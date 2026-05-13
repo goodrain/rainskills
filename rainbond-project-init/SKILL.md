@@ -384,6 +384,16 @@ GitHub proxy prompt rule:
 - recommend `https://ghfast.top/https://github.com/...` first
 - `https://gh.rainbond.cc/https://github.com/...` may be offered as an alternate explicit choice
 
+Docker registry proxy rule:
+- if a referenced image is on `docker.io`, `quay.io`, `gcr.io`, `ghcr.io`, `k8s.gcr.io`, or `registry.k8s.io`
+- and the image is not already proxied through a registry mirror
+- and the user did not explicitly opt out of using a mirror
+- prefer `docker.1ms.run/<original-path>` first; treat it as the default Docker mirror across this skill
+- `m.daocloud.io/<original-path>` may be offered as an alternate explicit choice
+- do **not** propose less-established mirrors (e.g. `dockerpull.com`, vendor-specific community proxies) unless the user explicitly asks for them
+- if the project's existing `rainbond.app.json` (or another component in the same manifest) already uses a specific mirror, reuse the same mirror instead of introducing a second one
+- this rule also applies when troubleshooting recommends switching to a reachable mirror after an image pull failure
+
 ## Generated Manifest Rules
 
 If generating `rainbond.app.json` in default mode, produce a **bootstrap-compatible schema v1**:
