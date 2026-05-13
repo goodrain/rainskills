@@ -1,4 +1,4 @@
-name: Release to OSS
+name: Release to TOS
 
 on:
   push:
@@ -27,49 +27,52 @@ jobs:
           cp rainskills-latest.tar.gz "rainskills-${SHA}.tar.gz"
           ls -lh rainskills-*.tar.gz
 
-      - name: Install ossutil
+      - name: Install tosutil
         run: |
-          curl -fsSL https://gosspublic.alicdn.com/ossutil/1.7.18/ossutil64 -o /tmp/ossutil
-          chmod +x /tmp/ossutil
-          /tmp/ossutil version
+          curl -fsSL https://tosutil-tos-bucket.tos-cn-beijing.volces.com/linux/tosutil -o /tmp/tosutil
+          chmod +x /tmp/tosutil
+          /tmp/tosutil version || true
 
-      - name: Upload to OSS
+      - name: Upload to TOS
         env:
-          OSS_ENDPOINT: ${{ secrets.OSS_ENDPOINT }}
-          OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
-          OSS_ACCESS_KEY_ID: ${{ secrets.OSS_ACCESS_KEY_ID }}
-          OSS_ACCESS_KEY_SECRET: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
-          OSS_PREFIX: ${{ secrets.OSS_PREFIX }}
+          TOS_ENDPOINT: ${{ secrets.TOS_ENDPOINT }}
+          TOS_REGION: ${{ secrets.TOS_REGION }}
+          TOS_BUCKET: ${{ secrets.TOS_BUCKET }}
+          TOS_ACCESS_KEY_ID: ${{ secrets.TOS_ACCESS_KEY_ID }}
+          TOS_ACCESS_KEY_SECRET: ${{ secrets.TOS_ACCESS_KEY_SECRET }}
+          TOS_PREFIX: ${{ secrets.TOS_PREFIX }}
         run: |
           SHA="${{ steps.meta.outputs.sha }}"
-          for v in OSS_ENDPOINT OSS_BUCKET OSS_ACCESS_KEY_ID OSS_ACCESS_KEY_SECRET; do
+          for v in TOS_ENDPOINT TOS_REGION TOS_BUCKET TOS_ACCESS_KEY_ID TOS_ACCESS_KEY_SECRET; do
             if [[ -z "${!v}" ]]; then
               echo "error: secret $v is not configured on this repo" >&2
               exit 1
             fi
           done
-          PREFIX="${OSS_PREFIX:-}"
-          if [[ -n "$PREFIX" ]]; then
-            PREFIX="${PREFIX%/}/"
-          fi
-          OSSUTIL=(/tmp/ossutil \
-            -e "$OSS_ENDPOINT" \
-            -i "$OSS_ACCESS_KEY_ID" \
-            -k "$OSS_ACCESS_KEY_SECRET")
+          PREFIX="${TOS_PREFIX:-rainskills}"
+          PREFIX="${PREFIX%/}/"
+          TOSUTIL=(/tmp/tosutil \
+            -e "$TOS_ENDPOINT" \
+            -i "$TOS_ACCESS_KEY_ID" \
+            -k "$TOS_ACCESS_KEY_SECRET" \
+            -re "$TOS_REGION")
 
-          # install.sh and the rolling latest tarball: keep cache short upstream
-          "${OSSUTIL[@]}" cp -f install.sh                       "oss://${OSS_BUCKET}/${PREFIX}install.sh"
-          "${OSSUTIL[@]}" cp -f rainskills-latest.tar.gz         "oss://${OSS_BUCKET}/${PREFIX}rainskills-latest.tar.gz"
-
-          # immutable per-commit snapshot
-          "${OSSUTIL[@]}" cp -f "rainskills-${SHA}.tar.gz"       "oss://${OSS_BUCKET}/${PREFIX}rainskills-${SHA}.tar.gz"
+          "${TOSUTIL[@]}" cp -f install.sh                       "tos://${TOS_BUCKET}/${PREFIX}install.sh"
+          "${TOSUTIL[@]}" cp -f rainskills-latest.tar.gz         "tos://${TOS_BUCKET}/${PREFIX}rainskills-latest.tar.gz"
+          "${TOSUTIL[@]}" cp -f "rainskills-${SHA}.tar.gz"       "tos://${TOS_BUCKET}/${PREFIX}rainskills-${SHA}.tar.gz"
 
       - name: Summary
         run: |
           SHA="${{ steps.meta.outputs.sha }}"
-          echo "Released commit ${SHA}" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "OSS objects updated:" >> "$GITHUB_STEP_SUMMARY"
-          echo "- install.sh" >> "$GITHUB_STEP_SUMMARY"
-          echo "- rainskills-latest.tar.gz" >> "$GITHUB_STEP_SUMMARY"
-          echo "- rainskills-${SHA}.tar.gz" >> "$GITHUB_STEP_SUMMARY"
+          PREFIX="${{ secrets.TOS_PREFIX }}"
+          PREFIX="${PREFIX:-rainskills}"
+          PREFIX="${PREFIX%/}/"
+          BUCKET="${{ secrets.TOS_BUCKET }}"
+          {
+            echo "Released commit ${SHA}"
+            echo ""
+            echo "TOS objects updated under \`tos://${BUCKET}/${PREFIX}\`:"
+            echo "- install.sh"
+            echo "- rainskills-latest.tar.gz"
+            echo "- rainskills-${SHA}.tar.gz"
+          } >> "$GITHUB_STEP_SUMMARY"
