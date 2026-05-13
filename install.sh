@@ -529,9 +529,60 @@ open_browser() {
   return 1
 }
 
+extract_token_from_paste() {
+  python3 - "$1" "$2" <<'PY'
+import re
+import sys
+from urllib.parse import urlparse, parse_qs
+
+raw = sys.argv[1].strip()
+expected_state = sys.argv[2]
+
+if raw.startswith("http://") or raw.startswith("https://"):
+    qs = parse_qs(urlparse(raw).query)
+    token = (qs.get("token") or [None])[0]
+    state = (qs.get("state") or [None])[0]
+    if not token:
+        print("回调 URL 中未找到 token 参数。", file=sys.stderr)
+        sys.exit(1)
+    if state and state != expected_state:
+        print("回调 URL 中的 state 与当前授权会话不一致；可能是过期或错混的链接，请重新点击「授权」。", file=sys.stderr)
+        sys.exit(1)
+    print(token)
+    sys.exit(0)
+
+if not re.fullmatch(r"[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+", raw):
+    print("输入既不是合法 JWT，也不是回调 URL，请重试。", file=sys.stderr)
+    sys.exit(1)
+
+print(raw)
+PY
+}
+
+manual_paste_reader() {
+  local port="$1"
+  local state="$2"
+  local server_pid="$3"
+  local pasted token_out
+  while kill -0 "$server_pid" 2>/dev/null; do
+    printf '\n请粘贴回调 URL 或 JWT（按回车确认，Ctrl+C 取消）: ' >&2
+    if ! IFS= read -r pasted </dev/tty; then
+      return 0
+    fi
+    pasted="$(trim "$pasted")"
+    [[ -n "$pasted" ]] || continue
+    if token_out="$(extract_token_from_paste "$pasted" "$state")"; then
+      curl -fsS --max-time 5 \
+        "http://127.0.0.1:${port}/cli-callback?token=${token_out}&state=${state}" \
+        >/dev/null 2>&1 || true
+      return 0
+    fi
+  done
+}
+
 browser_login_to_rainbond() {
   local base_url="$1"
-  local result_file state port auth_url
+  local result_file state port auth_url reader_pid=""
   result_file="$(mktemp)"
 
   state="$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"
@@ -673,23 +724,47 @@ PY
   auth_url="${base_url}/#/cli-auth?callback=$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=""))' "http://127.0.0.1:${port}/cli-callback")&state=${state}"
 
   # Stderr only — this function's stdout is captured by the caller as the JWT.
-  printf '正在浏览器中打开 Rainbond CLI 授权页面，请在浏览器中完成登录并点击「授权」按钮。\n' >&2
-  printf '授权地址：%s\n' "$auth_url" >&2
-
-  if ! can_open_browser; then
-    warn "未检测到桌面环境，请手动在浏览器中打开上方地址完成授权。"
-  else
+  if can_open_browser; then
+    printf '正在浏览器中打开 Rainbond CLI 授权页面，请在浏览器中完成登录并点击「授权」按钮。\n' >&2
+    printf '授权地址：%s\n' "$auth_url" >&2
     open_browser "$auth_url"
+  else
+    printf '\n' >&2
+    printf '未检测到本机浏览器（典型场景：远程 SSH 到 Linux 服务器），进入手动授权模式：\n' >&2
+    printf '  1. 在你能打开浏览器的电脑上，访问下面这条授权链接：\n' >&2
+    printf '       %s\n' "$auth_url" >&2
+    printf '  2. 登录后点击页面上的「授权」按钮。\n' >&2
+    printf '  3. 浏览器会跳到 http://127.0.0.1:%s/cli-callback?token=...&state=... 的地址。\n' "$port" >&2
+    printf '     远程 SSH 场景下页面会显示「无法访问」，属正常现象，只看地址栏即可。\n' >&2
+    printf '  4. 从浏览器地址栏复制整条 URL（或仅 token= 后那串 JWT），按下方提示粘贴回车。\n' >&2
+    printf '\n' >&2
+    printf '若浏览器与此终端在同一台机器，直接点击「授权」即可，无需手动粘贴。\n' >&2
+
+    if [[ -r /dev/tty ]]; then
+      manual_paste_reader "$port" "$state" "$server_pid" &
+      reader_pid=$!
+    else
+      warn "/dev/tty 不可读，无法接收手动粘贴。请改用 --token <jwt> 重新执行 install.sh。"
+    fi
   fi
 
   if ! wait "$server_pid"; then
     local err
     err="$(cat "${result_file}.err" 2>/dev/null || true)"
+    if [[ -n "$reader_pid" ]]; then
+      kill "$reader_pid" 2>/dev/null || true
+      wait "$reader_pid" 2>/dev/null || true
+    fi
     rm -f "$result_file" "${result_file}.port" "${result_file}.err"
     if [[ -n "$err" ]]; then
       die "$err"
     fi
     die "Rainbond 浏览器授权失败。"
+  fi
+
+  if [[ -n "$reader_pid" ]]; then
+    kill "$reader_pid" 2>/dev/null || true
+    wait "$reader_pid" 2>/dev/null || true
   fi
 
   local token
