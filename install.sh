@@ -122,7 +122,9 @@ RAINBOND_CACHED_URL="${RAINBOND_URL:-}"
 DEPLOYMENT_MODE_INPUT=""
 SAAS_DEFAULT_URL="https://run.rainbond.com"
 LOGIN_TIMEOUT="${RAINBOND_LOGIN_TIMEOUT:-300}"
+JWT_MIN_TTL_SECONDS="${RAINBOND_JWT_MIN_TTL_SECONDS:-600}"
 ACTIVE_SHELL_RC=""
+VALIDATED_TOKEN=""
 
 usage() {
   cat <<'EOF'
@@ -1028,15 +1030,17 @@ configure_claude_mcp() {
 
   backup_file "$HOME/.claude.json"
   claude mcp remove --scope user rainbond >/dev/null 2>&1 || true
-  claude mcp add --scope user --transport http rainbond "$mcp_url" -H "Authorization: GRJWT ${RAINBOND_JWT:-}" >/dev/null
+  claude mcp add --scope user --transport http rainbond "$mcp_url" -H 'Authorization: GRJWT ${RAINBOND_JWT}' >/dev/null
   log "[configure] 已配置 Claude MCP"
 }
 
 validate_mcp_connectivity() {
   local base_url="$1"
   local token="$2"
-  local response_file
+  local response_file header_file
   response_file="$(mktemp)"
+  header_file="$(mktemp)"
+  VALIDATED_TOKEN="$token"
 
   local http_code
   http_code="$(
@@ -1044,6 +1048,7 @@ validate_mcp_connectivity() {
       --silent \
       --show-error \
       --output "$response_file" \
+      --dump-header "$header_file" \
       --write-out '%{http_code}' \
       -X POST \
       "${base_url}/console/mcp/query" \
@@ -1055,7 +1060,7 @@ validate_mcp_connectivity() {
   )"
 
   if [[ ! "$http_code" =~ ^2 ]]; then
-    rm -f "$response_file"
+    rm -f "$response_file" "$header_file"
     if [[ "$http_code" == "404" ]]; then
       die "Rainbond MCP 校验失败：${base_url} 未暴露 /console/mcp/query。登录已成功，说明这个环境可达，但当前部署的 Rainbond Console 可能未包含 MCP 接口，或你连接到了错误的 Rainbond 主机。"
     fi
@@ -1074,11 +1079,55 @@ name = ((((payload.get("result") or {}).get("serverInfo") or {}).get("name")))
 if name != "rainbond-console-mcp":
     raise SystemExit(1)
 PY
-    rm -f "$response_file"
+    rm -f "$response_file" "$header_file"
     die "Rainbond MCP 校验返回了无法识别的响应"
   fi
 
-  rm -f "$response_file"
+  local renewed_token
+  renewed_token="$(
+    python3 - "$header_file" <<'PY'
+import sys
+
+path = sys.argv[1]
+renewed = ""
+authorization = ""
+
+try:
+    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            if ":" not in line:
+                continue
+            name, value = line.split(":", 1)
+            name = name.strip().lower()
+            value = value.strip()
+            if name == "x-renewed-token" and value:
+                renewed = value
+            elif name == "authorization" and value.lower().startswith("grjwt "):
+                authorization = value.split(None, 1)[1].strip()
+except FileNotFoundError:
+    pass
+
+print(renewed or authorization)
+PY
+  )"
+
+  if [[ -n "$renewed_token" ]]; then
+    if looks_like_jwt "$renewed_token"; then
+      local renewed_status_line renewed_status
+      renewed_status_line="$(jwt_time_status "$renewed_token" "$JWT_MIN_TTL_SECONDS")"
+      renewed_status="${renewed_status_line%% *}"
+      if [[ "$renewed_status" == "ok" ]]; then
+        VALIDATED_TOKEN="$renewed_token"
+        log "[renew] 已保存后端滑动续期返回的新 JWT"
+      else
+        warn "MCP 响应返回了续期 token，但其有效期状态为 ${renewed_status}，已忽略。"
+      fi
+    else
+      warn "MCP 响应返回了续期 token，但不是合法 JWT，已忽略。"
+    fi
+  fi
+
+  rm -f "$response_file" "$header_file"
   log "[verify] Rainbond MCP 可访问"
 }
 
@@ -1087,16 +1136,115 @@ looks_like_jwt() {
   [[ "$1" =~ ^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$ ]]
 }
 
+jwt_time_status() {
+  local token="$1"
+  local min_ttl_seconds="$2"
+  python3 - "$token" "$min_ttl_seconds" <<'PY'
+import base64
+import json
+import sys
+import time
+
+token = sys.argv[1]
+min_ttl = int(sys.argv[2])
+
+try:
+    payload_segment = token.split(".")[1]
+    payload_segment += "=" * (-len(payload_segment) % 4)
+    payload = json.loads(base64.urlsafe_b64decode(payload_segment.encode("ascii")).decode("utf-8"))
+except Exception:
+    print("invalid 0")
+    sys.exit(0)
+
+exp = payload.get("exp")
+try:
+    exp = int(exp)
+except Exception:
+    print("no-exp 0")
+    sys.exit(0)
+
+remaining = exp - int(time.time())
+if remaining <= 0:
+    print("expired {}".format(remaining))
+elif remaining <= min_ttl:
+    print("expiring {}".format(remaining))
+else:
+    print("ok {}".format(remaining))
+PY
+}
+
+reject_flag_token() {
+  local status="$1"
+  case "$status" in
+    expired)
+      die "--token 提供的 Rainbond JWT 已过期，请重新获取 token 或改用浏览器登录。"
+      ;;
+    expiring)
+      die "--token 提供的 Rainbond JWT 即将过期，请重新获取 token 或改用浏览器登录。"
+      ;;
+    no-exp)
+      die "--token 提供的 Rainbond JWT 不包含 exp，无法判断有效期，请重新获取 token。"
+      ;;
+    invalid)
+      die "--token 提供的 Rainbond JWT 无法解析 exp，请确认 token 是否完整。"
+      ;;
+  esac
+}
+
+check_reusable_token_or_clear() {
+  local token_label="$1"
+  local status_line status
+  status_line="$(jwt_time_status "$RAINBOND_TOKEN_INPUT" "$JWT_MIN_TTL_SECONDS")"
+  status="${status_line%% *}"
+
+  case "$status" in
+    ok)
+      return 0
+      ;;
+    expired)
+      if [[ "$RAINBOND_TOKEN_FROM_FLAG" -eq 1 ]]; then
+        reject_flag_token "$status"
+      fi
+      warn "${token_label} 已过期，将重新登录获取新 JWT。"
+      ;;
+    expiring)
+      if [[ "$RAINBOND_TOKEN_FROM_FLAG" -eq 1 ]]; then
+        reject_flag_token "$status"
+      fi
+      warn "${token_label} 即将过期，将重新登录获取新 JWT。"
+      ;;
+    no-exp|invalid)
+      if [[ "$RAINBOND_TOKEN_FROM_FLAG" -eq 1 ]]; then
+        reject_flag_token "$status"
+      fi
+      warn "${token_label} 无法解析有效期，将忽略旧 token 并重新登录。"
+      ;;
+    *)
+      if [[ "$RAINBOND_TOKEN_FROM_FLAG" -eq 1 ]]; then
+        die "--token 提供的 Rainbond JWT 状态未知，请重新获取 token。"
+      fi
+      warn "${token_label} 状态未知，将忽略旧 token 并重新登录。"
+      ;;
+  esac
+
+  RAINBOND_TOKEN_INPUT=""
+  return 1
+}
+
 obtain_rainbond_token() {
   local base_url="$1"
   local mode="$2"
 
   if [[ -n "$RAINBOND_TOKEN_INPUT" ]]; then
     if ! looks_like_jwt "$RAINBOND_TOKEN_INPUT"; then
+      if [[ "$RAINBOND_TOKEN_FROM_FLAG" -eq 1 ]]; then
+        die "--token 提供的值不是合法的 JWT（应形如 xxx.yyy.zzz）。"
+      fi
       warn "RAINBOND_JWT 不是合法的 JWT（应形如 xxx.yyy.zzz）；忽略并改走浏览器登录。"
       warn "如果你的当前 shell 还在加载旧的 ~/.rainbond/mcp.env，请先执行：unset RAINBOND_JWT"
       RAINBOND_TOKEN_INPUT=""
     elif [[ "$RAINBOND_TOKEN_FROM_FLAG" -eq 1 ]]; then
+      check_reusable_token_or_clear "--token 提供的 Rainbond JWT" || true
       printf '使用 --token 提供的 Rainbond JWT，跳过登录。\n' >&2
       printf '%s\n' "$RAINBOND_TOKEN_INPUT"
       return 0
@@ -1104,24 +1252,30 @@ obtain_rainbond_token() {
       warn "检测到 shell 中已加载的 RAINBOND_JWT 来自 ${RAINBOND_CACHED_URL}，与本次目标 ${base_url} 不一致；忽略旧 token，将重新登录。"
       RAINBOND_TOKEN_INPUT=""
     elif [[ "$NON_INTERACTIVE" -eq 1 || ! -t 0 ]]; then
-      printf '复用 shell 中已加载的 RAINBOND_JWT。\n' >&2
-      printf '%s\n' "$RAINBOND_TOKEN_INPUT"
-      return 0
+      check_reusable_token_or_clear "shell 中已加载的 RAINBOND_JWT" || true
+      if [[ -n "$RAINBOND_TOKEN_INPUT" ]]; then
+        printf '复用 shell 中已加载的 RAINBOND_JWT。\n' >&2
+        printf '%s\n' "$RAINBOND_TOKEN_INPUT"
+        return 0
+      fi
     else
-      local cached_label="${RAINBOND_CACHED_URL:-未知来源}"
-      printf '检测到 shell 中已加载的 RAINBOND_JWT（来自 %s）。是否复用？[y/N]: ' "$cached_label" >&2
-      local reuse_answer=""
-      read -r reuse_answer
-      case "$reuse_answer" in
-        y|Y|yes|YES)
-          printf '%s\n' "$RAINBOND_TOKEN_INPUT"
-          return 0
-          ;;
-        *)
-          printf '将忽略旧 token 并重新登录。\n' >&2
-          RAINBOND_TOKEN_INPUT=""
-          ;;
-      esac
+      check_reusable_token_or_clear "shell 中已加载的 RAINBOND_JWT" || true
+      if [[ -n "$RAINBOND_TOKEN_INPUT" ]]; then
+        local cached_label="${RAINBOND_CACHED_URL:-未知来源}"
+        printf '检测到 shell 中已加载的 RAINBOND_JWT（来自 %s）。是否复用？[y/N]: ' "$cached_label" >&2
+        local reuse_answer=""
+        read -r reuse_answer
+        case "$reuse_answer" in
+          y|Y|yes|YES)
+            printf '%s\n' "$RAINBOND_TOKEN_INPUT"
+            return 0
+            ;;
+          *)
+            printf '将忽略旧 token 并重新登录。\n' >&2
+            RAINBOND_TOKEN_INPUT=""
+            ;;
+        esac
+      fi
     fi
   fi
 
@@ -1175,8 +1329,10 @@ configure_mcp() {
 
   local token mcp_url
   token="$(obtain_rainbond_token "$base_url" "$DEPLOYMENT_MODE_INPUT")"
-  # Refresh this process's env so downstream `claude mcp add` / `codex mcp add`
-  # bake the freshly obtained token instead of whatever the parent shell had.
+  validate_mcp_connectivity "$base_url" "$token"
+  token="$VALIDATED_TOKEN"
+
+  # Refresh this process's env for any downstream CLI behavior that resolves it.
   export RAINBOND_JWT="$token"
   write_token_file "$token" "$base_url"
   configure_shell_autoload
@@ -1197,7 +1353,6 @@ configure_mcp() {
   esac
 
   (( configured > 0 )) || die "所选平台都未能完成 MCP 配置。"
-  validate_mcp_connectivity "$base_url" "$token"
 
   if [[ -n "$ACTIVE_SHELL_RC" ]]; then
     log "当前 shell 提示：新开的终端会自动从 ${ACTIVE_SHELL_RC} 加载 RAINBOND_JWT。"

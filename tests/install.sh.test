@@ -2,6 +2,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+unset RAINBOND_JWT RAINBOND_URL
 
 fail() {
   printf 'FAIL: %s\n' "$1" >&2
@@ -42,6 +43,26 @@ file_mode() {
   else
     stat -c '%a' "$1"
   fi
+}
+
+make_test_jwt() {
+  local exp="$1"
+  python3 - "$exp" <<'PY'
+import base64
+import json
+import sys
+
+exp = int(sys.argv[1])
+
+def b64(payload):
+    raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+print("{}.{}.signature".format(
+    b64({"alg": "HS256", "typ": "JWT"}),
+    b64({"sub": "demo", "exp": exp}),
+))
+PY
 }
 
 make_fake_commands() {
@@ -148,6 +169,7 @@ set -euo pipefail
 printf '%s\n' "$*" >> "${TEST_LOG_DIR}/curl.log"
 
 output_file=""
+header_file=""
 write_out=""
 url=""
 args=("$@")
@@ -158,6 +180,10 @@ while [[ $i -lt ${#args[@]} ]]; do
     --output)
       i=$((i + 1))
       output_file="${args[$i]}"
+      ;;
+    --dump-header)
+      i=$((i + 1))
+      header_file="${args[$i]}"
       ;;
     --write-out)
       i=$((i + 1))
@@ -172,7 +198,25 @@ done
 
 body='{}'
 if [[ "$url" == *"/console/users/login" ]]; then
-  body='{"code":200,"data":{"bean":{"token":"demo.jwt.token"}}}'
+  login_token="${TEST_FAKE_LOGIN_TOKEN:-}"
+  if [[ -z "$login_token" ]]; then
+    login_token="$(
+      python3 - <<'PY'
+import base64
+import json
+
+def b64(payload):
+    raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+print("{}.{}.signature".format(
+    b64({"alg": "HS256", "typ": "JWT"}),
+    b64({"sub": "demo", "exp": 1893456000}),
+))
+PY
+    )"
+  fi
+  body="{\"code\":200,\"data\":{\"bean\":{\"token\":\"${login_token}\"}}}"
 elif [[ "$url" == *"/console/mcp/query" ]]; then
   if [[ -n "${TEST_FAKE_MCP_HTTP_CODE:-}" && "${TEST_FAKE_MCP_HTTP_CODE}" != "200" ]]; then
     body='{"code":404,"msg":"not found"}'
@@ -181,6 +225,17 @@ elif [[ "$url" == *"/console/mcp/query" ]]; then
   fi
 else
   body='{"code":404}'
+fi
+
+if [[ -n "$header_file" ]]; then
+  {
+    printf 'HTTP/1.1 200 OK\r\n'
+    if [[ -n "${TEST_FAKE_RENEWED_TOKEN:-}" ]]; then
+      printf 'X-Renewed-Token: %s\r\n' "${TEST_FAKE_RENEWED_TOKEN}"
+      printf 'Authorization: GRJWT %s\r\n' "${TEST_FAKE_RENEWED_TOKEN}"
+    fi
+    printf '\r\n'
+  } > "$header_file"
 fi
 
 if [[ -n "$output_file" ]]; then
@@ -215,6 +270,8 @@ run_installer() {
     TEST_LOG_DIR="$workdir/logs" \
     PATH="$workdir/bin:/usr/bin:/bin" \
     TEST_FAKE_MCP_HTTP_CODE="${TEST_FAKE_MCP_HTTP_CODE:-}" \
+    TEST_FAKE_LOGIN_TOKEN="${TEST_FAKE_LOGIN_TOKEN:-}" \
+    TEST_FAKE_RENEWED_TOKEN="${TEST_FAKE_RENEWED_TOKEN:-}" \
     bash "$REPO_ROOT/install.sh" "$@"
   )
 }
@@ -231,6 +288,7 @@ import time
 
 repo_root, workdir, output_file = sys.argv[1:4]
 responses = [
+    "2\n",
     "http://rainbond.internal\n",
     "y\n",
     "demo\n",
@@ -272,8 +330,9 @@ while True:
         text = buffer.decode("utf-8", errors="replace")
         while response_index < len(responses):
             expected = [
-                "Rainbond 地址: ",
-                "是否继续使用内部试点模式？[y/N]: ",
+                "请输入选项 [1-2",
+                "Rainbond Console 地址: ",
+                "是否继续使用明文 HTTP 连接？[y/N]: ",
                 "Rainbond 用户名: ",
             ][response_index]
             if expected in text:
@@ -334,15 +393,17 @@ test_noninteractive_without_rainbond_params_skips_mcp() {
 
 test_installer_configures_both_platforms_and_shell_autoload() {
   local tmpdir
+  local default_token
   tmpdir="$(mktemp -d)"
   trap 'rm -rf "$tmpdir"' RETURN
   mkdir -p "$tmpdir/home" "$tmpdir/logs"
   make_fake_commands "$tmpdir/bin"
+  default_token="$(make_test_jwt 1893456000)"
 
   run_installer "$tmpdir" all --non-interactive --rainbond-url http://rainbond.internal --username demo --allow-insecure-http --force
 
   assert_file_exists "$tmpdir/home/.rainbond/mcp.env"
-  assert_contains "$tmpdir/home/.rainbond/mcp.env" "export RAINBOND_JWT='demo.jwt.token'"
+  assert_contains "$tmpdir/home/.rainbond/mcp.env" "export RAINBOND_JWT='$default_token'"
   [[ "$(file_mode "$tmpdir/home/.rainbond/mcp.env")" == "600" ]] || fail "expected token file permissions to be 600"
 
   assert_file_exists "$tmpdir/home/.zshrc"
@@ -377,8 +438,91 @@ test_interactive_prompts_are_visible() {
 
   run_interactive_installer_with_pty "$tmpdir" "$output_file"
 
-  assert_contains "$output_file" "Rainbond 地址: "
+  assert_contains "$output_file" "Rainbond Console 地址: "
   assert_contains "$output_file" "Rainbond 用户名: "
+}
+
+test_expired_cached_token_reauthenticates_before_write() {
+  local tmpdir expired_token fresh_token
+  tmpdir="$(mktemp -d)"
+  trap 'rm -rf "$tmpdir"' RETURN
+  mkdir -p "$tmpdir/home" "$tmpdir/logs"
+  make_fake_commands "$tmpdir/bin"
+
+  expired_token="$(make_test_jwt 1700000000)"
+  fresh_token="$(make_test_jwt 1893456000)"
+
+  RAINBOND_JWT="$expired_token" \
+  RAINBOND_URL="http://rainbond.internal" \
+  TEST_FAKE_LOGIN_TOKEN="$fresh_token" \
+    run_installer "$tmpdir" all --non-interactive --rainbond-url http://rainbond.internal --username demo --allow-insecure-http --force \
+    >/tmp/rainbond-install-expired-cache.out 2>&1
+
+  assert_contains "$tmpdir/logs/curl.log" "http://rainbond.internal/console/users/login"
+  assert_contains "$tmpdir/home/.rainbond/mcp.env" "export RAINBOND_JWT='$fresh_token'"
+  grep -F -- "已过期" /tmp/rainbond-install-expired-cache.out >/dev/null || fail "expected expired token guidance"
+}
+
+test_expiring_cached_token_reauthenticates_before_write() {
+  local tmpdir expiring_token fresh_token
+  tmpdir="$(mktemp -d)"
+  trap 'rm -rf "$tmpdir"' RETURN
+  mkdir -p "$tmpdir/home" "$tmpdir/logs"
+  make_fake_commands "$tmpdir/bin"
+
+  expiring_token="$(make_test_jwt "$(( $(date +%s) + 300 ))")"
+  fresh_token="$(make_test_jwt 1893456000)"
+
+  RAINBOND_JWT="$expiring_token" \
+  RAINBOND_URL="http://rainbond.internal" \
+  TEST_FAKE_LOGIN_TOKEN="$fresh_token" \
+    run_installer "$tmpdir" all --non-interactive --rainbond-url http://rainbond.internal --username demo --allow-insecure-http --force \
+    >/tmp/rainbond-install-expiring-cache.out 2>&1
+
+  assert_contains "$tmpdir/logs/curl.log" "http://rainbond.internal/console/users/login"
+  assert_contains "$tmpdir/home/.rainbond/mcp.env" "export RAINBOND_JWT='$fresh_token'"
+  grep -F -- "即将过期" /tmp/rainbond-install-expiring-cache.out >/dev/null || fail "expected expiring token guidance"
+}
+
+test_expired_flag_token_fails_without_writing_config() {
+  local tmpdir expired_token
+  tmpdir="$(mktemp -d)"
+  trap 'rm -rf "$tmpdir"' RETURN
+  mkdir -p "$tmpdir/home" "$tmpdir/logs"
+  make_fake_commands "$tmpdir/bin"
+
+  expired_token="$(make_test_jwt 1700000000)"
+
+  set +e
+  run_installer "$tmpdir" codex --non-interactive --rainbond-url http://rainbond.internal --token "$expired_token" --allow-insecure-http --force \
+    >/tmp/rainbond-install-expired-flag.out 2>&1
+  local rc=$?
+  set -e
+
+  [[ $rc -ne 0 ]] || fail "expected expired --token to fail"
+  [[ ! -f "$tmpdir/home/.rainbond/mcp.env" ]] || fail "did not expect token file for expired --token"
+  grep -F -- "--token 提供的 Rainbond JWT 已过期" /tmp/rainbond-install-expired-flag.out >/dev/null || fail "expected expired --token guidance"
+}
+
+test_mcp_renewed_token_is_persisted_after_validation() {
+  local tmpdir original_token renewed_token
+  tmpdir="$(mktemp -d)"
+  trap 'rm -rf "$tmpdir"' RETURN
+  mkdir -p "$tmpdir/home" "$tmpdir/logs"
+  make_fake_commands "$tmpdir/bin"
+
+  original_token="$(make_test_jwt "$(( $(date +%s) + 86400 * 30 ))")"
+  renewed_token="$(make_test_jwt 1893456000)"
+
+  RAINBOND_JWT="$original_token" \
+  RAINBOND_URL="http://rainbond.internal" \
+  TEST_FAKE_RENEWED_TOKEN="$renewed_token" \
+    run_installer "$tmpdir" codex --non-interactive --rainbond-url http://rainbond.internal --allow-insecure-http --force \
+    >/tmp/rainbond-install-renewed.out 2>&1
+
+  assert_contains "$tmpdir/home/.rainbond/mcp.env" "export RAINBOND_JWT='$renewed_token'"
+  assert_contains "$tmpdir/logs/codex.log" "mcp add rainbond --url http://rainbond.internal/console/mcp/query --bearer-token-env-var RAINBOND_JWT"
+  grep -F -- "已保存后端滑动续期返回的新 JWT" /tmp/rainbond-install-renewed.out >/dev/null || fail "expected renewal guidance"
 }
 
 test_mcp_404_reports_missing_endpoint() {
@@ -403,6 +547,10 @@ test_mcp_404_reports_missing_endpoint() {
 test_noninteractive_http_requires_explicit_opt_in
 test_noninteractive_without_rainbond_params_skips_mcp
 test_interactive_prompts_are_visible
+test_expired_cached_token_reauthenticates_before_write
+test_expiring_cached_token_reauthenticates_before_write
+test_expired_flag_token_fails_without_writing_config
+test_mcp_renewed_token_is_persisted_after_validation
 test_mcp_404_reports_missing_endpoint
 test_installer_configures_both_platforms_and_shell_autoload
 
