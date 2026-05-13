@@ -1,0 +1,21 @@
+case: linked-topology-missing
+assert:
+  equal:
+    AppAssistantResult.request_intent: source_app_delivery
+    AppAssistantResult.execution_path.requested_kind: source
+    AppAssistantResult.execution_path.resolved_kind: source
+    AppAssistantResult.orchestration_state: linked-and-topology-missing
+    AppAssistantResult.runtime_state.phase: topology_missing
+    AppAssistantResult.delivery_state: null
+    AppAssistantResult.promotion_result: null
+    AppAssistantResult.next_action: run bootstrap
+  contains:
+    AppAssistantResult.actions_performed:
+      - skill: rainbond-fullstack-bootstrap
+        status: pending
+        details: Selected as the next safe step because the linked source app still has no established topology.
+  prose_contains:
+    - linked-and-topology-missing
+    - topology_missing
+    - bootstrap is required
+    - run bootstrap

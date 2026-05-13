@@ -1,0 +1,33 @@
+case: source-ambiguity-stop
+in_scope_components:
+  - api
+  - web
+assert:
+  equal:
+    BootstrapResult.deployment_plan.workflow.created: []
+    BootstrapResult.deployment_plan.workflow.reused: []
+    BootstrapResult.deployment_plan.workflow.skipped:
+      - api
+      - web
+    BootstrapResult.deployment_plan.workflow.deferred_dependencies: []
+    BootstrapResult.runtime_state.overall: topology_missing
+    BootstrapResult.runtime_state.blocking_bucket: dependency missing
+    BootstrapResult.next_handoff: none
+  contains:
+    BootstrapResult.deployment_plan.workflow.skipped_reasons:
+      api: source-backed component stopped at multiple services detected; explicit source strategy required
+      web: not executed because the upstream source path stopped before safe dependency resolution
+    BootstrapResult.runtime_state.component_status:
+      api: waiting
+      web: waiting
+  excludes:
+    BootstrapResult.deployment_plan.workflow.created:
+      - api
+      - web
+    BootstrapResult.deployment_plan.workflow.reused:
+      - api
+      - web
+  prose_contains:
+    - multiple services detected
+    - did not switch to image creation or package upload
+    - explicit source component-selection strategy

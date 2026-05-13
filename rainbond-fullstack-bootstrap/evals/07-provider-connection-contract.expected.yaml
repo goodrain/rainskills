@@ -1,0 +1,29 @@
+case: provider-connection-contract
+in_scope_components:
+  - web
+  - api
+  - mysql
+assert:
+  equal:
+    BootstrapResult.deployment_plan.workflow.created:
+      - mysql
+      - api
+      - web
+    BootstrapResult.deployment_plan.workflow.reused: []
+    BootstrapResult.deployment_plan.workflow.skipped: []
+    BootstrapResult.deployment_plan.workflow.skipped_reasons: {}
+    BootstrapResult.deployment_plan.workflow.deferred_dependencies: []
+    BootstrapResult.deployment_plan.workflow.frontend_access_mode: reverse-proxy
+    BootstrapResult.runtime_state.overall: runtime_healthy
+    BootstrapResult.runtime_state.blocking_bucket: null
+    BootstrapResult.next_handoff: delivery_verifier
+  contains:
+    BootstrapResult.runtime_state.component_status:
+      web: running
+      api: running
+      mysql: running
+  prose_contains:
+    - provider connection envs
+    - rainbond_manage_component_dependency
+    - No duplicate consumer DB envs
+    - delivery-verifier

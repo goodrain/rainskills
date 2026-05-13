@@ -1,0 +1,16 @@
+case: manual-validation-stop
+assert:
+  equal:
+    AppAssistantResult.request_intent: dev_to_test_promotion
+    AppAssistantResult.orchestration_state: linked-and-needs-manual-url-validation
+    AppAssistantResult.delivery_state.status: delivered-but-needs-manual-validation
+    AppAssistantResult.delivery_state.verification_mode: inferred
+    AppAssistantResult.delivery_state.verifier_next_action: manual_url_validation
+    AppAssistantResult.promotion_result: null
+    AppAssistantResult.next_action: stop and validate URL manually
+  prose_contains:
+    - delivered-but-needs-manual-validation
+    - promotion was not entered
+    - manual URL validation
+  prose_not_contains:
+    - rainbond-app-version-assistant

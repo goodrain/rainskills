@@ -1,0 +1,19 @@
+case: runtime-healthy-delivery-unknown
+assert:
+  equal:
+    AppAssistantResult.request_intent: source_app_delivery
+    AppAssistantResult.orchestration_state: linked-and-needs-delivery-verification
+    AppAssistantResult.runtime_state.phase: runtime_healthy
+    AppAssistantResult.delivery_state: null
+    AppAssistantResult.promotion_result: null
+    AppAssistantResult.next_action: run delivery verifier
+  contains:
+    AppAssistantResult.actions_performed:
+      - skill: rainbond-delivery-verifier
+        status: pending
+        details: Selected because runtime is healthy but delivery acceptance is still unknown.
+  prose_contains:
+    - linked-and-needs-delivery-verification
+    - runtime_healthy
+    - delivery acceptance is still unknown
+    - run delivery verifier

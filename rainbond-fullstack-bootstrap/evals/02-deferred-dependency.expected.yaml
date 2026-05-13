@@ -1,0 +1,27 @@
+case: deferred-dependency
+in_scope_components:
+  - api
+  - web
+  - postgres
+assert:
+  equal:
+    BootstrapResult.deployment_plan.workflow.created:
+      - api
+      - web
+    BootstrapResult.deployment_plan.workflow.reused:
+      - postgres
+    BootstrapResult.deployment_plan.workflow.skipped: []
+    BootstrapResult.deployment_plan.workflow.skipped_reasons: {}
+    BootstrapResult.deployment_plan.workflow.deferred_dependencies:
+      - web -> api
+    BootstrapResult.runtime_state.overall: topology_building
+    BootstrapResult.runtime_state.blocking_bucket: source build still running
+    BootstrapResult.next_handoff: troubleshooter
+  contains:
+    BootstrapResult.runtime_state.component_status:
+      api: building
+      web: waiting
+      postgres: running
+  prose_contains:
+    - deferred_by_upstream_convergence
+    - rainbond-fullstack-troubleshooter

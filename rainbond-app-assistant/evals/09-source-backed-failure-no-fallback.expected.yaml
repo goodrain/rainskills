@@ -1,0 +1,22 @@
+case: source-backed-failure-no-fallback
+assert:
+  equal:
+    AppAssistantResult.execution_path.requested_kind: source
+    AppAssistantResult.execution_path.resolved_kind: source
+    AppAssistantResult.orchestration_state: linked-and-source-build-failed
+    AppAssistantResult.runtime_state.phase: topology_building
+    AppAssistantResult.delivery_state: null
+    AppAssistantResult.promotion_result: null
+    AppAssistantResult.next_action: run troubleshooter on the same source path
+  contains:
+    AppAssistantResult.actions_performed:
+      - skill: rainbond-fullstack-bootstrap
+        status: stopped
+        details: Source-backed bootstrap stopped after the source build failed and did not switch to package upload, image creation, or template install.
+  prose_contains:
+    - source-backed path intact
+    - did not switch to package upload, image creation, or template install
+    - same source path
+  prose_not_contains:
+    - fallback to package
+    - switched to image

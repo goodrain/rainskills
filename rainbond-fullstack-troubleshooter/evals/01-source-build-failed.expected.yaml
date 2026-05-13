@@ -1,0 +1,29 @@
+case: source-build-failed
+assert:
+  equal:
+    TroubleshootResult.runtime_state.label: code_or_build_handoff_needed
+    TroubleshootResult.blocker_bucket: source build failed
+    TroubleshootResult.verification_summary.evidence_chain:
+      - component_summary
+      - component_events
+      - build_logs
+    TroubleshootResult.verification_summary.stop_reason: source_build_failed
+    TroubleshootResult.next_handoff: code_build_handoff
+  contains:
+    TroubleshootResult.runtime_state.component_status:
+      api: abnormal
+      db: running
+    TroubleshootResult.verification_summary.stop_boundary:
+      delivery_verifier_allowed: false
+      code_changes_allowed: false
+      local_tests_allowed: false
+      commit_or_push_allowed: false
+      fallback_used: false
+  prose_contains:
+    - "component events followed by build logs"
+    - "code_or_build_handoff_needed"
+    - "handoff needed: yes, `code/build`"
+  prose_not_contains:
+    - "switched to package"
+    - "fallback to image"
+    - "template install"

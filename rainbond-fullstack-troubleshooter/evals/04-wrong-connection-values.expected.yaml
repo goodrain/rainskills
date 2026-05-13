@@ -1,0 +1,19 @@
+case: wrong-connection-values
+assert:
+  equal:
+    TroubleshootResult.runtime_state.label: runtime_healthy
+    TroubleshootResult.blocker_bucket: wrong connection values
+    TroubleshootResult.verification_summary.key_error_cleared: true
+    TroubleshootResult.next_handoff: delivery_verifier
+  contains:
+    TroubleshootResult.verification_summary.evidence_chain:
+      - runtime_envs
+      - connection_envs
+      - runtime_logs
+    TroubleshootResult.verification_summary.stop_boundary:
+      delivery_verifier_allowed: true
+      fallback_used: false
+  prose_contains:
+    - "wrong connection values"
+    - "runtime_healthy"
+    - "provider connection envs"

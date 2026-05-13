@@ -1,0 +1,19 @@
+case: blocked-runtime-unhealthy
+assert:
+  equal:
+    DeliveryVerificationResult.runtime_state: runtime_unhealthy
+    DeliveryVerificationResult.delivery_state: blocked
+    DeliveryVerificationResult.preferred_access_url: https://demo-team-us.rainbond.me/runtime-demo
+    DeliveryVerificationResult.verification_mode: verified
+    DeliveryVerificationResult.blocker: runtime unhealthy
+    DeliveryVerificationResult.next_action: run_troubleshooter
+  contains:
+    DeliveryVerificationResult.component_status:
+      db: running
+      api/service: abnormal
+      frontend: running
+  prose_contains:
+    - runtime unhealthy
+    - Verified
+    - https://demo-team-us.rainbond.me/runtime-demo
+    - run troubleshooter

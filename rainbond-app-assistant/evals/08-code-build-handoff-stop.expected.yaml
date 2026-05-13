@@ -1,0 +1,21 @@
+case: code-build-handoff-stop
+assert:
+  equal:
+    AppAssistantResult.orchestration_state: linked-and-needs-code-build-handoff
+    AppAssistantResult.runtime_state.phase: code_or_build_handoff_needed
+    AppAssistantResult.delivery_state: null
+    AppAssistantResult.promotion_result: null
+    AppAssistantResult.next_action: handoff to code/build agent
+  contains:
+    AppAssistantResult.actions_performed:
+      - skill: rainbond-fullstack-troubleshooter
+        status: completed
+        details: Confirmed the frontend access-path issue belongs to source/build remediation rather than Rainbond-side repair.
+  prose_contains:
+    - linked-and-needs-code-build-handoff
+    - code_or_build_handoff_needed
+    - localhost
+    - handoff to code/build agent
+  prose_not_contains:
+    - go test
+    - git push

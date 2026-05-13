@@ -1,0 +1,275 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: AppAssistantResult
+type: object
+additionalProperties: false
+required:
+  - AppAssistantResult
+$defs:
+  non_empty_string:
+    type: string
+    minLength: 1
+  nullable_non_empty_string:
+    anyOf:
+      - $ref: "#/$defs/non_empty_string"
+      - type: "null"
+  environment_name:
+    type: string
+    enum:
+      - preview
+      - production
+  environment_source:
+    type: string
+    enum:
+      - explicit
+      - local_preference
+      - default
+  request_intent:
+    type: string
+    enum:
+      - source_app_delivery
+      - dev_to_test_promotion
+  execution_kind:
+    type: string
+    enum:
+      - source
+      - image
+      - package
+      - template
+      - unknown
+  runtime_phase:
+    type: string
+    enum:
+      - topology_missing
+      - topology_building
+      - runtime_unhealthy
+      - runtime_healthy
+      - capacity_blocked
+      - code_or_build_handoff_needed
+  component_status:
+    anyOf:
+      - enum:
+          - building
+          - waiting
+          - running
+          - abnormal
+          - capacity-blocked
+      - type: "null"
+  delivery_status:
+    type: string
+    enum:
+      - delivered
+      - delivered-but-needs-manual-validation
+      - partially-delivered
+      - blocked
+  delivery_verification_mode:
+    anyOf:
+      - enum:
+          - verified
+          - inferred
+          - manual_validation_needed
+      - type: "null"
+  delivery_next_action:
+    anyOf:
+      - enum:
+          - stop
+          - manual_url_validation
+          - run_troubleshooter
+          - fix_cluster_capacity_first
+          - code_build_handoff
+      - type: "null"
+  delivery_summary:
+    type: object
+    additionalProperties: false
+    required:
+      - status
+      - preferred_access_url
+      - verification_mode
+      - blocker
+      - verifier_next_action
+    properties:
+      status:
+        $ref: "#/$defs/delivery_status"
+      preferred_access_url:
+        $ref: "#/$defs/nullable_non_empty_string"
+      verification_mode:
+        $ref: "#/$defs/delivery_verification_mode"
+      blocker:
+        $ref: "#/$defs/nullable_non_empty_string"
+      verifier_next_action:
+        $ref: "#/$defs/delivery_next_action"
+  promotion_status:
+    type: string
+    enum:
+      - snapshot_created
+      - testing_app_created
+      - testing_app_verified
+      - blocked
+  app_identity:
+    type: object
+    additionalProperties: false
+    required:
+      - team_name
+      - region_name
+      - app_name
+      - app_id
+    properties:
+      team_name:
+        $ref: "#/$defs/nullable_non_empty_string"
+      region_name:
+        $ref: "#/$defs/nullable_non_empty_string"
+      app_name:
+        $ref: "#/$defs/nullable_non_empty_string"
+      app_id:
+        $ref: "#/$defs/nullable_non_empty_string"
+  runtime_state:
+    type: object
+    additionalProperties: false
+    required:
+      - phase
+      - db_status
+      - api_status
+      - frontend_status
+      - blocker
+    properties:
+      phase:
+        anyOf:
+          - $ref: "#/$defs/runtime_phase"
+          - type: "null"
+      db_status:
+        $ref: "#/$defs/component_status"
+      api_status:
+        $ref: "#/$defs/component_status"
+      frontend_status:
+        $ref: "#/$defs/component_status"
+      blocker:
+        $ref: "#/$defs/nullable_non_empty_string"
+  action_record:
+    type: object
+    additionalProperties: false
+    required:
+      - skill
+      - status
+      - details
+    properties:
+      skill:
+        $ref: "#/$defs/non_empty_string"
+      status:
+        $ref: "#/$defs/non_empty_string"
+      details:
+        $ref: "#/$defs/non_empty_string"
+  promotion_result:
+    type: object
+    additionalProperties: false
+    required:
+      - status
+      - snapshot
+      - testing_app
+      - testing_delivery_state
+    properties:
+      status:
+        $ref: "#/$defs/promotion_status"
+      snapshot:
+        type: object
+        additionalProperties: false
+        required:
+          - version_id
+          - version
+          - alias
+        properties:
+          version_id:
+            $ref: "#/$defs/nullable_non_empty_string"
+          version:
+            $ref: "#/$defs/nullable_non_empty_string"
+          alias:
+            $ref: "#/$defs/nullable_non_empty_string"
+      testing_app:
+        $ref: "#/$defs/app_identity"
+      testing_delivery_state:
+        anyOf:
+          - $ref: "#/$defs/delivery_summary"
+          - type: "null"
+properties:
+  AppAssistantResult:
+    type: object
+    additionalProperties: false
+    required:
+      - project
+      - environment
+      - request_intent
+      - execution_path
+      - orchestration_state
+      - runtime_state
+      - delivery_state
+      - promotion_result
+      - actions_performed
+      - next_action
+    properties:
+      project:
+        type: object
+        additionalProperties: false
+        required:
+          - identity
+          - linked
+          - selected_environment
+        properties:
+          identity:
+            $ref: "#/$defs/app_identity"
+          linked:
+            anyOf:
+              - type: boolean
+              - type: "null"
+          selected_environment:
+            anyOf:
+              - $ref: "#/$defs/environment_name"
+              - type: "null"
+      environment:
+        type: object
+        additionalProperties: false
+        required:
+          - name
+          - source
+          - env_delta_present
+          - secrets_provided
+        properties:
+          name:
+            $ref: "#/$defs/environment_name"
+          source:
+            $ref: "#/$defs/environment_source"
+          env_delta_present:
+            type: boolean
+          secrets_provided:
+            type: boolean
+      request_intent:
+        $ref: "#/$defs/request_intent"
+      execution_path:
+        type: object
+        additionalProperties: false
+        required:
+          - requested_kind
+          - resolved_kind
+        properties:
+          requested_kind:
+            $ref: "#/$defs/execution_kind"
+          resolved_kind:
+            $ref: "#/$defs/execution_kind"
+      orchestration_state:
+        $ref: "#/$defs/non_empty_string"
+      runtime_state:
+        anyOf:
+          - $ref: "#/$defs/runtime_state"
+          - type: "null"
+      delivery_state:
+        anyOf:
+          - $ref: "#/$defs/delivery_summary"
+          - type: "null"
+      promotion_result:
+        anyOf:
+          - $ref: "#/$defs/promotion_result"
+          - type: "null"
+      actions_performed:
+        type: array
+        minItems: 1
+        items:
+          $ref: "#/$defs/action_record"
+      next_action:
+        $ref: "#/$defs/non_empty_string"

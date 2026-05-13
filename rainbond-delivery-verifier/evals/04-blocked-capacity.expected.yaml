@@ -1,0 +1,18 @@
+case: blocked-capacity
+assert:
+  equal:
+    DeliveryVerificationResult.runtime_state: capacity_blocked
+    DeliveryVerificationResult.delivery_state: blocked
+    DeliveryVerificationResult.preferred_access_url: null
+    DeliveryVerificationResult.verification_mode: inferred
+    DeliveryVerificationResult.blocker: cluster capacity blocked
+    DeliveryVerificationResult.next_action: fix_cluster_capacity_first
+  contains:
+    DeliveryVerificationResult.component_status:
+      db: running
+      api/service: running
+      frontend: capacity-blocked
+  prose_contains:
+    - blocked
+    - cluster capacity blocked
+    - fix cluster capacity first

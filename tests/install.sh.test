@@ -1,0 +1,409 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+fail() {
+  printf 'FAIL: %s\n' "$1" >&2
+  exit 1
+}
+
+assert_file_exists() {
+  local path="$1"
+  [[ -f "$path" ]] || fail "expected file to exist: $path"
+}
+
+assert_contains() {
+  local path="$1"
+  local pattern="$2"
+  grep -F -- "$pattern" "$path" >/dev/null || fail "expected '$pattern' in $path"
+}
+
+assert_not_contains() {
+  local path="$1"
+  local pattern="$2"
+  if grep -F -- "$pattern" "$path" >/dev/null; then
+    fail "did not expect '$pattern' in $path"
+  fi
+}
+
+assert_line_count() {
+  local path="$1"
+  local pattern="$2"
+  local expected="$3"
+  local count
+  count="$(grep -Fxc -- "$pattern" "$path" || true)"
+  [[ "$count" == "$expected" ]] || fail "expected '$pattern' to appear $expected times in $path, got $count"
+}
+
+file_mode() {
+  if stat -f '%Lp' "$1" >/dev/null 2>&1; then
+    stat -f '%Lp' "$1"
+  else
+    stat -c '%a' "$1"
+  fi
+}
+
+make_fake_commands() {
+  local bin_dir="$1"
+  mkdir -p "$bin_dir"
+
+  cat >"$bin_dir/codex" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "${TEST_LOG_DIR}/codex.log"
+if [[ "${1:-}" == "mcp" && "${2:-}" == "add" ]]; then
+  name="${3:-}"
+  shift 3
+  url=""
+  env_var=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --url)
+        url="$2"
+        shift 2
+        ;;
+      --bearer-token-env-var)
+        env_var="$2"
+        shift 2
+        ;;
+      *)
+        shift
+        ;;
+    esac
+  done
+  mkdir -p "$HOME/.codex"
+  cat > "$HOME/.codex/config.toml" <<CONFIG
+[mcp_servers.${name}]
+url = "${url}"
+bearer_token_env_var = "${env_var}"
+CONFIG
+  exit 0
+fi
+echo "unsupported fake codex command: $*" >&2
+exit 1
+EOF
+
+  cat >"$bin_dir/claude" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "${TEST_LOG_DIR}/claude.log"
+if [[ "${1:-}" == "mcp" && "${2:-}" == "add" ]]; then
+  shift 2
+  scope="local"
+  transport=""
+  header=""
+  name=""
+  url=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --scope)
+        scope="$2"
+        shift 2
+        ;;
+      --transport)
+        transport="$2"
+        shift 2
+        ;;
+      -H|--header)
+        header="$2"
+        shift 2
+        ;;
+      http://*|https://*)
+        url="$1"
+        shift
+        ;;
+      *)
+        if [[ -z "$name" ]]; then
+          name="$1"
+        fi
+        shift
+        ;;
+    esac
+  done
+  mkdir -p "$HOME"
+  auth_value="${header#Authorization: }"
+  cat > "$HOME/.claude.json" <<CONFIG
+{
+  "mcpServers": {
+    "${name}": {
+      "type": "${transport}",
+      "url": "${url}",
+      "headers": {
+        "Authorization": "${auth_value}"
+      }
+    }
+  }
+}
+CONFIG
+  exit 0
+fi
+echo "unsupported fake claude command: $*" >&2
+exit 1
+EOF
+
+  cat >"$bin_dir/curl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "${TEST_LOG_DIR}/curl.log"
+
+output_file=""
+write_out=""
+url=""
+args=("$@")
+i=0
+while [[ $i -lt ${#args[@]} ]]; do
+  arg="${args[$i]}"
+  case "$arg" in
+    --output)
+      i=$((i + 1))
+      output_file="${args[$i]}"
+      ;;
+    --write-out)
+      i=$((i + 1))
+      write_out="${args[$i]}"
+      ;;
+    http://*|https://*)
+      url="$arg"
+      ;;
+  esac
+  i=$((i + 1))
+done
+
+body='{}'
+if [[ "$url" == *"/console/users/login" ]]; then
+  body='{"code":200,"data":{"bean":{"token":"demo.jwt.token"}}}'
+elif [[ "$url" == *"/console/mcp/query" ]]; then
+  if [[ -n "${TEST_FAKE_MCP_HTTP_CODE:-}" && "${TEST_FAKE_MCP_HTTP_CODE}" != "200" ]]; then
+    body='{"code":404,"msg":"not found"}'
+  else
+    body='{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{"name":"rainbond-console-mcp"}}}'
+  fi
+else
+  body='{"code":404}'
+fi
+
+if [[ -n "$output_file" ]]; then
+  printf '%s' "$body" > "$output_file"
+else
+  printf '%s' "$body"
+fi
+
+if [[ "$write_out" == "%{http_code}" ]]; then
+  if [[ "$url" == *"/console/mcp/query" && -n "${TEST_FAKE_MCP_HTTP_CODE:-}" ]]; then
+    printf '%s' "$TEST_FAKE_MCP_HTTP_CODE"
+  else
+    printf '200'
+  fi
+fi
+EOF
+
+  chmod +x "$bin_dir/codex" "$bin_dir/claude" "$bin_dir/curl"
+}
+
+run_installer() {
+  local workdir="$1"
+  shift
+  (
+    cd "$REPO_ROOT"
+    if [[ "${TEST_RAINBOND_PASSWORD+x}" == "x" ]]; then
+      export RAINBOND_PASSWORD="$TEST_RAINBOND_PASSWORD"
+    else
+      export RAINBOND_PASSWORD="secret-password"
+    fi
+    HOME="$workdir/home" \
+    TEST_LOG_DIR="$workdir/logs" \
+    PATH="$workdir/bin:/usr/bin:/bin" \
+    TEST_FAKE_MCP_HTTP_CODE="${TEST_FAKE_MCP_HTTP_CODE:-}" \
+    bash "$REPO_ROOT/install.sh" "$@"
+  )
+}
+
+run_interactive_installer_with_pty() {
+  local workdir="$1"
+  local output_file="$2"
+  python3 - "$REPO_ROOT" "$workdir" "$output_file" <<'PY'
+import os
+import pty
+import select
+import sys
+import time
+
+repo_root, workdir, output_file = sys.argv[1:4]
+responses = [
+    "http://rainbond.internal\n",
+    "y\n",
+    "demo\n",
+]
+
+env = os.environ.copy()
+env["HOME"] = os.path.join(workdir, "home")
+env["TEST_LOG_DIR"] = os.path.join(workdir, "logs")
+env["PATH"] = os.path.join(workdir, "bin") + ":/usr/bin:/bin"
+env["RAINBOND_PASSWORD"] = "secret-password"
+
+pid, master_fd = pty.fork()
+if pid == 0:
+    os.chdir(repo_root)
+    os.execvpe("bash", ["bash", os.path.join(repo_root, "install.sh"), "codex", "--force"], env)
+
+buffer = bytearray()
+response_index = 0
+deadline = time.monotonic() + 10
+
+while True:
+    if time.monotonic() > deadline:
+        with open(output_file, "wb") as fh:
+            fh.write(buffer)
+        try:
+            os.kill(pid, 9)
+        except OSError:
+            pass
+        sys.exit(124)
+    ready, _, _ = select.select([master_fd], [], [], 0.2)
+    if master_fd in ready:
+        try:
+            chunk = os.read(master_fd, 4096)
+        except OSError:
+            break
+        if not chunk:
+            break
+        buffer.extend(chunk)
+        text = buffer.decode("utf-8", errors="replace")
+        while response_index < len(responses):
+            expected = [
+                "Rainbond 地址: ",
+                "是否继续使用内部试点模式？[y/N]: ",
+                "Rainbond 用户名: ",
+            ][response_index]
+            if expected in text:
+                os.write(master_fd, responses[response_index].encode("utf-8"))
+                response_index += 1
+            else:
+                break
+    try:
+        done_pid, status = os.waitpid(pid, os.WNOHANG)
+    except ChildProcessError:
+        done_pid, status = pid, 0
+    if done_pid == pid:
+        exit_code = os.waitstatus_to_exitcode(status)
+        with open(output_file, "wb") as fh:
+            fh.write(buffer)
+        sys.exit(exit_code)
+
+try:
+    _, status = os.waitpid(pid, 0)
+    exit_code = os.waitstatus_to_exitcode(status)
+except ChildProcessError:
+    exit_code = 0
+
+with open(output_file, "wb") as fh:
+    fh.write(buffer)
+sys.exit(exit_code)
+PY
+}
+
+test_noninteractive_http_requires_explicit_opt_in() {
+  local tmpdir
+  tmpdir="$(mktemp -d)"
+  trap 'rm -rf "$tmpdir"' RETURN
+  mkdir -p "$tmpdir/home" "$tmpdir/logs"
+  make_fake_commands "$tmpdir/bin"
+
+  set +e
+  run_installer "$tmpdir" all --non-interactive --rainbond-url http://rainbond.internal --username demo >/tmp/rainbond-install-test.out 2>&1
+  local rc=$?
+  set -e
+
+  [[ $rc -ne 0 ]] || fail "expected installer to reject non-interactive HTTP without explicit opt-in"
+  grep -F -- "--allow-insecure-http" /tmp/rainbond-install-test.out >/dev/null || fail "expected insecure http guidance"
+}
+
+test_noninteractive_without_rainbond_params_skips_mcp() {
+  local tmpdir
+  tmpdir="$(mktemp -d)"
+  trap 'rm -rf "$tmpdir"' RETURN
+  mkdir -p "$tmpdir/home" "$tmpdir/logs"
+  make_fake_commands "$tmpdir/bin"
+
+  TEST_RAINBOND_PASSWORD="" run_installer "$tmpdir" all --force >/tmp/rainbond-install-skip.out 2>&1
+
+  [[ ! -f "$tmpdir/home/.rainbond/mcp.env" ]] || fail "did not expect JWT file when MCP setup is auto-skipped"
+  grep -F -- "非交互模式下未提供 Rainbond 连接信息，已跳过 MCP 配置。" /tmp/rainbond-install-skip.out >/dev/null || fail "expected auto-skip guidance"
+}
+
+test_installer_configures_both_platforms_and_shell_autoload() {
+  local tmpdir
+  tmpdir="$(mktemp -d)"
+  trap 'rm -rf "$tmpdir"' RETURN
+  mkdir -p "$tmpdir/home" "$tmpdir/logs"
+  make_fake_commands "$tmpdir/bin"
+
+  run_installer "$tmpdir" all --non-interactive --rainbond-url http://rainbond.internal --username demo --allow-insecure-http --force
+
+  assert_file_exists "$tmpdir/home/.rainbond/mcp.env"
+  assert_contains "$tmpdir/home/.rainbond/mcp.env" "export RAINBOND_JWT='demo.jwt.token'"
+  [[ "$(file_mode "$tmpdir/home/.rainbond/mcp.env")" == "600" ]] || fail "expected token file permissions to be 600"
+
+  assert_file_exists "$tmpdir/home/.zshrc"
+  assert_contains "$tmpdir/home/.zshrc" "# >>> rainbond skills mcp >>>"
+  assert_contains "$tmpdir/home/.zshrc" 'source "$HOME/.rainbond/mcp.env"'
+  assert_line_count "$tmpdir/home/.zshrc" "# >>> rainbond skills mcp >>>" "1"
+
+  assert_file_exists "$tmpdir/home/.codex/config.toml"
+  assert_contains "$tmpdir/home/.codex/config.toml" "url = \"http://rainbond.internal/console/mcp/query\""
+  assert_contains "$tmpdir/home/.codex/config.toml" "bearer_token_env_var = \"RAINBOND_JWT\""
+  assert_file_exists "$tmpdir/home/.codex/skills/rainbond-fullstack-bootstrap/references/source-build-parameter-guide.md"
+
+  assert_file_exists "$tmpdir/home/.claude.json"
+  assert_contains "$tmpdir/home/.claude.json" "\"url\": \"http://rainbond.internal/console/mcp/query\""
+  assert_contains "$tmpdir/home/.claude.json" "\"Authorization\": \"GRJWT \${RAINBOND_JWT}\""
+  assert_file_exists "$tmpdir/home/.claude/skills/rainbond-fullstack-bootstrap/references/source-build-parameter-guide.md"
+
+  assert_contains "$tmpdir/logs/curl.log" "http://rainbond.internal/console/users/login"
+  assert_contains "$tmpdir/logs/curl.log" "http://rainbond.internal/console/mcp/query"
+  assert_contains "$tmpdir/logs/codex.log" "mcp add rainbond --url http://rainbond.internal/console/mcp/query --bearer-token-env-var RAINBOND_JWT"
+  assert_contains "$tmpdir/logs/claude.log" "mcp add --scope user --transport http rainbond http://rainbond.internal/console/mcp/query -H Authorization: GRJWT \${RAINBOND_JWT}"
+}
+
+test_interactive_prompts_are_visible() {
+  local tmpdir
+  local output_file
+  tmpdir="$(mktemp -d)"
+  output_file="$tmpdir/interactive.out"
+  trap 'rm -rf "$tmpdir"' RETURN
+  mkdir -p "$tmpdir/home" "$tmpdir/logs"
+  make_fake_commands "$tmpdir/bin"
+
+  run_interactive_installer_with_pty "$tmpdir" "$output_file"
+
+  assert_contains "$output_file" "Rainbond 地址: "
+  assert_contains "$output_file" "Rainbond 用户名: "
+}
+
+test_mcp_404_reports_missing_endpoint() {
+  local tmpdir
+  tmpdir="$(mktemp -d)"
+  trap 'rm -rf "$tmpdir"' RETURN
+  mkdir -p "$tmpdir/home" "$tmpdir/logs"
+  make_fake_commands "$tmpdir/bin"
+
+  set +e
+  (
+    export TEST_FAKE_MCP_HTTP_CODE=404
+    run_installer "$tmpdir" codex --non-interactive --rainbond-url http://rainbond.internal --username demo --allow-insecure-http --force
+  ) >/tmp/rainbond-install-404.out 2>&1
+  local rc=$?
+  set -e
+
+  [[ $rc -ne 0 ]] || fail "expected installer to fail when MCP endpoint returns 404"
+  grep -F -- "未暴露 /console/mcp/query" /tmp/rainbond-install-404.out >/dev/null || fail "expected missing endpoint guidance"
+}
+
+test_noninteractive_http_requires_explicit_opt_in
+test_noninteractive_without_rainbond_params_skips_mcp
+test_interactive_prompts_are_visible
+test_mcp_404_reports_missing_endpoint
+test_installer_configures_both_platforms_and_shell_autoload
+
+printf 'PASS: install.sh behavior tests\n'

@@ -1,0 +1,26 @@
+case: capacity-blocked
+in_scope_components:
+  - web
+  - api
+  - postgres
+assert:
+  equal:
+    BootstrapResult.deployment_plan.workflow.created: []
+    BootstrapResult.deployment_plan.workflow.reused:
+      - web
+      - api
+      - postgres
+    BootstrapResult.deployment_plan.workflow.skipped: []
+    BootstrapResult.deployment_plan.workflow.skipped_reasons: {}
+    BootstrapResult.deployment_plan.workflow.deferred_dependencies: []
+    BootstrapResult.runtime_state.overall: capacity_blocked
+    BootstrapResult.runtime_state.blocking_bucket: cluster capacity blocked
+    BootstrapResult.next_handoff: troubleshooter
+  contains:
+    BootstrapResult.runtime_state.component_status:
+      web: capacity-blocked
+      api: running
+      postgres: running
+  prose_contains:
+    - cluster cannot currently schedule the workload
+    - rainbond-fullstack-troubleshooter

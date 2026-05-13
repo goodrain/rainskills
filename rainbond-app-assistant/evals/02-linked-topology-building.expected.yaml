@@ -1,0 +1,19 @@
+case: linked-topology-building
+assert:
+  equal:
+    AppAssistantResult.request_intent: source_app_delivery
+    AppAssistantResult.orchestration_state: linked-and-topology-building
+    AppAssistantResult.runtime_state.phase: topology_building
+    AppAssistantResult.delivery_state: null
+    AppAssistantResult.promotion_result: null
+    AppAssistantResult.next_action: run troubleshooter
+  contains:
+    AppAssistantResult.actions_performed:
+      - skill: rainbond-fullstack-troubleshooter
+        status: pending
+        details: Selected because topology exists but source-backed components are still converging.
+  prose_contains:
+    - linked-and-topology-building
+    - topology_building
+    - Source-backed components are still building
+    - run troubleshooter

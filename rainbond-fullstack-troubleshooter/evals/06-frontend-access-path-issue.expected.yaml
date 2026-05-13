@@ -1,0 +1,21 @@
+case: frontend-access-path-issue
+assert:
+  equal:
+    TroubleshootResult.runtime_state.label: code_or_build_handoff_needed
+    TroubleshootResult.blocker_bucket: frontend access-path issue
+    TroubleshootResult.verification_summary.stop_reason: frontend_access_path_issue
+    TroubleshootResult.next_handoff: code_build_handoff
+  contains:
+    TroubleshootResult.verification_summary.evidence_chain:
+      - frontend_access_check
+      - runtime_logs
+    TroubleshootResult.verification_summary.stop_boundary:
+      delivery_verifier_allowed: false
+      code_changes_allowed: false
+      local_tests_allowed: false
+      commit_or_push_allowed: false
+      fallback_used: false
+  prose_contains:
+    - "frontend access-path issue"
+    - "code_or_build_handoff_needed"
+    - "handoff needed: yes, `code/build`"

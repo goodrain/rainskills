@@ -1,0 +1,23 @@
+case: external-artifact-unreachable
+in_scope_components:
+  - web
+assert:
+  equal:
+    BootstrapResult.deployment_plan.workflow.created:
+      - web
+    BootstrapResult.deployment_plan.workflow.reused: []
+    BootstrapResult.deployment_plan.workflow.skipped: []
+    BootstrapResult.runtime_state.overall: code_or_build_handoff_needed
+    BootstrapResult.runtime_state.blocking_bucket: external artifact unreachable
+    BootstrapResult.next_handoff: code_build_handoff
+  contains:
+    BootstrapResult.runtime_state.component_status:
+      web: abnormal
+  prose_contains:
+    - "external artifact unreachable"
+    - "code/build handoff"
+    - "No local package upload, image fallback, Docker build, or temporary image push was attempted."
+  prose_not_contains:
+    - "switched to package"
+    - "fallback to image"
+    - "template install"

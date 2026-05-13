@@ -1,0 +1,21 @@
+case: delivered-stop-without-promotion
+assert:
+  equal:
+    AppAssistantResult.request_intent: source_app_delivery
+    AppAssistantResult.orchestration_state: linked-and-delivered
+    AppAssistantResult.runtime_state.phase: runtime_healthy
+    AppAssistantResult.delivery_state.status: delivered
+    AppAssistantResult.delivery_state.preferred_access_url: https://demo-team-cn.rainbond.me/payments-app
+    AppAssistantResult.delivery_state.verification_mode: verified
+    AppAssistantResult.promotion_result: null
+    AppAssistantResult.next_action: stop
+  contains:
+    AppAssistantResult.actions_performed:
+      - skill: rainbond-delivery-verifier
+        status: completed
+        details: Verified the source app is delivered and resolved the preferred_access_url.
+  prose_contains:
+    - linked-and-delivered
+    - delivery status delivered
+    - promotion was not requested
+    - stop

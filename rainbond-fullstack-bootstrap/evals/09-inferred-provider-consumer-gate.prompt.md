@@ -1,0 +1,1 @@
+Compose has no explicit `depends_on`, but repository docs and env/config show a dashboard component connects to a database provider. Continue bootstrap through manual image component creation and make sure the visible Rainbond topology is complete before delivery verification.

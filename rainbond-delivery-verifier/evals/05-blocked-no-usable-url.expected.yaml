@@ -1,0 +1,20 @@
+case: blocked-no-usable-url
+assert:
+  equal:
+    DeliveryVerificationResult.runtime_state: runtime_healthy
+    DeliveryVerificationResult.delivery_state: blocked
+    DeliveryVerificationResult.preferred_access_url: null
+    DeliveryVerificationResult.verification_mode: inferred
+    DeliveryVerificationResult.blocker: no usable access URL
+    DeliveryVerificationResult.next_action: run_troubleshooter
+  contains:
+    DeliveryVerificationResult.component_status:
+      db: running
+      api/service: running
+      frontend: running
+  prose_contains:
+    - no usable access URL
+    - running
+    - run troubleshooter
+  prose_not_contains:
+    - delivery complete

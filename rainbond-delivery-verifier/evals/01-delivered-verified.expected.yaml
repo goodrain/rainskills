@@ -1,0 +1,19 @@
+case: delivered-verified
+assert:
+  equal:
+    DeliveryVerificationResult.runtime_state: runtime_healthy
+    DeliveryVerificationResult.delivery_state: delivered
+    DeliveryVerificationResult.preferred_access_url: https://demo-team-us.rainbond.me/delivered-demo
+    DeliveryVerificationResult.verification_mode: verified
+    DeliveryVerificationResult.blocker: null
+    DeliveryVerificationResult.next_action: stop
+  contains:
+    DeliveryVerificationResult.component_status:
+      db: running
+      api/service: running
+      frontend: running
+  prose_contains:
+    - delivered
+    - runtime_healthy
+    - https://demo-team-us.rainbond.me/delivered-demo
+    - stop, delivery complete

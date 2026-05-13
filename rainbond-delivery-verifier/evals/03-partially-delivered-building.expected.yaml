@@ -1,0 +1,20 @@
+case: partially-delivered-building
+assert:
+  equal:
+    DeliveryVerificationResult.runtime_state: topology_building
+    DeliveryVerificationResult.delivery_state: partially-delivered
+    DeliveryVerificationResult.preferred_access_url: null
+    DeliveryVerificationResult.verification_mode: inferred
+    DeliveryVerificationResult.blocker: source build still running
+    DeliveryVerificationResult.next_action: run_troubleshooter
+  contains:
+    DeliveryVerificationResult.component_status:
+      db: running
+      api/service: building
+      frontend: waiting
+  prose_contains:
+    - partially-delivered
+    - source build still running
+    - run troubleshooter
+  prose_not_contains:
+    - delivery complete

@@ -1,0 +1,15 @@
+case: cluster-capacity-blocked
+assert:
+  equal:
+    AppAssistantResult.orchestration_state: linked-and-cluster-capacity-blocked
+    AppAssistantResult.runtime_state.phase: capacity_blocked
+    AppAssistantResult.delivery_state: null
+    AppAssistantResult.promotion_result: null
+    AppAssistantResult.next_action: fix cluster capacity first
+  prose_contains:
+    - linked-and-cluster-capacity-blocked
+    - capacity_blocked
+    - unschedulable
+    - fix cluster capacity first
+  prose_not_contains:
+    - run delivery verifier

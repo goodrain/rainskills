@@ -1,0 +1,21 @@
+case: dependency-missing
+assert:
+  equal:
+    TroubleshootResult.runtime_state.label: runtime_healthy
+    TroubleshootResult.blocker_bucket: dependency missing
+    TroubleshootResult.verification_summary.key_error_cleared: true
+    TroubleshootResult.verification_summary.stop_reason: runtime_healthy_ready_for_delivery_verifier
+    TroubleshootResult.next_handoff: delivery_verifier
+  contains:
+    TroubleshootResult.verification_summary.evidence_chain:
+      - component_summary
+      - dependency_summary
+      - runtime_logs
+    TroubleshootResult.verification_summary.stop_boundary:
+      delivery_verifier_allowed: true
+      fallback_used: false
+  prose_contains:
+    - "dependency missing"
+    - "runtime_healthy"
+    - "provider connection"
+    - "rainbond-delivery-verifier"

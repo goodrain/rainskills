@@ -1,0 +1,161 @@
+# Pilot source of truth for the current bootstrap structured output contract.
+# Keep the nested deployment_plan.workflow.* shape; do not fall back to the
+# older top-level created/reused/skipped arrays from the product-object-model draft.
+
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: BootstrapResult
+type: object
+additionalProperties: false
+required:
+  - BootstrapResult
+$defs:
+  non_empty_string:
+    type: string
+    minLength: 1
+  component_name:
+    $ref: "#/$defs/non_empty_string"
+  component_status:
+    type: string
+    enum:
+      - building
+      - waiting
+      - running
+      - abnormal
+      - capacity-blocked
+  runtime_blocking_bucket:
+    type: string
+    enum:
+      - db not ready
+      - dependency missing
+      - env naming incompatibility
+      - wrong connection values
+      - api startup issue
+      - frontend access-path issue
+      - source build still running
+      - source build failed
+      - mcp backend issue
+      - external artifact unreachable
+      - cluster capacity blocked
+properties:
+  BootstrapResult:
+    type: object
+    additionalProperties: false
+    required:
+      - deployment_plan
+      - runtime_state
+      - next_handoff
+    properties:
+      deployment_plan:
+        type: object
+        additionalProperties: false
+        required:
+          - app_identity
+          - environment
+          - workflow
+        properties:
+          app_identity:
+            type: object
+            additionalProperties: false
+            required:
+              - team_name
+              - region_name
+              - app_name
+              - app_id
+            properties:
+              team_name:
+                $ref: "#/$defs/non_empty_string"
+              region_name:
+                $ref: "#/$defs/non_empty_string"
+              app_name:
+                $ref: "#/$defs/non_empty_string"
+              app_id:
+                anyOf:
+                  - $ref: "#/$defs/non_empty_string"
+                  - type: "null"
+          environment:
+            type: object
+            additionalProperties: false
+            required:
+              - name
+              - source
+            properties:
+              name:
+                enum:
+                  - preview
+                  - production
+              source:
+                enum:
+                  - explicit
+                  - local_preference
+                  - default
+          workflow:
+            type: object
+            additionalProperties: false
+            required:
+              - created
+              - reused
+              - skipped
+              - skipped_reasons
+              - deferred_dependencies
+              - frontend_access_mode
+            properties:
+              created:
+                type: array
+                items:
+                  $ref: "#/$defs/component_name"
+                uniqueItems: true
+              reused:
+                type: array
+                items:
+                  $ref: "#/$defs/component_name"
+                uniqueItems: true
+              skipped:
+                type: array
+                items:
+                  $ref: "#/$defs/component_name"
+                uniqueItems: true
+              skipped_reasons:
+                type: object
+                additionalProperties:
+                  $ref: "#/$defs/non_empty_string"
+              deferred_dependencies:
+                type: array
+                items:
+                  $ref: "#/$defs/non_empty_string"
+                uniqueItems: true
+              frontend_access_mode:
+                enum:
+                  - reverse-proxy
+                  - runtime-env
+                  - build-time-env
+                  - unspecified
+      runtime_state:
+        type: object
+        additionalProperties: false
+        required:
+          - overall
+          - component_status
+          - blocking_bucket
+        properties:
+          overall:
+            enum:
+              - topology_missing
+              - topology_building
+              - runtime_unhealthy
+              - runtime_healthy
+              - capacity_blocked
+              - code_or_build_handoff_needed
+          component_status:
+            type: object
+            additionalProperties:
+              $ref: "#/$defs/component_status"
+          blocking_bucket:
+            anyOf:
+              - $ref: "#/$defs/runtime_blocking_bucket"
+              - type: "null"
+      next_handoff:
+        enum:
+          - none
+          - troubleshooter
+          - delivery_verifier
+          - code_build_handoff

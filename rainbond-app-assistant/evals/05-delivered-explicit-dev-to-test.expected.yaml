@@ -1,0 +1,21 @@
+case: delivered-explicit-dev-to-test
+assert:
+  equal:
+    AppAssistantResult.request_intent: dev_to_test_promotion
+    AppAssistantResult.delivery_state.status: delivered
+    AppAssistantResult.delivery_state.preferred_access_url: https://demo-team-cn.rainbond.me/orders-app
+    AppAssistantResult.promotion_result.status: testing_app_verified
+    AppAssistantResult.promotion_result.snapshot.version_id: ver-20260423-01
+    AppAssistantResult.promotion_result.testing_app.app_name: orders-app-test
+    AppAssistantResult.promotion_result.testing_delivery_state.status: delivered
+    AppAssistantResult.next_action: stop after reporting testing app verification for orders-app-test
+  contains:
+    AppAssistantResult.actions_performed:
+      - skill: rainbond-app-version-assistant
+        status: completed
+        details: Created snapshot ver-20260423-01 and provisioned testing app orders-app-test because the user explicitly requested dev-to-test promotion.
+  prose_contains:
+    - linked-and-promotion-complete
+    - dev-to-test mainline
+    - orders-app-test
+    - promotion_result to enter

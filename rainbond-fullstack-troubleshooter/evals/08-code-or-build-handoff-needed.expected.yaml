@@ -1,0 +1,21 @@
+case: code-or-build-handoff-needed
+assert:
+  equal:
+    TroubleshootResult.runtime_state.label: code_or_build_handoff_needed
+    TroubleshootResult.blocker_bucket: api startup issue
+    TroubleshootResult.verification_summary.stop_reason: code_or_build_handoff_needed
+    TroubleshootResult.next_handoff: code_build_handoff
+  contains:
+    TroubleshootResult.verification_summary.evidence_chain:
+      - pod_detail
+      - runtime_logs
+    TroubleshootResult.verification_summary.stop_boundary:
+      delivery_verifier_allowed: false
+      code_changes_allowed: false
+      local_tests_allowed: false
+      commit_or_push_allowed: false
+      fallback_used: false
+  prose_contains:
+    - "code_or_build_handoff_needed"
+    - "code/build boundary"
+    - "handoff needed: yes, `code/build`"

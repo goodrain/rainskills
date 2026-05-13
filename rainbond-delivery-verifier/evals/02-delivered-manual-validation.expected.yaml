@@ -1,0 +1,19 @@
+case: delivered-manual-validation
+assert:
+  equal:
+    DeliveryVerificationResult.runtime_state: runtime_healthy
+    DeliveryVerificationResult.delivery_state: delivered-but-needs-manual-validation
+    DeliveryVerificationResult.preferred_access_url: https://demo-team-us.rainbond.me/manual-demo
+    DeliveryVerificationResult.verification_mode: inferred
+    DeliveryVerificationResult.blocker: null
+    DeliveryVerificationResult.next_action: manual_url_validation
+  contains:
+    DeliveryVerificationResult.component_status:
+      db: running
+      api/service: running
+      frontend: running
+  prose_contains:
+    - delivered-but-needs-manual-validation
+    - inferred
+    - manual validation
+    - https://demo-team-us.rainbond.me/manual-demo

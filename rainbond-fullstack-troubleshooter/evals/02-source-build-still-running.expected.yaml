@@ -1,0 +1,20 @@
+case: source-build-still-running
+assert:
+  equal:
+    TroubleshootResult.runtime_state.label: topology_building
+    TroubleshootResult.blocker_bucket: source build still running
+    TroubleshootResult.verification_summary.stop_reason: source_build_still_running
+    TroubleshootResult.next_handoff: none
+  contains:
+    TroubleshootResult.verification_summary.evidence_chain:
+      - component_summary
+      - component_events
+    TroubleshootResult.runtime_state.dependency_readiness:
+      db_dependency: deferred_by_upstream_convergence
+    TroubleshootResult.verification_summary.stop_boundary:
+      delivery_verifier_allowed: false
+      fallback_used: false
+  prose_contains:
+    - "topology_building"
+    - "build event to finish"
+    - "handoff needed: no"

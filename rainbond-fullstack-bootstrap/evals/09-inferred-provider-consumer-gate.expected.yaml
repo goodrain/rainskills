@@ -1,0 +1,32 @@
+case: inferred-provider-consumer-gate
+in_scope_components:
+  - database
+  - dashboard
+assert:
+  equal:
+    BootstrapResult.deployment_plan.workflow.created:
+      - database
+      - dashboard
+    BootstrapResult.deployment_plan.workflow.reused: []
+    BootstrapResult.deployment_plan.workflow.skipped: []
+    BootstrapResult.deployment_plan.workflow.skipped_reasons: {}
+    BootstrapResult.deployment_plan.workflow.deferred_dependencies: []
+    BootstrapResult.deployment_plan.workflow.frontend_access_mode: unspecified
+    BootstrapResult.runtime_state.overall: runtime_healthy
+    BootstrapResult.runtime_state.blocking_bucket: null
+    BootstrapResult.next_handoff: delivery_verifier
+  contains:
+    BootstrapResult.runtime_state.component_status:
+      database: running
+      dashboard: running
+  prose_contains:
+    - manual image component path
+    - dependency completeness gate
+    - provider/consumer edge
+    - rainbond_manage_component_dependency
+    - dashboard -> database
+    - repository connection instructions
+    - component roles
+    - env names
+    - provider port
+    - startup page alone was not treated as proof

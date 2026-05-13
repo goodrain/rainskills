@@ -1,0 +1,84 @@
+# Frozen source of truth for the current delivery-verifier structured output contract.
+# This contract is intentionally narrow: final delivery acceptance only.
+
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: DeliveryVerificationResult
+type: object
+additionalProperties: false
+required:
+  - DeliveryVerificationResult
+$defs:
+  non_empty_string:
+    type: string
+    minLength: 1
+  runtime_state:
+    type: string
+    enum:
+      - topology_missing
+      - topology_building
+      - runtime_unhealthy
+      - runtime_healthy
+      - capacity_blocked
+      - code_or_build_handoff_needed
+  delivery_state:
+    type: string
+    enum:
+      - delivered
+      - delivered-but-needs-manual-validation
+      - partially-delivered
+      - blocked
+  component_status:
+    type: string
+    enum:
+      - building
+      - waiting
+      - running
+      - abnormal
+      - capacity-blocked
+  verification_mode:
+    type: string
+    enum:
+      - verified
+      - inferred
+      - manual_validation_needed
+  next_action:
+    type: string
+    enum:
+      - stop
+      - manual_url_validation
+      - run_troubleshooter
+      - fix_cluster_capacity_first
+      - code_build_handoff
+properties:
+  DeliveryVerificationResult:
+    type: object
+    additionalProperties: false
+    required:
+      - runtime_state
+      - delivery_state
+      - preferred_access_url
+      - verification_mode
+      - blocker
+      - next_action
+      - component_status
+    properties:
+      runtime_state:
+        $ref: "#/$defs/runtime_state"
+      delivery_state:
+        $ref: "#/$defs/delivery_state"
+      preferred_access_url:
+        anyOf:
+          - $ref: "#/$defs/non_empty_string"
+          - type: "null"
+      verification_mode:
+        $ref: "#/$defs/verification_mode"
+      blocker:
+        anyOf:
+          - $ref: "#/$defs/non_empty_string"
+          - type: "null"
+      next_action:
+        $ref: "#/$defs/next_action"
+      component_status:
+        type: object
+        additionalProperties:
+          $ref: "#/$defs/component_status"

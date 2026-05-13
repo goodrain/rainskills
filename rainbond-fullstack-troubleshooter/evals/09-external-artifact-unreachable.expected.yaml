@@ -1,0 +1,28 @@
+case: external-artifact-unreachable
+assert:
+  equal:
+    TroubleshootResult.runtime_state.label: code_or_build_handoff_needed
+    TroubleshootResult.blocker_bucket: external artifact unreachable
+    TroubleshootResult.verification_summary.evidence_chain:
+      - component_summary
+      - component_events
+      - build_logs
+    TroubleshootResult.verification_summary.stop_reason: external_artifact_unreachable
+    TroubleshootResult.next_handoff: code_build_handoff
+  contains:
+    TroubleshootResult.runtime_state.component_status:
+      web: abnormal
+    TroubleshootResult.verification_summary.stop_boundary:
+      delivery_verifier_allowed: false
+      code_changes_allowed: false
+      local_tests_allowed: false
+      commit_or_push_allowed: false
+      fallback_used: false
+  prose_contains:
+    - "external artifact unreachable"
+    - "code_or_build_handoff_needed"
+    - "handoff needed: yes, `code/build`"
+  prose_not_contains:
+    - "switched to package"
+    - "fallback to image"
+    - "template install"

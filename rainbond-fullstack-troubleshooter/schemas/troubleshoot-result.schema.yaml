@@ -1,0 +1,217 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: TroubleshootResult
+type: object
+additionalProperties: false
+required:
+  - TroubleshootResult
+$defs:
+  non_empty_string:
+    type: string
+    minLength: 1
+  nullable_non_empty_string:
+    anyOf:
+      - $ref: "#/$defs/non_empty_string"
+      - type: "null"
+  runtime_label:
+    type: string
+    enum:
+      - topology_missing
+      - topology_building
+      - runtime_unhealthy
+      - runtime_healthy
+      - capacity_blocked
+      - code_or_build_handoff_needed
+  component_status:
+    anyOf:
+      - enum:
+          - building
+          - waiting
+          - running
+          - abnormal
+          - capacity-blocked
+      - type: "null"
+  dependency_readiness:
+    anyOf:
+      - enum:
+          - resolved
+          - deferred
+          - deferred_by_upstream_convergence
+      - type: "null"
+  blocker_bucket:
+    type: string
+    enum:
+      - db not ready
+      - dependency missing
+      - env naming incompatibility
+      - wrong connection values
+      - api startup issue
+      - frontend access-path issue
+      - source build still running
+      - source build failed
+      - mcp backend issue
+      - external artifact unreachable
+      - cluster capacity blocked
+  evidence_source:
+    type: string
+    enum:
+      - app_detail
+      - component_summary
+      - component_events
+      - build_logs
+      - pod_list
+      - pod_detail
+      - runtime_logs
+      - dependency_summary
+      - connection_envs
+      - runtime_envs
+      - port_rules
+      - frontend_access_check
+      - scheduler_events
+      - app_monitor
+  stop_reason:
+    anyOf:
+      - enum:
+          - topology_missing
+          - source_build_still_running
+          - source_build_failed
+          - external_artifact_unreachable
+          - db_not_ready
+          - dependency_missing
+          - env_naming_incompatibility
+          - wrong_connection_values
+          - api_startup_issue
+          - frontend_access_path_issue
+          - cluster_capacity_blocked
+          - code_or_build_handoff_needed
+          - runtime_healthy_ready_for_delivery_verifier
+      - type: "null"
+  runtime_component_status:
+    type: object
+    additionalProperties:
+      $ref: "#/$defs/component_status"
+  verification_status:
+    anyOf:
+      - enum:
+          - running
+          - waiting
+          - abnormal
+          - capacity-blocked
+      - type: "null"
+  frontend_access_status:
+    anyOf:
+      - enum:
+          - working
+          - not_working
+          - needs_validation
+      - type: "null"
+properties:
+  TroubleshootResult:
+    type: object
+    additionalProperties: false
+    required:
+      - runtime_state
+      - blocker_bucket
+      - actions_taken
+      - verification_summary
+      - next_handoff
+    properties:
+      runtime_state:
+        type: object
+        additionalProperties: false
+        required:
+          - label
+          - component_status
+          - dependency_readiness
+          - blocker_summary
+        properties:
+          label:
+            $ref: "#/$defs/runtime_label"
+          component_status:
+            $ref: "#/$defs/runtime_component_status"
+          dependency_readiness:
+            type: object
+            additionalProperties:
+              $ref: "#/$defs/dependency_readiness"
+          blocker_summary:
+            $ref: "#/$defs/nullable_non_empty_string"
+      blocker_bucket:
+        anyOf:
+          - $ref: "#/$defs/blocker_bucket"
+          - type: "null"
+      actions_taken:
+        type: array
+        minItems: 1
+        items:
+          $ref: "#/$defs/non_empty_string"
+      verification_summary:
+        type: object
+        additionalProperties: false
+        required:
+          - db_status
+          - api_status
+          - frontend_access_status
+          - key_error_cleared
+          - app_endpoint_operational
+          - evidence_chain
+          - dominant_evidence
+          - stop_reason
+          - recommended_next_action
+          - stop_boundary
+        properties:
+          db_status:
+            $ref: "#/$defs/verification_status"
+          api_status:
+            $ref: "#/$defs/verification_status"
+          frontend_access_status:
+            $ref: "#/$defs/frontend_access_status"
+          key_error_cleared:
+            anyOf:
+              - type: boolean
+              - type: "null"
+          app_endpoint_operational:
+            anyOf:
+              - type: boolean
+              - type: "null"
+          evidence_chain:
+            type: array
+            minItems: 1
+            items:
+              $ref: "#/$defs/evidence_source"
+          dominant_evidence:
+            $ref: "#/$defs/nullable_non_empty_string"
+          stop_reason:
+            $ref: "#/$defs/stop_reason"
+          recommended_next_action:
+            $ref: "#/$defs/nullable_non_empty_string"
+          stop_boundary:
+            type: object
+            additionalProperties: false
+            required:
+              - stopped
+              - delivery_verifier_allowed
+              - code_changes_allowed
+              - local_tests_allowed
+              - commit_or_push_allowed
+              - fallback_used
+            properties:
+              stopped:
+                type: boolean
+              delivery_verifier_allowed:
+                type: boolean
+              code_changes_allowed:
+                enum:
+                  - false
+              local_tests_allowed:
+                enum:
+                  - false
+              commit_or_push_allowed:
+                enum:
+                  - false
+              fallback_used:
+                enum:
+                  - false
+      next_handoff:
+        enum:
+          - none
+          - delivery_verifier
+          - code_build_handoff

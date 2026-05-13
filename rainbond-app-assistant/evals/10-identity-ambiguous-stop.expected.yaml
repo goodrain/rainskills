@@ -1,0 +1,21 @@
+case: identity-ambiguous-stop
+assert:
+  equal:
+    AppAssistantResult.orchestration_state: linked-and-identity-ambiguous
+    AppAssistantResult.project.identity.team_name: null
+    AppAssistantResult.project.identity.region_name: null
+    AppAssistantResult.project.identity.app_name: null
+    AppAssistantResult.project.identity.app_id: null
+    AppAssistantResult.project.linked: null
+    AppAssistantResult.project.selected_environment: null
+    AppAssistantResult.runtime_state: null
+    AppAssistantResult.delivery_state: null
+    AppAssistantResult.promotion_result: null
+    AppAssistantResult.next_action: stop and ask the user to choose the team/app identity
+  prose_contains:
+    - linked-and-identity-ambiguous
+    - multiple safe team/app targets
+    - stop and ask the user to choose the team/app identity
+  prose_not_contains:
+    - rainbond-fullstack-bootstrap
+    - rainbond-delivery-verifier

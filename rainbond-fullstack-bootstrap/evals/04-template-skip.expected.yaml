@@ -1,0 +1,31 @@
+case: template-skip
+in_scope_components:
+  - api
+  - web
+  - redis
+assert:
+  equal:
+    BootstrapResult.deployment_plan.workflow.created:
+      - api
+      - web
+    BootstrapResult.deployment_plan.workflow.reused: []
+    BootstrapResult.deployment_plan.workflow.skipped:
+      - redis
+    BootstrapResult.deployment_plan.workflow.deferred_dependencies: []
+    BootstrapResult.runtime_state.overall: topology_building
+    BootstrapResult.runtime_state.blocking_bucket: dependency missing
+    BootstrapResult.next_handoff: none
+  contains:
+    BootstrapResult.deployment_plan.workflow.skipped_reasons:
+      redis: template-backed component; handle via rainbond-template-installer
+    BootstrapResult.runtime_state.component_status:
+      api: running
+      web: waiting
+  excludes:
+    BootstrapResult.deployment_plan.workflow.created:
+      - redis
+    BootstrapResult.deployment_plan.workflow.reused:
+      - redis
+  prose_contains:
+    - template-backed `redis` component was skipped
+    - rainbond-template-installer

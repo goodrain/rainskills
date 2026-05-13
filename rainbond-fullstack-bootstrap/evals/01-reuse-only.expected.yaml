@@ -1,0 +1,27 @@
+case: reuse-only
+in_scope_components:
+  - web
+  - api
+  - postgres
+assert:
+  equal:
+    BootstrapResult.deployment_plan.workflow.created: []
+    BootstrapResult.deployment_plan.workflow.reused:
+      - web
+      - api
+      - postgres
+    BootstrapResult.deployment_plan.workflow.skipped: []
+    BootstrapResult.deployment_plan.workflow.skipped_reasons: {}
+    BootstrapResult.deployment_plan.workflow.deferred_dependencies: []
+    BootstrapResult.deployment_plan.workflow.frontend_access_mode: reverse-proxy
+    BootstrapResult.runtime_state.overall: runtime_healthy
+    BootstrapResult.runtime_state.blocking_bucket: null
+    BootstrapResult.next_handoff: none
+  contains:
+    BootstrapResult.runtime_state.component_status:
+      web: running
+      api: running
+      postgres: running
+  prose_contains:
+    - The app was reused.
+    - Setup complete for bootstrap.

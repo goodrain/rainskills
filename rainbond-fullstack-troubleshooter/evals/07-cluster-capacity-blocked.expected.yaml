@@ -1,0 +1,20 @@
+case: cluster-capacity-blocked
+assert:
+  equal:
+    TroubleshootResult.runtime_state.label: capacity_blocked
+    TroubleshootResult.blocker_bucket: cluster capacity blocked
+    TroubleshootResult.verification_summary.stop_reason: cluster_capacity_blocked
+    TroubleshootResult.next_handoff: none
+  contains:
+    TroubleshootResult.runtime_state.component_status:
+      web: capacity-blocked
+    TroubleshootResult.verification_summary.evidence_chain:
+      - pod_detail
+      - scheduler_events
+    TroubleshootResult.verification_summary.stop_boundary:
+      delivery_verifier_allowed: false
+      fallback_used: false
+  prose_contains:
+    - "capacity_blocked"
+    - "delivery verification must stop"
+    - "Application-level repair is paused until scheduling is restored."
