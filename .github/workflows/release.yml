@@ -28,9 +28,20 @@ jobs:
           ls -lh rainskills-*.tar.gz
 
       - name: Install tosutil
+        env:
+          TOSUTIL_VERSION: v4.1.2
         run: |
-          curl -fsSL https://tosutil-tos-bucket.tos-cn-beijing.volces.com/linux/tosutil -o /tmp/tosutil
-          chmod +x /tmp/tosutil
+          curl -fsSL "https://github.com/volcengine/tosutil/releases/download/${TOSUTIL_VERSION}/tosutil-linux-amd64.zip" \
+            -o /tmp/tosutil.zip
+          unzip -q /tmp/tosutil.zip -d /tmp/tosutil-pkg
+          TOSUTIL_BIN="$(find /tmp/tosutil-pkg -type f -name tosutil | head -1)"
+          if [[ -z "$TOSUTIL_BIN" ]]; then
+            echo "tosutil binary not found in release zip; contents were:" >&2
+            ls -laR /tmp/tosutil-pkg >&2
+            exit 1
+          fi
+          chmod +x "$TOSUTIL_BIN"
+          cp "$TOSUTIL_BIN" /tmp/tosutil
           /tmp/tosutil version || true
 
       - name: Upload to TOS
