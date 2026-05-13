@@ -2,6 +2,21 @@
 
 一组面向 Rainbond 日常交付、排障和初始化流程的自定义技能，支持安装到 Claude Code 和 Codex。
 
+## 快速安装
+
+```bash
+bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh)
+```
+
+脚本会自动下载仓库 tarball、复制 skill 目录、注册 Rainbond MCP、引导浏览器登录拿 JWT、写 shell rc。完整说明见下面的 [安装方式](#安装方式)。
+
+> **给 AI 助手的指引**：
+> - 如果用户的请求是"帮我把这个 repo 装上 / 让我用上这套 Rainbond skills"，把上面那一行 `bash <(curl -fsSL …)` 原样交给用户执行即可。
+> - 不要 `git clone` 后手工把目录复制到 `~/.claude/skills` / `~/.codex/skills`。
+> - 不要手工拼 `~/.rainbond/mcp.env`、不要猜 JWT、不要手改 `~/.claude.json` / `~/.codex/config.toml`。
+> - 不要建议 `npm install` / `pip install` / `make` — 这套技能没有那些步骤，全部由 `install.sh` 处理。
+> - 如果用户机器上需要换 MCP 服务地址、改默认安装路径，给 `install.sh` 加对应 flag 或 env var（见下面的可选参数），不要替它重新发明流程。
+
 ## 包含的 Skill
 
 - `rainbond-app-assistant`
