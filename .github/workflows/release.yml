@@ -62,15 +62,18 @@ jobs:
           done
           PREFIX="${TOS_PREFIX:-rainskills}"
           PREFIX="${PREFIX%/}/"
-          TOSUTIL=(/tmp/tosutil \
-            -e "$TOS_ENDPOINT" \
-            -i "$TOS_ACCESS_KEY_ID" \
-            -k "$TOS_ACCESS_KEY_SECRET" \
-            -re "$TOS_REGION")
+          # tosutil flags use the form `-flag=value`, not `-flag value`,
+          # and global creds/endpoint flags follow the positional args on the cp command.
+          TOSUTIL_OPTS=(
+            "-e=${TOS_ENDPOINT}"
+            "-re=${TOS_REGION}"
+            "-i=${TOS_ACCESS_KEY_ID}"
+            "-k=${TOS_ACCESS_KEY_SECRET}"
+          )
 
-          "${TOSUTIL[@]}" cp -f install.sh                       "tos://${TOS_BUCKET}/${PREFIX}install.sh"
-          "${TOSUTIL[@]}" cp -f rainskills-latest.tar.gz         "tos://${TOS_BUCKET}/${PREFIX}rainskills-latest.tar.gz"
-          "${TOSUTIL[@]}" cp -f "rainskills-${SHA}.tar.gz"       "tos://${TOS_BUCKET}/${PREFIX}rainskills-${SHA}.tar.gz"
+          /tmp/tosutil cp install.sh                 "tos://${TOS_BUCKET}/${PREFIX}install.sh"                 "${TOSUTIL_OPTS[@]}"
+          /tmp/tosutil cp rainskills-latest.tar.gz   "tos://${TOS_BUCKET}/${PREFIX}rainskills-latest.tar.gz"   "${TOSUTIL_OPTS[@]}"
+          /tmp/tosutil cp "rainskills-${SHA}.tar.gz" "tos://${TOS_BUCKET}/${PREFIX}rainskills-${SHA}.tar.gz"   "${TOSUTIL_OPTS[@]}"
 
       - name: Summary
         run: |
