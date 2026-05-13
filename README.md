@@ -37,7 +37,7 @@
 国内推荐用 OSS 入口（CDN 加速，无需翻墙）：
 
 ```bash
-bash <(curl -fsSL https://install.rainbond.com/rainskills/install.sh)
+bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh)
 ```
 
 海外或源码党可以直接用 GitHub 入口：
@@ -51,13 +51,13 @@ bash <(curl -fsSL https://raw.githubusercontent.com/goodrain/rainskills/main/ins
 可通过环境变量自定义下载源：
 
 - `RAINBOND_SKILLS_TARBALL_URL` — 用户显式指定的 tarball URL（最高优先）
-- `RAINBOND_SKILLS_OSS_URL` — OSS tarball URL（默认 `https://install.rainbond.com/rainskills/rainskills-latest.tar.gz`）
+- `RAINBOND_SKILLS_OSS_URL` — OSS tarball URL（默认 `https://get.rainbond.com/rainskills/rainskills-latest.tar.gz`）
 - `RAINBOND_SKILLS_HOME` — 安装目录（默认 `~/.rainbond/skills`）
 
 > 谨慎模式：如果不想让远程脚本直接执行，可以先下载再阅读：
 >
 > ```bash
-> curl -fsSLO https://install.rainbond.com/rainskills/install.sh
+> curl -fsSLO https://get.rainbond.com/rainskills/install.sh
 > less install.sh   # 自行审阅
 > bash install.sh
 > ```
@@ -103,8 +103,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/goodrain/rainskills/main/ins
 
 ```bash
 # 一行命令模式：参数追加在脚本之后
-bash <(curl -fsSL https://install.rainbond.com/rainskills/install.sh) all --saas
-bash <(curl -fsSL https://install.rainbond.com/rainskills/install.sh) all --self-hosted --rainbond-url <url>
+bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh) all --saas
+bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh) all --self-hosted --rainbond-url <url>
 
 # 本地仓库模式
 ./install.sh all --saas                                 # Rainbond Cloud
@@ -209,7 +209,7 @@ bash <(curl -fsSL https://install.rainbond.com/rainskills/install.sh) all --self
 一行命令模式：再跑一次同一行命令即可。脚本会重新下载最新 tarball 解压到 `~/.rainbond/skills`，然后继续安装流程：
 
 ```bash
-bash <(curl -fsSL https://install.rainbond.com/rainskills/install.sh) --force
+bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh) --force
 ```
 
 本地仓库模式：
