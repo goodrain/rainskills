@@ -105,6 +105,10 @@ DEFAULT_TARGET="all"
 TARGET=""
 FORCE=0
 CUSTOM_DEST=""
+INSTALL_COUNT_NEW=0
+INSTALL_COUNT_UPDATED=0
+INSTALL_COUNT_UNCHANGED=0
+INSTALL_COUNT_FORCED=0
 SKIP_MCP=0
 NON_INTERACTIVE=0
 ALLOW_INSECURE_HTTP=0
@@ -222,18 +226,34 @@ copy_skill() {
 
   mkdir -p "$dest_root"
 
-  if [[ -e "$dest" ]]; then
-    if [[ "$FORCE" -eq 1 ]]; then
-      rm -rf "$dest"
-      cp -R "$src" "$dest"
-      log "[overwrite] 已覆盖 $dest"
-    else
-      log "[skip] $dest 已存在"
-    fi
-  else
+  if [[ ! -e "$dest" ]]; then
     cp -R "$src" "$dest"
     log "[install] 已安装到 $dest"
+    INSTALL_COUNT_NEW=$((INSTALL_COUNT_NEW + 1))
+    return 0
   fi
+
+  if [[ "$FORCE" -eq 1 ]]; then
+    rm -rf "$dest"
+    cp -R "$src" "$dest"
+    log "[overwrite] 已强制覆盖 $dest"
+    INSTALL_COUNT_FORCED=$((INSTALL_COUNT_FORCED + 1))
+    return 0
+  fi
+
+  if diff -rq "$src" "$dest" >/dev/null 2>&1; then
+    log "[skip] $dest 已是最新"
+    INSTALL_COUNT_UNCHANGED=$((INSTALL_COUNT_UNCHANGED + 1))
+    return 0
+  fi
+
+  # diff -rq 在有差异时退出码非零；与 `set -e + pipefail` 共存需要 || true 兜底
+  local changed_files
+  changed_files="$( { diff -rq "$src" "$dest" 2>/dev/null || true; } | wc -l | tr -d ' ')"
+  rm -rf "$dest"
+  cp -R "$src" "$dest"
+  log "[update] 已更新 ${dest}（${changed_files} 项变化，本地修改已被覆盖）"
+  INSTALL_COUNT_UPDATED=$((INSTALL_COUNT_UPDATED + 1))
 }
 
 parse_args() {
@@ -1215,7 +1235,8 @@ main() {
 
   configure_mcp
 
-  log "安装完成。"
+  log ""
+  log "安装完成。本次：${INSTALL_COUNT_NEW} 项新装 / ${INSTALL_COUNT_UPDATED} 项已更新 / ${INSTALL_COUNT_UNCHANGED} 项已是最新 / ${INSTALL_COUNT_FORCED} 项强制覆盖"
   if [[ -n "$CUSTOM_DEST" || "$SKIP_MCP" -eq 1 ]]; then
     log "请重启 Claude Code 或 Codex 以加载新技能。"
   else
