@@ -29,23 +29,35 @@
 ### 0. 前置条件
 
 - 已安装 `Codex`、`Claude Code`，或两者之一
-- 本机可执行 `bash`、`git`、`curl`、`python3`
+- 本机可执行 `bash`、`curl`、`tar`、`python3`
 - 已有可登录的 Rainbond 账号
 
 ### 1. 一行命令安装（推荐）
 
-无需提前 `git clone`，直接执行：
+国内推荐用 OSS 入口（CDN 加速，无需翻墙）：
+
+```bash
+bash <(curl -fsSL https://install.rainbond.com/install.sh)
+```
+
+海外或源码党可以直接用 GitHub 入口：
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/goodrain/rainskills/main/install.sh)
 ```
 
-脚本会自动把仓库克隆到 `~/.rainbond/skills`（可通过 `RAINBOND_SKILLS_HOME` 覆盖），然后继续走原有的交互式安装流程。如果该目录已经存在仓库，脚本会自动拉取最新代码再继续。
+脚本会按 **用户覆盖 → OSS → GitHub** 的顺序自动尝试下载仓库 tarball，解压到 `~/.rainbond/skills`（可通过 `RAINBOND_SKILLS_HOME` 覆盖），然后继续走交互式安装流程。
+
+可通过环境变量自定义下载源：
+
+- `RAINBOND_SKILLS_TARBALL_URL` — 用户显式指定的 tarball URL（最高优先）
+- `RAINBOND_SKILLS_OSS_URL` — OSS tarball URL（默认 `https://install.rainbond.com/rainskills-latest.tar.gz`）
+- `RAINBOND_SKILLS_HOME` — 安装目录（默认 `~/.rainbond/skills`）
 
 > 谨慎模式：如果不想让远程脚本直接执行，可以先下载再阅读：
 >
 > ```bash
-> curl -fsSLO https://raw.githubusercontent.com/goodrain/rainskills/main/install.sh
+> curl -fsSLO https://install.rainbond.com/install.sh
 > less install.sh   # 自行审阅
 > bash install.sh
 > ```
@@ -91,8 +103,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/goodrain/rainskills/main/ins
 
 ```bash
 # 一行命令模式：参数追加在脚本之后
-bash <(curl -fsSL https://raw.githubusercontent.com/goodrain/rainskills/main/install.sh) all --saas
-bash <(curl -fsSL https://raw.githubusercontent.com/goodrain/rainskills/main/install.sh) all --self-hosted --rainbond-url <url>
+bash <(curl -fsSL https://install.rainbond.com/install.sh) all --saas
+bash <(curl -fsSL https://install.rainbond.com/install.sh) all --self-hosted --rainbond-url <url>
 
 # 本地仓库模式
 ./install.sh all --saas                                 # Rainbond Cloud
@@ -194,13 +206,13 @@ bash <(curl -fsSL https://raw.githubusercontent.com/goodrain/rainskills/main/ins
 
 ## 更新方式
 
-如果用一行命令模式安装，再跑一次同一行命令即可。脚本会自动 `git fetch` + 重置 `~/.rainbond/skills` 到远端最新分支，然后继续安装流程：
+一行命令模式：再跑一次同一行命令即可。脚本会重新下载最新 tarball 解压到 `~/.rainbond/skills`，然后继续安装流程：
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/goodrain/rainskills/main/install.sh) --force
+bash <(curl -fsSL https://install.rainbond.com/install.sh) --force
 ```
 
-如果是本地仓库模式：
+本地仓库模式：
 
 ```bash
 git pull

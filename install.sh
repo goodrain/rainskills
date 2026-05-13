@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-RAINBOND_SKILLS_REPO_URL="${RAINBOND_SKILLS_REPO:-https://github.com/goodrain/rainskills.git}"
-RAINBOND_SKILLS_REPO_BRANCH="${RAINBOND_SKILLS_BRANCH:-main}"
 RAINBOND_SKILLS_HOME_DEFAULT="${RAINBOND_SKILLS_HOME:-$HOME/.rainbond/skills}"
+RAINBOND_SKILLS_OSS_TARBALL_URL="${RAINBOND_SKILLS_OSS_URL:-https://install.rainbond.com/rainskills-latest.tar.gz}"
+RAINBOND_SKILLS_GITHUB_TARBALL_URL="https://github.com/goodrain/rainskills/archive/refs/heads/main.tar.gz"
+RAINBOND_SKILLS_TARBALL_URL_OVERRIDE="${RAINBOND_SKILLS_TARBALL_URL:-}"
 
 bootstrap_log() {
   printf '%s\n' "$1"
@@ -23,7 +24,18 @@ resolve_script_dir() {
   fi
 }
 
-bootstrap_clone_if_needed() {
+try_download_tarball() {
+  local url="$1"
+  local out="$2"
+  [[ -n "$url" ]] || return 1
+  bootstrap_log "尝试下载：$url"
+  if curl -fsSL --connect-timeout 10 --max-time 120 "$url" -o "$out"; then
+    [[ -s "$out" ]] && return 0
+  fi
+  return 1
+}
+
+bootstrap_download_if_needed() {
   local script_dir
   script_dir="$(resolve_script_dir)"
 
@@ -32,25 +44,39 @@ bootstrap_clone_if_needed() {
     return 0
   fi
 
-  command -v git >/dev/null 2>&1 \
-    || bootstrap_die "需要 git 才能自动下载 rainbond-skills 仓库。请先安装 git。"
+  command -v curl >/dev/null 2>&1 \
+    || bootstrap_die "需要 curl 才能下载 rainskills 仓库。请先安装 curl。"
+  command -v tar >/dev/null 2>&1 \
+    || bootstrap_die "需要 tar 才能解压 rainskills 仓库。"
 
   local install_root="$RAINBOND_SKILLS_HOME_DEFAULT"
-  local repo_url="$RAINBOND_SKILLS_REPO_URL"
-  local repo_branch="$RAINBOND_SKILLS_REPO_BRANCH"
+  local tarball="${install_root}.download.tar.gz"
 
-  if [[ -d "$install_root/.git" ]]; then
-    bootstrap_log "更新本地 rainbond-skills 仓库：$install_root"
-    git -C "$install_root" fetch --depth=1 origin "$repo_branch" >/dev/null 2>&1 \
-      || bootstrap_die "拉取仓库失败：$repo_url ($repo_branch)"
-    git -C "$install_root" reset --hard "FETCH_HEAD" >/dev/null 2>&1 \
-      || bootstrap_die "切换到分支失败：$repo_branch"
-  else
-    bootstrap_log "下载 rainbond-skills 仓库到：$install_root"
-    mkdir -p "$(dirname "$install_root")"
-    git clone --depth=1 --branch "$repo_branch" "$repo_url" "$install_root" >/dev/null 2>&1 \
-      || bootstrap_die "克隆仓库失败：$repo_url ($repo_branch)"
+  mkdir -p "$(dirname "$install_root")"
+  mkdir -p "$install_root"
+  rm -f "$tarball"
+
+  # 下载源优先级：用户显式覆盖 > OSS（国内快） > GitHub（海外/兜底）
+  local downloaded_from=""
+  for candidate in \
+      "$RAINBOND_SKILLS_TARBALL_URL_OVERRIDE" \
+      "$RAINBOND_SKILLS_OSS_TARBALL_URL" \
+      "$RAINBOND_SKILLS_GITHUB_TARBALL_URL"; do
+    if try_download_tarball "$candidate" "$tarball"; then
+      downloaded_from="$candidate"
+      break
+    fi
+  done
+
+  if [[ -z "$downloaded_from" ]]; then
+    bootstrap_die "所有 tarball 源都拉不下来。可手工执行：
+  curl -fsSL $RAINBOND_SKILLS_GITHUB_TARBALL_URL | tar -xz --strip-components=1 -C $install_root"
   fi
+
+  bootstrap_log "解压到：${install_root}（来源：${downloaded_from}）"
+  tar -xzf "$tarball" --strip-components=1 -C "$install_root" \
+    || bootstrap_die "解压 tarball 失败：$tarball"
+  rm -f "$tarball"
 
   local target_script="$install_root/install.sh"
   [[ -f "$target_script" ]] \
@@ -65,7 +91,7 @@ bootstrap_clone_if_needed() {
   fi
 }
 
-bootstrap_clone_if_needed "$@"
+bootstrap_download_if_needed "$@"
 
 DEFAULT_TARGET="all"
 TARGET=""

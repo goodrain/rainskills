@@ -1,0 +1,75 @@
+name: Release to OSS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Resolve commit metadata
+        id: meta
+        run: |
+          SHA="$(git rev-parse --short HEAD)"
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Pack release tarball
+        run: |
+          SHA="${{ steps.meta.outputs.sha }}"
+          git archive --format=tar.gz --prefix=rainskills/ -o rainskills-latest.tar.gz HEAD
+          cp rainskills-latest.tar.gz "rainskills-${SHA}.tar.gz"
+          ls -lh rainskills-*.tar.gz
+
+      - name: Install ossutil
+        run: |
+          curl -fsSL https://gosspublic.alicdn.com/ossutil/1.7.18/ossutil64 -o /tmp/ossutil
+          chmod +x /tmp/ossutil
+          /tmp/ossutil version
+
+      - name: Upload to OSS
+        env:
+          OSS_ENDPOINT: ${{ secrets.OSS_ENDPOINT }}
+          OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
+          OSS_ACCESS_KEY_ID: ${{ secrets.OSS_ACCESS_KEY_ID }}
+          OSS_ACCESS_KEY_SECRET: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
+          OSS_PREFIX: ${{ secrets.OSS_PREFIX }}
+        run: |
+          SHA="${{ steps.meta.outputs.sha }}"
+          for v in OSS_ENDPOINT OSS_BUCKET OSS_ACCESS_KEY_ID OSS_ACCESS_KEY_SECRET; do
+            if [[ -z "${!v}" ]]; then
+              echo "error: secret $v is not configured on this repo" >&2
+              exit 1
+            fi
+          done
+          PREFIX="${OSS_PREFIX:-}"
+          if [[ -n "$PREFIX" ]]; then
+            PREFIX="${PREFIX%/}/"
+          fi
+          OSSUTIL=(/tmp/ossutil \
+            -e "$OSS_ENDPOINT" \
+            -i "$OSS_ACCESS_KEY_ID" \
+            -k "$OSS_ACCESS_KEY_SECRET")
+
+          # install.sh and the rolling latest tarball: keep cache short upstream
+          "${OSSUTIL[@]}" cp -f install.sh                       "oss://${OSS_BUCKET}/${PREFIX}install.sh"
+          "${OSSUTIL[@]}" cp -f rainskills-latest.tar.gz         "oss://${OSS_BUCKET}/${PREFIX}rainskills-latest.tar.gz"
+
+          # immutable per-commit snapshot
+          "${OSSUTIL[@]}" cp -f "rainskills-${SHA}.tar.gz"       "oss://${OSS_BUCKET}/${PREFIX}rainskills-${SHA}.tar.gz"
+
+      - name: Summary
+        run: |
+          SHA="${{ steps.meta.outputs.sha }}"
+          echo "Released commit ${SHA}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "OSS objects updated:" >> "$GITHUB_STEP_SUMMARY"
+          echo "- install.sh" >> "$GITHUB_STEP_SUMMARY"
+          echo "- rainskills-latest.tar.gz" >> "$GITHUB_STEP_SUMMARY"
+          echo "- rainskills-${SHA}.tar.gz" >> "$GITHUB_STEP_SUMMARY"
