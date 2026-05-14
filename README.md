@@ -295,7 +295,20 @@ rainbond-skills/
 
 脚本不会保存你的 Rainbond 用户名和密码。
 
-### 5. 如何确认安装到了哪里
+### 5. 用 Claude / Codex 时 MCP 突然返回 401 / 403 怎么办
+
+通常是 `~/.rainbond/mcp.env` 里的 JWT 到期了。无需重装 skills，也不要手工改文件，直接用下面任一命令刷新：
+
+```bash
+bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh) refresh
+# 或：bash ~/.rainbond/skills/install.sh refresh
+```
+
+`refresh` 只做浏览器登录 → 重写 `~/.rainbond/mcp.env`，不会动 skill 文件，也不会改 `~/.codex/config.toml` / `~/.claude.json`。
+
+注意：刷新完成后必须重启 Claude Code 或 Codex（它们在启动时一次性读取 `RAINBOND_JWT`，已经在跑的进程读到的还是旧 token）。
+
+### 6. 如何确认安装到了哪里
 
 脚本会输出每个目标目录和每个 skill 的安装结果。
 

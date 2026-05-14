@@ -77,10 +77,28 @@ description: >
   - 手工编写或猜测 `~/.rainbond/mcp.env`、JWT、API token
   - 调用任何业务 MCP 工具
 
-  Preflight 失败时必须给用户的动作建议：
-  - 在 rainbond-skills 仓库根执行 `./install.sh codex` 或 `./install.sh all`
-  - 安装脚本会配置 MCP server、保存 JWT、并验证 `/console/mcp/query` 可用
-  - 配置完成后重新触发同一指令即可
+  Preflight 失败时必须给用户的动作建议，需要先区分场景：
+
+  - 如果用户机器上已存在 `~/.rainbond/mcp.env` 或 `~/.rainbond/skills/install.sh`，
+    判定为「已装过，多半是 JWT 过期 / 401 / 403」，给出 refresh 指引：
+
+    ```bash
+    bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh) refresh
+    # 或：bash ~/.rainbond/skills/install.sh refresh
+    ```
+
+    成功后必须提醒用户**重启 Claude Code 或 Codex**（MCP 客户端在进程启动时一次性
+    读取 `RAINBOND_JWT`，文件刷新不会自动透传到运行中的客户端），用户重启完成后再让其重新
+    触发同一指令。本轮不要自动重试同一个 MCP 工具调用。
+
+  - 否则视为首次安装，给完整安装命令：
+
+    ```bash
+    bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh)
+    ```
+
+    安装脚本会配置 MCP server、保存 JWT、并验证 `/console/mcp/query` 可用。
+    配置完成后重新触发同一指令即可。
 
   例外：用户在同一会话里已经成功用过任意 `rainbond_*` 工具，则视为 preflight 已通过，不必每轮重探。
 

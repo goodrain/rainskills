@@ -5,6 +5,20 @@ description: Use when onboarding a local project into Rainbond for the first tim
 
 # Rainbond Project Init
 
+## MCP 认证失败恢复（JWT 过期 / 401 / 403）
+
+当任何 `rainbond_*` MCP 工具返回 401 / 403 / `unauthorized` / `token expired` 类认证错误时，
+禁止重装 skills，也禁止手工改 `~/.rainbond/mcp.env`。先用下面任一命令刷新 JWT：
+
+```bash
+bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh) refresh
+# 或：bash ~/.rainbond/skills/install.sh refresh
+```
+
+刷新成功后必须提醒用户**重启 Claude Code 或 Codex**（MCP 客户端在进程启动时一次性读取
+`RAINBOND_JWT`，刷新后的新 token 不会自动透传到正在运行的客户端）。在用户确认重启之前不要自动
+重试同一个 MCP 工具调用。
+
 ## Overview
 
 Use this skill to perform the **first-time onboarding** of a local project into Rainbond.

@@ -99,9 +99,29 @@ bootstrap_download_if_needed() {
   fi
 }
 
-bootstrap_download_if_needed "$@"
+should_skip_bootstrap_for_refresh() {
+  local arg
+  for arg in "$@"; do
+    case "$arg" in
+      refresh)
+        return 0
+        ;;
+      --)
+        return 1
+        ;;
+    esac
+  done
+  return 1
+}
+
+if should_skip_bootstrap_for_refresh "$@"; then
+  SCRIPT_DIR=""
+else
+  bootstrap_download_if_needed "$@"
+fi
 
 DEFAULT_TARGET="all"
+ACTION=""
 TARGET=""
 FORCE=0
 CUSTOM_DEST=""
@@ -137,11 +157,16 @@ Usage:
   ./install.sh all --saas
   ./install.sh all --self-hosted --rainbond-url <url>
   ./install.sh all --non-interactive --rainbond-url <url> --token <jwt>
+  ./install.sh refresh
 
 Options:
   claude                 Install and configure Claude Code
   codex                  Install and configure Codex
   all                    Install and configure both platforms
+  refresh                Re-run browser login and rewrite ~/.rainbond/mcp.env only
+                         (skips skill copy and Codex/Claude MCP re-registration;
+                          use when MCP returns 401/403 because the JWT expired —
+                          remember to restart Claude Code / Codex afterwards)
   --dest PATH            Install skills to a custom directory only
   --force                Overwrite existing installed skills
   --skip-mcp             Skip Rainbond MCP setup
@@ -261,6 +286,10 @@ copy_skill() {
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      refresh)
+        ACTION="refresh"
+        shift
+        ;;
       claude|codex|all)
         TARGET="$1"
         shift
@@ -1295,6 +1324,76 @@ obtain_rainbond_token() {
   browser_login_to_rainbond "$base_url"
 }
 
+read_cached_rainbond_url() {
+  local mcp_env="$HOME/.rainbond/mcp.env"
+  [[ -f "$mcp_env" ]] || return 1
+  (
+    set +u
+    # shellcheck disable=SC1090
+    . "$mcp_env"
+    printf '%s\n' "${RAINBOND_URL:-}"
+  )
+}
+
+do_refresh() {
+  ensure_python3
+
+  # Refresh exists because the cached JWT is broken; ignore inherited tokens
+  # unless the operator explicitly supplied one via --token.
+  if [[ "$RAINBOND_TOKEN_FROM_FLAG" -ne 1 ]]; then
+    RAINBOND_TOKEN_INPUT=""
+    RAINBOND_CACHED_URL=""
+  fi
+
+  if [[ -z "$RAINBOND_URL_INPUT" ]]; then
+    local cached_url
+    cached_url="$(read_cached_rainbond_url 2>/dev/null || true)"
+    if [[ -n "$cached_url" ]]; then
+      RAINBOND_URL_INPUT="$cached_url"
+      log "[refresh] 使用 ~/.rainbond/mcp.env 中已记录的地址：$cached_url"
+    fi
+  fi
+
+  if [[ -z "$DEPLOYMENT_MODE_INPUT" ]]; then
+    if [[ -z "$RAINBOND_URL_INPUT" || "$RAINBOND_URL_INPUT" == "$SAAS_DEFAULT_URL" ]]; then
+      DEPLOYMENT_MODE_INPUT="saas"
+    else
+      DEPLOYMENT_MODE_INPUT="self-hosted"
+    fi
+  fi
+
+  local base_url_input base_url
+  case "$DEPLOYMENT_MODE_INPUT" in
+    saas)
+      base_url_input="${RAINBOND_URL_INPUT:-$SAAS_DEFAULT_URL}"
+      ;;
+    self-hosted)
+      base_url_input="$(prompt_for_value "Rainbond Console 地址" "$RAINBOND_URL_INPUT")"
+      ;;
+    *)
+      die "未知部署形态：$DEPLOYMENT_MODE_INPUT"
+      ;;
+  esac
+  base_url="$(normalize_rainbond_url "$base_url_input")"
+  confirm_insecure_http_if_needed "$base_url"
+
+  local token
+  token="$(obtain_rainbond_token "$base_url" "$DEPLOYMENT_MODE_INPUT")"
+  validate_mcp_connectivity "$base_url" "$token"
+  token="$VALIDATED_TOKEN"
+
+  export RAINBOND_JWT="$token"
+  write_token_file "$token" "$base_url"
+  configure_shell_autoload
+
+  log ""
+  log "JWT 刷新完成。Codex / Claude Code 的 MCP 注册没有变化，无需重新执行 install.sh all。"
+  log "请重启 Claude Code 或 Codex 让新 JWT 生效（它们在启动时一次性读取 RAINBOND_JWT）。"
+  if [[ -n "$ACTIVE_SHELL_RC" ]]; then
+    log "如果想立刻在当前终端使用，请执行：source ${ACTIVE_SHELL_RC}"
+  fi
+}
+
 configure_mcp() {
   [[ "$SKIP_MCP" -eq 0 ]] || return 0
   [[ -z "$CUSTOM_DEST" ]] || return 0
@@ -1362,6 +1461,12 @@ configure_mcp() {
 
 main() {
   parse_args "$@"
+
+  if [[ "$ACTION" == "refresh" ]]; then
+    do_refresh
+    return 0
+  fi
+
   resolve_target
 
   local skills=()

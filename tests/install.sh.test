@@ -525,6 +525,61 @@ test_mcp_renewed_token_is_persisted_after_validation() {
   grep -F -- "已保存后端滑动续期返回的新 JWT" /tmp/rainbond-install-renewed.out >/dev/null || fail "expected renewal guidance"
 }
 
+test_refresh_rewrites_token_without_reinstalling_skills() {
+  local tmpdir expired_token fresh_token codex_mtime_before codex_mtime_after
+  tmpdir="$(mktemp -d)"
+  trap 'rm -rf "$tmpdir"' RETURN
+  mkdir -p "$tmpdir/home/.rainbond" "$tmpdir/home/.codex" "$tmpdir/logs"
+  make_fake_commands "$tmpdir/bin"
+
+  expired_token="$(make_test_jwt 1700000000)"
+  fresh_token="$(make_test_jwt 1893456000)"
+
+  cat > "$tmpdir/home/.rainbond/mcp.env" <<EOF
+export RAINBOND_JWT='$expired_token'
+export RAINBOND_URL='http://rainbond.internal'
+EOF
+  chmod 600 "$tmpdir/home/.rainbond/mcp.env"
+
+  cat > "$tmpdir/home/.codex/config.toml" <<EOF
+[mcp_servers.rainbond]
+url = "http://rainbond.internal/console/mcp/query"
+bearer_token_env_var = "RAINBOND_JWT"
+EOF
+
+  codex_mtime_before="$(stat -f '%m' "$tmpdir/home/.codex/config.toml" 2>/dev/null \
+    || stat -c '%Y' "$tmpdir/home/.codex/config.toml")"
+
+  sleep 1
+
+  TEST_FAKE_LOGIN_TOKEN="$fresh_token" \
+    run_installer "$tmpdir" refresh --non-interactive --self-hosted --username demo --allow-insecure-http \
+    >/tmp/rainbond-install-refresh.out 2>&1
+
+  assert_contains "$tmpdir/home/.rainbond/mcp.env" "export RAINBOND_JWT='$fresh_token'"
+  assert_contains "$tmpdir/home/.rainbond/mcp.env" "export RAINBOND_URL='http://rainbond.internal'"
+  [[ "$(file_mode "$tmpdir/home/.rainbond/mcp.env")" == "600" ]] || fail "refresh should keep mcp.env permissions at 600"
+
+  codex_mtime_after="$(stat -f '%m' "$tmpdir/home/.codex/config.toml" 2>/dev/null \
+    || stat -c '%Y' "$tmpdir/home/.codex/config.toml")"
+  [[ "$codex_mtime_before" == "$codex_mtime_after" ]] || fail "refresh should not rewrite codex config"
+  [[ ! -f "$tmpdir/logs/codex.log" ]] || fail "refresh should not invoke codex mcp"
+  [[ ! -f "$tmpdir/logs/claude.log" ]] || fail "refresh should not invoke claude mcp"
+
+  [[ ! -d "$tmpdir/home/.codex/skills" ]] || fail "refresh should not copy skills to codex"
+  [[ ! -d "$tmpdir/home/.claude/skills" ]] || fail "refresh should not copy skills to claude"
+
+  assert_contains "$tmpdir/logs/curl.log" "http://rainbond.internal/console/users/login"
+  assert_contains "$tmpdir/logs/curl.log" "http://rainbond.internal/console/mcp/query"
+  grep -F -- "使用 ~/.rainbond/mcp.env 中已记录的地址" /tmp/rainbond-install-refresh.out >/dev/null \
+    || fail "expected refresh to log cached URL reuse"
+  grep -F -- "请重启 Claude Code 或 Codex" /tmp/rainbond-install-refresh.out >/dev/null \
+    || fail "expected restart guidance"
+
+  assert_contains "$tmpdir/home/.zshrc" "# >>> rainbond skills mcp >>>"
+  assert_line_count "$tmpdir/home/.zshrc" "# >>> rainbond skills mcp >>>" "1"
+}
+
 test_mcp_404_reports_missing_endpoint() {
   local tmpdir
   tmpdir="$(mktemp -d)"
@@ -551,6 +606,7 @@ test_expired_cached_token_reauthenticates_before_write
 test_expiring_cached_token_reauthenticates_before_write
 test_expired_flag_token_fails_without_writing_config
 test_mcp_renewed_token_is_persisted_after_validation
+test_refresh_rewrites_token_without_reinstalling_skills
 test_mcp_404_reports_missing_endpoint
 test_installer_configures_both_platforms_and_shell_autoload
 
