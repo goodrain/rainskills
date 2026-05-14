@@ -98,15 +98,16 @@ These rules are always in force. If any module, example, or lower-priority note 
 5. If source creation hits MCP / Rainbond console / control-plane exceptions, stop and report `mcp backend issue`. Do not continue with fallback execution modes.
 6. `check_uuid` and `event_id` are optional passthrough fields for standard source creation unless the backend explicitly requires them for the current request.
 7. If a raw GitHub URL is still `https://github.com/...`, ask once whether to keep it or switch to a proxy URL before source creation. Recommend `https://ghfast.top/https://github.com/...` first.
-8. If Dockerfile and language-build detection both exist, keep the language-build path unless the user explicitly wants Dockerfile behavior. The current MCP surface exposes `prefer_dockerfile_when_detected`, not `dockerfile_path`.
-9. Build parameters go through `rainbond_manage_component_envs(operation=replace_build_envs, build_env_dict=...)`. Runtime envs and connection envs must stay on their own tool paths.
-10. Component connection information must be configured on the provider component with `rainbond_manage_component_connection_envs`; do not use `rainbond_manage_component_envs(scope=outer)` for that path. Consumers receive those values through explicit dependencies.
-11. Explicit component dependencies are a required topology artifact, not just a runtime networking convenience. Use `rainbond_manage_component_dependency` for every declared `depends_on` edge and every inferred provider/consumer edge that bootstrap accepts into the topology. Do not claim MCP lacks a component dependency API; if the tool call fails, report the actual MCP/control-plane failure.
-12. Before bootstrap can hand off as structurally complete, run a dependency completeness gate for every multi-component topology, including manual component creation or fallback paths: list accepted provider/consumer edges, query current dependency evidence, add missing edges with `rainbond_manage_component_dependency`, then verify the dependency evidence again. If an accepted edge cannot be created yet, record it as a deferred dependency or blocker instead of treating runtime reachability as sufficient.
-13. Bootstrap has a retry budget: the same error signature may be retried at most once, and the same component-creation path may be attempted at most twice. After that, stop and report the blocker.
-14. If runtime has already converged enough and the remaining question is access URL or delivery acceptance, hand off to `rainbond-delivery-verifier` instead of stretching bootstrap or defaulting to troubleshooter.
-15. Local Docker daemon actions are not an implicit bootstrap fallback. Do not run local Docker builds, start Docker Desktop/OrbStack, push temporary images, or switch to local package upload unless the user explicitly changes the delivery strategy.
-16. The final reply must end with `### Structured Output`, render `BootstrapResult` in fenced `yaml`, and never leak secret plaintext.
+8. If a component image still points at a raw public registry (`docker.io/...`, `quay.io/...`, `gcr.io/...`, `ghcr.io/...`, `k8s.gcr.io/...`, `registry.k8s.io/...`) and the user did not explicitly opt out of a mirror, ask once before component creation whether to keep it or switch to a registry mirror. Recommend `docker.1ms.run/<original-path>` first; reuse any mirror already chosen for another in-scope component instead of introducing a second one.
+9. If Dockerfile and language-build detection both exist, keep the language-build path unless the user explicitly wants Dockerfile behavior. The current MCP surface exposes `prefer_dockerfile_when_detected`, not `dockerfile_path`.
+10. Build parameters go through `rainbond_manage_component_envs(operation=replace_build_envs, build_env_dict=...)`. Runtime envs and connection envs must stay on their own tool paths.
+11. Component connection information must be configured on the provider component with `rainbond_manage_component_connection_envs`; do not use `rainbond_manage_component_envs(scope=outer)` for that path. Consumers receive those values through explicit dependencies.
+12. Explicit component dependencies are a required topology artifact, not just a runtime networking convenience. Use `rainbond_manage_component_dependency` for every declared `depends_on` edge and every inferred provider/consumer edge that bootstrap accepts into the topology. Do not claim MCP lacks a component dependency API; if the tool call fails, report the actual MCP/control-plane failure.
+13. Before bootstrap can hand off as structurally complete, run a dependency completeness gate for every multi-component topology, including manual component creation or fallback paths: list accepted provider/consumer edges, query current dependency evidence, add missing edges with `rainbond_manage_component_dependency`, then verify the dependency evidence again. If an accepted edge cannot be created yet, record it as a deferred dependency or blocker instead of treating runtime reachability as sufficient.
+14. Bootstrap has a retry budget: the same error signature may be retried at most once, and the same component-creation path may be attempted at most twice. After that, stop and report the blocker.
+15. If runtime has already converged enough and the remaining question is access URL or delivery acceptance, hand off to `rainbond-delivery-verifier` instead of stretching bootstrap or defaulting to troubleshooter.
+16. Local Docker daemon actions are not an implicit bootstrap fallback. Do not run local Docker builds, start Docker Desktop/OrbStack, push temporary images, or switch to local package upload unless the user explicitly changes the delivery strategy.
+17. The final reply must end with `### Structured Output`, render `BootstrapResult` in fenced `yaml`, and never leak secret plaintext.
 
 ## Reading Order
 
@@ -130,7 +131,7 @@ Load references only when the corresponding module tells you to.
 - [modules/20-scope-and-boundaries.md](modules/20-scope-and-boundaries.md)
   - 支持范围、delivery mode、允许动作、禁止动作、期望输入
 - [modules/30-creation-rules.md](modules/30-creation-rules.md)
-  - 通用创建规则、幂等策略、数据库最小启动配置、前端 `access_mode` 约束
+  - 通用创建规则、幂等策略、数据库最小启动配置、前端 `access_mode` 约束、image registry proxy prompt
 - [modules/40-source-and-package-rules.md](modules/40-source-and-package-rules.md)
   - source / package 路径、GitHub proxy、build 参数路由、多服务歧义、source-path 保持规则
 - [modules/50-workflow-and-convergence.md](modules/50-workflow-and-convergence.md)

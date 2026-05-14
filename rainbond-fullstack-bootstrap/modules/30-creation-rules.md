@@ -153,7 +153,31 @@ If local mapping and MCP disagree:
 - report drift
 - keep going with MCP-discovered runtime components
 
-## 10. Allow component subset execution
+## 10. Image Registry Proxy Prompt
+
+For any in-scope image-backed component, before calling component creation, evaluate the `image` field against the public-registry list and ask the user once whether to keep the raw image or switch to a mirror. This is a creation-time prompt, not a post-failure recovery step — the goal is to avoid the "create → wait for build/pull → fails → read logs → finally suggest a mirror" cycle.
+
+Trigger when all of the following are true:
+- the `image` field references a raw public registry: `docker.io/...`, `quay.io/...`, `gcr.io/...`, `ghcr.io/...`, `k8s.gcr.io/...`, or `registry.k8s.io/...`
+- the image is not already proxied through a registry mirror
+- the user did not explicitly opt out of using a mirror earlier in the same run
+
+Prompt content:
+- ask once whether to keep the raw image reference or switch to a registry mirror
+- recommend `docker.1ms.run/<original-path>` first; treat it as the default Docker mirror across this skill
+- `m.daocloud.io/<original-path>` may be offered as an explicit alternate choice
+- do **not** propose less-established mirrors (e.g. `dockerpull.com`, vendor-specific community proxies) unless the user explicitly asks for them
+- if another in-scope component or the existing `rainbond.app.json` already uses a specific mirror, reuse the same mirror instead of introducing a second one
+
+Scope and reuse:
+- treat this as a **one-time prompt per bootstrap run**: once the user picks "use mirror" or "keep raw" for the first matching image, apply the same choice to every remaining matching image in the same run without re-asking
+- the mirror is a transport hint only; it does not change `execution_mode` or delivery mode, and is not a fallback signal
+- if the user explicitly opts out, proceed with the raw image but record the opt-out in `actions_taken` so that a subsequent pull failure can be classified correctly as `external artifact unreachable` rather than as a missed prompt
+
+Boundary:
+- this rule only inspects the explicit `image` field; it does not try to predict which base images a source-backed Dockerfile or Buildpack will pull. Source-backed pulls that fail at build time still flow through the `external artifact unreachable` blocker bucket described in [40-source-and-package-rules.md](40-source-and-package-rules.md).
+
+## 11. Allow component subset execution
 
 When the run provides:
 - `included_components`
