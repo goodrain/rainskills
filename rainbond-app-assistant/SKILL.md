@@ -135,39 +135,46 @@ description: >
 5. 当前项目一旦被判定为 `source-backed`，不能静默改成 `package` 或 `image`。
    transport 代理只改“怎么拉”，不改 delivery mode。
 6. 如果源码 Git URL 是原始 `https://github.com/...`，且用户没有明确给出代理地址，优先先问一次是否改用代理 URL，再继续主线。
-7. 一旦 source ref 已确定，不能静默改 branch/ref。
+7. 在创建任何 image-backed 组件（包括直接 `rainbond_create_component_from_image` 调用）之前，如果 `image` 值是要从公网 registry 拉取，必须先问一次是否切镜像代理；用户在本次 run 内明确 opt-out 之后才可以跳过。
+   触发场景包括：
+   - 裸 Docker Hub 引用：`nginx:latest`、`library/nginx:latest`、`mysql/mysql-server:8.0`、`bitnami/postgresql:16` 等隐式解析为 `docker.io/...` 的镜像
+   - 显式公共 registry：`docker.io/...`、`quay.io/...`、`gcr.io/...`、`ghcr.io/...`、`k8s.gcr.io/...`、`registry.k8s.io/...`
+   不触发：已经在已知镜像源（`docker.1ms.run/...`、`m.daocloud.io/...`、`mirror.gcr.io/...` 等）或私有 registry（`harbor.example.internal/...`、`registry.cn-hangzhou.aliyuncs.com/...`、`<corp-registry>:5000/...` 等）。
+   推荐顺序：首选 `docker.1ms.run/<full-path>`（例如 `nginx:latest` → `docker.1ms.run/library/nginx:latest`，`docker.io/library/postgres:17` → `docker.1ms.run/library/postgres:17`）；备选 `m.daocloud.io/<full-path>`。同一次 run 内如果已经为另一个组件选定了某个镜像源，复用相同前缀，不要并存多个。
+   该 prompt 每次 run 只问一次：用户做出选择后（用或不用代理），相同条件下的后续组件直接复用，不重复确认。
+8. 一旦 source ref 已确定，不能静默改 branch/ref。
    分支不存在时必须停住并报告 source definition needs confirmation。
-8. `check_uuid` / `event_id` 默认不是标准 source create 的前置条件。
+9. `check_uuid` / `event_id` 默认不是标准 source create 的前置条件。
    除非后端明确返回它们必需，否则不能把它们当 blocker。
-9. 如果 source create 返回 `multiple services detected` 或等价的多组件源码歧义，必须停住，要求用户明确选择策略。
+10. 如果 source create 返回 `multiple services detected` 或等价的多组件源码歧义，必须停住，要求用户明确选择策略。
    不允许自动切到 local package、手工上传、模板安装或其他 workaround。
-10. 如果进入 `code_or_build_handoff_needed`，必须硬停止。
+11. 如果进入 `code_or_build_handoff_needed`，必须硬停止。
    不允许自动改代码、跑本地测试、commit、push、自动重试。
-11. `delivery_state` 只表示 source app。
+12. `delivery_state` 只表示 source app。
       在没有运行 `delivery-verifier` 之前必须是 `null`。
       `promotion_result` 只表示 snapshot 和 testing app；未进入 promotion 时必须是 `null`。
-12. 顶层主线必须有尝试预算：
+13. 顶层主线必须有尝试预算：
     - 同一类错误签名最多重试 1 次
     - 同一阶段最多尝试 2 次（首次 + 1 次重试）
     - 单次主线总时长默认不应超过 8 分钟；超时后必须停止并汇报当前停点。
-13. 任何 delivery mode 或 workaround 策略切换都不允许隐式发生。
+14. 任何 delivery mode 或 workaround 策略切换都不允许隐式发生。
     source -> package、source -> image、source -> template 都必须先得到用户明确确认。
-14. 如果用户明确在问“为什么构建失败”，顶层必须优先走 `component events -> build logs -> runtime logs` 的构建失败证据链。
+15. 如果用户明确在问“为什么构建失败”，顶层必须优先走 `component events -> build logs -> runtime logs` 的构建失败证据链。
     不要把运行容器日志当第一现场。
-15. 如果用户要求调整源码构建参数，优先走 `rainbond_manage_component_envs(operation=replace_build_envs, build_env_dict=...)`。
+16. 如果用户要求调整源码构建参数，优先走 `rainbond_manage_component_envs(operation=replace_build_envs, build_env_dict=...)`。
     不要把语言构建参数塞进 `build_info`。
-16. 如果源码检测同时命中 Dockerfile 和语言构建，只有用户明确要走 Dockerfile 时才建议 `prefer_dockerfile_when_detected = true`。
-17. 当前 MCP 不支持显式 `dockerfile_path` 时，不要在顶层编排里承诺该能力。
-18. 对 reverse-proxy full-stack 项目，不要只因为根路径 URL 存在就把它当作最终交付成功或 Fast Path 的可信 URL；同 host 的 backend 路径（通常是 `/api`）必须也一致可用，或明确停在 blocker。
-19. 对数据库、Redis、Kafka 等中间件，优先把共享连接变量建在 provider 组件的 connection envs 上，并通过显式依赖注入到 consumer；不要优先在每个 consumer 上重复写 `DB_*`、`REDIS_*`、`KAFKA_*` 连接变量。
-20. 如果依赖关系已经存在，但运行时仍出现 `ENOTFOUND db`、错误 host、错误 port、缺少 `DB_PASS` 等问题，优先把问题视为 provider connection env / dependency alias / compatibility env 问题，而不是把 baseline 里的硬编码主机名当作正确事实。
-21. Rainbond MCP 已提供 `rainbond_manage_component_dependency` 用于显式组件依赖管理。只要项目拓扑存在 `depends_on`、provider/consumer 关系、反向代理链路、或运行时日志暴露出缺失依赖，就必须把显式依赖作为可执行能力处理；禁止回答“当前 MCP 没有创建组件依赖接口”。如果调用失败，按 MCP/控制面错误报告失败原因，而不是把它描述为工具不存在。
-22. 对多组件拓扑，在进入最终交付验收前必须确保下层 bootstrap/troubleshooter 已完成依赖完整性 gate：列出已接受的 provider/consumer 边，查询现有依赖，补齐缺失显式依赖，再次验证依赖摘要。手工创建镜像组件、Compose 上传失败后的 fallback 路径、或组件本身能独立启动，都不能跳过这个 gate。
-23. 不要自动拉起本地 Docker Desktop/OrbStack、执行本地 Docker build/push、或推送临时镜像作为兜底；这属于 delivery-mode 策略切换，必须先得到用户明确确认。
-24. 每次运行内部仍必须形成 `AppAssistantResult` 结果对象，但默认用户答复不一定暴露 YAML。
+17. 如果源码检测同时命中 Dockerfile 和语言构建，只有用户明确要走 Dockerfile 时才建议 `prefer_dockerfile_when_detected = true`。
+18. 当前 MCP 不支持显式 `dockerfile_path` 时，不要在顶层编排里承诺该能力。
+19. 对 reverse-proxy full-stack 项目，不要只因为根路径 URL 存在就把它当作最终交付成功或 Fast Path 的可信 URL；同 host 的 backend 路径（通常是 `/api`）必须也一致可用，或明确停在 blocker。
+20. 对数据库、Redis、Kafka 等中间件，优先把共享连接变量建在 provider 组件的 connection envs 上，并通过显式依赖注入到 consumer；不要优先在每个 consumer 上重复写 `DB_*`、`REDIS_*`、`KAFKA_*` 连接变量。
+21. 如果依赖关系已经存在，但运行时仍出现 `ENOTFOUND db`、错误 host、错误 port、缺少 `DB_PASS` 等问题，优先把问题视为 provider connection env / dependency alias / compatibility env 问题，而不是把 baseline 里的硬编码主机名当作正确事实。
+22. Rainbond MCP 已提供 `rainbond_manage_component_dependency` 用于显式组件依赖管理。只要项目拓扑存在 `depends_on`、provider/consumer 关系、反向代理链路、或运行时日志暴露出缺失依赖，就必须把显式依赖作为可执行能力处理；禁止回答“当前 MCP 没有创建组件依赖接口”。如果调用失败，按 MCP/控制面错误报告失败原因，而不是把它描述为工具不存在。
+23. 对多组件拓扑，在进入最终交付验收前必须确保下层 bootstrap/troubleshooter 已完成依赖完整性 gate：列出已接受的 provider/consumer 边，查询现有依赖，补齐缺失显式依赖，再次验证依赖摘要。手工创建镜像组件、Compose 上传失败后的 fallback 路径、或组件本身能独立启动，都不能跳过这个 gate。
+24. 不要自动拉起本地 Docker Desktop/OrbStack、执行本地 Docker build/push、或推送临时镜像作为兜底；这属于 delivery-mode 策略切换，必须先得到用户明确确认。
+25. 每次运行内部仍必须形成 `AppAssistantResult` 结果对象，但默认用户答复不一定暴露 YAML。
     当 source app 已严格 `delivered`、`next_action = stop`、没有 promotion、没有 blocker，且用户没有要求结构化/调试输出时，默认使用简洁中文交付报告，不追加 `### Structured Output`。
-25. 只有在自动化/评测/调试模式、用户明确要求结构化输出、结果未完全交付、需要人工验证、需要 handoff、或进入 dev-to-test promotion 时，才把 `AppAssistantResult` 渲染为最终 fenced `yaml`。
-26. 如果本次使用了 Git、镜像仓库或其他传输代理，必须在默认交付报告的处理记录或注意事项中说明；在结构化模式下也必须写入 `actions_performed[].details`。
+26. 只有在自动化/评测/调试模式、用户明确要求结构化输出、结果未完全交付、需要人工验证、需要 handoff、或进入 dev-to-test promotion 时，才把 `AppAssistantResult` 渲染为最终 fenced `yaml`。
+27. 如果本次使用了 Git、镜像仓库或其他传输代理，必须在默认交付报告的处理记录或注意事项中说明；在结构化模式下也必须写入 `actions_performed[].details`。
     代理事实属于执行记录，不是强制暴露 YAML 的理由。
 
   ## 主线流程
