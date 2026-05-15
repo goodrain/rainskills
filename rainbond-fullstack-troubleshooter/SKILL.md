@@ -77,6 +77,7 @@ Do not use when:
  - the task requires source-code changes, build script changes, reverse-proxy edits, or destructive cleanup
 - the database must be reset or modified directly
 - the issue is clearly unrelated to Rainbond runtime state
+- the user wants to restart or modify Rainbond platform system components (`rbd-*` such as `rbd-gateway`, `rbd-api`, `rbd-worker`, `rbd-chaos`, `rbd-db`, `rbd-mq`, `rbd-monitor`, `rbd-node`); these are platform infrastructure, not user app components — MCP write operations are not supported on them; direct the user to `kubectl rollout restart` or the Rainbond cluster management console instead
 
 ## Configuration Priority
 
