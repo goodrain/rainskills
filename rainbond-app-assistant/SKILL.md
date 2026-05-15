@@ -1,12 +1,14 @@
 ---
 name: rainbond-app-assistant
 description: >
-  Default top-level entry for a current Rainbond project request, including
-  generic prompts such as deploy this project to Rainbond, run this project,
-  or check what is blocking it. Use for linked projects and for unlinked
-  current-project requests that may need project-init before bootstrap,
-  troubleshooting, delivery verification, dev-to-test promotion, or
-  code-layer handoff.
+  Use for any request to deploy, run, deliver, publish, or troubleshoot the
+  current project — regardless of whether the user mentions "Rainbond" by name.
+  Triggers on generic intents such as: 帮我把项目跑起来 / 部署这个项目 / 发布上线 /
+  看看为什么跑不起来 / 帮我交付 / 排查一下 / deploy this project / run this app /
+  check what is blocking it. Prefer this skill when a Rainbond MCP connection
+  is configured in the session. Handles the full lifecycle: project-init,
+  bootstrap, troubleshooting, delivery verification, dev-to-test promotion,
+  and code-layer handoff.
 ---
 
   # Rainbond App Assistant
