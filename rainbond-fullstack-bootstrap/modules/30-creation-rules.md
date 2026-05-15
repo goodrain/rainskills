@@ -213,6 +213,46 @@ Rules:
 - template-backed components may still appear in the manifest, but should be skipped
 - skipped components must be listed clearly in output
 
+## 12. Prefer batch port operations
+
+When calling `rainbond_manage_component_ports`, use the `ports` array form to fold multiple single-port calls into a single MCP call. The goal is to cut tool-call count and avoid partial-state windows where some ports are already created or enabled while others are still pending.
+
+### Batch create (operation=add)
+
+When the same component needs multiple ports, send one `add` call with the full list:
+
+```
+{
+  "operation": "add",
+  "ports": [
+    {"port": 80,   "protocol": "http", "enable_inner": true},
+    {"port": 8080, "protocol": "tcp"},
+    {"port": 9090, "protocol": "http"}
+  ]
+}
+```
+
+### Batch enable inner / outer
+
+When the same operation applies to multiple ports of the same component, send one call with `ports`:
+
+```
+{ "operation": "enable_inner", "ports": [{"port": 80}, {"port": 8080}] }
+{ "operation": "enable_outer", "ports": [80, 443] }   // integer list also accepted
+```
+
+### Decision rule
+
+- ≥2 ports on the same component with the same operation → MUST use `ports`
+- single port → keep the original `port` field
+- when both `ports` and `port` are provided, `ports` wins
+
+### Caveats
+
+- `enable_outer` requires inner already enabled on each target port; if not, batch `enable_inner` first, then batch `enable_outer` in a second call
+- `enable_outer_only` does **not** support batching — call once per port
+- `update_alias` (the provider port alias normalization from §4) is per-port today — do not try to batch it
+
 ## What This Module Does Not Cover
 
 This module is intentionally general.
