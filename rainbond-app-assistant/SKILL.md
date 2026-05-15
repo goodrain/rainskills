@@ -182,6 +182,11 @@ description: >
     - 可以用 `rainbond_query_region_rbd_components` 查询并展示它们的状态
     - 不能通过 MCP 对它们执行重启、部署、修改等写操作；当前 MCP 工具集不支持此类操作
     - 如果用户要求操作这些组件，明确告知：需要通过 Kubernetes 命令（如 `kubectl rollout restart deployment/<name> -n rbd-system`）或 Rainbond 集群管理控制台进行，超出本技能的操作范围，不要假装可以执行
+29. 如果用户提示词中**仅包含一个外部 Git URL**（无本地 manifest 文件，当前目录不属于该项目），在进入 project-init 之前必须先询问：
+    - 要部署的是仓库根目录，还是某个具体子目录？
+    - **禁止**根据模型对该仓库的先验知识，自动把多个子目录展开成多个组件后直接创建
+    - 用户明确给出子目录（或确认部署根目录）后，才继续进入 project-init → bootstrap 主线
+    - 此规则与 `rainbond-project-init` 硬规则 11 配套，共同防止多 example 仓库触发批量"数据中心异常"
 
   ## 主线流程
 

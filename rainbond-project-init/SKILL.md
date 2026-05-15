@@ -82,6 +82,11 @@ This skill should describe how onboarding produces or resolves those objects. It
 8. 如果这个 skill 是由 `rainbond-app-assistant` 的单入口主线调用的，init 成功后应该把 `next_action` 交给 bootstrap，而不是停在 init。
 9. `team_name = default` 只有在用户明确给出或明确确认时才允许。
 10. 不要把本地 Docker 构建、临时镜像仓库推送、启动 Docker Desktop/OrbStack 当成 init 的自动兜底；这些都是 delivery-mode 策略切换，必须先得到用户明确确认。
+11. 如果当前工作目录没有任何项目特征文件（无 `rainbond.app.json`、`Dockerfile`、`package.json`、`go.mod`、`pom.xml`、`requirements.txt` 等），且用户仅提供了一个外部 Git URL，则：
+    - **禁止**凭模型对该 URL 仓库结构的先验知识自动枚举或推断子目录
+    - 必须先询问用户：要部署的是仓库根目录，还是某个具体子目录？若是子目录，请用户给出路径（如 `java/spring-boot`）
+    - 只生成**一个**组件；除非用户在回复中明确列出了多个目标子目录
+    - 此规则防止把多 example 仓库（如 sourcecode-examples）的所有子目录批量展开为组件，避免造成批量"数据中心异常"
 
 ## 主线流程
 
