@@ -248,7 +248,7 @@ Example final reply:
 
 ````markdown
 ### Deployment State
-The overall delivery outcome is `delivered-but-needs-manual-validation` for environment `preview`, app `my-app`, team `example-team`, region `cn`, app_id `app-101`.
+The overall delivery outcome is `delivered-but-needs-manual-validation` for app `my-app`, environment `preview`.
 
 ### Component Runtime
 - `db status`: `running`
@@ -281,8 +281,8 @@ Always respond using exactly these sections:
 
 ### Deployment State
 - state the overall delivery outcome
-- include selected environment
-- include resolved app context
+- include `app_name` and selected environment
+- do not include `team_name`, `region_name`, or `app_id` in prose; those are available in `### Structured Output` only
 
 ### Component Runtime
 - report:

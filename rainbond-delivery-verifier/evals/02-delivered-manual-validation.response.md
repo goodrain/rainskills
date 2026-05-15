@@ -1,5 +1,5 @@
 ### Deployment State
-The overall delivery outcome is `delivered-but-needs-manual-validation` for environment `preview`, app `manual-demo`, team `demo-team`, region `us`, app_id `app-delivery-002`. The final runtime state is `runtime_healthy`.
+The overall delivery outcome is `delivered-but-needs-manual-validation` for app `manual-demo`, environment `preview`. The final runtime state is `runtime_healthy`.
 
 ### Component Runtime
 - `db status`: `running`

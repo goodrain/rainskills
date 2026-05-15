@@ -1,5 +1,5 @@
 ### Deployment State
-The overall delivery outcome is `blocked` for environment `preview`, app `no-url-demo`, team `demo-team`, region `us`, app_id `app-delivery-005`. The runtime state is `runtime_healthy`, but that does not by itself mean the rollout is delivered.
+The overall delivery outcome is `blocked` for app `no-url-demo`, environment `preview`. The runtime state is `runtime_healthy`, but that does not by itself mean the rollout is delivered.
 
 ### Component Runtime
 - `db status`: `running`

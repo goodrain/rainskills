@@ -1,5 +1,5 @@
 ### Deployment State
-The overall delivery outcome is `blocked` for environment `preview`, app `capacity-demo`, team `demo-team`, region `us`, app_id `app-delivery-004`. The current runtime state is `capacity_blocked`.
+The overall delivery outcome is `blocked` for app `capacity-demo`, environment `preview`. The current runtime state is `capacity_blocked`.
 
 ### Component Runtime
 - `db status`: `running`

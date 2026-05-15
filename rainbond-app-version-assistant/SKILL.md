@@ -355,7 +355,7 @@ Example final reply:
 
 ````markdown
 ### Context
-Resolved `team_name` rainbond-demo, `region_name` singapore, `app_id` app-4fd2, flow type `publish`.
+App `rainbond-demo`, flow type `publish`.
 
 ### Current State
 Current baseline version is `v12`, unsaved runtime changes do not exist, and there is one unfinished publish record: `share-102`.
@@ -399,10 +399,9 @@ VersionCenterSession:
 Always respond using exactly these sections:
 
 ### Context
-- resolved `team_name`
-- resolved `region_name`
-- resolved `app_id`
+- state `app_name` (from `.rainbond/local.json`) and flow type
 - whether the task is snapshot, publish, or rollback
+- do not include `team_name`, `region_name`, or `app_id` in prose; those are available in `### Structured Output` only
 
 ### Current State
 - overview summary

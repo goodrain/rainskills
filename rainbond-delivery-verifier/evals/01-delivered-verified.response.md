@@ -1,5 +1,5 @@
 ### Deployment State
-The overall delivery outcome is `delivered` for environment `preview`, app `delivered-demo`, team `demo-team`, region `us`, app_id `app-delivery-001`. The final runtime state is `runtime_healthy`.
+The overall delivery outcome is `delivered` for app `delivered-demo`, environment `preview`. The final runtime state is `runtime_healthy`.
 
 ### Component Runtime
 - `db status`: `running`

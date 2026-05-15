@@ -796,7 +796,7 @@ Example final reply:
 Initialization succeeded with a freshly inferred manifest; the missing `rainbond.app.json` was generated and the Rainbond app was created via MCP, so the project is now linked and ready for bootstrap.
 
 ### Resolved Project
-`team_name` demo-team, `region_name` us-west-2, `app_name` storefront, `app_id` app-9123, selected environment preview.
+App `storefront`, environment `preview`.
 
 ### Files Created Or Updated
 `rainbond.app.json` (created from repository inference), `.rainbond/local.json` (created with verified binding metadata, status `linked`).
@@ -856,11 +856,9 @@ Always respond using exactly these sections:
 - describe manifest/app/file actions from what happened in the current run, not merely from what exists by the time the reply is written
 
 ### Resolved Project
-- state `team_name`
-- state `region_name`
 - state `app_name`
-- state `app_id` if known
 - state `selected environment`
+- do not include `team_name`, `region_name`, or `app_id` in this section; those are available in `### Structured Output` only
 
 ### Files Created Or Updated
 - list:

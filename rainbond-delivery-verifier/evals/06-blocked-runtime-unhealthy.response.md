@@ -1,5 +1,5 @@
 ### Deployment State
-The overall delivery outcome is `blocked` for environment `preview`, app `runtime-demo`, team `demo-team`, region `us`, app_id `app-delivery-006`. The current runtime state is `runtime_unhealthy`.
+The overall delivery outcome is `blocked` for app `runtime-demo`, environment `preview`. The current runtime state is `runtime_unhealthy`.
 
 ### Component Runtime
 - `db status`: `running`

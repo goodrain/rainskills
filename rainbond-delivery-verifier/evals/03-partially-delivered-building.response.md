@@ -1,5 +1,5 @@
 ### Deployment State
-The overall delivery outcome is `partially-delivered` for environment `preview`, app `building-demo`, team `demo-team`, region `us`, app_id `app-delivery-003`. The current runtime state is `topology_building`.
+The overall delivery outcome is `partially-delivered` for app `building-demo`, environment `preview`. The current runtime state is `topology_building`.
 
 ### Component Runtime
 - `db status`: `running`
