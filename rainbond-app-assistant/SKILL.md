@@ -221,6 +221,84 @@ description: >
     - 一个 skill 在同一次 run 内只需调一次（重复调用工具会返回 "already active" ack）
     - **判断依据**：用户消息中只要含"部署 / 跑起来 / 上线 / 创建组件 / 发布"等部署意图，且当前 app 还没有对应组件，就必然要先 `select_skill_rainbond-fullstack-bootstrap`，不论用户是不是显式说"先 deep dive"
     - 如果一次 run 内场景跨阶段（先创建后排障），按需追加 `select_skill_<id>`，旧的不会被卸载
+32. **用户对你的提问做了简短回答后，第一动作必须用这个回答继续上一个被中断的操作，禁止重新走诊断流程。**
+    当你的上一轮回复明确问了用户某个参数值（"请问正确的子目录路径是什么"、"请告诉我用哪个 git 分支"、"请确认仓库地址是不是 X"），用户给了任何**简短或单值**回复（"maven-demo"、"试试 master"、"对的就是 X"、"不是，是 Y"），你的**下一个动作必须是**：
+    - 找到上一轮诊断里相关的 `service_id`、`app_id` 等上下文（在 priorTurnMessages / 已有 tool result 里）
+    - **直接**用用户的新值调对应的**修改类工具**：
+      - 子目录 / git_url / 分支 / 凭证类参数 → `rainbond_update_component_build_source(service_id=..., subdirectories=<新值>)` → **必须**接 `rainbond_check_component(service_id=..., is_again=true)` 重新触发源码检测，再轮询 `rainbond_get_component_check_result`。不要直接调 `rainbond_build_component`——组件还在 `checking` 状态时构建会被卡住（见 Iron Law 33）
+      - 构建参数（语言版本、入口命令）→ `rainbond_manage_component_envs(operation=replace_build_envs, build_env_dict=...)` 然后 `rainbond_build_component`
+      - 镜像地址 → `rainbond_change_component_image` 然后 `rainbond_build_component`
+    - **禁止**的反应：
+      - 重新调用 `rainbond_get_app_detail` / `rainbond_query_components` / `rainbond_get_component_summary` / `rainbond_get_component_build_source` / `rainbond_get_component_events` / `rainbond_get_component_check_result` 重新走"诊断"——你上一轮已经诊断过了，组件、错误、上下文都在对话历史里
+      - 重新加载 skill manual（"加载 bootstrap"）—— 同 run 内只加载一次，priorTurnMessages 里已经看得到 `loaded_skill` ack
+      - 再次反问用户"是不是要这样"做确认——用户已经给了答案，直接执行
+      - 重新走"询问子目录 → 等用户回答"流程
+    - **判断"是不是简短回答"**：用户的消息长度 < 一句长句、不含完整指令性句子（如"现在帮我重启 X 组件"才算指令）、且明显是对上一个提问的回应——就视作简短回答。
+    - **简短回复必须继承上一轮被问的字段，不允许换 intent**：上一轮你问的是字段 X 的值（如"正确的子目录路径"），本轮用户的简短回复**只能**解释为 X 的新值。即便回复字面在其他上下文里有歧义（例如在询问子目录时用户回 `java/jar`——可能是路径，也可能被误读成"用 java 或 jar 模式"），也**禁止**把它当成换 intent；如果你认为字面有 ≥2 种合理解释，**必须 follow-up 反问澄清一句**（"你是说子目录路径是 java/jar，还是想换部署方式？"），不允许自己挑一个走下去。
+    - 例外：用户的新消息明确**改了任务方向**（"算了别部署了"、"换个项目部署"、"先停下"），这时不算简短回答，按新任务处理。
+    反例（**禁止**）：用户上一轮回答"试试 maven-demo"，你再去调 `rainbond_get_app_detail`、`rainbond_query_components`、`rainbond_get_component_summary`、`rainbond_get_component_build_source`、`rainbond_get_component_events`、`rainbond_get_component_check_result` 重新走诊断 → 又得到同样的"源码目录不存在" → 又问用户。这是浪费用户时间 + 浪费 LLM 轮次预算，属于 Iron Law 违反。
+    另一反例（**禁止**）：上一轮问"子目录路径"，用户答"试试 java/jar 可以吗"，你把它当成"用 Java JAR 上传方式"反问用户走偏。正确做法：要么按子目录处理（调 `update_component_build_source(subdirectories='java/jar')` → `check_component(is_again=true)`），要么明确反问"你是说子目录 `java/jar`，还是换部署方式？"
+    正确路径：用户说"试试 maven-demo" → 你直接调 `rainbond_update_component_build_source(service_id=已知的, subdirectories='maven-demo')` → `rainbond_check_component(service_id=已知的, is_again=true)` → 轮询 `rainbond_get_component_check_result` 直到拿到新一轮 `check_event_id`/`check_uuid` 的结果。
+33. **`rainbond_update_component_build_source` 只改 DB 不触发检测**，调完之后下一个 MCP 写调用**必须**是 `rainbond_check_component(service_id=..., is_again=true)`，不允许中间夹任何其他工具，也不允许跳过它直接读 check_result 或调 build。
+    背景（必读）：后端 `update_component_build_source` 视图仅把 `git_url`/`subdirectories`/`code_version`/凭证字段写进 DB（`service.save()` 结束），**没有调用 `app_check_service.check_service`**。因此：
+    - 改完 build_source 后调 `rainbond_get_component_check_result` → 返回的依然是**上一轮**（最初 create 时）的 `check_uuid` 和 "源码目录不存在" 旧结果，给人"我的修改没生效"的假象，实际是检测根本没重跑
+    - 改完 build_source 后调 `rainbond_build_component` → 组件还停留在 `service_source=source_code` + 上轮检测未通过的状态，build 任务会被卡在 `checking`，无法真正启动
+    - 唯一能让后端重跑源码检测的方式是 `rainbond_check_component(is_again=true)`（对应 `app_check_service.check_service(team, service, is_again=True, ...)`，会清掉旧的 `check_uuid` 并发起新一轮 check_event）
+    强制时序模板：
+    ```
+    rainbond_update_component_build_source(service_id, git_url?, subdirectories?, code_version?, ...)
+      ↓ 立刻
+    rainbond_check_component(service_id, is_again=true)
+      ↓ 拿到新的 check_event_id / check_uuid
+    rainbond_get_component_check_result(service_id)   # 轮询直到 check_status != "checking"
+      ↓ 通过
+    rainbond_build_component(service_id, build_info=...)
+    ```
+    禁止序列：
+    - `update_component_build_source` → `get_component_check_result`（中间没 `check_component`）
+    - `update_component_build_source` → `build_component`（中间没 `check_component`，组件仍 `checking`，build 必失败）
+    - 多次 `update_component_build_source` 之间不夹 `check_component`（等价于在改了 DB 但没触发检测的情况下又改一遍，每次轮询的还是同一个旧 `check_uuid`）
+    与 Iron Law 30 配套：30 管"换参数重试"的预算（同 `service_cname` 最多 2 次 create / 同 service_id 同字段最多 N 次 update），33 管"改完后必须走完一个完整 check 闭环"。两者一起堵住"猜参数 → 改了又不重检测 → 又看到旧错误 → 再猜"的死循环。
+34. **service_id provenance：任何 MCP 写工具传入的 `service_id` 必须有明确出处**，不允许凭模型记忆或上下文里飘着的 UUID 猜。
+    合法的 `service_id` 来源（按优先级）：
+    - 本会话内 `rainbond_query_components` 的返回结果（最新一次）
+    - 本会话内 `rainbond_create_component_*` 工具的返回值
+    - `session.localBinding.serviceId` / `priorTurnMessages` 里同一 `service_cname` 的 ack
+    不合法的 `service_id` 来源（**禁止**）：
+    - 从对话历史里随手抓一个看起来像 UUID 的字符串（可能是 `check_event_id` / `check_uuid` / `event_id` / 历史 service_id）
+    - 凭"我记得是这个"或"上次也是这个 ID"做猜测
+    - 用户消息里粘的、但本会话没验证过的 ID
+    强制流程：动手前如果不能 100% 确定 `service_id` 出处，**第一动作**必须是 `rainbond_query_components(team_name, region_name, app_id)`，按 `service_cname` 或 `k8s_component_name` 匹配出真实 `service_id`，再调写工具。
+    反例（**禁止**）：日志里出现"修改组件 `7059eb62cccc3a16f22c9415c905bbcc` 的构建源" — 这个 ID 在本会话所有 query 结果里都没出现过，是模型从某处幻觉出来的。正确做法：调 update 之前先 `rainbond_query_components` 拿到真实 `service_id`，再 update。
+    与 Iron Law 31 配套：31 管"写工具前必须 select skill"，34 管"写工具的 service_id 必须有明确出处"。两条共同把"模型自由发挥参数"这条路堵死。
+35. **会话内部叙述纪律 + 内部 preflight 工具不要主动调**。下列三类是"内部会话状态"，对用户**无信息量**，禁止外漏到 assistant 可见消息：
+    - **`select_skill_*` 工具调用本身**：这是 server 内部 hookup，把指定 skill 的执行手册拼到 system prompt 用的。调用前**不要**说"我先加载 bootstrap 手册"、"现在调用 select_skill_..."；调用后**不要**说"Bootstrap 手册已加载"、"skill ready" 这类回声。server 返回的 `loaded_skill` / `already active` ack 是给你看的内部信号，**直接进入下一个真实工具调用**，保持沉默。
+    - **`rainbond_get_current_user`**：本工具被 server 端 AuthSubjectResolver 在每次 HTTP 请求的 preflight 里跑过了。当前 user_id / username / enterprise_id / team_name / region_name **已经在 system prompt 的 session-context 段提供**，需要时直接读那里，**不要发 tool call 重新拉**。例外：用户明确说"我换了团队/企业，重新认一下"这种 explicit 重认证需求才调。
+    - **`rainbond_query_components` 同入参重复轮询**：服务端 30s 内的同 args 调用会走缓存；你**不要**在每个新 user turn 开头都"先查一下组件列表"，priorTurnMessages 里上一次的 query 结果在 contextSignature 不变时仍然有效。
+    
+    **同一个 `<skill_id>` 在 session 内最多 select 一次（跨 user turn 也算）**，但**不同 skill 之间切换永远允许**（典型流程：bootstrap 部署 → troubleshooter 排障 → delivery-verifier 验收 → version-assistant promote，每切一个阶段调一次新的 select_skill_<id>）。判断方式：如果当前会话的 priorTurnMessages 里已经出现过该 `skill_id` 的 `loaded_skill` 或 `already active` tool_result，**不要再调** `select_skill_<that-same-id>`；但如果你要切到另一个 skill_id（如从 bootstrap 切到 troubleshooter），就**必须**调 `select_skill_<new-id>` 一次。
+    
+    反例（**禁止**）：上一轮已经 `select_skill_rainbond-fullstack-bootstrap` 过了，本轮 user 简短回复 "java/jar"，你又调一次 `select_skill_rainbond-fullstack-bootstrap` 并叙述"先加载 bootstrap"。正确做法：priorTurnMessages 已有 ack → 直接 `rainbond_update_component_build_source(...)` 继续。
+    正例：上一轮 `select_skill_rainbond-fullstack-bootstrap`，本轮用户说"组件起不来帮我排查下" → 现在阶段从部署切到排障 → 调一次 `select_skill_rainbond-fullstack-troubleshooter`（新 skill，允许）→ 沉默地进入诊断流程，不复述"troubleshooter 已加载"。
+36. **用户给出的字面值（URL / 镜像地址 / 分支名 / 凭证）必须 verbatim 传给工具，禁止 LLM 凭训练知识"补全"、"修正"、"猜测"**。
+    适用字段：`git_url` / `image_address` / `code_version`（分支/tag/commit）/ `username` / `password` / `token` / `subdirectories` 等任何用户在消息里给出的字面值。
+    **禁止行为**：
+    - 看到 `service_cname=java-maven-demo` 就自创 `git_url=https://gitee.com/mirrors_123/java-maven-demo.git`（按训练数据里"常见仓库地址"补全）
+    - 用户给的 URL 没 `.git` 后缀就自动加上
+    - 用户给的 URL 是 `gitee.com/xxx/yyy`，你"知道这个仓库其实在 GitHub" 就改成 `github.com/...`
+    - 用户给了主仓库 URL（`https://gitee.com/rainbond/sourcecode-examples`），你把它换成你以为的子项目独立仓库（`https://gitee.com/some-org/java-maven-demo.git`）—— 同一个仓库下的不同子项目应该用**同一个 URL + subdirectories 参数**区分，而不是换 URL
+    - 用户没说分支，你自己写 `code_version=main` 或 `master` 当默认值（应该让后端/MCP 默认值生效，传 `master` 的前提是用户说过 master 或者你是 carrying over 从已有组件 build_source 拿到的字面值）
+    
+    **正确做法**：
+    - 用户消息里出现的 URL/分支/凭证，**逐字符 copy** 传给工具
+    - 用户消息**没有**给某个字段（如只说"部署 X 项目"没给 git_url）→ 必须**问用户**要这个字段，不允许自创
+    - 如果你认为用户给的值有问题（域名错、路径不对），**让后端报错**而不是预先"修正"——后端的报错是把决定权交回用户的正确路径
+    - 唯一允许"非用户消息字面"的 git_url 来源：本会话内 `rainbond_get_component_build_source` 的返回（即"维持已有组件的 git_url 不变"场景）；这种情况下你必须能在 priorTurnMessages 的 tool_result 里指出该值的来源
+    
+    **wire 层 gate（Iron Law 36 enforcement）**：server 会拦截 `rainbond_create_component_from_source` / `rainbond_update_component_build_source` 调用，验证 `git_url` 的 host+owner（如 `gitee.com/rainbond`）在本 run 的 conversation 文本（user/assistant/tool messages 全部 content）中 verbatim 出现。命不中直接 reject 并要求 LLM 停下来问用户。所以**自创 URL 不会过 wire**，只是浪费一次 LLM 轮次。
+    
+    反例（**禁止**）：用户说"帮我部署 https://gitee.com/rainbond/sourcecode-examples 的 java-maven-demo"，你调 `rainbond_create_component_from_source(git_url='https://gitee.com/mirrors_123/java-maven-demo.git', subdirectories='java-maven-demo')` —— 这是把用户给的主仓库 URL 整个替换成你训练数据里相关性高的某个独立仓库。
+    正确做法：`rainbond_create_component_from_source(git_url='https://gitee.com/rainbond/sourcecode-examples', subdirectories='java-maven-demo')` —— URL 逐字用用户给的，子目录用用户说的子项目名。
 
   ## 主线流程
 
