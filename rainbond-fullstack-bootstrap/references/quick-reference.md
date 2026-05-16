@@ -15,6 +15,7 @@ Use this file for low-frequency reminders. Do not treat it as the source of trut
 - omitting the required `### Structured Output` section
 - inventing top-level `created_components`, `reused_components`, `skipped_components`, or `deferred_dependencies` instead of using `deployment_plan.workflow.*`
 - echoing raw platform states such as `undeploy` instead of normalizing them into the canonical runtime vocabulary
+- re-triggering `rainbond_build_component` because `status = undeploy` was misread as "build never started" instead of treating `undeploy` as a runtime label and verifying the prior build `event_id` first
 - treating frontend runtime path issues as bootstrap problems
 - forgetting to require explicit frontend `access_mode` declaration
 - exceeding the stage retry budget instead of stopping with the current blocker

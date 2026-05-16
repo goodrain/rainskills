@@ -129,6 +129,32 @@ Apply this discipline whenever you are waiting on a build or deploy:
 
 This discipline keeps the run loop bounded for genuinely long-running builds. Failure to apply it is the dominant cause of "本次分析轮次已达上限" terminations on otherwise healthy build flows.
 
+## Build Trigger Anchoring
+
+Two concurrent builds on the same component produce two interleaved log streams that the user has to manually de-duplicate. Do not re-trigger `rainbond_build_component` unless the previous build's terminal state is known.
+
+Capture every build trigger by `event_id`:
+- `rainbond_create_component_from_source` returns the initial build `event_id` — record it as `build_event_id` immediately
+- a later `rainbond_build_component` call returns a new `event_id` — overwrite `build_event_id` with the new value
+- if the triggering response does not carry a usable `event_id`, record `trigger_at` and fall back to the most recent build event from `rainbond_get_component_events` for that `service_id`
+
+`status = undeploy` in `rainbond_get_component_summary` is **runtime** state, not **build** state. It means no Pod is currently deployed for this component, and is consistent with:
+- a source build still in progress that has not yet produced a deployable image
+- a source build that failed downstream and never produced a Pod
+- a component that was created but never built
+
+`undeploy` is therefore **not** evidence that a fresh build is needed.
+
+Before calling `rainbond_build_component` again on the same component:
+- if `build_event_id` is known, confirm it is terminal via `rainbond_get_component_build_logs(event_id=build_event_id)` — look for `BUILD SUCCESS`, `BUILD FAILED`, or a fatal exit-code line
+- if `build_event_id` was lost, read `rainbond_get_component_events` first; if the most recent build event is still in flight, treat that as the active build and wait — do not trigger a new one
+- only call `rainbond_build_component` again when the previous build is terminal **and** one of the retry intents in [40-source-and-package-rules.md](40-source-and-package-rules.md) applies (source definition changed, build env tuned, explicit retry of same `git_url` + `code_version`)
+- never call `rainbond_build_component` purely because `status = undeploy`, `status = waiting`, or because the runtime is "not running yet"; runtime labels are not build signals
+
+When verifying a freshly created source-backed component:
+- prefer reading the build log for the captured `build_event_id` over re-reading `component_summary`; the build is the dominant evidence until it is terminal
+- only fall back to `rainbond_get_component_events` when `build_event_id` was lost or the build log stream is empty
+
 ## Source Build Convergence Before Dependency Completion
 
 For source-backed components:
