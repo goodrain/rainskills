@@ -66,6 +66,24 @@ For standard source-backed creation:
 - do **not** invent a blocker just because `check_uuid` or `event_id` is absent
 - only stop on this point if the backend explicitly returns that those fields are required for the current request
 
+### Source-create Retry Discipline
+
+`rainbond_create_component_from_source` is a create-and-build tool, not an idempotent retry tool. Every call mints a new `service_id`. A failed source-creation flow does **not** mean the component is absent — the component row, ports, envs, and dependency edges may already exist with the build merely failing downstream.
+
+Before calling `rainbond_create_component_from_source` after any earlier source failure in the same run:
+- query the target app with `rainbond_query_components` and look for a matching `service_cname` or `k8s_component_name`
+- if a matching component already exists, do **not** call `rainbond_create_component_from_source` again — switch to the retry path below
+
+Pick the retry path by intent:
+- same `git_url` + same `code_version`, want to retrigger the build → `rainbond_build_component(service_id, build_info=...)`
+- source definition changed (`git_url`, `code_version`, `server_type`, credentials) → `rainbond_update_component_build_source` then `rainbond_build_component`
+- build env tuning only → `rainbond_manage_component_envs(operation=replace_build_envs, build_env_dict=...)` then `rainbond_build_component`
+
+Rules:
+- never call `rainbond_create_component_from_source` twice for the same logical component in one run; that produces duplicate `service_id` rows the user has to clean up
+- a build failure surfaced by events or build logs is **not** evidence the component was not created; verify with `rainbond_query_components` before any retry
+- the existing source-failure handling in [50-workflow-and-convergence.md](50-workflow-and-convergence.md) (read events, read build log, classify blocker) still applies; this section only governs which tool to call when retry is justified
+
 ### Multi-service Source Ambiguity
 
 If source detection reports `multiple services detected` or equivalent multi-component ambiguity:
