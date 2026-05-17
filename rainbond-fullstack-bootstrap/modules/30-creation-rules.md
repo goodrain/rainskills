@@ -65,29 +65,47 @@ Typical examples:
 
 Consumer-specific runtime envs are still allowed only for values that are genuinely local to that consumer. Secrets must come from explicit input or `.rainbond/secrets.<environment>.json`; never print secret values.
 
-## 5. Stateful middleware persistence must be visible
+## 5. Stateful service persistence must be visible
 
-For database, cache, broker, queue, search, and similar stateful middleware components, check whether the manifest, image convention, role, or repository evidence carries a persistence requirement.
+**Trigger (principle, not a closed list)**: any component that is a **stateful service — one whose data must survive container restart — requires persistence**. Use general knowledge to identify these. Categories include but are not exhaustive:
+- Relational databases (MySQL, MariaDB, Postgres, CockroachDB, TiDB, …)
+- NoSQL / document / key-value stores (MongoDB, Redis when persisted, etcd, Cassandra, ScyllaDB, DynamoDB-local, FoundationDB, …)
+- Time-series / analytics databases (ClickHouse, InfluxDB, TimescaleDB, QuestDB, VictoriaMetrics, Druid, Pinot, …)
+- Search engines (Elasticsearch, OpenSearch, Solr, Meilisearch, Typesense, …)
+- Message queues / brokers with durable storage (RabbitMQ, Kafka, Pulsar, NATS-JetStream, …)
+- Graph / vector / specialised stores (Neo4j, ArangoDB, Dgraph, Milvus, Qdrant, Weaviate, Chroma, …)
+- Object stores / blob stores (MinIO, SeaweedFS, Garage, …)
+- Workflow / state engines that persist state to disk (Temporal-server backed by SQLite, Airflow metadata DB, …)
 
-Common middleware data directories:
+The list illustrates the breadth; it is not exhaustive. For any service in your knowledge that follows the same pattern (data on disk that must survive restart), apply this rule.
+
+**Data directory (fact — must be correct, not invented)**: use the **documented data directory for the specific image**. Common examples:
 - MySQL / MariaDB: `/var/lib/mysql`
 - Postgres: `/var/lib/postgresql/data`
 - MongoDB: `/data/db`
 - Redis: `/data`
 - RabbitMQ: `/var/lib/rabbitmq`
-- Kafka: `/var/lib/kafka/data`
+- Kafka: `/var/lib/kafka/data` (Apache Kafka image) or `/bitnami/kafka` (Bitnami)
 - Elasticsearch / OpenSearch: `/usr/share/elasticsearch/data`
 - MinIO: `/data`
+- ClickHouse: `/var/lib/clickhouse`
+- Cassandra: `/var/lib/cassandra`
+- InfluxDB: `/var/lib/influxdb2` (v2) or `/var/lib/influxdb` (v1)
+- Neo4j: `/data`
+- Milvus: `/var/lib/milvus`
+- Qdrant: `/qdrant/storage`
 
-Rules:
-- for stateful middleware components whose image, role, or component name identifies one of the standard data directories above, treat persistence as required for a normal Rainbond bootstrap
-- inspect existing component storage before deploying the middleware component
-- if no durable storage is already mounted at the middleware data directory, use `rainbond_manage_component_storage` to create or reuse a component volume and mount it at that directory before deploying the component
+For services not in this list, recall the documented data directory from the image's official documentation, state your assumption in the report, and invite the user to correct it. If genuinely unsure (rare image, conflicting variants), ask the user.
+
+**Rules**:
+- inspect existing component storage before deploying the stateful component
+- **the component must be created as stateful** (`extend_method = state`) when local-volume persistence is intended; see "Volume type ↔ component type compatibility" below. **Default image-mode creation is stateless** — this is the most common cause of the "stateful service running without persistence" regression. Explicitly set `extend_method = state` when creating stateful service components.
+- if no durable storage is already mounted at the service's data directory, use `rainbond_manage_component_storage` to create or reuse a component volume and mount it at that directory **before** deploying the component
 - prefer the smallest durable storage binding accepted by the platform; do not invent a storage class, PVC name, host path, reclaim policy, or data-retention guarantee
-- if the storage MCP call fails or the platform does not expose a usable storage provider, do not silently ignore it; report missing middleware persistence as a bootstrap caveat or blocker depending on user intent
-- if no stateful middleware component is present, no persistence check is required
-- if a cache component is explicitly configured as ephemeral and the user intent is clearly disposable, it may run without durable storage, but this must be reported as an intentional ephemeral caveat
-- demo bootstrap may continue only when the user intent is clearly ephemeral or when storage creation is blocked and the caveat is explicitly reported
+- if the storage MCP call fails or the platform does not expose a usable storage provider, do not silently ignore it; report missing persistence as a bootstrap caveat or blocker depending on user intent
+- if no stateful service component is present, no persistence check is required
+- if a cache component is explicitly configured as ephemeral and user intent is clearly disposable (e.g., user said "just for testing" or `--ephemeral`), it may run without durable storage, but this must be reported as an intentional ephemeral caveat
+- demo bootstrap may continue without persistence only when user intent is clearly ephemeral, or when storage creation is blocked and the caveat is explicitly reported
 - do not invent storage classes, PVC names, host paths, or data-retention guarantees
 
 ### Volume type ↔ component type compatibility

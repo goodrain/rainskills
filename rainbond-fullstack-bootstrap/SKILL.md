@@ -138,6 +138,12 @@ These rules are always in force. If any module, example, or lower-priority note 
 
    Forbidden: asking "image or source?" when a clear signal is present, or when the name is obviously a public infrastructure software project (Nginx, Redis, ClickHouse, Jaeger, Loki, OpenTelemetry Collector, and equivalent newer ones). Use judgment, not enumeration.
 
+   **Stateful service follow-up**: when image mode is chosen for a stateful service (databases, persistent queues, search engines, time-series, object stores, vector / graph stores — any service whose data must survive container restart), you **must** also:
+   1. Set `extend_method = state` at component creation (image-mode default is stateless; stateless components cannot mount `local` volumes)
+   2. Mount durable storage at the service's documented data directory via `rainbond_manage_component_storage` **before** deploying
+
+   Full identification of stateful categories, the data-directory facts per service, and `extend_method` / `volume_type` compatibility rules live in `modules/30-creation-rules.md § 5`. Deploying a stateful service via image mode without persistence is a real data-loss regression — do not skip this step because "I'm not sure if X is stateful." If unsure, ask the user; do not default to stateless image deployment for anything that might store data.
+
 ## Reading Order
 
 Use the skill in this order:

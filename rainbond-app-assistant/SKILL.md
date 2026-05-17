@@ -335,6 +335,12 @@ description: >
     - 用户给了 git_url 还问"用镜像还是源码？"（信号已经明确）
     - 用户给了 image tag 还问"用镜像还是源码？"（信号已经明确）
     - 对一个你的训练知识里明显是基础设施软件的名字（不管是否在某个示例清单里）问"用镜像还是源码？" —— Nginx、Redis、ClickHouse、Jaeger、Loki、OpenTelemetry Collector 都属于这一类，未来出现的新项目也会属于这一类，用判断不要用穷举
+    
+    **stateful 服务的额外要求**：当推断结果是 image 模式 **且** 该服务属于 stateful 范畴（数据库 / 持久化消息队列 / 搜索引擎 / 时序库 / 对象存储 / 向量库 / 图库等 — 数据必须跨重启存活的任何服务），创建组件时必须额外做两件事：
+    1. 显式设置 `extend_method = state`（默认 image 创建是 stateless，stateless 组件不能挂 local volume）
+    2. 用 `rainbond_manage_component_storage` 在该服务的官方数据目录（`/var/lib/clickhouse`、`/var/lib/postgresql/data` 等）挂载持久卷，**先挂存储再 deploy**
+    
+    具体的官方数据目录清单、识别 stateful 服务的范畴边界、以及 `extend_method` / `volume_type` 兼容性细节见 bootstrap skill 的 `modules/30-creation-rules.md § 5 (Stateful service persistence must be visible)`。stateful 服务用 image 模式部署却没配持久化是真实回归 bug（用户重启 pod 就丢数据），禁止以"模型不知道这个 service 是 stateful"为由跳过。
 
   ## 主线流程
 
