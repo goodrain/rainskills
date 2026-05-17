@@ -143,13 +143,17 @@ description: >
    transport 代理只改“怎么拉”，不改 delivery mode。
 6. **传输代理自动决策（Git URL + image 公网拉取统一处理）**：当组件源识别为公网 Git 或公网 registry 时，**默认自动套用代理**，不打断流程问用户，在最终报告里明确告知"已用 X 代理拉取 Y"，邀请用户覆盖。
 
-   公网 Git URL（`https://github.com/...`、`https://raw.githubusercontent.com/...`）→ 默认改写为 `https://ghfast.top/https://github.com/...`。
+   推荐代理（具体操作默认值）：
+   - 公网 Git URL → 改写为 `https://ghfast.top/<原 URL>`。典型例子：`https://github.com/...`、`https://raw.githubusercontent.com/...`。其它公网 Git 托管（GitLab.com、Codeberg 等）同样视作公网 Git，套同样代理前缀。
+   - 公网容器 registry → 改写为 `docker.1ms.run/<full-path>`。
 
-   公网 image registry → 默认改写为 `docker.1ms.run/<full-path>`。触发判定（in-scope）：
-   - 裸 Docker Hub 引用：`nginx:latest`、`library/nginx:latest`、`mysql/mysql-server:8.0` 等隐式 `docker.io/...`
-   - 显式公网 registry：`docker.io/...`、`quay.io/...`、`gcr.io/...`、`ghcr.io/...`、`k8s.gcr.io/...`、`registry.k8s.io/...`
+   **In-scope 判断（principle 而非清单）**：组件源指向**一个无法在大陆稳定直连的公网服务**就算 in-scope。用你的通用知识判断 — 不要等清单匹配。
+   - 公网 registry 典型例子：`docker.io`（含裸 `nginx:latest`、`library/...` 这种隐式解析）、`quay.io`、`gcr.io`、`ghcr.io`、`k8s.gcr.io`、`registry.k8s.io`、`nvcr.io`、`mcr.microsoft.com`、`public.ecr.aws` 等
+   - 类似性质的新 registry（如未来出现的厂商公网仓库）按同样判断
 
-   跳过（out-of-scope）：已在已知镜像源（`docker.1ms.run/...`、`m.daocloud.io/...`、`mirror.gcr.io/...`）或私有 registry（`harbor.example.internal/...`、`registry.cn-hangzhou.aliyuncs.com/...`、`<corp-registry>:5000/...`）。
+   **Out-of-scope 判断（principle）**：以下情况**不代理**，直接用原 URL：
+   - 已经指向某个镜像源（URL 前缀已经是 `docker.1ms.run`、`m.daocloud.io`、`mirror.gcr.io`、`ghfast.top/...` 等）
+   - **私有 / 自建 registry**：判断特征是"用户/企业专属"，包括但不限于 `.internal` / `.local` 后缀、企业自有域名（`harbor.<corp>.com`、`registry.<corp>.cn` 等）、IP 地址或带端口的内网地址（`10.x.x.x:5000`、`<host>:443/...`）、云厂商私有仓库子域名（`registry.cn-*.aliyuncs.com`、`<aws-account>.dkr.ecr.<region>.amazonaws.com` 等用户专属路径）。模型用通用知识判断，不要等清单。
 
    一次 run 内复用同一代理前缀，不并存多个。仅以下情况切换为询问用户：
    - 用户明确说过"不用代理"或"用原始地址" → 当次 run 内不再自动代理

@@ -99,8 +99,17 @@ These rules are always in force. If any module, example, or lower-priority note 
 6. `check_uuid` and `event_id` are optional passthrough fields for standard source creation unless the backend explicitly requires them for the current request.
 7. **Transport proxy: auto-apply, announce, accept override.** When a component source resolves to a public Git URL or public-registry image, **silently apply the recommended proxy prefix** rather than pausing to ask. Mention the proxy substitution in the final report so the user can override.
 
-   - Public Git URL (`https://github.com/...`, `https://raw.githubusercontent.com/...`) → rewrite to `https://ghfast.top/https://github.com/...`.
-   - Public registry image → rewrite to `docker.1ms.run/<full-path>`. In-scope: bare Docker Hub refs (`nginx:latest`, `library/nginx:latest`, `mysql/mysql-server:8.0`), explicit `docker.io/...`, `quay.io/...`, `gcr.io/...`, `ghcr.io/...`, `k8s.gcr.io/...`, `registry.k8s.io/...`. Out-of-scope: already-mirrored (`docker.1ms.run/...`, `m.daocloud.io/...`) or private registries (`harbor.example.internal/...`, `<corp-registry>:5000/...`).
+   Recommended proxy defaults:
+   - Public Git URL → rewrite to `https://ghfast.top/<original-url>`. Typical examples: `https://github.com/...`, `https://raw.githubusercontent.com/...`. Other public Git hosts (GitLab.com, Codeberg, etc.) count as public Git too.
+   - Public container registry → rewrite to `docker.1ms.run/<full-path>`.
+
+   **In-scope (principle, not a list):** a registry or Git host is in-scope when it is a **public service that may have unreliable direct access from mainland China**. Use general knowledge to judge — do not wait for an enumerated list.
+   - Typical public registries: `docker.io` (including bare refs like `nginx:latest` or `library/...` that implicitly resolve to it), `quay.io`, `gcr.io`, `ghcr.io`, `k8s.gcr.io`, `registry.k8s.io`, `nvcr.io`, `mcr.microsoft.com`, `public.ecr.aws`, etc.
+   - Similar future or newer public vendor registries follow the same judgment.
+
+   **Out-of-scope (principle):** do not proxy the following — pass the URL through as-is:
+   - Already pointed at a mirror (`docker.1ms.run`, `m.daocloud.io`, `mirror.gcr.io`, `ghfast.top/...`, etc.)
+   - **Private / self-hosted registries**: anything user- or organisation-specific. Recognisable signals include `.internal` / `.local` suffixes, corporate domains (`harbor.<corp>.com`, `registry.<corp>.cn`), bare IPs or hostnames with explicit ports (`10.x.x.x:5000`, `<host>:443/...`), cloud-vendor private paths (`registry.cn-*.aliyuncs.com`, `<aws-account>.dkr.ecr.<region>.amazonaws.com`, etc.). Judge from context, not from a hard-coded enumeration.
 
    Reuse the same proxy prefix within a run; do not introduce multiple mirrors. Switch to asking the user only when (a) the user explicitly opted out of proxying earlier in this run, or (b) the proxy itself failed (`ImagePullBackOff`, `Manifest not found`) — retry once with the raw URL before pausing.
 8. If Dockerfile and language-build detection both exist, keep the language-build path unless the user explicitly wants Dockerfile behavior. The current MCP surface exposes `prefer_dockerfile_when_detected`, not `dockerfile_path`.
