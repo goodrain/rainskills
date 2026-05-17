@@ -315,16 +315,21 @@ description: >
     
     推断信号优先级（从强到弱）：
     - 用户提到 Git URL / 分支 / commit / `subdirectories` → **source 模式**
-    - 用户提到 image tag / registry 路径（`nginx:latest`、`docker.io/...`、`harbor.../...`）→ **image 模式**
-    - 用户只说组件名，且该名匹配公认 image-only 服务（`nginx`、`redis`、`postgres`、`mysql`、`mariadb`、`mongodb`、`kafka`、`zookeeper`、`etcd`、`rabbitmq`、`elasticsearch`、`minio`、`memcached`、`prometheus`、`grafana`、`consul`、`vault`、`traefik`、`haproxy` 等）→ **image 模式**，默认镜像名 `<name>:latest`（再经 Iron Law 6 代理改写为 `docker.1ms.run/library/<name>:latest`）
-    - 用户只说组件名，且该名不在上面的清单内（如 `my-api`、`order-service`）→ 暂无足够信号，**这时才可以问用户**"用镜像还是源码？"
+    - 用户提到 image tag / registry 路径（如 `<name>:<tag>`、`docker.io/...`、`harbor.../...`）→ **image 模式**
+    - 用户只说组件名，且该名指向**公认的、通常以容器镜像形式部署的基础设施软件**（数据库、消息队列、缓存、对象存储、观测/监控、Web 服务器、反向代理/负载均衡、注册中心、密钥管理等类别下被广泛使用、有官方/社区维护镜像的项目）→ **image 模式**，默认镜像名 `<name>:latest`（再经 Iron Law 6 代理改写）。这里用你自己的通用知识判断，**不要**等清单或穷举匹配。
+    - 用户只说组件名，且该名是项目专属或来历不明（如 `my-api`、`order-service`、`payment-svc` 等业务命名风格） → 信号不足，**这时才**问"用镜像还是源码？"
     
-    自动推断的结果必须在最终报告里说明，例如："已按 image 模式创建 nginx 组件（推断依据：组件名匹配公认 image-only 服务）。如需改用源码请告知。"
+    判断标准（principle 而非清单）：
+    - 在你的知识里，这个名字是不是**一个有公开镜像的成熟基础设施软件**？是 → image。
+    - 这个名字是不是**业务领域命名风格**（含动词、含组织名、含具体业务概念）？是 → 问。
+    - 介于两者之间不确定？**优先按 image 默认**（更常见的部署方式）并在报告里告知推断理由，邀请用户覆盖。
+    
+    自动推断的结果必须在最终报告里说明，例如："已按 image 模式创建 clickhouse 组件（推断依据：该名为公认的列式分析数据库）。如需改用源码请告知。"
     
     **禁止行为**：
-    - 用户说"创建一个 nginx 组件" → 你回"用镜像还是源码？" （Nginx 99% 是镜像用法，问就是过度谨慎）
-    - 用户给了 git_url 还问"用镜像还是源码？"（信号已经明确了）
-    - 用户给了 image tag 还问"用镜像还是源码？"（同上）
+    - 用户给了 git_url 还问"用镜像还是源码？"（信号已经明确）
+    - 用户给了 image tag 还问"用镜像还是源码？"（信号已经明确）
+    - 对一个你的训练知识里明显是基础设施软件的名字（不管是否在某个示例清单里）问"用镜像还是源码？" —— Nginx、Redis、ClickHouse、Jaeger、Loki、OpenTelemetry Collector 都属于这一类，未来出现的新项目也会属于这一类，用判断不要用穷举
 
   ## 主线流程
 
