@@ -97,21 +97,25 @@ These rules are always in force. If any module, example, or lower-priority note 
 4. If source creation or source detection returns `multiple services detected` or another multi-component ambiguity, stop and ask for an explicit strategy. Do not auto-switch to package upload, manual artifact upload, template install, or other workaround paths.
 5. If source creation hits MCP / Rainbond console / control-plane exceptions, stop and report `mcp backend issue`. Do not continue with fallback execution modes.
 6. `check_uuid` and `event_id` are optional passthrough fields for standard source creation unless the backend explicitly requires them for the current request.
-7. **Transport proxy: auto-apply, announce, accept override.** When a component source resolves to a public Git URL or public-registry image, **silently apply the recommended proxy prefix** rather than pausing to ask. Mention the proxy substitution in the final report so the user can override.
+7. **Transport proxy: auto-apply for known pairs, ask only on failure for the rest.** Apply a proxy silently **only when there is a known-working proxy for the specific source registry / Git host**. Mention the substitution in the final report so the user can override.
 
-   Recommended proxy defaults:
-   - Public Git URL → rewrite to `https://ghfast.top/<original-url>`. Typical examples: `https://github.com/...`, `https://raw.githubusercontent.com/...`. Other public Git hosts (GitLab.com, Codeberg, etc.) count as public Git too.
-   - Public container registry → rewrite to `docker.1ms.run/<full-path>`.
+   **Known-working proxy pairs (this is a closed list — proxy URLs are facts, not principles; the model must not invent proxy paths):**
+   - `github.com` Git URL → `https://ghfast.top/<full-original-url>` (covers `https://github.com/...`, `https://raw.githubusercontent.com/...`)
+   - `docker.io` container image (including bare refs like `nginx:latest` or `library/...` that implicitly resolve to `docker.io/library/...`) → `docker.1ms.run/<dockerhub-path>`
 
-   **In-scope (principle, not a list):** a registry or Git host is in-scope when it is a **public service that may have unreliable direct access from mainland China**. Use general knowledge to judge — do not wait for an enumerated list.
-   - Typical public registries: `docker.io` (including bare refs like `nginx:latest` or `library/...` that implicitly resolve to it), `quay.io`, `gcr.io`, `ghcr.io`, `k8s.gcr.io`, `registry.k8s.io`, `nvcr.io`, `mcr.microsoft.com`, `public.ecr.aws`, etc.
-   - Similar future or newer public vendor registries follow the same judgment.
+   **Other public registries / Git hosts** (`quay.io`, `gcr.io`, `ghcr.io`, `k8s.gcr.io`, `registry.k8s.io`, `nvcr.io`, `mcr.microsoft.com`, `public.ecr.aws`, `gitlab.com`, `codeberg.org`, and similar):
+   - **Do not fabricate proxy URLs.** Patterns like `docker.1ms.run/quay.io/...` or `docker.1ms.run/nvcr.io/...` are invalid — each public proxy only covers its declared upstream.
+   - Default: try the original URL directly.
+   - If the user provided an explicit proxy URL in the message, use it verbatim.
+   - On pull failure (`ImagePullBackOff`, `Manifest not found`, `connection refused`), **then** ask the user: "Failed to pull `<original-url>`, possibly a network issue. Do you have a working proxy, or should I retry the original URL?"
 
-   **Out-of-scope (principle):** do not proxy the following — pass the URL through as-is:
-   - Already pointed at a mirror (`docker.1ms.run`, `m.daocloud.io`, `mirror.gcr.io`, `ghfast.top/...`, etc.)
-   - **Private / self-hosted registries**: anything user- or organisation-specific. Recognisable signals include `.internal` / `.local` suffixes, corporate domains (`harbor.<corp>.com`, `registry.<corp>.cn`), bare IPs or hostnames with explicit ports (`10.x.x.x:5000`, `<host>:443/...`), cloud-vendor private paths (`registry.cn-*.aliyuncs.com`, `<aws-account>.dkr.ecr.<region>.amazonaws.com`, etc.). Judge from context, not from a hard-coded enumeration.
+   **Private / self-hosted registries:** never proxy; pass the URL through as-is. Recognisable signals (principle, not a list): `.internal` / `.local` suffixes, corporate domains, bare IPs with ports, cloud-vendor private paths (`registry.cn-*.aliyuncs.com`, `<aws-account>.dkr.ecr.<region>.amazonaws.com`, etc.).
 
-   Reuse the same proxy prefix within a run; do not introduce multiple mirrors. Switch to asking the user only when (a) the user explicitly opted out of proxying earlier in this run, or (b) the proxy itself failed (`ImagePullBackOff`, `Manifest not found`) — retry once with the raw URL before pausing.
+   **Already-mirrored URLs** (prefix already on `docker.1ms.run`, `m.daocloud.io`, `mirror.gcr.io`, `ghfast.top/...`, etc.): pass through unchanged, do not double-proxy.
+
+   Reuse the same proxy prefix within a run. If the user explicitly opts out of proxying ("use the raw URL"), skip all proxy substitution for the remainder of the run.
+
+   > Note on principle vs list: the proxy-pair mapping above is a **closed list of facts** (which proxy actually works for which source). It is the one place in this skill where enumeration is correct, because the model cannot infer a working proxy URL from general knowledge. The in/out-of-scope source-side recognition below is still principle-driven.
 8. If Dockerfile and language-build detection both exist, keep the language-build path unless the user explicitly wants Dockerfile behavior. The current MCP surface exposes `prefer_dockerfile_when_detected`, not `dockerfile_path`.
 9. Build parameters go through `rainbond_manage_component_envs(operation=replace_build_envs, build_env_dict=...)`. Runtime envs and connection envs must stay on their own tool paths.
 10. Component connection information must be configured on the provider component with `rainbond_manage_component_connection_envs`; do not use `rainbond_manage_component_envs(scope=outer)` for that path. Consumers receive those values through explicit dependencies.
