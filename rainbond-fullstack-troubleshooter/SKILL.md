@@ -289,7 +289,9 @@ Attempt budget:
   - keep the state as `topology_building`
 - `source build failed`
   - if the build failure is caused by unreachable external artifacts, registry layers, package tarballs, GitHub Release assets, or native binary downloads, classify as `external artifact unreachable` rather than generic source-code failure
-  - if the build failure is caused by a missing or wrong low-risk build parameter, one minimal `replace_build_envs` repair attempt is allowed
+  - **Source-file-pointing errors (escalate immediately, no env attempt)**: when the build log error explicitly names a file that lives in the user's source repository (`pnpm-lock.yaml` / `package-lock.json` / `yarn.lock` / `package.json` / `Dockerfile` / `go.mod` / `go.sum` / `requirements.txt` / `Pipfile.lock` / `pom.xml` / `build.gradle` etc.), or names an in-repo configuration like `.nvmrc` / `.python-version` / `packageManager` field, the fix has to happen INSIDE that file. Build envs from outside the repo cannot edit file contents. Skip env tweaking; classify `code_or_build_handoff_needed` on the first observation of this error signature.
+  - **Build env attempt budget**: if (and only if) the failure looks env-fixable AND the candidate env key exists in `rainbond-fullstack-bootstrap/references/source-build-parameter-guide.md`, **one minimal `replace_build_envs` repair attempt is allowed**. If that one attempt does not change the build error signature on the next build, escalate to `code_or_build_handoff_needed`. Do not iterate through env variations (`CNB_X=v1`, then `BUILD_X=v1`, then `CNB_X=v2`, etc.) — each variation needs its own build + user authorization, and the cumulative cost is worse than escalating.
+  - **Fabricated env keys are not "one attempt"** — they are zero attempts because the runtime silently ignores them. If you discover the key you used isn't in the reference doc, do not "try a different env" — escalate.
   - otherwise stop Rainbond-side repair and classify as `code_or_build_handoff_needed`
 - `external artifact unreachable`
   - stop Rainbond-side repair after collecting component events and build logs
