@@ -85,11 +85,11 @@ This skill should describe how onboarding produces or resolves those objects. It
 8. 如果这个 skill 是由 `rainbond-app-assistant` 的单入口主线调用的，init 成功后应该把 `next_action` 交给 bootstrap，而不是停在 init。
 9. `team_name = default` 只有在用户明确给出或明确确认时才允许。
 10. 不要把本地 Docker 构建、临时镜像仓库推送、启动 Docker Desktop/OrbStack 当成 init 的自动兜底；这些都是 delivery-mode 策略切换，必须先得到用户明确确认。
-11. 如果当前工作目录没有任何项目特征文件（无 `rainbond.app.json`、`Dockerfile`、`package.json`、`go.mod`、`pom.xml`、`requirements.txt` 等），且用户仅提供了一个外部 Git URL，则：
-    - **禁止**凭模型对该 URL 仓库结构的先验知识自动枚举或推断子目录
-    - 必须先询问用户：要部署的是仓库根目录，还是某个具体子目录？若是子目录，请用户给出路径（如 `java/spring-boot`）
-    - 只生成**一个**组件；除非用户在回复中明确列出了多个目标子目录
-    - 此规则防止把多 example 仓库（如 sourcecode-examples）的所有子目录批量展开为组件，避免造成批量"数据中心异常"
+11. **bare Git URL + 无本地项目特征文件的默认路径**：当前 CWD 无任何项目特征文件（无 `rainbond.app.json`、`Dockerfile`、`package.json`、`go.mod`、`pom.xml`、`requirements.txt` 等）且用户仅给了一个 Git URL 时：
+    - 默认 `subdirectories=""`（仓库根）传给 source 检测工具，由 Rainbond 后端判断仓库结构
+    - 只生成**一个**组件；后端返回 `multiple services detected` 或等价多组件歧义 → 停下来按 Iron Law 10 让用户选子目录
+    - **禁止**凭模型对该仓库的先验知识枚举或猜测子目录（由 app-assistant Iron Law 36 字面值 verbatim 约束强制 — `subdirectories` 是受保护的字段）
+    - 仅当用户的需求文本本身明确说了某个子目录（"我要部署仓库下的 X 子目录"）才直接 verbatim 用用户给的子目录字面值，不需要再问
 
 ## 主线流程
 

@@ -209,11 +209,11 @@ description: >
     - 可以用 `rainbond_query_region_rbd_components` 查询并展示它们的状态
     - 不能通过 MCP 对它们执行重启、部署、修改等写操作；当前 MCP 工具集不支持此类操作
     - 如果用户要求操作这些组件，明确告知：需要通过 Kubernetes 命令（如 `kubectl rollout restart deployment/<name> -n rbd-system`）或 Rainbond 集群管理控制台进行，超出本技能的操作范围，不要假装可以执行
-29. 如果用户提示词中**仅包含一个外部 Git URL**（无本地 manifest 文件，当前目录不属于该项目），在进入 project-init 之前必须先询问：
-    - 要部署的是仓库根目录，还是某个具体子目录？
-    - **禁止**根据模型对该仓库的先验知识，自动把多个子目录展开成多个组件后直接创建
-    - 用户明确给出子目录（或确认部署根目录）后，才继续进入 project-init → bootstrap 主线
-    - 此规则与 `rainbond-project-init` 硬规则 11 配套，共同防止多 example 仓库触发批量"数据中心异常"
+29. **仅给 bare Git URL 时默认 root + 空 `subdirectories`**：当用户给的只是一个 Git URL（无本地 manifest、无明确子目录提示），默认 `subdirectories=""`（仓库根）进入 source 检测，让后端判断这个仓库结构。**不要**先问用户"根目录还是子目录"。
+    - 单项目仓库（一个 buildable root）→ 后端检测通过，正常 build
+    - 多组件 / 多 example 仓库 → 后端返回 `multiple services detected` 或等价歧义信号 → 按 Iron Law 10 停下问用户选哪个子目录
+    - 模型**禁止**凭训练知识枚举子目录或猜测路径（由 Iron Law 36 强制 — `subdirectories` 是受 verbatim 保护的字段之一）
+    - 把"是否需要选子目录"这个判断**外包给后端检测**，不要前置询问；前置询问只在用户的需求文本本身就说了"我只要这个仓库的 X 子目录"这类显式信号时才有意义（这时直接 verbatim 用用户给的子目录字面值）
 30. 源码创建一旦失败，**绝对禁止**第二次调用 `rainbond_create_component_from_source` 来"换参数重试"，也**绝对禁止**通过 `rainbond_delete_component` 删掉失败组件再 create 这种伪装手段绕过预算。
     `rainbond_create_component_from_source` 是"检测 + 创建 + 构建"三合一工具，**不是幂等重试工具**，每次调用都会写入一个新的 `service_id`。调用报错不代表组件没建出来——组件行、端口、env、依赖可能已经存在，错误只发生在下游检测或构建阶段；不能凭"上次 create 调用我没拿到 service_id 所以肯定没建出来"做臆测。
     本轮任何源码失败（包括"源码目录不存在 / 子目录识别不到 / 多组件歧义 / 仓库不可达 / 检测识别不到语言 / 构建失败"等）之后，第二个动作**必须**按以下纪律走：
