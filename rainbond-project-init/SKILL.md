@@ -78,7 +78,10 @@ This skill should describe how onboarding produces or resolves those objects. It
 4. 对 docs / Docusaurus / frontend Git 项目，默认优先 `source-backed`。
 5. Docker 镜像代理、Git 代理只是 transport hint，不改变 `execution_mode`。
 6. 如果源码 Git URL 是原始 `https://github.com/...`，且用户没有明确给出代理地址，优先先问一次是否改用代理地址，再继续。
-7. 如果存在多个可访问 team，必须停下来让用户选择；不能静默选 team。
+7. **team 智能选择**：
+   - 单个 team 可访问 → 直接用，不询问。
+   - 多个 team 但 manifest 显式指定了 `team_name` 且该 team 在可访问列表里 → 直接用，在报告里说"已选 team = X（来自 manifest）"。
+   - 多个 team 且无 manifest 提示 → 停下来询问；**禁止**静默选 `default` / 第一个 / 任意已有 team。
 8. 如果这个 skill 是由 `rainbond-app-assistant` 的单入口主线调用的，init 成功后应该把 `next_action` 交给 bootstrap，而不是停在 init。
 9. `team_name = default` 只有在用户明确给出或明确确认时才允许。
 10. 不要把本地 Docker 构建、临时镜像仓库推送、启动 Docker Desktop/OrbStack 当成 init 的自动兜底；这些都是 delivery-mode 策略切换，必须先得到用户明确确认。
@@ -306,8 +309,10 @@ Rules:
   - default `preview`
 - if the resolved value is anything other than `preview` or `production`, fall back to `preview`
 - if `team_name` is not explicitly provided and no manifest value exists, query available teams first
-- if only one accessible team exists, it may be selected automatically
-- if multiple accessible teams exist, stop and ask the user directly which team to use; do not fall through to a default without explicit user input
+- team selection follows hard rule 7 (smart default):
+  - single accessible team → use silently
+  - multiple accessible teams + manifest `team_name` matches one of them → use silently, mention `已选 team = X（来自 manifest）` in the report
+  - multiple accessible teams, no manifest hint → ask the user directly; do not fall through to `default` / first / any existing team
 - never silently invent `team_name`; if it cannot be resolved from explicit input, manifest, or a single unambiguous MCP result, ask the user directly
 - `team_name = default` is allowed only when it came from explicit user input or explicit user confirmation
 
@@ -598,7 +603,7 @@ Follow this order.
 3. Resolve target project identity
 - determine `team_name`, `region_name`, and `app_name`
 - prefer explicit input, then manifest, then repository inference
-- if `team_name` or `region_name` remains unknown after checking MCP, ask the user directly and stop until the answer is given
+- team / region selection follows hard rule 7 (smart default): use silently when single candidate or manifest match; ask only when genuinely ambiguous
 - do not silently choose `default` as `team_name`
 
 4. Resolve selected environment

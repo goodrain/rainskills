@@ -129,7 +129,12 @@ description: >
 
   1. 只读取当前项目目录中的 `rainbond.app.json`、`.rainbond/local.json`、环境文件和 secrets 文件。
      不允许扫描 `$HOME`、上级目录或其他仓库来“补绑定”。
-  2. 如果存在多个 team 或多个安全候选 app，必须先停下来让用户选；不能静默选择 `default` 或任意已有 app。
+  2. **team / app 智能选择**：
+     - 单个 team 可访问 → 直接用，不询问。
+     - 多个 team 但 manifest（`rainbond.app.json` / `.rainbond/local.json`）显式指定了 `team_name` 且该 team 在可访问列表里 → 直接用，在报告里明确说"已选 team = X（来自 manifest）"。
+     - 多个 team 且无 manifest 提示 → 停下来询问用户，**禁止**静默选 `default` / 第一个 / 任意已有 team。
+     - app 选择同上逻辑：manifest 指定且可解析 → 直接用；无提示且多候选 → 询问。
+     - 任何自动选择的结果都必须在最终报告里以"已选 X（理由：来自 manifest / 单一可选）"形式告知，邀请用户覆盖。
   3. 单入口主线一旦触发：
      `project-init -> bootstrap -> troubleshooter -> delivery-verifier -> version-assistant -> testing-app delivery-verifier`
      应按 gate 自动继续，不要在中途停成“下一步建议”。
@@ -306,6 +311,20 @@ description: >
     
     反例（**禁止**）：用户说"帮我部署 https://gitee.com/rainbond/sourcecode-examples 的 java-maven-demo"，你调 `rainbond_create_component_from_source(git_url='https://gitee.com/mirrors_123/java-maven-demo.git', subdirectories='java-maven-demo')` —— 这是把用户给的主仓库 URL 整个替换成你训练数据里相关性高的某个独立仓库。
     正确做法：`rainbond_create_component_from_source(git_url='https://gitee.com/rainbond/sourcecode-examples', subdirectories='java-maven-demo')` —— URL 逐字用用户给的，子目录用用户说的子项目名。
+37. **组件创建方式智能推断（image vs source）**：用户请求创建组件时，**根据用户消息里的信号自动推断创建方式**，不要停下来问"用镜像还是源码？"。
+    
+    推断信号优先级（从强到弱）：
+    - 用户提到 Git URL / 分支 / commit / `subdirectories` → **source 模式**
+    - 用户提到 image tag / registry 路径（`nginx:latest`、`docker.io/...`、`harbor.../...`）→ **image 模式**
+    - 用户只说组件名，且该名匹配公认 image-only 服务（`nginx`、`redis`、`postgres`、`mysql`、`mariadb`、`mongodb`、`kafka`、`zookeeper`、`etcd`、`rabbitmq`、`elasticsearch`、`minio`、`memcached`、`prometheus`、`grafana`、`consul`、`vault`、`traefik`、`haproxy` 等）→ **image 模式**，默认镜像名 `<name>:latest`（再经 Iron Law 6 代理改写为 `docker.1ms.run/library/<name>:latest`）
+    - 用户只说组件名，且该名不在上面的清单内（如 `my-api`、`order-service`）→ 暂无足够信号，**这时才可以问用户**"用镜像还是源码？"
+    
+    自动推断的结果必须在最终报告里说明，例如："已按 image 模式创建 nginx 组件（推断依据：组件名匹配公认 image-only 服务）。如需改用源码请告知。"
+    
+    **禁止行为**：
+    - 用户说"创建一个 nginx 组件" → 你回"用镜像还是源码？" （Nginx 99% 是镜像用法，问就是过度谨慎）
+    - 用户给了 git_url 还问"用镜像还是源码？"（信号已经明确了）
+    - 用户给了 image tag 还问"用镜像还是源码？"（同上）
 
   ## 主线流程
 

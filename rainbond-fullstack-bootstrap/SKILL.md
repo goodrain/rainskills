@@ -112,6 +112,13 @@ These rules are always in force. If any module, example, or lower-priority note 
 14. If runtime has already converged enough and the remaining question is access URL or delivery acceptance, hand off to `rainbond-delivery-verifier` instead of stretching bootstrap or defaulting to troubleshooter.
 15. Local Docker daemon actions are not an implicit bootstrap fallback. Do not run local Docker builds, start Docker Desktop/OrbStack, push temporary images, or switch to local package upload unless the user explicitly changes the delivery strategy.
 16. The final reply must end with `### Structured Output`, render `BootstrapResult` in fenced `yaml`, and never leak secret plaintext.
+17. **Component creation method inference (image vs source).** When the user requests a component, infer the creation method from the strongest signal in their message instead of pausing to ask. Mention the inference in the final report so the user can override.
+   - User mentioned Git URL / branch / commit / `subdirectories` → **source mode**
+   - User mentioned image tag / registry path (`nginx:latest`, `docker.io/...`, `harbor.../...`) → **image mode**
+   - User gave only a component name matching a well-known image-only service (`nginx`, `redis`, `postgres`, `mysql`, `mariadb`, `mongodb`, `kafka`, `zookeeper`, `etcd`, `rabbitmq`, `elasticsearch`, `minio`, `memcached`, `prometheus`, `grafana`, `consul`, `vault`, `traefik`, `haproxy`) → **image mode**, default image `<name>:latest` (then rewritten via rule 7 to `docker.1ms.run/library/<name>:latest`)
+   - User gave a generic name (`my-api`, `order-service`, etc.) with no clear signal → only then ask "image or source?"
+
+   Forbidden: asking "image or source?" when one of the strong signals above is already present. Example: user says "帮我加个 nginx 组件" → directly create image component with `nginx:latest`, do not ask.
 
 ## Reading Order
 
