@@ -97,10 +97,23 @@ The list illustrates the breadth; it is not exhaustive. For any service in your 
 
 For services not in this list, recall the documented data directory from the image's official documentation, state your assumption in the report, and invite the user to correct it. If genuinely unsure (rare image, conflicting variants), ask the user.
 
+**Platform reality (fact, must be remembered)**:
+- `rainbond_create_component_from_image` and `rainbond_create_component_from_source` do **not** expose `extend_method` as a parameter. Components created via these tools are stateless by default, and the platform exposes **no MCP tool to convert stateless → stateful in place**.
+- Therefore: **image-mode / source-mode component creation always produces a stateless component**, regardless of whether the service is genuinely stateful.
+
+**Persistence strategy for stateful services created via image/source mode**:
+- Use `volume_type = share-file` (RWX shared file storage — works on stateless components). Mount it at the service's documented data directory.
+- Do **not** attempt `volume_type = local` — Rainbond rejects this on stateless components with HTTP 400 (`数据中心操作故障 应用类型为'无状态'.不支持本地存储`). See "Volume type ↔ component type compatibility" below.
+- This gives durable persistence (survives pod restart, container rebuild) but is file-backed not block-backed. For most workloads (analytics DBs, doc stores, queues, search) this is acceptable. For IOPS-critical workloads (high-throughput OLTP), see the template-install path below.
+
+**Persistence strategy when stateful + local volume is genuinely required**:
+- Path: **template install** via `rainbond_install_app_model` from the app market. Market templates can be pre-configured as stateful with local volumes.
+- Image-mode creation cannot reach a stateful component on the current MCP surface.
+- If the user explicitly needs `local` (block-backed) persistence and no template exists, report this as a delivery-mode limitation, not as a step the bootstrap can silently work around.
+
 **Rules**:
-- inspect existing component storage before deploying the stateful component
-- **the component must be created as stateful** (`extend_method = state`) when local-volume persistence is intended; see "Volume type ↔ component type compatibility" below. **Default image-mode creation is stateless** — this is the most common cause of the "stateful service running without persistence" regression. Explicitly set `extend_method = state` when creating stateful service components.
-- if no durable storage is already mounted at the service's data directory, use `rainbond_manage_component_storage` to create or reuse a component volume and mount it at that directory **before** deploying the component
+- inspect existing component storage before deploying the stateful-service component
+- if no durable storage is already mounted at the data directory, use `rainbond_manage_component_storage(operation=create_volume, volume_type=share-file, volume_path=<data-dir>)` **before** `rainbond_operate_app(action=deploy)`
 - prefer the smallest durable storage binding accepted by the platform; do not invent a storage class, PVC name, host path, reclaim policy, or data-retention guarantee
 - if the storage MCP call fails or the platform does not expose a usable storage provider, do not silently ignore it; report missing persistence as a bootstrap caveat or blocker depending on user intent
 - if no stateful service component is present, no persistence check is required

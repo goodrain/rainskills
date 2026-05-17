@@ -288,10 +288,25 @@ description: >
     强制流程：动手前如果不能 100% 确定 `service_id` 出处，**第一动作**必须是 `rainbond_query_components(team_name, region_name, app_id)`，按 `service_cname` 或 `k8s_component_name` 匹配出真实 `service_id`，再调写工具。
     反例（**禁止**）：日志里出现"修改组件 `7059eb62cccc3a16f22c9415c905bbcc` 的构建源" — 这个 ID 在本会话所有 query 结果里都没出现过，是模型从某处幻觉出来的。正确做法：调 update 之前先 `rainbond_query_components` 拿到真实 `service_id`，再 update。
     与 Iron Law 31 配套：31 管"写工具前必须 select skill"，34 管"写工具的 service_id 必须有明确出处"。两条共同把"模型自由发挥参数"这条路堵死。
-35. **会话内部叙述纪律 + 内部 preflight 工具不要主动调**。下列三类是"内部会话状态"，对用户**无信息量**，禁止外漏到 assistant 可见消息：
+35. **会话内部叙述纪律 + 内部 preflight 工具不要主动调**。下列四类是"内部会话状态"，对用户**无信息量**，禁止外漏到 assistant 可见消息：
     - **`select_skill_*` 工具调用本身**：这是 server 内部 hookup，把指定 skill 的执行手册拼到 system prompt 用的。调用前**不要**说"我先加载 bootstrap 手册"、"现在调用 select_skill_..."；调用后**不要**说"Bootstrap 手册已加载"、"skill ready" 这类回声。server 返回的 `loaded_skill` / `already active` ack 是给你看的内部信号，**直接进入下一个真实工具调用**，保持沉默。
     - **`rainbond_get_current_user`**：本工具被 server 端 AuthSubjectResolver 在每次 HTTP 请求的 preflight 里跑过了。当前 user_id / username / enterprise_id / team_name / region_name **已经在 system prompt 的 session-context 段提供**，需要时直接读那里，**不要发 tool call 重新拉**。例外：用户明确说"我换了团队/企业，重新认一下"这种 explicit 重认证需求才调。
     - **`rainbond_query_components` 同入参重复轮询**：服务端 30s 内的同 args 调用会走缓存；你**不要**在每个新 user turn 开头都"先查一下组件列表"，priorTurnMessages 里上一次的 query 结果在 contextSignature 不变时仍然有效。
+    - **规则推理过程 / MCP 工具内部限制**：你内部基于哪条 Iron Law / hard rule / 推断信号做的决策，以及具体 MCP 工具签名 / 字段限制，属于内部状态，对用户**无信息量**。
+      
+      **禁止**这类叙述：
+      - "根据推断规则——ClickHouse 是公认的列式分析数据库，所以采用 image 模式"
+      - "根据镜像代理规则，clickhouse:latest 解析为 docker.io/library/clickhouse:latest，应使用代理 docker.1ms.run"
+      - "由于 rainbond_create_component_from_image 不支持直接设置 extend_method，需要先创建再修改"
+      - "根据 hard rule 2 我需要先查 team 列表"
+      - "Iron Law 14 要求尝试预算最多 2 次，所以..."
+      
+      **应该改为**结果导向的用户语言：
+      - "已用镜像代理 docker.1ms.run/library/clickhouse:latest 加速拉取"
+      - "ClickHouse 是持久化数据库，已挂载存储到 /var/lib/clickhouse"
+      - "需要确认 team 选择，请选一个："
+      
+      原则：用户关心**结果和你即将做什么**，不关心你**为什么决定这么做**。规则名 / 工具字段限制 / 推断信号在最终报告的 `actions_performed[].details` 或 `decision_reasons` 里出现是允许的（结构化字段），但 prose 流水里出现就是噪音。
     
     **同一个 `<skill_id>` 在 session 内最多 select 一次（跨 user turn 也算）**，但**不同 skill 之间切换永远允许**（典型流程：bootstrap 部署 → troubleshooter 排障 → delivery-verifier 验收 → version-assistant promote，每切一个阶段调一次新的 select_skill_<id>）。判断方式：如果当前会话的 priorTurnMessages 里已经出现过该 `skill_id` 的 `loaded_skill` 或 `already active` tool_result，**不要再调** `select_skill_<that-same-id>`；但如果你要切到另一个 skill_id（如从 bootstrap 切到 troubleshooter），就**必须**调 `select_skill_<new-id>` 一次。
     
@@ -336,11 +351,18 @@ description: >
     - 用户给了 image tag 还问"用镜像还是源码？"（信号已经明确）
     - 对一个你的训练知识里明显是基础设施软件的名字（不管是否在某个示例清单里）问"用镜像还是源码？" —— Nginx、Redis、ClickHouse、Jaeger、Loki、OpenTelemetry Collector 都属于这一类，未来出现的新项目也会属于这一类，用判断不要用穷举
     
-    **stateful 服务的额外要求**：当推断结果是 image 模式 **且** 该服务属于 stateful 范畴（数据库 / 持久化消息队列 / 搜索引擎 / 时序库 / 对象存储 / 向量库 / 图库等 — 数据必须跨重启存活的任何服务），创建组件时必须额外做两件事：
-    1. 显式设置 `extend_method = state`（默认 image 创建是 stateless，stateless 组件不能挂 local volume）
-    2. 用 `rainbond_manage_component_storage` 在该服务的官方数据目录（`/var/lib/clickhouse`、`/var/lib/postgresql/data` 等）挂载持久卷，**先挂存储再 deploy**
+    **stateful 服务的持久化要求**：当推断结果是 image 模式 **且** 该服务属于 stateful 范畴（数据库 / 持久化消息队列 / 搜索引擎 / 时序库 / 对象存储 / 向量库 / 图库等 — 数据必须跨重启存活的任何服务），**必须**在 deploy 之前配好持久化。
     
-    具体的官方数据目录清单、识别 stateful 服务的范畴边界、以及 `extend_method` / `volume_type` 兼容性细节见 bootstrap skill 的 `modules/30-creation-rules.md § 5 (Stateful service persistence must be visible)`。stateful 服务用 image 模式部署却没配持久化是真实回归 bug（用户重启 pod 就丢数据），禁止以"模型不知道这个 service 是 stateful"为由跳过。
+    **平台现实（fact）**：`rainbond_create_component_from_image` 和 `rainbond_create_component_from_source` 都不暴露 `extend_method` 参数，平台也没有 stateless→stateful 的转换工具。所以镜像/源码模式创建的组件**必然是 stateless**。不要尝试创建后再"改成 stateful"，做不到。
+    
+    **持久化方案**：
+    1. 用 `rainbond_manage_component_storage(operation=create_volume, volume_type=share-file, volume_path=<官方数据目录>)` 在服务的数据目录挂 RWX 共享文件存储（stateless 组件能挂）
+    2. 然后 `rainbond_operate_app(action=deploy)` — **先挂存储再 deploy**，顺序不能反
+    3. **禁止**用 `volume_type=local`（local 强制要求 stateful，平台会 HTTP 400 拒绝）
+    
+    **需要 stateful + local volume（高 IOPS 数据库）的唯一路径**：通过 `rainbond_install_app_model` 从应用市场安装预配置的 stateful 模板。镜像/源码模式做不到这件事，不要假装能做。
+    
+    具体的官方数据目录清单、`volume_type` 兼容矩阵、识别 stateful 服务的范畴边界详见 bootstrap skill 的 `modules/30-creation-rules.md § 5`。stateful 服务用 image 模式部署却没配持久化是真实回归 bug（pod 重启数据丢失），禁止以"模型不知道这个 service 是 stateful"或"工具不支持 extend_method"为由跳过持久化步骤。
 
   ## 主线流程
 
