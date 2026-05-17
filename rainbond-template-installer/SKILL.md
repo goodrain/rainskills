@@ -174,32 +174,32 @@ When `rainbond_create_app` fails because the target app name already exists
 (error contains `应用名称已存在`, `app name exists`, `duplicate`, `already exists`,
 or any equivalent name-conflict signal):
 
-NEVER silently fall back to an arbitrary existing app. Specifically forbidden:
-- listing team apps and picking any of them as the install target
-- choosing an app whose name does not match the user's original intent
-- proceeding with `rainbond_install_app_model` against an unrelated existing `app_id`
-- treating "an app with this name exists" as equivalent to "the user wants to reuse that app"
+The user's original intent was a **new target app**, not "reuse whatever app
+exists in the team". Preserve that intent by auto-retrying with a numeric
+suffix instead of stopping or grabbing an unrelated app.
 
-The user's original intent was a **new target app**. Preserve that intent.
+Default recovery:
+1. Retry `rainbond_create_app` with a numeric suffix: first `<original-name>-2`,
+   then `-3`, `-4` if those also collide. Stop after 3 suffix attempts.
+2. On success, proceed with `rainbond_install_app_model` against the new app
+   and **explicitly mention the rename in the final report** so the user can
+   override:
+   > `pinpoint-apm` 已被占用，已用 `pinpoint-apm-2` 创建新应用。如需复用现有
+   > `pinpoint-apm` 应用，请告知。
+3. If 3 suffix attempts all collide, then pause and ask the user — at that
+   point the namespace is genuinely contested and a human decision is warranted.
 
-Required recovery procedure:
-1. Stop the install workflow at this step.
-2. Look up the conflicting app by exact name via `rainbond_query_apps` /
-   `rainbond_get_team_apps` (filter by the requested name only). Capture its
-   `app_id` and a brief summary (existing components, governance mode if visible).
-3. Pause and report the collision to the user. Offer exactly these options:
-   a. retry creation with a suffixed name (e.g. `<original-name>-2`, `<original-name>-3`)
-   b. retry creation with a user-supplied new name
-   c. reuse the existing app with the same name (only valid when the user
-      confirms it is semantically the same logical target — this is the only
-      path that may proceed with the conflicting `app_id`)
-   d. cancel the installation
-4. Wait for explicit user choice before any further `rainbond_create_app` or
-   `rainbond_install_app_model` call. Do not auto-pick option (a) or (c).
+Hard prohibitions (regardless of recovery path):
+- never silently install into an existing app whose name does not match the
+  user's original intent (e.g. requested `pinpoint-apm` → installing into
+  `big-screen-vue-datav`). This violates user intent and is forbidden.
+- never list team apps and "pick a reasonable one" as a substitute for the
+  intended new app.
+- never treat "an app with this name exists" as equivalent to "the user wants
+  to reuse that app" without explicit user confirmation.
 
-If the user picks (c), explicitly mark `app_reused = true` and explain in the
-final report that reuse was confirmed by the user after a name collision, not
-inferred by the assistant.
+The user may still choose to reuse the existing same-name app — but only when
+they explicitly say so, not as a silent fallback.
 
 ## Version Selection Rules
 
@@ -228,8 +228,9 @@ Only allow:
 
 ### App name conflict on create
 - see `App Creation Rules > App name collision during creation`
+- default: auto-retry with `-2`, `-3`, `-4` suffix and mention the rename in the report
 - never substitute an unrelated existing app
-- pause for explicit user choice before reusing any existing `app_id`
+- pause for user choice only after 3 suffix attempts all collide
 
 ### Installation fails
 Before concluding the template is unavailable, verify:
@@ -384,7 +385,11 @@ Always respond using exactly these sections:
 - on app-name collision, silently picking an unrelated existing app from the
   team list (e.g. requested `pinpoint-apm` exists → assistant installs into
   `big-screen-vue-datav` instead). This violates user intent and must never
-  happen — see the collision handling rules above.
+  happen — auto-retry with suffix instead. See the collision handling rules above.
+- on app-name collision, immediately pausing to ask the user which of 4 options
+  they want. This is also wrong — silent retry with `-2/-3/-4` and a clear
+  rename notice in the report is the default; only pause after 3 suffix
+  attempts all collide.
 
 ## Quick Reference
 
