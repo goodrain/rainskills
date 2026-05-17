@@ -185,10 +185,20 @@ description: >
 17. 如果源码检测同时命中 Dockerfile 和语言构建，只有用户明确要走 Dockerfile 时才建议 `prefer_dockerfile_when_detected = true`。
 18. 当前 MCP 不支持显式 `dockerfile_path` 时，不要在顶层编排里承诺该能力。
 19. 对 reverse-proxy full-stack 项目，不要只因为根路径 URL 存在就把它当作最终交付成功或 Fast Path 的可信 URL；同 host 的 backend 路径（通常是 `/api`）必须也一致可用，或明确停在 blocker。
-20. 对数据库、Redis、Kafka 等中间件，优先把共享连接变量建在 provider 组件的 connection envs 上，并通过显式依赖注入到 consumer；不要优先在每个 consumer 上重复写 `DB_*`、`REDIS_*`、`KAFKA_*` 连接变量。
-21. 如果依赖关系已经存在，但运行时仍出现 `ENOTFOUND db`、错误 host、错误 port、缺少 `DB_PASS` 等问题，优先把问题视为 provider connection env / dependency alias / compatibility env 问题，而不是把 baseline 里的硬编码主机名当作正确事实。
-22. Rainbond MCP 已提供 `rainbond_manage_component_dependency` 用于显式组件依赖管理。只要项目拓扑存在 `depends_on`、provider/consumer 关系、反向代理链路、或运行时日志暴露出缺失依赖，就必须把显式依赖作为可执行能力处理；禁止回答“当前 MCP 没有创建组件依赖接口”。如果调用失败，按 MCP/控制面错误报告失败原因，而不是把它描述为工具不存在。
-23. 对多组件拓扑，在进入最终交付验收前必须确保下层 bootstrap/troubleshooter 已完成依赖完整性 gate：列出已接受的 provider/consumer 边，查询现有依赖，补齐缺失显式依赖，再次验证依赖摘要。手工创建镜像组件、Compose 上传失败后的 fallback 路径、或组件本身能独立启动，都不能跳过这个 gate。
+20. **组件依赖与连接变量管理**（合并自原 20-23 四条）：多组件拓扑里，provider/consumer 关系必须用显式依赖 + provider 侧连接变量管理，不要让 consumer 端硬编码或重复声明。
+
+    **可执行工具（fact）**：
+    - 显式依赖：`rainbond_manage_component_dependency` — 不要回答"MCP 没有依赖接口"；调用失败时按 MCP/控制面真实错误报告，不要描述为工具不存在
+    - Provider 连接变量：`rainbond_manage_component_connection_envs(scope=outer)` — 这是 provider 暴露给 consumer 的接口面
+    - Consumer 自身的本地 env：`rainbond_manage_component_envs` — 仅放该 consumer 真正本地的值
+
+    **判断顺序（principle）**：
+    - 拓扑里出现 provider/consumer 关系（`depends_on`、反向代理链路、运行时日志暴露的连接错误）→ 用 `rainbond_manage_component_dependency` 建显式依赖
+    - 共享连接信息（数据库连接串、缓存地址、消息队列 broker 等任何"provider 拥有的连接 fact"）→ 配在 provider 的 connection envs 上，**不要**在每个 consumer 上重复写
+    - 运行时报 `connection refused` / `ENOTFOUND <provider-name>` / 错 host / 错 port / 缺密码等连接类错误 → 先看 provider connection env / dependency alias / compatibility env，**不要**把 baseline 里的硬编码主机名当成事实
+    - 多组件拓扑进入交付验收前 → 必须跑一遍依赖完整性 gate（列已接受边 → 查现有依赖 → 补齐缺失 → 再次验证依赖摘要）。手工创建镜像组件、Compose fallback 路径、组件能独立启动都**不能**跳过 gate
+
+    具体的 provider 命名约定、connection env 变量名（`DB_*` / `REDIS_*` / `KAFKA_*` 等是示例，按 provider 文档实际名字为准）、以及依赖 alias 细节，详见 bootstrap modules/30-creation-rules.md 的相关章节。
 24. 不要自动拉起本地 Docker Desktop/OrbStack、执行本地 Docker build/push、或推送临时镜像作为兜底；这属于 delivery-mode 策略切换，必须先得到用户明确确认。
 25. 每次运行内部仍必须形成 `AppAssistantResult` 结果对象，但默认用户答复不一定暴露 YAML。
     当 source app 已严格 `delivered`、`next_action = stop`、没有 promotion、没有 blocker，且用户没有要求结构化/调试输出时，默认使用简洁中文交付报告，不追加 `### Structured Output`。
@@ -238,23 +248,6 @@ description: >
     - 一个 skill 在同一次 run 内只需调一次（重复调用工具会返回 "already active" ack）
     - **判断依据**：用户消息中只要含"部署 / 跑起来 / 上线 / 创建组件 / 发布"等部署意图，且当前 app 还没有对应组件，就必然要先 `select_skill_rainbond-fullstack-bootstrap`，不论用户是不是显式说"先 deep dive"
     - 如果一次 run 内场景跨阶段（先创建后排障），按需追加 `select_skill_<id>`，旧的不会被卸载
-32. **用户对你的提问做了简短回答后，第一动作必须用这个回答继续上一个被中断的操作，禁止重新走诊断流程。**
-    当你的上一轮回复明确问了用户某个参数值（"请问正确的子目录路径是什么"、"请告诉我用哪个 git 分支"、"请确认仓库地址是不是 X"），用户给了任何**简短或单值**回复（"maven-demo"、"试试 master"、"对的就是 X"、"不是，是 Y"），你的**下一个动作必须是**：
-    - 找到上一轮诊断里相关的 `service_id`、`app_id` 等上下文（在 priorTurnMessages / 已有 tool result 里）
-    - **直接**用用户的新值调对应的**修改类工具**：
-      - 子目录 / git_url / 分支 / 凭证类参数 → `rainbond_update_component_build_source(service_id=..., subdirectories=<新值>)` → **必须**接 `rainbond_check_component(service_id=..., is_again=true)` 重新触发源码检测，再轮询 `rainbond_get_component_check_result`。不要直接调 `rainbond_build_component`——组件还在 `checking` 状态时构建会被卡住（见 Iron Law 33）
-      - 构建参数（语言版本、入口命令）→ `rainbond_manage_component_envs(operation=replace_build_envs, build_env_dict=...)` 然后 `rainbond_build_component`
-      - 镜像地址 → `rainbond_change_component_image` 然后 `rainbond_build_component`
-    - **禁止**的反应：
-      - 重新调用 `rainbond_get_app_detail` / `rainbond_query_components` / `rainbond_get_component_summary` / `rainbond_get_component_build_source` / `rainbond_get_component_events` / `rainbond_get_component_check_result` 重新走"诊断"——你上一轮已经诊断过了，组件、错误、上下文都在对话历史里
-      - 重新加载 skill manual（"加载 bootstrap"）—— 同 run 内只加载一次，priorTurnMessages 里已经看得到 `loaded_skill` ack
-      - 再次反问用户"是不是要这样"做确认——用户已经给了答案，直接执行
-      - 重新走"询问子目录 → 等用户回答"流程
-    - **判断"是不是简短回答"**：用户的消息长度 < 一句长句、不含完整指令性句子（如"现在帮我重启 X 组件"才算指令）、且明显是对上一个提问的回应——就视作简短回答。
-    - **简短回复必须继承上一轮被问的字段，不允许换 intent**：上一轮你问的是字段 X 的值（如"正确的子目录路径"），本轮用户的简短回复**只能**解释为 X 的新值。即便回复字面在其他上下文里有歧义（例如在询问子目录时用户回 `java/jar`——可能是路径，也可能被误读成"用 java 或 jar 模式"），也**禁止**把它当成换 intent；如果你认为字面有 ≥2 种合理解释，**必须 follow-up 反问澄清一句**（"你是说子目录路径是 java/jar，还是想换部署方式？"），不允许自己挑一个走下去。
-    - 例外：用户的新消息明确**改了任务方向**（"算了别部署了"、"换个项目部署"、"先停下"），这时不算简短回答，按新任务处理。
-    反例（**禁止**）：用户上一轮回答"试试 maven-demo"，你再去调 `rainbond_get_app_detail`、`rainbond_query_components`、`rainbond_get_component_summary`、`rainbond_get_component_build_source`、`rainbond_get_component_events`、`rainbond_get_component_check_result` 重新走诊断 → 又得到同样的"源码目录不存在" → 又问用户。这是浪费用户时间 + 浪费 LLM 轮次预算，属于 Iron Law 违反。
-    另一反例（**禁止**）：上一轮问"子目录路径"，用户答"试试 java/jar 可以吗"，你把它当成"用 Java JAR 上传方式"反问用户走偏。正确做法：要么按子目录处理（调 `update_component_build_source(subdirectories='java/jar')` → `check_component(is_again=true)`），要么明确反问"你是说子目录 `java/jar`，还是换部署方式？"
     正确路径：用户说"试试 maven-demo" → 你直接调 `rainbond_update_component_build_source(service_id=已知的, subdirectories='maven-demo')` → `rainbond_check_component(service_id=已知的, is_again=true)` → 轮询 `rainbond_get_component_check_result` 直到拿到新一轮 `check_event_id`/`check_uuid` 的结果。
 33. **`rainbond_update_component_build_source` 只改 DB 不触发检测**，调完之后下一个 MCP 写调用**必须**是 `rainbond_check_component(service_id=..., is_again=true)`，不允许中间夹任何其他工具，也不允许跳过它直接读 check_result 或调 build。
     背景（必读）：后端 `update_component_build_source` 视图仅把 `git_url`/`subdirectories`/`code_version`/凭证字段写进 DB（`service.save()` 结束），**没有调用 `app_check_service.check_service`**。因此：
