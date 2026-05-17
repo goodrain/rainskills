@@ -168,6 +168,39 @@ Reason:
 - `k8s_app` is optional
 - passing it incorrectly can cause validation or duplication errors
 
+### App name collision during creation
+
+When `rainbond_create_app` fails because the target app name already exists
+(error contains `应用名称已存在`, `app name exists`, `duplicate`, `already exists`,
+or any equivalent name-conflict signal):
+
+NEVER silently fall back to an arbitrary existing app. Specifically forbidden:
+- listing team apps and picking any of them as the install target
+- choosing an app whose name does not match the user's original intent
+- proceeding with `rainbond_install_app_model` against an unrelated existing `app_id`
+- treating "an app with this name exists" as equivalent to "the user wants to reuse that app"
+
+The user's original intent was a **new target app**. Preserve that intent.
+
+Required recovery procedure:
+1. Stop the install workflow at this step.
+2. Look up the conflicting app by exact name via `rainbond_query_apps` /
+   `rainbond_get_team_apps` (filter by the requested name only). Capture its
+   `app_id` and a brief summary (existing components, governance mode if visible).
+3. Pause and report the collision to the user. Offer exactly these options:
+   a. retry creation with a suffixed name (e.g. `<original-name>-2`, `<original-name>-3`)
+   b. retry creation with a user-supplied new name
+   c. reuse the existing app with the same name (only valid when the user
+      confirms it is semantically the same logical target — this is the only
+      path that may proceed with the conflicting `app_id`)
+   d. cancel the installation
+4. Wait for explicit user choice before any further `rainbond_create_app` or
+   `rainbond_install_app_model` call. Do not auto-pick option (a) or (c).
+
+If the user picks (c), explicitly mark `app_reused = true` and explain in the
+final report that reuse was confirmed by the user after a name collision, not
+inferred by the assistant.
+
 ## Version Selection Rules
 
 If version is missing:
@@ -192,6 +225,11 @@ Only allow:
 
 ### Missing target app
 - create it first
+
+### App name conflict on create
+- see `App Creation Rules > App name collision during creation`
+- never substitute an unrelated existing app
+- pause for explicit user choice before reusing any existing `app_id`
 
 ### Installation fails
 Before concluding the template is unavailable, verify:
@@ -343,6 +381,10 @@ Always respond using exactly these sections:
 - creating a target app but then not reusing its `app_id`
 - passing `k8s_app` by default
 - treating template installation as the same thing as component bootstrap
+- on app-name collision, silently picking an unrelated existing app from the
+  team list (e.g. requested `pinpoint-apm` exists → assistant installs into
+  `big-screen-vue-datav` instead). This violates user intent and must never
+  happen — see the collision handling rules above.
 
 ## Quick Reference
 
