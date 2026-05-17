@@ -136,14 +136,21 @@ description: >
   4. `project-init` 成功 linked 后，如果当前 run 是单入口部署/开发到测试主线，必须自动继续到 `bootstrap`。
 5. 当前项目一旦被判定为 `source-backed`，不能静默改成 `package` 或 `image`。
    transport 代理只改“怎么拉”，不改 delivery mode。
-6. 如果源码 Git URL 是原始 `https://github.com/...`，且用户没有明确给出代理地址，优先先问一次是否改用代理 URL，再继续主线。
-7. 在创建任何 image-backed 组件（包括直接 `rainbond_create_component_from_image` 调用）之前，如果 `image` 值是要从公网 registry 拉取，必须先问一次是否切镜像代理；用户在本次 run 内明确 opt-out 之后才可以跳过。
-   触发场景包括：
-   - 裸 Docker Hub 引用：`nginx:latest`、`library/nginx:latest`、`mysql/mysql-server:8.0`、`bitnami/postgresql:16` 等隐式解析为 `docker.io/...` 的镜像
-   - 显式公共 registry：`docker.io/...`、`quay.io/...`、`gcr.io/...`、`ghcr.io/...`、`k8s.gcr.io/...`、`registry.k8s.io/...`
-   不触发：已经在已知镜像源（`docker.1ms.run/...`、`m.daocloud.io/...`、`mirror.gcr.io/...` 等）或私有 registry（`harbor.example.internal/...`、`registry.cn-hangzhou.aliyuncs.com/...`、`<corp-registry>:5000/...` 等）。
-   推荐顺序：首选 `docker.1ms.run/<full-path>`（例如 `nginx:latest` → `docker.1ms.run/library/nginx:latest`，`docker.io/library/postgres:17` → `docker.1ms.run/library/postgres:17`）；备选 `m.daocloud.io/<full-path>`。同一次 run 内如果已经为另一个组件选定了某个镜像源，复用相同前缀，不要并存多个。
-   该 prompt 每次 run 只问一次：用户做出选择后（用或不用代理），相同条件下的后续组件直接复用，不重复确认。
+6. **传输代理自动决策（Git URL + image 公网拉取统一处理）**：当组件源识别为公网 Git 或公网 registry 时，**默认自动套用代理**，不打断流程问用户，在最终报告里明确告知"已用 X 代理拉取 Y"，邀请用户覆盖。
+
+   公网 Git URL（`https://github.com/...`、`https://raw.githubusercontent.com/...`）→ 默认改写为 `https://ghfast.top/https://github.com/...`。
+
+   公网 image registry → 默认改写为 `docker.1ms.run/<full-path>`。触发判定（in-scope）：
+   - 裸 Docker Hub 引用：`nginx:latest`、`library/nginx:latest`、`mysql/mysql-server:8.0` 等隐式 `docker.io/...`
+   - 显式公网 registry：`docker.io/...`、`quay.io/...`、`gcr.io/...`、`ghcr.io/...`、`k8s.gcr.io/...`、`registry.k8s.io/...`
+
+   跳过（out-of-scope）：已在已知镜像源（`docker.1ms.run/...`、`m.daocloud.io/...`、`mirror.gcr.io/...`）或私有 registry（`harbor.example.internal/...`、`registry.cn-hangzhou.aliyuncs.com/...`、`<corp-registry>:5000/...`）。
+
+   一次 run 内复用同一代理前缀，不并存多个。仅以下情况切换为询问用户：
+   - 用户明确说过"不用代理"或"用原始地址" → 当次 run 内不再自动代理
+   - 自动代理后构建/拉取失败（`ImagePullBackOff`、`Manifest not found` 等） → 改回原 URL 重试一次再问
+
+   > 编号说明：原 Iron Law 7（image 代理 ask once）已合并到本条；后续 Iron Law 编号保留原值（8、9、10…），不重编号以免破坏跨规则引用。
 8. 一旦 source ref 已确定，不能静默改 branch/ref。
    分支不存在时必须停住并报告 source definition needs confirmation。
 9. `check_uuid` / `event_id` 默认不是标准 source create 的前置条件。
