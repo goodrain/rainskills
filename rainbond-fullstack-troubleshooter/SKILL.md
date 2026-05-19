@@ -189,6 +189,7 @@ Polling signal priority (use in order, do not skip):
 - **P1 — anchored build log** (default for build / deploy / upgrade)
   - call `rainbond_get_component_build_logs(event_id=<my_event_id>)` and look for terminal markers (`BUILD SUCCESS`, `BUILD FAILED`, exit-code lines, fatal error keywords)
   - this stream is keyed by `event_id` at the platform level; concurrent operations on the same component cannot pollute it
+  - for large projects (Maven monorepo, multi-stage Node.js, etc.), **prefer narrowing the response** with `tail=500` (last N entries — errors almost always live at the tail) or `grep="ERROR"` / `grep="BUILD FAILURE"` / `grep="Caused by"` (substring filter on message field). `offset` + `limit` also supported. Without these the upstream LLM truncates the middle and the actual error vanishes; if you ever see `_truncated: true` or `_dropped_items_count > 0` in the response, **the very next call must add tail/grep** — never refetch with the same arguments
 - **P2 — pod truth** (default for start / stop / runtime convergence, also fallback for P1)
   - `rainbond_get_component_pods` then `rainbond_get_pod_detail`
   - judge by `pod_status`, `containers[*].state`, `restart_count`, and pod-level events
