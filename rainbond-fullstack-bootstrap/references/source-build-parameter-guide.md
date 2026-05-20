@@ -89,18 +89,35 @@ After the user answers, **recommend they record the choice in `source.build.stra
 
 ### Output requirement — decision must be auditable
 
-After picking a mode, the skill MUST state the decision in the prose output (a dedicated "Build Mode Decision" line/section in the human-readable report; structured-output contract extension is a follow-up). Each per-component decision should answer:
+When the skill resolves a dual-detection (Dockerfile + language signature) for any component, it MUST surface the decision in BOTH:
 
-- **picked**: `dockerfile` or `cnb`
-- **source**: which priority level supplied it (`manifest`, `heuristic`, `user_choice`)
-- **reason**: one-sentence explanation of the dominant signal(s)
-- **override_hint**: concrete instruction for overriding via manifest (e.g. "set `source.build.strategy: cnb` for component `web` in `rainbond.app.json` to force language buildpack")
+1. **Prose** — a per-component "Build mode for `<name>`" line in the human-readable report.
+2. **Structured output** — populate `BootstrapResult.deployment_plan.workflow.build_strategy_decisions[<component_name>]` with:
+   - `picked`: `dockerfile` or `cnb`
+   - `source`: which priority level supplied it (`manifest`, `heuristic`, `user_choice`)
+   - `reason`: one-sentence explanation of the dominant signal(s)
+   - `override_hint`: concrete instruction for overriding via manifest (e.g. "set `source.build.strategy: cnb` for component `web` in `rainbond.app.json` to force language buildpack")
+
+The structured field is **optional in the schema** — only populate it for components that actually had a dual detection. Single-signal components (only Dockerfile, or only a language signature) need no entry.
 
 Example prose line:
 
 > Build mode for `web`: **dockerfile** (heuristic — self-contained multi-stage Dockerfile + user-authored runtime config that the buildpack would overwrite; to force CNB set `source.build.strategy: cnb` in manifest).
 
-An incorrect heuristic call must be self-correcting: the user reads the reason, edits `source.build.strategy`, redeploys.
+Example structured fragment:
+
+```yaml
+deployment_plan:
+  workflow:
+    build_strategy_decisions:
+      web:
+        picked: dockerfile
+        source: heuristic
+        reason: self-contained multi-stage Dockerfile copies a user-authored runtime config that the buildpack would overwrite
+        override_hint: "set source.build.strategy: cnb on component `web` in rainbond.app.json to force language buildpack"
+```
+
+An incorrect heuristic call must be self-correcting: the user reads `reason`, edits `source.build.strategy` in the manifest, redeploys.
 
 ### Forbidden Short-Circuits (apply regardless of mode)
 

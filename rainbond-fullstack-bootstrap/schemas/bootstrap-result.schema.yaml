@@ -36,6 +36,27 @@ $defs:
       - mcp backend issue
       - external artifact unreachable
       - cluster capacity blocked
+  build_strategy_decision:
+    type: object
+    additionalProperties: false
+    required:
+      - picked
+      - source
+      - reason
+    properties:
+      picked:
+        enum:
+          - dockerfile
+          - cnb
+      source:
+        enum:
+          - manifest
+          - heuristic
+          - user_choice
+      reason:
+        $ref: "#/$defs/non_empty_string"
+      override_hint:
+        $ref: "#/$defs/non_empty_string"
 properties:
   BootstrapResult:
     type: object
@@ -129,6 +150,17 @@ properties:
                   - runtime-env
                   - build-time-env
                   - unspecified
+              build_strategy_decisions:
+                # Optional. Map of component_name -> decision record.
+                # Populate this entry only for components whose source
+                # detection returned BOTH a Dockerfile and a language
+                # signature, where the skill had to resolve the build mode.
+                # Components with a single detection outcome do not need
+                # an entry. See references/source-build-parameter-guide.md
+                # § Build Mode Selection.
+                type: object
+                additionalProperties:
+                  $ref: "#/$defs/build_strategy_decision"
       runtime_state:
         type: object
         additionalProperties: false

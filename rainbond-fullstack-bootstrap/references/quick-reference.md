@@ -22,7 +22,7 @@ Use this file for low-frequency reminders. Do not treat it as the source of trut
 - confusing source build parameters with runtime envs, connection envs, or `build_info`
 - skipping the Build Mode Selection priority chain (manifest → heuristic → ask) and either blindly defaulting to CNB or blindly setting `prefer_dockerfile_when_detected = true` based on file presence alone
 - treating the Dockerfile-intent-signal examples as a closed checklist instead of applying the underlying principle ("would the language buildpack produce equivalent runtime behavior?")
-- omitting the per-component build-mode decision line ("Build mode for `<name>`: …") from prose output, leaving the user no way to verify or override the chosen mode
+- omitting the per-component build-mode decision from output (both the prose "Build mode for `<name>`: …" line AND the structured `deployment_plan.workflow.build_strategy_decisions` entry), leaving the user no way to verify or override the chosen mode
 - promising `dockerfile_path` support when the current MCP surface only exposes `prefer_dockerfile_when_detected`
 - jumping straight to runtime logs for a source build failure without checking component events and build logs first
 - treating external artifact download failures as application source-code failures without naming the unreachable artifact
