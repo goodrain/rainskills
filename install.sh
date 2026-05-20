@@ -1417,7 +1417,14 @@ configure_mcp() {
       fi
       ;;
     self-hosted)
-      base_url_input="$(prompt_for_value "Rainbond Console 地址" "$RAINBOND_URL_INPUT")"
+      local url_default="$RAINBOND_URL_INPUT"
+      # 用户在交互菜单中显式选了"私有化部署"，意图就是切换到不同的 Console。
+      # 若 RAINBOND_URL 是从 shell env 继承的 SaaS 默认值（不是 --rainbond-url 显式传入），
+      # 不能把它当成静默默认值，否则会把私有化部署导回 SaaS。
+      if [[ "$RAINBOND_URL_FROM_FLAG" -ne 1 && "$url_default" == "$SAAS_DEFAULT_URL" ]]; then
+        url_default=""
+      fi
+      base_url_input="$(prompt_for_value "Rainbond Console 地址" "$url_default")"
       ;;
     *)
       die "未知部署形态：$DEPLOYMENT_MODE_INPUT"
