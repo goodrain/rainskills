@@ -759,7 +759,7 @@ Also:
 - reading runtime logs first for a source build failure instead of checking component events and build logs
 - skipping Pod detail for `ImagePullBackOff`, `ErrImagePull`, `ContainersNotInitialized`, init-container failures, or similar startup blockers
 - stuffing source build parameters into `build_info` instead of `replace_build_envs`
-- defaulting to Dockerfile mode just because a repository also contains `Dockerfile`
+- defaulting to Dockerfile or CNB based on file presence alone without applying the Build Mode Selection priority chain (manifest `source.build.strategy` → heuristic by Dockerfile classification + intent signals → ask only when ambiguous); see `rainbond-fullstack-bootstrap/references/source-build-parameter-guide.md`
 - promising `dockerfile_path` support when the current MCP surface only exposes `prefer_dockerfile_when_detected`
 
 ## Quick Reference

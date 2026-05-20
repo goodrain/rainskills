@@ -104,6 +104,46 @@ Baseline mapping rules:
 - v2 `source.kind = package` -> local package upload execution
 - v2 `source.kind = template` -> skip in bootstrap and hand off to `rainbond-template-installer`
 
+## v2 `source.build` (optional, source-mode only)
+
+For `source.kind = source` components, the optional `source.build` block declares **how** the source should be built. It is the persisted, manifest-level override for build-mode decisions that would otherwise rely on heuristic inference.
+
+Schema:
+
+```yaml
+source:
+  kind: source
+  git: { … }
+  subdirectories: <string>
+  build:                              # optional; default: { strategy: auto }
+    strategy: dockerfile | cnb | auto # dockerfile = force Dockerfile build;
+                                      # cnb        = force language buildpack;
+                                      # auto       = let the skill decide via heuristic
+```
+
+Example — a frontend component that ships a custom Dockerfile (with non-standard runtime config) where buildpack auto-detection would otherwise pick the language path and overwrite that config:
+
+```json
+{
+  "name": "web",
+  "role": "frontend",
+  "port": 80,
+  "source": {
+    "kind": "source",
+    "git": { "remote_url": "https://example.com/org/repo", "ref": "main" },
+    "subdirectories": "frontend",
+    "build": { "strategy": "dockerfile" }
+  }
+}
+```
+
+Resolution rules:
+- `strategy: dockerfile` → maps to `prefer_dockerfile_when_detected = true` on `rainbond_create_component_from_source`. Skip heuristic.
+- `strategy: cnb` → force the language buildpack path even if a Dockerfile is present. Skip heuristic.
+- `strategy: auto` (or block omitted) → fall through to the heuristic in `source-build-parameter-guide.md § Build Mode Selection`.
+
+The manifest-level choice is the user's persisted intent — honor it without re-deriving. See [source-build-parameter-guide.md](source-build-parameter-guide.md) for the full priority chain (manifest → heuristic → user prompt → record back to manifest).
+
 Do not treat this reference as the execution-policy source of truth. The execution rules live in:
 - [../modules/10-context-loading.md](../modules/10-context-loading.md)
 - [../modules/20-scope-and-boundaries.md](../modules/20-scope-and-boundaries.md)

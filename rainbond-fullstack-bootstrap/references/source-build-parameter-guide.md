@@ -24,30 +24,83 @@ Do not use consumer runtime envs as a shortcut for middleware provider connectio
 
 ## Build Mode Selection (HARD RULES)
 
-When source detection returns BOTH a language signature AND a Dockerfile:
+When source detection returns BOTH a language signature AND a Dockerfile, decide the build mode in the priority order below. Stop at the first priority that resolves; do not re-evaluate lower priorities.
 
-- MUST keep the language build path by default. Treat the component as language-backed.
+Cross-cutting MUSTs (apply at every priority):
 - MUST NOT generate a local Dockerfile, modify the user's Dockerfile, switch the component to `image` or `package` mode, or run local `mvn` / `npm` / `docker build` to produce upload artifacts. These count as delivery-mode switches and require explicit user confirmation.
-- MUST NOT promise `dockerfile_path`; the current MCP surface does not expose it.
+- MUST NOT promise `dockerfile_path`; the current MCP surface only exposes the boolean `prefer_dockerfile_when_detected` on `rainbond_create_component_from_source`.
 
-Escape conditions (any one allows Dockerfile mode):
-- E1: the user explicitly says "use Dockerfile" / "走 Dockerfile" / "build with Dockerfile".
-- E2: the Dockerfile passes the static check below as `self-contained` AND the language build path was attempted at least once and failed for a structural reason that is not a missing `build_env_dict` value.
-- E3: source detection returned no buildpack-supported language at all.
+### Priority 1 — Manifest declaration (deterministic)
 
-### Dockerfile Static Check
+Read `source.build.strategy` from the component's manifest entry in `rainbond.app.json` / `rainbond.app.v2.json` (see [manifest-v1-reference.md](manifest-v1-reference.md) for the field definition):
 
-Run this classification before considering escape E2.
+- `strategy: dockerfile` → use Dockerfile build. Skip heuristic and skip user prompt.
+- `strategy: cnb` → use language buildpack. Skip heuristic and skip user prompt.
+- `strategy: auto` or field omitted → fall through to Priority 2.
+
+The manifest is the user's persisted choice. Honor it verbatim; do not re-derive.
+
+### Priority 2 — Intent signals (heuristic, principle-based)
+
+When the manifest does not pin a choice, default to the **language build path** unless the Dockerfile carries explicit intent that the language buildpack would either fail to express or actively overwrite. This is a principle, **not** a closed enumeration of file names, package managers, or frameworks.
+
+#### Dockerfile Static Check
+
+Classify the Dockerfile first:
 
 - If the Dockerfile contains `COPY target/*.jar`, `COPY dist/`, `COPY build/`, `COPY out/`, or any `COPY` of a path that does not exist in the source repo, AND there is no preceding `FROM ... AS <stage>` builder stage that produces those paths:
   - classification = `needs-prebuilt`
-  - this Dockerfile assumes a local build artifact; MUST stay on the language build path; never escape to Dockerfile mode for this component.
+  - this Dockerfile assumes a local build artifact and cannot stand alone.
 - If the Dockerfile is multi-stage with a builder stage (`FROM <lang>:* AS build` … `COPY --from=build …`):
   - classification = `self-contained`
-  - eligible for escape E2.
 - If the Dockerfile is single-stage, only installs runtime packages, and does not COPY build artifacts:
   - classification = `runtime-only`
-  - language build still preferred; do not escape unless E1 or E3 also holds.
+
+Then map classification to default decision:
+
+| Classification | Default decision |
+|---|---|
+| `needs-prebuilt` | MUST language build. Dockerfile is incomplete on its own; signals are not evaluated. |
+| `runtime-only` | Default language build. Single-stage runtime-only Dockerfiles rarely carry customization the buildpack cannot match. |
+| `self-contained` | If **one or more intent signals** are present → default Dockerfile. Otherwise → default language build. |
+
+#### What counts as an intent signal (principle, with illustrative examples)
+
+The guiding question is: **"Would the language buildpack produce equivalent runtime behavior?"** If no, the Dockerfile carries an intent signal. If yes, it does not.
+
+Examples of the **kinds** of intent the principle covers (do not treat as exhaustive — recognize new instances from the principle, not by matching a fixed list):
+
+- The Dockerfile copies a user-authored runtime configuration file that the language buildpack would auto-generate or replace (e.g. web server / reverse proxy / sidecar / process supervisor configs of any flavor).
+- The Dockerfile installs system-level packages (`apt-get install`, `apk add`, `yum install`, `dnf install`, `pacman -S`, etc.) — capability the language buildpack typically cannot express.
+- The Dockerfile uses a base image that is not the official language base for the detected language family (e.g. a security-hardened distro, a GPU/CUDA image, a distroless image, a custom internal base) — signals deliberate runtime selection.
+- The Dockerfile sets process-level details the buildpack does not surface — signal handling, USER/UID switching, capability adjustments, file ownership, sysctls.
+- The Dockerfile compiles native dependencies, downloads tools at build time, or wires a customized toolchain that the buildpack's default flow does not invoke.
+
+These examples illustrate the **shape** of the principle. New cases should be recognized by asking the guiding question, not by extending the example list.
+
+### Priority 3 — Ambiguous → ask once, persist
+
+Ask the user a single concrete question when, and only when:
+
+- intent signals conflict with explicit buildpack signals (e.g. self-contained Dockerfile with intent signals AND a `Procfile` / `buildpack.toml` declaring buildpack startup), or
+- evidence is genuinely insufficient to call (e.g. Dockerfile is fragmentary or unparseable; multiple Dockerfiles in the same context with no convention).
+
+After the user answers, **recommend they record the choice in `source.build.strategy`** in the manifest so the next deploy does not re-ask. This converts a one-time question into permanent project metadata.
+
+### Output requirement — decision must be auditable
+
+After picking a mode, the skill MUST state the decision in the prose output (a dedicated "Build Mode Decision" line/section in the human-readable report; structured-output contract extension is a follow-up). Each per-component decision should answer:
+
+- **picked**: `dockerfile` or `cnb`
+- **source**: which priority level supplied it (`manifest`, `heuristic`, `user_choice`)
+- **reason**: one-sentence explanation of the dominant signal(s)
+- **override_hint**: concrete instruction for overriding via manifest (e.g. "set `source.build.strategy: cnb` for component `web` in `rainbond.app.json` to force language buildpack")
+
+Example prose line:
+
+> Build mode for `web`: **dockerfile** (heuristic — self-contained multi-stage Dockerfile + user-authored runtime config that the buildpack would overwrite; to force CNB set `source.build.strategy: cnb` in manifest).
+
+An incorrect heuristic call must be self-correcting: the user reads the reason, edits `source.build.strategy`, redeploys.
 
 ### Forbidden Short-Circuits (apply regardless of mode)
 

@@ -117,7 +117,7 @@ Guardrails:
 - do **not** use consumer runtime envs as a substitute for provider connection envs plus explicit dependencies
 - do **not** echo secret example values
 - Python build tuning does **not** get a made-up Node-style `CNB_BUILD_SCRIPT`
-- when a Dockerfile is detected alongside a language build, keep the language build path unless the user explicitly wants Dockerfile behavior; only then set `prefer_dockerfile_when_detected = true`
+- when a Dockerfile is detected alongside a language build, resolve the build mode by priority: manifest `source.build.strategy` first; then heuristic on Dockerfile classification + intent signals (see `../references/source-build-parameter-guide.md § Build Mode Selection`); only ask the user when signals are genuinely ambiguous. Map a `dockerfile` decision to `prefer_dockerfile_when_detected = true` on `rainbond_create_component_from_source`. State the per-component decision in the prose output ("Build mode for `<name>`: …") so the user can audit and override.
 - if build logs fail while downloading third-party build artifacts such as GitHub Release assets, native binary packages, image layers, or package-manager tarballs, classify the blocker as `external artifact unreachable` when the dominant evidence is network reachability rather than app source code
 - examples include sharp/libvips release downloads, registry layer pulls, Docker Hub timeouts, package tarball download timeouts, or language installer binary downloads
 - for `external artifact unreachable`, stop after one evidence-backed retry or mirror attempt; do not convert the component to a different delivery mode automatically
