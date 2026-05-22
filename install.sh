@@ -464,6 +464,36 @@ prompt_for_value() {
   printf '%s\n' "$value"
 }
 
+# 始终向用户提问，但提供一个可回车沿用的默认值。
+# 与 prompt_for_value 的区别：default_value 非空时不会静默返回，用户仍可改写。
+prompt_with_default() {
+  local prompt_text="$1"
+  local default_value="$2"
+
+  if [[ "$NON_INTERACTIVE" -eq 1 || ! -t 0 ]]; then
+    if [[ -n "$default_value" ]]; then
+      printf '%s\n' "$default_value"
+      return 0
+    fi
+    die "非交互模式下必须提供${prompt_text}。"
+  fi
+
+  local value=""
+  while [[ -z "$value" ]]; do
+    if [[ -n "$default_value" ]]; then
+      printf '%s [回车沿用 %s]: ' "$prompt_text" "$default_value" >&2
+    else
+      printf '%s: ' "$prompt_text" >&2
+    fi
+    read -r value
+    value="$(trim "$value")"
+    if [[ -z "$value" && -n "$default_value" ]]; then
+      value="$default_value"
+    fi
+  done
+  printf '%s\n' "$value"
+}
+
 prompt_for_password() {
   if [[ -n "$RAINBOND_PASSWORD_INPUT" ]]; then
     printf '%s\n' "$RAINBOND_PASSWORD_INPUT"
@@ -1417,14 +1447,16 @@ configure_mcp() {
       fi
       ;;
     self-hosted)
-      local url_default="$RAINBOND_URL_INPUT"
-      # 用户在交互菜单中显式选了"私有化部署"，意图就是切换到不同的 Console。
-      # 若 RAINBOND_URL 是从 shell env 继承的 SaaS 默认值（不是 --rainbond-url 显式传入），
-      # 不能把它当成静默默认值，否则会把私有化部署导回 SaaS。
-      if [[ "$RAINBOND_URL_FROM_FLAG" -ne 1 && "$url_default" == "$SAAS_DEFAULT_URL" ]]; then
-        url_default=""
+      if [[ "$RAINBOND_URL_FROM_FLAG" -eq 1 && -n "$RAINBOND_URL_INPUT" ]]; then
+        # 显式 --rainbond-url 传入，视为明确意图，直接采用。
+        base_url_input="$RAINBOND_URL_INPUT"
+      else
+        # 用户在交互菜单中显式选了"私有化部署"，意图就是自填 Console 地址。
+        # 继承自 shell env 的 RAINBOND_URL（无论是 SaaS 默认值还是某个旧的私有化
+        # 地址）只能作为可回车沿用的提示，绝不静默采用——否则会把用户想切换的
+        # 新私有化部署导回旧地址。
+        base_url_input="$(prompt_with_default "Rainbond Console 地址" "$RAINBOND_URL_INPUT")"
       fi
-      base_url_input="$(prompt_for_value "Rainbond Console 地址" "$url_default")"
       ;;
     *)
       die "未知部署形态：$DEPLOYMENT_MODE_INPUT"
