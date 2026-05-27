@@ -38,7 +38,7 @@ jobs:
           cat > canary.json <<EOF
           {
             "sha": "${SHA}",
-            "promoted_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "promoted_at": "$(TZ='Asia/Shanghai' date +%Y-%m-%dT%H:%M:%S%:z)",
             "tarball_url": "https://get.rainbond.com/rainskills/rainskills-${SHA}.tar.gz",
             "manifest_version": 1
           }
@@ -150,7 +150,7 @@ jobs:
           {
             "sha": "${SHA}",
             "tag": "${TAG}",
-            "promoted_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "promoted_at": "$(TZ='Asia/Shanghai' date +%Y-%m-%dT%H:%M:%S%:z)",
             "tarball_url": "${TARBALL}",
             "manifest_version": 1
           }
