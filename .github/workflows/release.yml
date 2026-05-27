@@ -3,10 +3,15 @@ name: Release to TOS
 on:
   push:
     branches: [main]
+    tags: ['stable-*']
   workflow_dispatch:
 
 jobs:
+  # ─────────────────────────────────────────────────────────────
+  # Job 1: main push → 出 tarball + canary.json
+  # ─────────────────────────────────────────────────────────────
   release:
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -26,6 +31,19 @@ jobs:
           git archive --format=tar.gz --prefix=rainskills/ -o rainskills-latest.tar.gz HEAD
           cp rainskills-latest.tar.gz "rainskills-${SHA}.tar.gz"
           ls -lh rainskills-*.tar.gz
+
+      - name: Build canary channel manifest
+        run: |
+          SHA="${{ steps.meta.outputs.sha }}"
+          cat > canary.json <<EOF
+          {
+            "sha": "${SHA}",
+            "promoted_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "tarball_url": "https://get.rainbond.com/rainskills/rainskills-${SHA}.tar.gz",
+            "manifest_version": 1
+          }
+          EOF
+          cat canary.json
 
       - name: Install tosutil
         env:
@@ -62,8 +80,6 @@ jobs:
           done
           PREFIX="${TOS_PREFIX:-rainskills}"
           PREFIX="${PREFIX%/}/"
-          # tosutil flags use the form `-flag=value`, not `-flag value`,
-          # and global creds/endpoint flags follow the positional args on the cp command.
           TOSUTIL_OPTS=(
             "-e=${TOS_ENDPOINT}"
             "-re=${TOS_REGION}"
@@ -74,6 +90,7 @@ jobs:
           /tmp/tosutil cp install.sh                 "tos://${TOS_BUCKET}/${PREFIX}install.sh"                 "${TOSUTIL_OPTS[@]}"
           /tmp/tosutil cp rainskills-latest.tar.gz   "tos://${TOS_BUCKET}/${PREFIX}rainskills-latest.tar.gz"   "${TOSUTIL_OPTS[@]}"
           /tmp/tosutil cp "rainskills-${SHA}.tar.gz" "tos://${TOS_BUCKET}/${PREFIX}rainskills-${SHA}.tar.gz"   "${TOSUTIL_OPTS[@]}"
+          /tmp/tosutil cp canary.json                "tos://${TOS_BUCKET}/${PREFIX}channels/canary.json"       "${TOSUTIL_OPTS[@]}"
 
       - name: Summary
         run: |
@@ -89,4 +106,158 @@ jobs:
             echo "- install.sh"
             echo "- rainskills-latest.tar.gz"
             echo "- rainskills-${SHA}.tar.gz"
+            echo "- channels/canary.json → sha=${SHA}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ─────────────────────────────────────────────────────────────
+  # Job 2: stable-* tag → 只改 stable.json + 通知 vendor sync
+  # ─────────────────────────────────────────────────────────────
+  promote_stable:
+    if: startsWith(github.ref, 'refs/tags/stable-')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Resolve tagged commit metadata
+        id: meta
+        run: |
+          SHA="$(git rev-parse --short HEAD)"
+          TAG="${GITHUB_REF#refs/tags/}"
+          TARBALL_URL="https://get.rainbond.com/rainskills/rainskills-${SHA}.tar.gz"
+          echo "sha=${SHA}"           >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}"           >> "$GITHUB_OUTPUT"
+          echo "tarball=${TARBALL_URL}" >> "$GITHUB_OUTPUT"
+
+      - name: Validate tagged commit has a tarball on CDN
+        run: |
+          URL="${{ steps.meta.outputs.tarball }}"
+          echo "Checking $URL ..."
+          if ! curl -fsSI "$URL" >/dev/null; then
+            echo "ERROR: tarball not found at $URL" >&2
+            echo "Did you push the commit to main first? promote_stable cannot run on a commit that hasn't been released." >&2
+            exit 1
+          fi
+
+      - name: Build stable channel manifest
+        run: |
+          SHA="${{ steps.meta.outputs.sha }}"
+          TAG="${{ steps.meta.outputs.tag }}"
+          TARBALL="${{ steps.meta.outputs.tarball }}"
+          cat > stable.json <<EOF
+          {
+            "sha": "${SHA}",
+            "tag": "${TAG}",
+            "promoted_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "tarball_url": "${TARBALL}",
+            "manifest_version": 1
+          }
+          EOF
+          cat stable.json
+
+      - name: Install tosutil
+        env:
+          TOSUTIL_VERSION: v4.1.2
+        run: |
+          curl -fsSL "https://github.com/volcengine/tosutil/releases/download/${TOSUTIL_VERSION}/tosutil-linux-amd64.zip" \
+            -o /tmp/tosutil.zip
+          unzip -q /tmp/tosutil.zip -d /tmp/tosutil-pkg
+          TOSUTIL_BIN="$(find /tmp/tosutil-pkg -type f -name tosutil | head -1)"
+          chmod +x "$TOSUTIL_BIN"
+          cp "$TOSUTIL_BIN" /tmp/tosutil
+
+      - name: Upload stable.json to TOS
+        env:
+          TOS_ENDPOINT: ${{ secrets.TOS_ENDPOINT }}
+          TOS_REGION: ${{ secrets.TOS_REGION }}
+          TOS_BUCKET: ${{ secrets.TOS_BUCKET }}
+          TOS_ACCESS_KEY_ID: ${{ secrets.TOS_ACCESS_KEY_ID }}
+          TOS_ACCESS_KEY_SECRET: ${{ secrets.TOS_ACCESS_KEY_SECRET }}
+          TOS_PREFIX: ${{ secrets.TOS_PREFIX }}
+        run: |
+          PREFIX="${TOS_PREFIX:-rainskills}"
+          PREFIX="${PREFIX%/}/"
+          /tmp/tosutil cp stable.json \
+            "tos://${TOS_BUCKET}/${PREFIX}channels/stable.json" \
+            "-e=${TOS_ENDPOINT}" "-re=${TOS_REGION}" \
+            "-i=${TOS_ACCESS_KEY_ID}" "-k=${TOS_ACCESS_KEY_SECRET}"
+
+      - name: Notify rainbond-copilot for vendor sync
+        if: success()
+        env:
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+        run: |
+          if [[ -z "$GITLAB_TOKEN" ]]; then
+            echo "WARNING: GITLAB_TOKEN not set; skipping vendor sync notification." >&2
+            echo "Configure secrets.GITLAB_TOKEN with api scope on goodrain/rainbond-agent." >&2
+            exit 0
+          fi
+          SHA="${{ steps.meta.outputs.sha }}"
+          TAG="${{ steps.meta.outputs.tag }}"
+          TARBALL="${{ steps.meta.outputs.tarball }}"
+          PROJECT_PATH="goodrain%2Frainbond-agent"
+          TITLE="[vendor sync] stable promoted to ${SHA} (${TAG})"
+          DESCRIPTION=$(cat <<EOF
+          rainskills 已 promote 到稳定版，请按 SOP §11 执行 vendor 同步。
+
+          - **tag**: \`${TAG}\`
+          - **sha**: \`${SHA}\`
+          - **tarball**: ${TARBALL}
+          - **stable.json**: https://get.rainbond.com/rainskills/channels/stable.json
+
+          ## Vendor sync 步骤
+
+          \`\`\`bash
+          cd ~/code/rainbond-copilot
+          git pull origin main
+          git checkout -b chore/sync-skills-${SHA}
+
+          bash scripts/sync-skills.sh rainbond-app-assistant rainbond-fullstack-bootstrap
+          npm run skills:sync -- rainbond-fullstack-troubleshooter
+          npm run skills:sync -- rainbond-delivery-verifier
+          npm run skills:sync -- rainbond-template-installer
+          npm run skills:sync -- rainbond-app-version-assistant
+          npm run skills:sync -- rainbond-project-init
+
+          git diff --stat skills-src/rainbond/
+          git add skills-src/rainbond/
+          git commit -m "chore(skills): sync vendor to ${SHA} (tag: ${TAG})"
+          git push origin chore/sync-skills-${SHA}
+          # Open MR -> main, merge, then close this issue
+          \`\`\`
+
+          完整 SOP: docs/plans/2026-05-26-skill-cdn-channel-distribution-plan.md §十一
+          EOF
+          )
+          # GitLab issues API expects JSON body
+          jq -n \
+            --arg title "$TITLE" \
+            --arg description "$DESCRIPTION" \
+            --arg labels "skills-sync" \
+            '{title: $title, description: $description, labels: $labels}' \
+            > /tmp/issue.json
+          HTTP_CODE=$(curl -sS -o /tmp/issue-response.json -w "%{http_code}" \
+            -X POST \
+            -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data @/tmp/issue.json \
+            "https://git.goodrain.com/api/v4/projects/${PROJECT_PATH}/issues")
+          if [[ "$HTTP_CODE" != "201" ]]; then
+            echo "ERROR: GitLab issue creation failed (HTTP $HTTP_CODE):" >&2
+            cat /tmp/issue-response.json >&2
+            exit 1
+          fi
+          ISSUE_URL=$(jq -r '.web_url' /tmp/issue-response.json)
+          echo "Created vendor-sync issue: $ISSUE_URL"
+          echo "vendor_sync_issue=$ISSUE_URL" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Summary
+        run: |
+          {
+            echo "Promoted to stable: ${{ steps.meta.outputs.tag }}"
+            echo "- sha: ${{ steps.meta.outputs.sha }}"
+            echo "- stable.json updated"
+            echo "- rainbond-copilot vendor sync issue opened"
           } >> "$GITHUB_STEP_SUMMARY"
