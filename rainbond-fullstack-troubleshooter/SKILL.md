@@ -202,6 +202,7 @@ Polling signal priority (use in order, do not skip):
 
 Forbidden polling patterns:
 - repeatedly calling `rainbond_get_component_summary` inside a polling loop to read `recent_events` or `status` as the primary signal
+- repeatedly calling `rainbond_query_components` (same `app_id` + same `query`/`service_id`) to re-check whether a component has converged after a restart, deploy, or `rainbond_operate_app` — it returns a component-list snapshot, not an action-anchored signal, and identical-arg re-reads are served from a short server-side cache, so the `status` field looks unchanged and feeds an endless re-poll; verify convergence through P2 (pods anchored to the operation) instead
 - judging "my action finished" from `summary.status` string changes — `status` is an aggregate field that other concurrent operations also mutate
 - treating "the most recent event" or "the first event in the events page" as the signal for the action this run triggered, when no `event_id` was captured at trigger time
 - assuming an event without `event_id` correlation belongs to the action this run just triggered, just because it is recent
@@ -223,6 +224,7 @@ Attempt budget:
 - the same blocker bucket should not trigger more than 1 repeated repair attempt in a single run
 - if the same blocker remains after one repair-and-verify cycle, stop and report the bounded blocker instead of trying a third variation
 - if the run spends too long without materially changing runtime evidence, stop and report the current blocker rather than continuing indefinite retries
+- read-only status re-reads count toward this budget too: repeating any status check (`rainbond_get_component_summary`, `rainbond_query_components`, `rainbond_get_component_events`) against the same target with the same arguments, with no new anchored evidence (a fresh `event_id`, a pod-state change, a just-granted approval) in between, is "no material change" — after at most 2 such repeats, stop and return a graceful intermediate reply with the last observed state plus "reply 继续 to resume the status check", then end the run
 
 1. Resolve context and handoff
 - Collect any user-explicit identifiers, environment choice, or component names first
