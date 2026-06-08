@@ -1,14 +1,6 @@
 ---
 name: rainbond-app-assistant
-description: >
-  Use for any request to deploy, run, deliver, publish, or troubleshoot the
-  current project — regardless of whether the user mentions "Rainbond" by name.
-  Triggers on generic intents such as: 帮我把项目跑起来 / 部署这个项目 / 发布上线 /
-  看看为什么跑不起来 / 帮我交付 / 排查一下 / deploy this project / run this app /
-  check what is blocking it. Prefer this skill when a Rainbond MCP connection
-  is configured in the session. Handles the full lifecycle: project-init,
-  bootstrap, troubleshooting, delivery verification, dev-to-test promotion,
-  and code-layer handoff.
+description: "Use for any request to deploy, run, deliver, publish, or troubleshoot the current project — regardless of whether the user mentions \"Rainbond\" by name. Triggers on generic intents such as: 帮我把项目跑起来 / 部署这个项目 / 发布上线 / 看看为什么跑不起来 / 帮我交付 / 排查一下 / deploy this project / run this app / check what is blocking it. Prefer this skill when a Rainbond MCP connection is configured in the session. Handles the full lifecycle: project-init, bootstrap, troubleshooting, delivery verification, dev-to-test promotion, and code-layer handoff."
 ---
 
   # Rainbond App Assistant
@@ -197,6 +189,7 @@ description: >
     - 共享连接信息（数据库连接串、缓存地址、消息队列 broker 等任何"provider 拥有的连接 fact"）→ 配在 provider 的 connection envs 上，**不要**在每个 consumer 上重复写
     - 运行时报 `connection refused` / `ENOTFOUND <provider-name>` / 错 host / 错 port / 缺密码等连接类错误 → 先看 provider connection env / dependency alias / compatibility env，**不要**把 baseline 里的硬编码主机名当成事实
     - 多组件拓扑进入交付验收前 → 必须跑一遍依赖完整性 gate（列已接受边 → 查现有依赖 → 补齐缺失 → 再次验证依赖摘要）。手工创建镜像组件、Compose fallback 路径、组件能独立启动都**不能**跳过 gate
+    - **配置覆盖 gate（backend 组件，设完 env 后、宣布健康/可交付前必跑）**：从 `rainbond_get_component_summary` 枚举该组件挂载的 config-file 卷。若有卷挂到已知配置路径（`config.yml` / `application.yml` / `application.properties` / `.env` / `nginx.conf` / `*.conf`），运行态有效配置由该文件决定而非 env（mounted config-file > env > 镜像默认值）。这时必须警告"env 可能被挂载的配置文件覆盖"，并先确认该文件反映了预期值，再宣布交付健康。比较配置值用于该 gate 是允许的，但**禁止**回显原始文件内容或密钥明文，只报结构化不一致。文件内容无法用当前 MCP 能力读取时，显式标注覆盖风险并停下来让用户确认，不要默默改 env 就当成功
 
     具体的 provider 命名约定、connection env 变量名（`DB_*` / `REDIS_*` / `KAFKA_*` 等是示例，按 provider 文档实际名字为准）、以及依赖 alias 细节，详见 bootstrap modules/30-creation-rules.md 的相关章节。
 24. 不要自动拉起本地 Docker Desktop/OrbStack、执行本地 Docker build/push、或推送临时镜像作为兜底；这属于 delivery-mode 策略切换，必须先得到用户明确确认。

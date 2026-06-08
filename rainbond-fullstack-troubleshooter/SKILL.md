@@ -103,6 +103,13 @@ Operational rules:
 - If persisted files conflict with Rainbond MCP results, trust MCP and report the mismatch explicitly
 - Never print secret values in prose or structured output
 
+## Runtime Configuration Source Precedence
+
+This is about which source the *running process* actually reads, not which local file resolves context.
+
+- Effective runtime config resolves as: mounted config-file volume (`config.yml` / `application.yml` / `application.properties` / `.env` / `nginx.conf` / `*.conf` at a config path) > runtime environment variables > image baked-in defaults.
+- A correct env change does NOT take effect if a mounted config file overrides the same key. Fix the override source, not just env.
+
 ## Scope
 
 Typical components:
@@ -282,9 +289,12 @@ Attempt budget:
   - prefer fixing provider connection env names and port aliases so every dependent service receives the same contract
   - add consumer compatibility envs only when provider-side repair is unsafe or cannot express the app's expected names
 - `wrong connection values`
+  - **config-override gate (run BEFORE mutating env)**: enumerate the component's mounted config-file volumes from `rainbond_get_component_summary`. If any mounted volume targets a known config path (`config.yml` / `application.yml` / `application.properties` / `.env` / `nginx.conf` / `*.conf`), treat that file as the authoritative config source per Runtime Configuration Source Precedence. The repair must target that file (or remove the stale override), not just env, because the mounted file wins. Compare values for the override, but report mismatches structurally (e.g. "mounted config.yml overrides env: db host mismatch") and never print the raw secret value.
+  - **capability limit**: detection that a config-file volume is mounted at a config path works today via `component_summary`. Content verification (what the file actually contains) needs pod exec or a config-file read API that may not exist yet. If content cannot be read, flag the override risk explicitly and escalate or instruct the user; do not silently edit env and declare success.
   - correct provider connection envs or port aliases first when the wrong values come from provider metadata
   - correct consumer envs only when they are truly consumer-local overrides
 - `api startup issue`
+  - **config-override gate (run BEFORE mutating env)**: same as `wrong connection values` — if a config-file volume is mounted at a known config path, that file outranks env. Repair the file or remove the stale override; do not assume an env edit fixes a value the mounted file re-supplies. When file content cannot be verified with current MCP capability, flag the override risk and escalate rather than claiming the env fix worked.
   - report clearly that the issue is not primarily the db path
   - apply only a confirmed platform-side fix; otherwise keep the state as `runtime_unhealthy`
 - `source build still running`
@@ -387,6 +397,9 @@ Symptoms:
 - a manifest or runtime env pins a literal dependency hostname that does not resolve in the current Rainbond topology
 
 Action:
+- **before mutating env, run the config-override gate**: enumerate mounted config-file volumes from `rainbond_get_component_summary`; if one targets a known config path (`config.yml` / `application.yml` / `application.properties` / `.env` / `nginx.conf` / `*.conf`), that file is authoritative and outranks env (see Runtime Configuration Source Precedence). Repair the file or remove the stale override; an env-only fix silently reverts when the mounted file re-supplies the value
+- when comparing config values against env for the gate, report mismatches structurally (e.g. "mounted config.yml overrides env: db host differs from intended") and never print the raw secret value
+- if file content cannot be read with current MCP capability, flag the override risk and escalate or instruct the user; do not edit env and declare success
 - fix only the incorrect values
 - when dependency wiring already exists, prefer provider connection envs and the currently resolvable Rainbond dependency alias/service coordinates over stale literal hostnames
 - if stale consumer envs duplicate provider connection values, remove or replace the consumer-local override only after confirming the dependency-injected provider values are present
@@ -402,10 +415,11 @@ Symptoms:
 - logs show file-not-found or permission errors for file-backed config/secret paths
 
 Action:
+- **before mutating env, run the config-override gate**: if a config-file volume is mounted at a known config path (`config.yml` / `application.yml` / `application.properties` / `.env` / `nginx.conf` / `*.conf`), that mounted file outranks runtime env (see Runtime Configuration Source Precedence). A startup value driven by the mounted file will not change from an env edit; repair the file or remove the stale override instead. When file content cannot be verified with current MCP capability, flag the override risk and escalate rather than declaring the env fix successful
 - report clearly that the issue is not primarily the db path
 - do not force db-oriented repairs
 - if the evidence shows a source/build defect rather than a runtime config issue, reclassify to `code_or_build_handoff_needed`
-- for file-backed config/secret mounts, treat Rainbond mount path as a directory when a config filename is present; adjust the consuming env to `<mount_dir>/<config_name>` once, and do not print file contents
+- for file-backed config/secret mounts, treat Rainbond mount path as a directory when a config filename is present; adjust the consuming env to `<mount_dir>/<config_name>` once. Comparing mounted config values against env for the override gate is allowed and expected, but never print raw file contents or secret values verbatim — report only structural mismatches
 
 Expected result:
 - `runtime_unhealthy` for unresolved runtime issues
@@ -750,6 +764,7 @@ Also:
 
 - fixing frontend first when the real issue is `api -> db`
 - editing envs before checking dependency
+- editing env to fix a connection/startup value without first checking for a mounted config-file volume that overrides the same key
 - claiming recovery without re-reading logs
 - treating component summary as Pod-level root-cause evidence
 - assuming `rainbond_get_pod_detail` returns `data.bean`
