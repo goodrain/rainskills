@@ -62,6 +62,7 @@ Then:
 
 For standard source-backed creation:
 - required inputs are `git_url`, `code_version`, `code_from`, and optional `subdirectories`
+- **always pass `code_version` as the repository's real default branch** — from the project source profile's `repo.defaultBranch` when available (e.g. `rainbond_get_project_source_profile`), otherwise the ref the user gave or the detected default. Omitting `code_version` makes the backend default to `master`, so any `main`-default repo fails creation and forces a recovery path that loses the build-mode preference (see Retry Discipline). Do not blind-guess `master`/`main`.
 - `check_uuid` and `event_id` are optional passthrough fields only when a prior detection flow already produced them
 - do **not** invent a blocker just because `check_uuid` or `event_id` is absent
 - only stop on this point if the backend explicitly returns that those fields are required for the current request
@@ -84,6 +85,8 @@ Rules:
 - a build failure surfaced by events or build logs is **not** evidence the component was not created; verify with `rainbond_query_components` before any retry
 - the existing source-failure handling in [50-workflow-and-convergence.md](50-workflow-and-convergence.md) (read events, read build log, classify blocker) still applies; this section only governs which tool to call when retry is justified
 
+**Exception — stuck on CNB but needs Dockerfile (the one sanctioned recreate):** the retry paths above CANNOT change build mode, because `prefer_dockerfile_when_detected` is create-only (see Build Mode). So if a source component already exists with `build_strategy = cnb` and its CNB build dead-ends on a not-CNB-allowed language/version (e.g. `dotnet version 7.0 is not allowed by cnb version policy`) while the repo ships a usable Dockerfile, neither `rainbond_update_component_build_source` nor `rainbond_check_component` can rescue it. In that case `rainbond_delete_component` the stuck component and recreate it once with `rainbond_create_component_from_source(..., code_version=<default branch>, prefer_dockerfile_when_detected=true)`, then reconfigure ports/envs/deps on the new `service_id`. Do this early, before attaching extensive config. **Prevention beats this:** get `code_version` and `prefer_dockerfile_when_detected` right on the first create so no recovery is ever needed.
+
 ### Multi-service Source Ambiguity
 
 If source detection reports `multiple services detected` or equivalent multi-component ambiguity:
@@ -92,6 +95,23 @@ If source detection reports `multiple services detected` or equivalent multi-com
 - do **not** automatically switch the component from source to local package
 - do **not** automatically build jars locally, upload artifacts manually, or install middleware templates as a workaround
 - only continue on a package-backed or manually selected path after the user explicitly confirms that strategy
+
+### Compose / Multi-service Topology
+
+When the project is a docker-compose application — a `docker-compose.yml` / `compose.yaml`, or a project source profile with `topologySource == "compose"` — deploy the whole topology as one Rainbond app with **one component per compose service**. Create each service **individually with its own `subdirectories`** (its compose `build.context`), so every create call is single-service and does not trip the "multiple services detected" stop above.
+
+Per service, by kind (from the profile's `deployKind`):
+- `image` (compose `image:`) → `rainbond_create_component_from_image` (image proxied per guardrail 7).
+- `source` (compose `build:`) → `rainbond_create_component_from_source` with its `subdirectories`, `code_version = repo.defaultBranch`, and `prefer_dockerfile_when_detected = true` when the service ships a Dockerfile (compose `build:` almost always does). Get these right **at create** (see Source-create Precheck + Build Mode) so no recovery path is needed.
+
+Completeness:
+- create one component per service, then confirm the created-component count matches the profile's service count.
+- one-shot / init-only services (seed, migrate, fixtures — run once and exit, not long-running) MAY be skipped, but the skip and its reason MUST be stated explicitly in the report. Never silently drop a service.
+
+Configure and bring up (reuse existing rules, do not invent tools):
+- per-service config: ports (provider/infra such as db, redis → `enable_inner` only; web/public-facing → `enable_inner` + `enable_outer`); runtime envs; persistence for stateful services (storage before deploy, guardrail 17); provider connection envs.
+- dependencies: wire every compose `depends_on` edge with `rainbond_manage_component_dependency`, then run the dependency completeness gate (guardrail 12).
+- bring-up differs by kind: image components deploy directly (`rainbond_operate_app`); **source components must be built** (`rainbond_build_component`) — a source component that was only created/detected has no runnable image and stays `undeploy` if you merely `operate_app deploy` it. Deploy the infra (db/redis) first, then build the source services that depend on them.
 
 ## Source Build Parameter Rules
 
@@ -118,6 +138,8 @@ Guardrails:
 - do **not** echo secret example values
 - Python build tuning does **not** get a made-up Node-style `CNB_BUILD_SCRIPT`
 - when a Dockerfile is detected alongside a language build, resolve the build mode by priority: manifest `source.build.strategy` first; then heuristic on Dockerfile classification + intent signals (see `../references/source-build-parameter-guide.md § Build Mode Selection`); only ask the user when signals are genuinely ambiguous. Map a `dockerfile` decision to `prefer_dockerfile_when_detected = true` on `rainbond_create_component_from_source`. Record the per-component decision in BOTH the prose ("Build mode for `<name>`: …") and the structured output (`deployment_plan.workflow.build_strategy_decisions[<name>]`) so the user can audit and override.
+  - **`prefer_dockerfile_when_detected` is honored only at create time.** `rainbond_update_component_build_source` and `rainbond_check_component` (re-detect) do NOT re-apply it, and the MCP surface has no field to flip `build_strategy` after creation. So the Dockerfile-vs-CNB decision must be correct on the create call; a component that already built as CNB cannot be switched to Dockerfile in place (see the build-mode exception in Source-create Retry Discipline).
+  - **.NET version trap:** dotnet/.NET Core is treated as CNB-capable, but the CNB version policy only allows .NET 8/9/10. A repo on a CNB-rejected version (e.g. .NET 7 → `dotnet version 7.0 is not allowed by cnb version policy`) that ships a usable Dockerfile MUST be created with `prefer_dockerfile_when_detected = true`, or its CNB build dead-ends with no in-place recovery.
 - if build logs fail while downloading third-party build artifacts such as GitHub Release assets, native binary packages, image layers, or package-manager tarballs, classify the blocker as `external artifact unreachable` when the dominant evidence is network reachability rather than app source code
 - examples include sharp/libvips release downloads, registry layer pulls, Docker Hub timeouts, package tarball download timeouts, or language installer binary downloads
 - for `external artifact unreachable`, stop after one evidence-backed retry or mirror attempt; do not convert the component to a different delivery mode automatically

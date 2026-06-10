@@ -185,7 +185,7 @@ Load references only when the corresponding module tells you to.
 - [modules/30-creation-rules.md](modules/30-creation-rules.md)
   - 通用创建规则、幂等策略、数据库最小启动配置、前端 `access_mode` 约束、image registry proxy prompt
 - [modules/40-source-and-package-rules.md](modules/40-source-and-package-rules.md)
-  - source / package 路径、GitHub proxy、build 参数路由、多服务歧义、source-path 保持规则
+  - source / package 路径、GitHub proxy、build 参数路由、多服务歧义、source-path 保持规则、compose 多服务拓扑（逐服务建 / create 时定死分支+Dockerfile / 卡 CNB 需 Dockerfile 的删建特例）
 - [modules/50-workflow-and-convergence.md](modules/50-workflow-and-convergence.md)
   - 主线执行顺序、source convergence、`deferred_dependencies`、build/debug 读取顺序
 - [modules/60-verification-and-handoffs.md](modules/60-verification-and-handoffs.md)
