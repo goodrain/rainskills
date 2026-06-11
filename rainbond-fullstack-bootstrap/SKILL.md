@@ -153,13 +153,19 @@ These rules are always in force. If any module, example, or lower-priority note 
    **Platform reality**: `rainbond_create_component_from_image` / `_from_source` do not accept `extend_method`, and the platform exposes no MCP tool to convert stateless → stateful. Image/source-mode creation always yields a stateless component. Do not waste turns trying to "make it stateful" after creation — the tools to do so do not exist.
 
    **What to do instead**:
-   1. Call `rainbond_manage_component_storage(operation=create_volume, volume_type=share-file, volume_path=<data-dir>)` to attach RWX shared-file persistence to the stateless component
+   1. Call `rainbond_manage_component_storage(operation=create_volume, volume_name=<short-name>, volume_type=share-file, volume_path=<data-dir>)` to attach RWX shared-file persistence to the stateless component (`volume_name` is required — omitting it fails the call)
    2. Then `rainbond_operate_app(action=deploy)` — storage first, deploy second
    3. Do **not** attempt `volume_type=local` (platform returns HTTP 400 for stateless + local)
 
    **If the user genuinely needs `local` (high-IOPS database)**: the only path is `rainbond_install_app_model` from the app market with a pre-configured stateful template. Image-mode cannot reach a stateful component on the current MCP surface — report this as a delivery-mode limitation, not a step bootstrap can silently work around.
 
    Full data-directory list per service and `volume_type` ↔ component-type compatibility matrix live in `modules/30-creation-rules.md § 5`. Deploying a stateful service via image mode without persistence is a real data-loss regression — do not skip this step because "I'm not sure if X is stateful." If unsure, ask the user; do not default to no-persistence image deployment for anything that might store data.
+
+18. **Source component creation prerequisites (HARD RULE).** These rules previously lived only in `modules/40-source-and-package-rules.md` and were skipped in practice; they live here because violating them wastes creation calls and user approvals.
+   - **Profile before create**: when the `rainbond_get_project_source_profile` tool is available in this session (rainagent runtime), you MUST call it once for the repository before the FIRST `rainbond_create_component_from_source` of that repository, and fill creation parameters from the profile (subdirectories, default branch, dockerfile preference, ports, env keys). In CLI runtimes without that tool, derive the same facts by reading the local project files before creating. Creating source components by guess is forbidden.
+   - **Always pass `code_version`**: set it to the repository's real default branch — the profile's `repo.defaultBranch` when available, otherwise the ref the user gave or the detected default. Omitting it makes the backend silently default to `master`, so any `main`-default repository fails creation and the recovery path loses the build-mode preference. Never blind-guess `master`/`main`.
+   - **`create_volume` requires `volume_name`**: every `rainbond_manage_component_storage(operation=create_volume)` call must include a short explicit `volume_name`; omitting it fails the call and wastes a turn.
+   - Full source/package detail remains in `modules/40-source-and-package-rules.md`; still read it before the first source-backed creation.
 
 ## Reading Order
 
