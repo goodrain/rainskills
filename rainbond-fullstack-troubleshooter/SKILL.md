@@ -510,6 +510,7 @@ Action:
 - keep the original component delivery mode
 - read component events first and the relevant build or pull evidence second
 - do not start local Docker/OrbStack, push a temporary image, or switch to package/image fallback automatically
+- do not attempt build-env fixes for registry or network failures: no documented build key affects network reachability, and inventing one (mirror/proxy-style names) burns the retry budget on a no-op
 - recommend a reachable registry/artifact mirror, restoring cluster egress, or explicit user-approved delivery-mode change
 
 Expected result:

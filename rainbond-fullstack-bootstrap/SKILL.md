@@ -127,6 +127,8 @@ These rules are always in force. If any module, example, or lower-priority note 
 
    Failure-mode signal: any key shaped like `CNB_<TOOL>_VERSION`, `CNB_<TOOL>_<OPTION>`, `BP_<UNKNOWN>`, or `BUILD_<UNKNOWN>` that you cannot point to a specific line of the reference doc for — that's a fabrication. Stop and consult the reference doc before calling `replace_build_envs`.
 
+   The allowed-list test is literal, not shape-based: a key is legitimate only if you can point to the exact line of the reference doc that documents it. Plausible-looking platform-style names (`DOCKER_MIRROR_URL`, `MIRROR_URL`, `REGISTRY_PROXY`, or any other invented `*_MIRROR_*` / `*_PROXY_*` / `*_REGISTRY_*` variable) are fabrications regardless of how official they sound. Build envs configure build behavior for the language runner; **no build env changes network reachability** — registry timeouts, image-pull failures, and blocked egress cannot be fixed from `build_env_dict`, so do not spend a single call trying.
+
    When a build failure points to something not controllable by any documented key (specific tool version mismatches, lockfile incompatibility, framework version pinning beyond what `CNB_NODE_VERSION` exposes, etc.), that's evidence the fix is **code-side**, not a missing build env. Route to `code_or_build_handoff_needed` rather than guessing env names.
 10. Component connection information must be configured on the provider component with `rainbond_manage_component_connection_envs`; do not use `rainbond_manage_component_envs(scope=outer)` for that path. Consumers receive those values through explicit dependencies.
 11. Explicit component dependencies are a required topology artifact, not just a runtime networking convenience. Use `rainbond_manage_component_dependency` for every declared `depends_on` edge and every inferred provider/consumer edge that bootstrap accepts into the topology. Do not claim MCP lacks a component dependency API; if the tool call fails, report the actual MCP/control-plane failure.
@@ -166,6 +168,11 @@ These rules are always in force. If any module, example, or lower-priority note 
    - **Always pass `code_version`**: set it to the repository's real default branch — the profile's `repo.defaultBranch` when available, otherwise the ref the user gave or the detected default. Omitting it makes the backend silently default to `master`, so any `main`-default repository fails creation and the recovery path loses the build-mode preference. Never blind-guess `master`/`main`.
    - **`create_volume` requires `volume_name`**: every `rainbond_manage_component_storage(operation=create_volume)` call must include a short explicit `volume_name`; omitting it fails the call and wastes a turn.
    - Full source/package detail remains in `modules/40-source-and-package-rules.md`; still read it before the first source-backed creation.
+
+19. **Dockerfile base-image pulls are not platform-proxyable (HARD RULE).** In Dockerfile build mode the `FROM` images are pulled by the cluster build runtime directly from the registry written in the Dockerfile; rule 7's URL proxying does not apply (the URL lives in user code), and no build env redirects it. When a Dockerfile build fails pulling its base image (timeout / unreachable registry), that is a platform-side network blocker. The only legal moves, in order:
+   1. If the language is supported by the CNB build path, propose switching that component to the language build (CNB has a working mirror mechanism) and ask the user to confirm — this changes build behavior, never switch silently.
+   2. Otherwise report the blocker with the concrete options: fix the Dockerfile `FROM` to point at a reachable mirror (code-side handoff), configure a cluster-level registry mirror (platform admin), or deploy a prebuilt image instead.
+   Do not invent build envs, do not retry the same build hoping the network recovers, and do not modify the Dockerfile yourself.
 
 ## Reading Order
 

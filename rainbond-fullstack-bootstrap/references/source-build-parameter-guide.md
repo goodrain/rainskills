@@ -217,6 +217,8 @@ PHP:
 - `BUILD_NUGET_CONFIG_NAME`
 - `BUILD_PROCFILE`
 
+> Known fabrication pattern: keys like `DOCKER_MIRROR_URL` (or any invented `*_MIRROR_URL` / `*_PROXY` name) do not exist. No documented build key affects how Dockerfile `FROM` images are pulled — registry reachability is cluster-level, not a build env. If a key is not on this page, it does not exist.
+
 ## Language Notes
 
 Node.js / static frontend:
