@@ -27,6 +27,46 @@ Create only what is needed to establish the topology:
 
 Do not try to solve every runtime problem inside this skill.
 
+## 2a. Deployment-plan readiness for multi-component image topologies
+
+Before any mutating MCP call for a multi-component image deployment, build a short `DeploymentPlanReadiness` mentally and stop if it is not ready.
+
+This gate applies when:
+- the planned topology has more than one component
+- the user supplied only a product/software name, not a concrete descriptor
+- the plan contains image-backed components whose relationship is being inferred
+- the product is a complex off-the-shelf suite such as Harbor, GitLab, a monitoring/observability stack, or any product normally deployed as coordinated services
+
+Accepted evidence provenance for critical fields:
+- `rainbond_template`: Rainbond app market/template selected by user or tool evidence
+- `rainbond.app.json`: repository manifest with component topology
+- `compose_profile`: `docker-compose.yml`, `compose.yaml`, or `rainbond_get_project_source_profile` output whose `topologySource` is compose and whose `services[]` carry image/build/ports/depends_on/env/volume evidence
+- `official_descriptor`: official deployment descriptor supplied by the user or tool context, such as a vendor compose/Helm-derived service plan
+- `existing_runtime`: components and edges already present in the Rainbond app
+- `user_confirmed_plan`: the assistant presented a concrete plan and the user explicitly approved it in the current conversation
+
+Fields that need provenance before writing:
+- service list and one-to-one mapping to Rainbond components
+- dependency edges between services
+- required runtime env keys and secret sources
+- container ports and which ports are internal or externally exposed
+- durable storage paths for stateful components
+- image references and tags, including registry/mirror choice
+- product-level settings such as external URL, domain, TLS mode, admin/bootstrap password source, scanner/worker enablement, and retention/storage assumptions
+
+Readiness decision:
+- `ready`: every critical field has accepted provenance; continue with component creation and record the provenance in the final report
+- `needs_user_confirmation`: a complete proposed plan exists, but one or more critical fields come from assistant inference; ask the user to confirm the plan before any create/update/dependency/env/storage call
+- `blocked_missing_descriptor`: no descriptor/template/manifest/compose evidence exists; ask the user to provide or choose one before creating components
+
+Do not downgrade this gate to a warning for production-like deployments. Inference-only service lists, dependencies, required env, or storage paths are blockers because an apparently successful multi-component creation can encode the wrong product topology.
+
+### Complex suite examples
+
+Harbor is a complex suite, not a simple `harbor:latest` single-image component. If the user says "deploy Harbor" and no Rainbond template, `rainbond.app.json`, compose profile, official descriptor, or explicit user-confirmed plan is available, stop and ask for one. Do not create `core`, `portal`, `registry`, `jobservice`, `database`, `redis`, `proxy`, scanner, or similar components from model knowledge alone.
+
+GitLab and monitoring stacks follow the same rule: prefer a Rainbond template or official descriptor; otherwise present a plan for confirmation before writing.
+
 ## 3. Database bootstrap is allowed
 
 Unlike the troubleshooter skill, bootstrap may add the minimum startup env required for the database image to initialize successfully.

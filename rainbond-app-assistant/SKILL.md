@@ -344,25 +344,29 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
     
     反例（**禁止**）：用户说"帮我部署 https://gitee.com/rainbond/sourcecode-examples 的 java-maven-demo"，你调 `rainbond_create_component_from_source(git_url='https://gitee.com/mirrors_123/java-maven-demo.git', subdirectories='java-maven-demo')` —— 这是把用户给的主仓库 URL 整个替换成你训练数据里相关性高的某个独立仓库。
     正确做法：`rainbond_create_component_from_source(git_url='https://gitee.com/rainbond/sourcecode-examples', subdirectories='java-maven-demo')` —— URL 逐字用用户给的，子目录用用户说的子项目名。
-37. **组件创建方式智能推断（image vs source）**：用户请求创建组件时，**根据用户消息里的信号自动推断创建方式**，不要停下来问"用镜像还是源码？"。
+37. **组件创建方式智能推断（image vs source vs complex suite）**：用户请求创建组件时，**根据用户消息里的信号自动推断创建方式**，不要停下来问"用镜像还是源码？"。但必须先区分"简单单镜像基础设施"和"复杂现成软件套件"：复杂套件不能只凭模型通用知识手搓多组件拓扑。
     
     推断信号优先级（从强到弱）：
     - 用户提到 Git URL / 分支 / commit / `subdirectories` → **source 模式**
     - 用户提到 image tag / registry 路径（如 `<name>:<tag>`、`docker.io/...`、`harbor.../...`）→ **image 模式**
-    - 用户只说组件名，且该名指向**公认的、通常以容器镜像形式部署的基础设施软件**（数据库、消息队列、缓存、对象存储、观测/监控、Web 服务器、反向代理/负载均衡、注册中心、密钥管理等类别下被广泛使用、有官方/社区维护镜像的项目）→ **image 模式**，默认镜像名 `<name>:latest`（再经 Iron Law 6 代理改写）。这里用你自己的通用知识判断，**不要**等清单或穷举匹配。
+    - 用户只说组件名，且该名指向**简单单镜像基础设施软件**（数据库、消息队列、缓存、对象存储、Web 服务器、反向代理/负载均衡、注册中心、密钥管理等类别下被广泛使用、有官方/社区维护镜像，且通常一个主容器即可形成最小可运行服务的项目）→ **image 模式**，默认镜像名 `<name>:latest`（再经 Iron Law 6 代理改写）。这里用你自己的通用知识判断，**不要**等清单或穷举匹配。
+    - 用户只说软件名，且该名指向**复杂现成软件套件 / 多服务发行版**（例如 Harbor、GitLab、监控/可观测性 stack、带内置数据库/缓存/worker/jobservice/registry/UI 的产品套件）→ **complex suite 模式**：先寻找或要求 Rainbond 模板、`rainbond.app.json`、`docker-compose` / compose profile、官方部署描述符，或让用户显式确认一份完整计划；在证据缺失前禁止创建组件。
     - 用户只说组件名，且该名是项目专属或来历不明（如 `my-api`、`order-service`、`payment-svc` 等业务命名风格） → 信号不足，**这时才**问"用镜像还是源码？"
     
     判断标准（principle 而非清单）：
-    - 在你的知识里，这个名字是不是**一个有公开镜像的成熟基础设施软件**？是 → image。
+    - 在你的知识里，这个名字是不是**一个有公开镜像、单主服务可运行的成熟基础设施软件**？是 → image。
+    - 这个名字是不是**一个产品套件**，通常由多个互相依赖的组件组成，且 service list / depends_on / env / storage / external_url / TLS 这些字段需要官方描述符才能可靠？是 → complex suite，先要证据或用户确认。
     - 这个名字是不是**业务领域命名风格**（含动词、含组织名、含具体业务概念）？是 → 问。
     - 介于两者之间不确定？**优先按 image 默认**（更常见的部署方式）并在报告里告知推断理由，邀请用户覆盖。
     
     自动推断的结果必须在最终报告里说明，例如："已按 image 模式创建 clickhouse 组件（推断依据：该名为公认的列式分析数据库）。如需改用源码请告知。"
+    对 complex suite 的报告必须说明停止原因和下一步选择，例如："Harbor 是多组件套件；当前没有 Rainbond 模板、compose/Helm/官方描述符或用户确认计划，因此我不会凭通用知识创建 registry/core/jobservice/database 等组件。请提供部署描述符，或确认使用某个 Rainbond 模板。"
     
     **禁止行为**：
     - 用户给了 git_url 还问"用镜像还是源码？"（信号已经明确）
     - 用户给了 image tag 还问"用镜像还是源码？"（信号已经明确）
     - 对一个你的训练知识里明显是基础设施软件的名字（不管是否在某个示例清单里）问"用镜像还是源码？" —— Nginx、Redis、ClickHouse、Jaeger、Loki、OpenTelemetry Collector 都属于这一类，未来出现的新项目也会属于这一类，用判断不要用穷举
+    - 对 Harbor / GitLab / 监控 stack / 其他复杂套件，在没有 Rainbond 模板、`rainbond.app.json`、compose profile、官方部署描述符或用户确认计划时，凭通用知识创建多个组件、依赖、env、存储或端口
     
     **stateful 服务的持久化要求**：当推断结果是 image 模式 **且** 该服务属于 stateful 范畴（数据库 / 持久化消息队列 / 搜索引擎 / 时序库 / 对象存储 / 向量库 / 图库等 — 数据必须跨重启存活的任何服务），**必须**在 deploy 之前配好持久化。
     
