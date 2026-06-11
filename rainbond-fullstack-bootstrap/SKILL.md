@@ -168,6 +168,8 @@ These rules are always in force. If any module, example, or lower-priority note 
 
 18. **Deployment-plan readiness gate for multi-component image deployments.** Before any mutating MCP call for a multi-component image topology, establish provenance for the service list, dependency edges, required env/secrets, ports, storage paths, external URL/TLS assumptions, and image tags. Accepted provenance is: Rainbond template, `rainbond.app.json`, `docker-compose` / compose profile, official deployment descriptor supplied by user/tool, existing Rainbond runtime state, or explicit user-confirmed plan. Inference-only critical fields are blockers, not TODOs.
 
+   **Explicit user source intent overrides template installs.** When the user gave a Git URL (or said "deploy this repo's source"), the deploy path is locked to the source / compose-profile path; an app-market template is a suggestion to mention, never the default to install before the user explicitly picks it. Do not install a market template and then abandon it to hand-build image components — that strands a half-installed app. If you must switch strategy, first clean up the abandoned half-built app or tell the user it exists and ask. (Enforced at the routing layer by `rainbond-app-assistant` Iron Law 38.)
+
 19. **Source component creation prerequisites (HARD RULE).** These rules previously lived only in `modules/40-source-and-package-rules.md` and were skipped in practice; they live here because violating them wastes creation calls and user approvals.
    - **Profile before create**: when the `rainbond_get_project_source_profile` tool is available in this session (rainagent runtime), you MUST call it once for the repository before the FIRST `rainbond_create_component_from_source` of that repository, and fill creation parameters from the profile (subdirectories, default branch, dockerfile preference, ports, env keys). In CLI runtimes without that tool, derive the same facts by reading the local project files before creating. Creating source components by guess is forbidden.
    - **Always pass `code_version`**: set it to the repository's real default branch — the profile's `repo.defaultBranch` when available, otherwise the ref the user gave or the detected default. Omitting it makes the backend silently default to `master`, so any `main`-default repository fails creation and the recovery path loses the build-mode preference. Never blind-guess `master`/`main`.
@@ -178,6 +180,12 @@ These rules are always in force. If any module, example, or lower-priority note 
    1. If the language is supported by the CNB build path, propose switching that component to the language build (CNB has a working mirror mechanism) and ask the user to confirm — this changes build behavior, never switch silently.
    2. Otherwise report the blocker with the concrete options: fix the Dockerfile `FROM` to point at a reachable mirror (code-side handoff), configure a cluster-level registry mirror (platform admin), or deploy a prebuilt image instead.
    Do not invent build envs, do not retry the same build hoping the network recovers, and do not modify the Dockerfile yourself.
+
+21. **Compose topology mapping (HARD RULE — index; full text in `modules/40-source-and-package-rules.md`).** When deploying a docker-compose topology:
+   - **Compose service names are not hostnames.** Never write a compose service name (`db_postgres`, `redis`, `sandbox`, …) into a consumer `*_HOST` / `*_URL` / `*_ADDR` env — it does not resolve in Rainbond and underscored names are not valid DNS labels. Add the dependency edge (`rainbond_manage_component_dependency`) and rewrite the host to the provider's injected connection variable or `127.0.0.1:<port>`. (dify example: `DB_HOST=db_postgres` ❌ → `DB_HOST=127.0.0.1` ✅ after wiring the dep.)
+   - **Do not silently drop a reverse-proxy / gateway service.** If the frontend relies on same-origin path routing (relative-path API envs, or multi-upstream path forwarding), keep the proxy as a component and make it the sole external entry point (only it gets `enable_outer`; `web`/`api` stay inner-only). Omit the proxy only when it is a simple single-upstream port forwarder.
+   - **`optionalServices` are not part of the default deploy set.** Deploy only `services[]`; disclose `optionalServices[]` once; prompt the user to pick one only when they ask or when the default-active set lacks a required capability.
+   Full rules, decision tables, and config-sourcing details: [modules/40-source-and-package-rules.md § Compose / Multi-service Topology](modules/40-source-and-package-rules.md).
 
 ## Reading Order
 
@@ -203,7 +211,7 @@ Load references only when the corresponding module tells you to.
 - [modules/30-creation-rules.md](modules/30-creation-rules.md)
   - 通用创建规则、幂等策略、数据库最小启动配置、前端 `access_mode` 约束、image registry proxy prompt
 - [modules/40-source-and-package-rules.md](modules/40-source-and-package-rules.md)
-  - source / package 路径、GitHub proxy、build 参数路由、多服务歧义、source-path 保持规则、compose 多服务拓扑（逐服务建 / create 时定死分支+Dockerfile / 卡 CNB 需 Dockerfile 的删建特例）
+  - source / package 路径、GitHub proxy、build 参数路由、多服务歧义、source-path 保持规则、compose 多服务拓扑（逐服务建 / create 时定死分支+Dockerfile / 卡 CNB 需 Dockerfile 的删建特例 / compose 服务名非主机名 / 反代不可静默丢弃 / `optionalServices` 披露但不默认部署）
 - [modules/50-workflow-and-convergence.md](modules/50-workflow-and-convergence.md)
   - 主线执行顺序、source convergence、`deferred_dependencies`、build/debug 读取顺序
 - [modules/60-verification-and-handoffs.md](modules/60-verification-and-handoffs.md)

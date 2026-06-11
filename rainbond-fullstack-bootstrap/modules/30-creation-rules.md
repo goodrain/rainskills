@@ -97,6 +97,7 @@ Rules:
 - when a relationship is already reachable by Kubernetes/Rainbond DNS but is not visible in Rainbond dependencies, still add the explicit dependency edge so the console topology and connection-env injection are correct
 - do not put provider connection values such as `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASS`, `REDIS_PASSWORD`, `KAFKA_BROKERS`, or similar values directly on each consumer when the same value belongs to the provider contract
 - do not use `rainbond_manage_component_envs(scope=outer)` for connection information; that path belongs to `rainbond_manage_component_connection_envs`
+- **compose case:** a compose service name (`db_postgres`, `redis`, `sandbox`, …) is NOT a hostname after the topology lands in Rainbond — it does not resolve, and names with underscores are not even valid DNS labels. Never copy a compose service name into a consumer `*_HOST` / `*_URL` / `*_ADDR` env; add the dependency edge and rewrite the host to the injected connection variable or `127.0.0.1:<port>` instead. Full rule with the dify ❌→✅ examples: [40-source-and-package-rules.md § Compose service names are NOT hostnames](40-source-and-package-rules.md).
 
 Typical examples:
 - MySQL provider exposes a normalized port alias such as `MYSQL` or `DATABASE` plus connection envs such as `DB_USER`, `DB_PASS`, and `DB_NAME`

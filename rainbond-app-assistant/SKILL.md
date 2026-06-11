@@ -380,6 +380,15 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
     **需要 stateful + local volume（高 IOPS 数据库）的唯一路径**：通过 `rainbond_install_app_model` 从应用市场安装预配置的 stateful 模板。镜像/源码模式做不到这件事，不要假装能做。
     
     具体的官方数据目录清单、`volume_type` 兼容矩阵、识别 stateful 服务的范畴边界详见 bootstrap skill 的 `modules/30-creation-rules.md § 5`。stateful 服务用 image 模式部署却没配持久化是真实回归 bug（pod 重启数据丢失），禁止以"模型不知道这个 service 是 stateful"或"工具不支持 extend_method"为由跳过持久化步骤。
+38. **用户显式源码意图优先（禁止"先装模板再改主意手搓"）**：当用户消息里**明确给出了 Git 仓库 URL**（或明确说"部署这个仓库 / 这个项目的源码"），本轮部署路径**锁定为源码 / compose 画像路径**。
+    - 应用市场模板（`rainbond_install_app_model` / 云市场版本）只能作为**建议提及**（"该应用市场也有现成的 X 模板，需要的话可以改用"），在用户**明确选择**模板之前**禁止执行模板安装**。
+    - **禁止**这条真实反例链路：用户给了 GitHub URL → 模型先建应用装了云市场模板（`is_deploy=true`）→ 发现不对又放弃 → 另建应用手搓镜像组件 → 留下一个半装的废弃应用没清理。每一步都消耗用户授权、且制造垃圾资源。
+    - 如果策略切换确实发生（例如确认源码路径走不通、用户改主意要用模板），切换前**必须先清理废弃的半成品应用**（删掉上一条路径建出来的应用/组件），或在切换时**明确告知用户存在这个半成品并征求处理意见**，不允许默默留着。
+    - 与 Iron Law 14（delivery mode 切换必须用户确认）配套：14 管 source↔package↔image↔template 的策略切换需用户确认，38 管"用户已经显式给了源码意图时，模板不是默认路径、且切换必须清理残留"。
+39. **轮次纪律：复用已知值，不重复无变化的调用**（与 Iron Law 35 的"内部 preflight 工具不要主动调"配套，35 管哪些工具不该调，39 管已拿到的值要复用）：
+    - **复用创建返回的 `service_id` / `service_alias`**：`rainbond_create_component_*` 成功后会返回 `service_id` 和 `service_alias`（k8s component name），**记住并在本轮后续 mutating 操作里直接复用**。**禁止**在每次 `rainbond_manage_component_*` / `rainbond_operate_app` 之前都先 `rainbond_query_components` 重查一遍 alias —— 创建时已经返回过，重查只是浪费轮次（仅当 `service_id` 出处不明、按 Iron Law 34 必须重新建立 provenance 时才查）。
+    - **不重复调 `rainbond_get_current_user`**：身份（user_id / username / enterprise_id / team_name / region_name）在一次会话内不变，已在 system prompt 的 session-context 段提供，需要时直接读（见 Iron Law 35 第 2 类）。
+    - **同一 mutating 调用成功后禁止原样重复**：一个写工具用相同入参成功返回后，不要在同一轮再发一次相同调用"确认一下"——成功就是成功，要确认状态用读工具（`rainbond_get_component_summary` 等），不要重发写调用。
 
   ## 主线流程
 

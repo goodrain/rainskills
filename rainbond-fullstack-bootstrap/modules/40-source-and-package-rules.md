@@ -108,6 +108,43 @@ Completeness:
 - create one component per service, then confirm the created-component count matches the profile's service count.
 - one-shot / init-only services (seed, migrate, fixtures — run once and exit, not long-running) MAY be skipped, but the skip and its reason MUST be stated explicitly in the report. Never silently drop a service.
 
+#### Optional services (`optionalServices`) — disclose, do not auto-deploy
+
+A compose project source profile now splits services into two lists:
+- `services[]` — only the services that the profile's default `COMPOSE_PROFILES` actually activates. This is the default deploy set.
+- `optionalServices[]` — profile-gated services that are **not** activated by default (alternative vector stores / databases / backends a user could swap in, e.g. dify's optional `weaviate` / `qdrant` / `pgvector` choices behind a profile flag).
+
+Rules:
+- **By default deploy only `services[]`.** Do not create components for anything in `optionalServices[]` unless a trigger below fires.
+- **Disclose their existence once**, briefly, in the report — e.g. "该 compose 还提供了可选向量库 `qdrant` / `weaviate`（默认未部署）。"
+- **Only prompt the user to pick from `optionalServices[]` when** the user explicitly asks for one, OR `services[]` is missing a capability the app genuinely requires (e.g. the app needs a vector store but the default-active set has none). If the default-active set already supplies that capability (e.g. `weaviate` is already in `services[]`), do **not** ask — the requirement is met.
+- Never silently activate an optional service to "complete" the topology; an optional service is a user-facing choice, not a missing default.
+
+#### Compose service names are NOT hostnames (R1 — highest priority)
+
+Compose service names (`db_postgres`, `redis`, `sandbox`, `plugin_daemon`, …) resolve to each other **inside the compose network only**. They do **not** resolve once the topology lands in Rainbond: a compose service name is not a cluster DNS name, and names with underscores (`db_postgres`, `plugin_daemon`) are not even valid DNS labels. So **forbidden**: writing a compose service name into any consumer connection variable (`*_HOST`, `*_URL`, `*_ADDR`, `*_ENDPOINT`, `*_BROKERS`, a DSN host segment, …).
+
+Translate each compose `depends_on` + service-name reference into the two Rainbond steps:
+1. **Add the dependency edge** — `rainbond_manage_component_dependency(operation=add)` from the consumer to the provider (this is the same mandatory wiring as `30-creation-rules.md § 4`).
+2. **Rewrite the connection env to the Rainbond mechanism** — the provider's connection facts live on the provider via `rainbond_manage_component_connection_envs` and are injected into the consumer by the platform; in mesh mode the consumer reaches a depended-on provider at `127.0.0.1:<provider-port>`. So a host/URL env that pointed at a compose service name must become `127.0.0.1` (or the provider's injected connection variable), never the compose name.
+
+dify-derived examples (❌ as the LLM copied from compose → ✅ after wiring the dependency edge):
+- `DB_HOST=db_postgres` ❌ → add dep api→db_postgres, then `DB_HOST=127.0.0.1` ✅
+- `REDIS_HOST=redis` ❌ → add dep api→redis, then `REDIS_HOST=127.0.0.1` ✅
+- `SANDBOX_API_URL=http://sandbox:8194` ❌ → add dep api→sandbox, then `SANDBOX_API_URL=http://127.0.0.1:8194` ✅
+
+This extends `30-creation-rules.md § 4` (connection contracts live on the provider) to the compose case explicitly — it does not contradict it. The provider still owns the connection contract; what this rule adds is "the compose service name is never the host."
+
+#### Reverse-proxy / gateway services must not be silently dropped (R2)
+
+When the compose topology contains a pure reverse-proxy / gateway service (`nginx`, `traefik`, `caddy`, an `*-proxy` / `*-gateway` service whose only job is routing), do **not** silently drop it. Decide by routing semantics:
+
+- **The proxy carries same-origin path routing** — the frontend env points API calls at relative paths (`CONSOLE_API_URL=/api`, `VITE_API_URL=/api`, a base-path of `/`), or the proxy config fans one host out to several upstreams by path (`/console/api`, `/api`, `/v1` → `api:5001`). In this case **keep the proxy as a component and make it the single external entry point**: only the proxy gets an external port (`enable_outer`); `web` / `api` get inner ports only and are NOT exposed directly. Exposing `web` directly while its frontend expects same-origin `/api` produces guaranteed frontend 404s (the dify failure mode: `web` configured `CONSOLE_API_URL=/api` but nothing served `/api`).
+  - The proxy needs its routing config (e.g. `nginx.conf`). When the profile does not carry that config, either ask the user for it, or generate it from the config-file evidence sitting next to the compose file in the same directory. State which you did.
+- **The proxy is only a simple port forwarder** (one upstream, no path-routing semantics) — then it MAY be omitted, and the backend exposed through the Rainbond gateway directly.
+
+When in doubt (frontend uses relative API paths, or multiple upstreams are routed by path), keep the proxy. Dropping a path-routing reverse proxy is the failure, not keeping it.
+
 Configure and bring up (reuse existing rules, do not invent tools):
 - per-service config: ports (provider/infra such as db, redis → `enable_inner` only; web/public-facing → `enable_inner` + `enable_outer`); runtime envs; persistence for stateful services (storage before deploy, guardrail 17); provider connection envs.
 - dependencies: wire every compose `depends_on` edge with `rainbond_manage_component_dependency`, then run the dependency completeness gate (guardrail 12).
