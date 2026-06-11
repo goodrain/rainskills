@@ -1,0 +1,40 @@
+case: reverse-proxy-not-dropped
+in_scope_components:
+  - nginx
+  - web
+  - api
+assert:
+  equal:
+    BootstrapResult.deployment_plan.workflow.created:
+      - nginx
+      - api
+      - web
+    BootstrapResult.deployment_plan.workflow.reused: []
+    BootstrapResult.deployment_plan.workflow.skipped: []
+    BootstrapResult.deployment_plan.workflow.skipped_reasons: {}
+    BootstrapResult.deployment_plan.workflow.deferred_dependencies: []
+    BootstrapResult.deployment_plan.workflow.frontend_access_mode: reverse-proxy
+    BootstrapResult.runtime_state.overall: runtime_healthy
+    BootstrapResult.runtime_state.blocking_bucket: null
+    BootstrapResult.next_handoff: delivery_verifier
+  contains:
+    BootstrapResult.runtime_state.component_status:
+      nginx: running
+      web: running
+      api: running
+  excludes:
+    BootstrapResult.deployment_plan.workflow.skipped:
+      - nginx
+  prose_contains:
+    - single external entry point
+    - inner ports only
+    - same-origin path routing
+    - enable_outer
+    - upstream
+    - internal domain
+    - delivery-verifier
+  prose_not_contains:
+    - dropped the nginx proxy
+    - exposed web directly
+    - proxy_pass http://127.0.0.1
+    - proxy_pass http://api:5001

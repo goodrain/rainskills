@@ -1,0 +1,24 @@
+case: complex-suite-needs-descriptor-stop
+assert:
+  equal:
+    AppAssistantResult.request_intent: source_app_delivery
+    AppAssistantResult.execution_path.requested_kind: unknown
+    AppAssistantResult.execution_path.resolved_kind: unknown
+    AppAssistantResult.orchestration_state: linked-and-complex-suite-needs-descriptor
+    AppAssistantResult.runtime_state: null
+    AppAssistantResult.delivery_state: null
+    AppAssistantResult.promotion_result: null
+    AppAssistantResult.next_action: stop and ask the user to provide a descriptor or template
+  contains:
+    AppAssistantResult.actions_performed:
+      - skill: inspection-only
+        status: stopped
+        details: Harbor is a multi-component suite and no Rainbond template, rainbond.app.json, compose profile, or official deployment descriptor was provided, so no component, dependency, env, storage, or port was created.
+  prose_contains:
+    - linked-and-complex-suite-needs-descriptor
+    - multi-component suite
+    - stop and ask the user to provide a descriptor or template
+  prose_not_contains:
+    - rainbond_install_app_model
+    - rainbond_create_component_from_image
+    - rainbond_create_component_from_source

@@ -1,0 +1,34 @@
+case: compose-service-name-not-hostname
+in_scope_components:
+  - db_postgres
+  - redis
+  - api
+assert:
+  equal:
+    BootstrapResult.deployment_plan.workflow.created:
+      - db_postgres
+      - redis
+      - api
+    BootstrapResult.deployment_plan.workflow.reused: []
+    BootstrapResult.deployment_plan.workflow.skipped: []
+    BootstrapResult.deployment_plan.workflow.skipped_reasons: {}
+    BootstrapResult.deployment_plan.workflow.deferred_dependencies: []
+    BootstrapResult.runtime_state.overall: runtime_healthy
+    BootstrapResult.runtime_state.blocking_bucket: null
+    BootstrapResult.next_handoff: delivery_verifier
+  contains:
+    BootstrapResult.runtime_state.component_status:
+      db_postgres: running
+      redis: running
+      api: running
+  prose_contains:
+    - rainbond_manage_component_dependency
+    - dependency injection
+    - _HOST
+    - internal domain
+    - delivery-verifier
+  prose_not_contains:
+    - DB_HOST=db_postgres
+    - REDIS_HOST=redis
+    - DB_HOST=127.0.0.1
+    - REDIS_HOST=127.0.0.1

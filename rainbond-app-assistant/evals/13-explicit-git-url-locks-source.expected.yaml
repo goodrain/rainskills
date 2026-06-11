@@ -1,0 +1,24 @@
+case: explicit-git-url-locks-source
+assert:
+  equal:
+    AppAssistantResult.request_intent: source_app_delivery
+    AppAssistantResult.execution_path.requested_kind: source
+    AppAssistantResult.execution_path.resolved_kind: source
+    AppAssistantResult.orchestration_state: linked-and-source-path-locked
+    AppAssistantResult.runtime_state.phase: topology_building
+    AppAssistantResult.delivery_state: null
+    AppAssistantResult.promotion_result: null
+    AppAssistantResult.next_action: build the linked source app on the user-provided GitHub URL
+  contains:
+    AppAssistantResult.actions_performed:
+      - skill: rainbond-fullstack-bootstrap
+        status: completed
+        details: Locked the execution path to source from the user-provided GitHub URL; the same-named market template was only mentioned as an alternative and rainbond_install_app_model was not invoked.
+  prose_contains:
+    - linked-and-source-path-locked
+    - user-provided GitHub URL
+    - only mentioned as an alternative
+    - build the linked source app on the user-provided GitHub URL
+  prose_not_contains:
+    - rainbond_install_app_model
+    - rainbond-template-installer

@@ -126,14 +126,17 @@ Compose service names (`db_postgres`, `redis`, `sandbox`, `plugin_daemon`, …) 
 
 Translate each compose `depends_on` + service-name reference into the two Rainbond steps:
 1. **Add the dependency edge** — `rainbond_manage_component_dependency(operation=add)` from the consumer to the provider (this is the same mandatory wiring as `30-creation-rules.md § 4`).
-2. **Rewrite the connection env to the Rainbond mechanism** — the provider's connection facts live on the provider via `rainbond_manage_component_connection_envs` and are injected into the consumer by the platform; in mesh mode the consumer reaches a depended-on provider at `127.0.0.1:<provider-port>`. So a host/URL env that pointed at a compose service name must become `127.0.0.1` (or the provider's injected connection variable), never the compose name.
+2. **Render the connection from dependency injection** — when a provider component has an enabled inner port, the platform auto-generates two `outer`-scope envs **on the provider**: `{ALIAS}_HOST` and `{ALIAS}_PORT` (the alias defaults to a `{UPPER_SERVICE_ALIAS}{PORT}` form such as `GR186CA1_5432`; read the provider's env list for the exact name). The dependency edge then **injects** the provider's `outer`/`both`-scope envs into the consumer container. So:
+   - **Prefer consuming the injected variables directly.** If the application can read `{ALIAS}_HOST` / `{ALIAS}_PORT`, point it at those — no host literal is written at all.
+   - **If the application requires a fixed variable name** (e.g. it hard-reads `DB_HOST`), first read the provider's auto-generated `{ALIAS}_HOST` env value (its **k8s service internal domain**) and put that value into the consumer's fixed variable.
+   - **Forbidden:** writing a compose service name into the host. **Also forbidden:** unconditionally hard-coding `127.0.0.1`. `{ALIAS}_HOST` resolves to `127.0.0.1` **only** under the `BUILD_IN_SERVICE_MESH` governance mode; the default (kubernetes-native service) governance mode resolves it to the port's k8s service internal domain, so a blanket `127.0.0.1` is wrong outside built-in mesh.
 
-dify-derived examples (❌ as the LLM copied from compose → ✅ after wiring the dependency edge):
-- `DB_HOST=db_postgres` ❌ → add dep api→db_postgres, then `DB_HOST=127.0.0.1` ✅
-- `REDIS_HOST=redis` ❌ → add dep api→redis, then `REDIS_HOST=127.0.0.1` ✅
-- `SANDBOX_API_URL=http://sandbox:8194` ❌ → add dep api→sandbox, then `SANDBOX_API_URL=http://127.0.0.1:8194` ✅
+dify-derived examples (❌ as the LLM copied from compose → ✅ after wiring the dependency edge and rendering from injection):
+- `DB_HOST=db_postgres` ❌ → add dep api→db_postgres, then either let api read the injected `{ALIAS}_HOST`, or `DB_HOST=<provider's auto-generated {ALIAS}_HOST value, i.e. the db's k8s service internal domain>` ✅
+- `REDIS_HOST=redis` ❌ → add dep api→redis, then `REDIS_HOST=<redis provider's injected {ALIAS}_HOST value>` ✅
+- `SANDBOX_API_URL=http://sandbox:8194` ❌ → add dep api→sandbox, then `SANDBOX_API_URL=http://<sandbox provider's injected {ALIAS}_HOST value>:8194` ✅
 
-This extends `30-creation-rules.md § 4` (connection contracts live on the provider) to the compose case explicitly — it does not contradict it. The provider still owns the connection contract; what this rule adds is "the compose service name is never the host."
+This extends `30-creation-rules.md § 4` (connection contracts live on the provider) to the compose case explicitly — it does not contradict it. The provider still owns the connection contract; what this rule adds is "the compose service name is never the host, and the host comes from dependency injection (the provider's `{ALIAS}_HOST` internal domain), not a hard-coded `127.0.0.1`."
 
 #### Reverse-proxy / gateway services must not be silently dropped (R2)
 
@@ -141,6 +144,7 @@ When the compose topology contains a pure reverse-proxy / gateway service (`ngin
 
 - **The proxy carries same-origin path routing** — the frontend env points API calls at relative paths (`CONSOLE_API_URL=/api`, `VITE_API_URL=/api`, a base-path of `/`), or the proxy config fans one host out to several upstreams by path (`/console/api`, `/api`, `/v1` → `api:5001`). In this case **keep the proxy as a component and make it the single external entry point**: only the proxy gets an external port (`enable_outer`); `web` / `api` get inner ports only and are NOT exposed directly. Exposing `web` directly while its frontend expects same-origin `/api` produces guaranteed frontend 404s (the dify failure mode: `web` configured `CONSOLE_API_URL=/api` but nothing served `/api`).
   - The proxy needs its routing config (e.g. `nginx.conf`). When the profile does not carry that config, either ask the user for it, or generate it from the config-file evidence sitting next to the compose file in the same directory. State which you did.
+  - **The proxy's upstream addresses follow R1 — they are not `127.0.0.1`.** A compose `nginx.conf` typically writes `proxy_pass http://api:5001;` or `proxy_pass http://127.0.0.1:5001;`. Neither survives in Rainbond: the compose service name does not resolve, and `127.0.0.1` only works under built-in-mesh governance. Wire the proxy→upstream dependency edge (`rainbond_manage_component_dependency`) and rewrite each upstream to the upstream provider's dependency-injected `{ALIAS}_HOST` value (its k8s service internal domain) and port. Do **not** leave `proxy_pass http://127.0.0.1:5001;` or `proxy_pass http://api:5001;` in the rendered config.
 - **The proxy is only a simple port forwarder** (one upstream, no path-routing semantics) — then it MAY be omitted, and the backend exposed through the Rainbond gateway directly.
 
 When in doubt (frontend uses relative API paths, or multiple upstreams are routed by path), keep the proxy. Dropping a path-routing reverse proxy is the failure, not keeping it.

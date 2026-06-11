@@ -1,0 +1,23 @@
+case: turn-discipline-reuse-alias
+assert:
+  equal:
+    AppAssistantResult.request_intent: source_app_delivery
+    AppAssistantResult.execution_path.requested_kind: source
+    AppAssistantResult.execution_path.resolved_kind: source
+    AppAssistantResult.orchestration_state: linked-and-component-just-created
+    AppAssistantResult.runtime_state.phase: topology_building
+    AppAssistantResult.delivery_state: null
+    AppAssistantResult.promotion_result: null
+    AppAssistantResult.next_action: configure ports and envs on the known service_alias from the create return
+  contains:
+    AppAssistantResult.actions_performed:
+      - skill: rainbond-fullstack-bootstrap
+        status: completed
+        details: Reused the service_alias returned by the successful component create and moved straight to configuration without re-querying components or re-fetching the current user.
+  prose_contains:
+    - linked-and-component-just-created
+    - reused the service_alias
+    - configure ports and envs on the known service_alias from the create return
+  prose_not_contains:
+    - rainbond_query_components
+    - rainbond_get_current_user

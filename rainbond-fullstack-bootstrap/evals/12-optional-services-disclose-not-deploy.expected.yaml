@@ -1,0 +1,43 @@
+case: optional-services-disclose-not-deploy
+in_scope_components:
+  - api
+  - worker
+  - web
+  - nginx
+  - db_postgres
+  - redis
+  - sandbox
+  - plugin_daemon
+  - ssrf_proxy
+  - weaviate
+  - sandbox_worker
+  - web_frontend
+  - api_internal
+assert:
+  equal:
+    BootstrapResult.deployment_plan.workflow.reused: []
+    BootstrapResult.deployment_plan.workflow.skipped: []
+    BootstrapResult.deployment_plan.workflow.skipped_reasons: {}
+    BootstrapResult.deployment_plan.workflow.deferred_dependencies: []
+    BootstrapResult.runtime_state.overall: runtime_healthy
+    BootstrapResult.runtime_state.blocking_bucket: null
+    BootstrapResult.next_handoff: delivery_verifier
+  contains:
+    BootstrapResult.deployment_plan.workflow.created:
+      - weaviate
+      - api
+      - db_postgres
+      - redis
+  excludes:
+    BootstrapResult.deployment_plan.workflow.created:
+      - qdrant
+      - pgvector
+      - milvus
+  prose_contains:
+    - 默认未部署
+    - qdrant
+    - weaviate
+    - delivery-verifier
+  prose_not_contains:
+    - 部署了可选向量库 qdrant
+    - activated qdrant

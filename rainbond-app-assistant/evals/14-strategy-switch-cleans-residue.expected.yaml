@@ -1,0 +1,22 @@
+case: strategy-switch-cleans-residue
+assert:
+  equal:
+    AppAssistantResult.request_intent: source_app_delivery
+    AppAssistantResult.execution_path.requested_kind: source
+    AppAssistantResult.execution_path.resolved_kind: source
+    AppAssistantResult.orchestration_state: linked-and-switching-to-source-with-residue
+    AppAssistantResult.runtime_state.phase: topology_building
+    AppAssistantResult.delivery_state: null
+    AppAssistantResult.promotion_result: null
+    AppAssistantResult.next_action: delete the abandoned half-installed template app before building the source path
+  contains:
+    AppAssistantResult.actions_performed:
+      - skill: inspection-only
+        status: completed
+        details: Detected a half-installed abandoned app left by the earlier template path and surfaced it to the user before switching to the confirmed source path.
+  prose_contains:
+    - linked-and-switching-to-source-with-residue
+    - half-installed
+    - delete the abandoned half-installed template app before building the source path
+  prose_not_contains:
+    - rainbond-template-installer
