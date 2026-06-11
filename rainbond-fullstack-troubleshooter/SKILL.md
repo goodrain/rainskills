@@ -58,7 +58,7 @@ When describing observed runtime state, use the canonical terms from the product
 - `RuntimeState`: `topology_missing`, `topology_building`, `runtime_unhealthy`, `runtime_healthy`, `capacity_blocked`, `code_or_build_handoff_needed`
 - component convergence: `building`, `waiting`, `running`, `abnormal`, `capacity-blocked`
 - dependency readiness: `resolved`, `deferred`
-- blocker buckets: `db not ready`, `dependency missing`, `env naming incompatibility`, `wrong connection values`, `api startup issue`, `frontend access-path issue`, `source build still running`, `source build failed`, `external artifact unreachable`, `cluster capacity blocked`
+- blocker buckets: `db not ready`, `dependency missing`, `env naming incompatibility`, `wrong connection values`, `api startup issue`, `frontend access-path issue`, `source build still running`, `source build failed`, `external artifact unreachable`, `cluster capacity blocked`, `config_file_configmap_missing`
 
 Keep the canonical `RuntimeState` explicit in both prose and structured output. Do not collapse it into ad hoc labels such as "mostly healthy" or "repair complete."
 
@@ -144,6 +144,13 @@ Allowed actions:
 - open provider inner ports when explicitly required to satisfy a confirmed dependency edge, including by retrying dependency creation with `open_inner=true` and the provider `container_port`
 - restart or deploy the `api` component
 
+Known limitation — one-shot tasks: Rainbond components are long-running workloads.
+Do not create a temporary component just to run a one-shot script: `stateless_multiple`
+containers that exit immediately go into restart loops, and database images run their own
+entrypoint instead of a custom CMD. For one-off commands prefer `rainbond_exec` into a
+running container; for database initialization prefer the image's native init mechanism
+(e.g. PostgreSQL `/docker-entrypoint-initdb.d`).
+
 Disallowed actions:
 - delete app
 - delete components
@@ -222,6 +229,18 @@ Allowed `summary` usage:
 Concurrency note:
 - if the user is interacting with the same component through the UI or another client during this run, P2 (pods) is the most robust signal — it reflects platform-side actuation, not the operation event mix
 - if `event_id` returned from a trigger is empty, do not silently proceed as if anchoring is in place; switch to P2 with the recorded `trigger_at` and report this gap in `actions_performed[].details`
+
+### Write-result confirmation under async inconsistency
+
+Mutating MCP calls (storage update, env change, restart, upgrade) can return a 5xx error
+while the platform still applies the change asynchronously.
+
+- a 5xx response to a write is **not** proof of failure: query the related component events
+  or re-read the resource once before concluding
+- if the event stream reports success but the pod is still failing, trust the pod-level
+  runtime evidence, not the event
+- per blocker, perform at most one repair retry when the control plane looks inconsistent;
+  repeated writes against an inconsistent control plane make state strictly worse
 
 ## Workflow
 
@@ -404,6 +423,11 @@ Action:
 - when dependency wiring already exists, prefer provider connection envs and the currently resolvable Rainbond dependency alias/service coordinates over stale literal hostnames
 - if stale consumer envs duplicate provider connection values, remove or replace the consumer-local override only after confirming the dependency-injected provider values are present
 - do not invent values without evidence
+- known limitation: cross-team service DNS does not resolve — a component in one team
+  cannot resolve another team's component by its Rainbond service alias. If the evidence
+  shows a cross-team hostname, do not keep retrying DNS-based fixes; recommend exposing
+  the provider through a gateway/external address or moving the components into one team,
+  and ask the user to choose
 
 Expected result:
 - if corrected values restore startup, `runtime_state.label = runtime_healthy`
@@ -509,6 +533,23 @@ Action:
 Expected result:
 - `runtime_state.label = capacity_blocked`
 - `next_handoff = none`
+
+### J. Config-file ConfigMap missing
+Symptoms:
+- pod events show `FailedMount` with `configmap ... not found`
+- the component has config-file volumes in its storage summary
+- upgrade/deploy succeeds at the build stage but the pod never starts
+
+Action:
+- read the component storage summary and locate every config-file volume and its mount path
+- read `rainbond_get_config_file` for each config-file volume to confirm the platform-side content exists
+- read pod detail and extract the missing ConfigMap name from the `FailedMount` event
+- apply at most one low-risk repair: re-save the config-file volume content via `rainbond_manage_component_storage(update_volume)` (remember `new_volume_path` is required even when the path is unchanged), then restart once
+- if the ConfigMap is still missing after one repair attempt, or the storage update returns a 5xx error, stop. Report a platform-side sync blocker; do not loop on config edits
+
+Expected result:
+- if the mount recovers, `runtime_state.label = runtime_healthy`
+- otherwise `runtime_state.label = runtime_unhealthy` with `blocker_bucket = config_file_configmap_missing`
 
 ## Verification Standard
 
@@ -823,3 +864,6 @@ Primary stop conditions:
 - cluster capacity blocked
 - frontend access-path issue
 - topology unexpectedly missing
+
+Symptom-to-branch lookup:
+- pod `FailedMount` with `configmap ... not found` → Rule J (`config_file_configmap_missing`)

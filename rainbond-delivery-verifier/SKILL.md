@@ -112,6 +112,9 @@ Use current-run evidence such as:
 In those cases:
 - verify the preferred root URL for the frontend document path
 - also verify the same host's backend path, typically `/api`
+- if the frontend is served under a base prefix (e.g. `/system`), also verify the API path
+  under that prefix (e.g. `/system/api`); `/api` succeeding alone does not prove the page's
+  actual requests succeed
 - if `/` works but `/api` returns 4xx/5xx, empty reply, placeholder page, or cloud-provider intercept page, do not classify the app as delivered
 - classify the result as `blocked` unless a narrower partial state is better supported by evidence
 
@@ -122,6 +125,30 @@ If the app includes a database or stateful middleware component:
 - if no durable storage is mounted, do not silently report a clean `delivered` result
 - if the user explicitly required durable data, classify delivery as `blocked` with blocker `stateful middleware persistence not configured`
 - if the run is clearly only an ephemeral demo, report the missing persistence caveat in `Verification Result` and avoid wording that implies production-safe stateful middleware storage
+
+### 6. Static frontend delivery has its own acceptance checklist
+When the delivered app serves a built frontend (SPA or static site), verify beyond the
+root page returning 200:
+- the entry HTML actually contains the app shell, not a placeholder or directory listing
+- JS/CSS assets return correct MIME types (not `text/html` from an SPA fallback)
+- a deep link (any non-root route) returns the SPA fallback page instead of 404
+- responses for large JS/CSS assets include `content-encoding: gzip` or `br`; if a single
+  asset exceeds ~2 MB uncompressed and is served without compression, report it as a
+  delivery caveat
+- static assets carry a cache-control header
+
+Report failed items as caveats or blockers depending on user impact; do not silently
+pass a frontend that only returned a 200 on `/`.
+
+### 7. Performance findings get layered recommendations, not a rewrite verdict
+When verification surfaces a performance problem (oversized bundle, missing compression,
+no caching), recommend in two layers:
+1. deployment-layer mitigation first — enable gzip/br, add cache headers, adjust proxy
+   config; low risk, no code change
+2. code-layer fix second — code splitting, lazy loading, dependency dieting; hand off as
+   code/build work
+Never present a source-code refactor as the only path when a deployment-layer mitigation
+exists.
 
 ## Workflow
 
@@ -174,6 +201,9 @@ When reverse-proxy full-stack behavior is expected:
 - if the root path returns HTML but the API path fails, returns a provider intercept page, or routes to the wrong upstream, treat delivery as not complete
 - if current environment cannot directly verify the external URL, do not fake success
 - report the final delivery outcome as `delivered-but-needs-manual-validation`
+- when the app serves a built frontend, run the static frontend checklist from
+  Verification Principle 6 as far as the current environment allows, and record
+  unverifiable items as manual-confirmation leftovers
 
 7. Produce final delivery report
 
