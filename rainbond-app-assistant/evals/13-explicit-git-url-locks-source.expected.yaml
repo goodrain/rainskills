@@ -13,12 +13,16 @@ assert:
     AppAssistantResult.actions_performed:
       - skill: rainbond-fullstack-bootstrap
         status: completed
-        details: Locked the execution path to source from the user-provided GitHub URL; the same-named market template was only mentioned as an alternative and rainbond_install_app_model was not invoked.
+        details: Compose source profile already in hand (topologySource=compose); the complex-suite evidence gate was satisfied by the profile, so no template library was queried and rainbond_install_app_model was not invoked. Locked the execution path to source from the user-provided GitHub URL; the same-named market template was only mentioned as an alternative.
   prose_contains:
     - linked-and-source-path-locked
     - user-provided GitHub URL
     - only mentioned as an alternative
     - build the linked source app on the user-provided GitHub URL
+    - 'topologySource=compose'
   prose_not_contains:
     - rainbond_install_app_model
+    - rainbond_query_local_app_models
+    - rainbond_query_cloud_app_models
+    - rainbond_query_cloud_markets
     - rainbond-template-installer

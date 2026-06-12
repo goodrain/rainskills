@@ -350,7 +350,9 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
     - 用户提到 Git URL / 分支 / commit / `subdirectories` → **source 模式**
     - 用户提到 image tag / registry 路径（如 `<name>:<tag>`、`docker.io/...`、`harbor.../...`）→ **image 模式**
     - 用户只说组件名，且该名指向**简单单镜像基础设施软件**（数据库、消息队列、缓存、对象存储、Web 服务器、反向代理/负载均衡、注册中心、密钥管理等类别下被广泛使用、有官方/社区维护镜像，且通常一个主容器即可形成最小可运行服务的项目）→ **image 模式**，默认镜像名 `<name>:latest`（再经 Iron Law 6 代理改写）。这里用你自己的通用知识判断，**不要**等清单或穷举匹配。
-    - 用户只说软件名，且该名指向**复杂现成软件套件 / 多服务发行版**（例如 Harbor、GitLab、监控/可观测性 stack、带内置数据库/缓存/worker/jobservice/registry/UI 的产品套件）→ **complex suite 模式**：先寻找或要求 Rainbond 模板、`rainbond.app.json`、`docker-compose` / compose profile、官方部署描述符，或让用户显式确认一份完整计划；在证据缺失前禁止创建组件。
+    - 用户只说软件名，且该名指向**复杂现成软件套件 / 多服务发行版**（例如 Harbor、GitLab、监控/可观测性 stack、带内置数据库/缓存/worker/jobservice/registry/UI 的产品套件）→ **complex suite 模式**：先寻找或要求 `docker-compose` / compose profile（含 `rainbond_get_project_source_profile` 返回 `topologySource == "compose"` 的画像）、`rainbond.app.json`、官方部署描述符，或让用户显式确认一份完整计划；最后才是 Rainbond 应用市场模板（**仅当用户明确选择模板路径时**才用）；在证据缺失前禁止创建组件。
+
+      **证据仲裁（complex suite 门槛何时已满足）**：当 `rainbond_get_project_source_profile` 已经返回 compose / manifest 拓扑证据（`topologySource == "compose"`、含服务清单的 `rainbond.app.json` 或官方描述符）时，complex suite 的证据门槛**就已满足**——这份画像本身就是权威拓扑来源。此时**禁止**再以"去找更可靠的证据"为名跳去查 `rainbond_query_local_app_models` / `rainbond_query_cloud_markets` / `rainbond_query_cloud_app_models` 等模板库，更不允许把"找到了同名模板"升格成默认部署路径。尤其当用户消息里**显式给了 Git URL** 时，按 Iron Law 38 把本轮路径锁定为源码 / compose 画像路径，应用市场模板至多作为一句建议提及，不得安装。
     - 用户只说组件名，且该名是项目专属或来历不明（如 `my-api`、`order-service`、`payment-svc` 等业务命名风格） → 信号不足，**这时才**问"用镜像还是源码？"
     
     判断标准（principle 而非清单）：
@@ -360,13 +362,14 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
     - 介于两者之间不确定？**优先按 image 默认**（更常见的部署方式）并在报告里告知推断理由，邀请用户覆盖。
     
     自动推断的结果必须在最终报告里说明，例如："已按 image 模式创建 clickhouse 组件（推断依据：该名为公认的列式分析数据库）。如需改用源码请告知。"
-    对 complex suite 的报告必须说明停止原因和下一步选择，例如："Harbor 是多组件套件；当前没有 Rainbond 模板、compose/Helm/官方描述符或用户确认计划，因此我不会凭通用知识创建 registry/core/jobservice/database 等组件。请提供部署描述符，或确认使用某个 Rainbond 模板。"
+    对 complex suite 的报告必须说明停止原因和下一步选择，例如："Harbor 是多组件套件；当前没有 compose/Helm/官方描述符、`rainbond.app.json` 或用户确认计划，因此我不会凭通用知识创建 registry/core/jobservice/database 等组件。请提供部署描述符，或显式确认使用某个 Rainbond 模板。"（注意：如果画像已返回 compose/manifest 证据，门槛即已满足，不要再报"缺证据"，按证据仲裁直接进入对应部署路径。）
     
     **禁止行为**：
     - 用户给了 git_url 还问"用镜像还是源码？"（信号已经明确）
     - 用户给了 image tag 还问"用镜像还是源码？"（信号已经明确）
     - 对一个你的训练知识里明显是基础设施软件的名字（不管是否在某个示例清单里）问"用镜像还是源码？" —— Nginx、Redis、ClickHouse、Jaeger、Loki、OpenTelemetry Collector 都属于这一类，未来出现的新项目也会属于这一类，用判断不要用穷举
-    - 对 Harbor / GitLab / 监控 stack / 其他复杂套件，在没有 Rainbond 模板、`rainbond.app.json`、compose profile、官方部署描述符或用户确认计划时，凭通用知识创建多个组件、依赖、env、存储或端口
+    - 对 Harbor / GitLab / 监控 stack / 其他复杂套件，在没有 compose profile、`rainbond.app.json`、官方部署描述符或用户确认计划时，凭通用知识创建多个组件、依赖、env、存储或端口
+    - 已经拿到 compose / manifest 画像证据（门槛已满足）时，还以"找更可靠证据"为由去查模板库（`rainbond_query_local_app_models` / `rainbond_query_cloud_app_models`），或把找到的同名模板当默认路径——尤其用户已显式给了 Git URL 时（违反证据仲裁与 Iron Law 38）
     
     **stateful 服务的持久化要求**：当推断结果是 image 模式 **且** 该服务属于 stateful 范畴（数据库 / 持久化消息队列 / 搜索引擎 / 时序库 / 对象存储 / 向量库 / 图库等 — 数据必须跨重启存活的任何服务），**必须**在 deploy 之前配好持久化。
     

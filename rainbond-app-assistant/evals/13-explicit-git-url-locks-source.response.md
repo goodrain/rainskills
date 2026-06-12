@@ -1,8 +1,8 @@
 ### Project State
-The project is `linked-and-source-path-locked` for the `preview` environment with team `demo-team`, region `cn`, app `catalog-app`, and app_id `app-302`. The user provided an explicit GitHub URL for the repository, and session state shows a same-named template exists in the application market.
+The project is `linked-and-source-path-locked` for the `preview` environment with team `demo-team`, region `cn`, app `catalog-app`, and app_id `app-302`. The user gave an explicit GitHub URL for the repository, and the project source profile already returned `topologySource=compose` with a full multi-service list — so the complex-suite evidence gate is already satisfied by the profile itself. Session state also shows a same-named template exists in the application market.
 
 ### Actions Performed
-This run kept `rainbond-fullstack-bootstrap` on the source path because the user gave an explicit GitHub URL. The same-named market template was only mentioned as an alternative; no market-template install was invoked. The market template stays a suggestion until the user explicitly chooses it.
+Because the compose source profile (`topologySource=compose`) was already in hand, the complex-suite evidence gate was met and no template library was searched. This run kept `rainbond-fullstack-bootstrap` on the source path because the user gave an explicit GitHub URL. The same-named market template was only mentioned as an alternative; no market-template install was performed. The market template stays a suggestion until the user explicitly chooses it.
 
 ### Current Health
 db status null, api/service status building, frontend-access status null, overall status topology_building.
@@ -45,9 +45,9 @@ AppAssistantResult:
   actions_performed:
     - skill: inspection-only
       status: completed
-      details: Confirmed the linked source app identity and that the user supplied an explicit GitHub URL.
+      details: Confirmed the linked source app identity, that the user supplied an explicit GitHub URL, and that the project source profile already returned topologySource=compose with the service list.
     - skill: rainbond-fullstack-bootstrap
       status: completed
-      details: Locked the execution path to source from the user-provided GitHub URL; the same-named market template was only mentioned as an alternative and rainbond_install_app_model was not invoked.
+      details: Compose source profile already in hand (topologySource=compose); the complex-suite evidence gate was satisfied by the profile, so no template library was queried and rainbond_install_app_model was not invoked. Locked the execution path to source from the user-provided GitHub URL; the same-named market template was only mentioned as an alternative.
   next_action: build the linked source app on the user-provided GitHub URL
 ```
