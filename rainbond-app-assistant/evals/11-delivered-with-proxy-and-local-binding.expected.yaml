@@ -7,7 +7,7 @@ assert:
     AppAssistantResult.orchestration_state: linked-and-delivered
     AppAssistantResult.runtime_state.phase: runtime_healthy
     AppAssistantResult.delivery_state.status: delivered
-    AppAssistantResult.delivery_state.preferred_access_url: http://gr0c90d0-8080-kz5igqh4.14.103.233.199.nip.io
+    AppAssistantResult.delivery_state.preferred_access_url: http://gr0c90d0-8080-kz5igqh4.203.0.113.10.nip.io
     AppAssistantResult.delivery_state.verification_mode: verified
     AppAssistantResult.promotion_result: null
     AppAssistantResult.next_action: stop

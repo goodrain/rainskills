@@ -42,7 +42,7 @@ AppAssistantResult:
     blocker: null
   delivery_state:
     status: delivered
-    preferred_access_url: http://gr0c90d0-8080-kz5igqh4.14.103.233.199.nip.io
+    preferred_access_url: http://gr0c90d0-8080-kz5igqh4.203.0.113.10.nip.io
     verification_mode: verified
     blocker: null
     verifier_next_action: stop

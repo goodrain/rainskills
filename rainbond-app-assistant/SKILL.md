@@ -392,6 +392,11 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
     - **复用创建返回的 `service_id` / `service_alias`**：`rainbond_create_component_*` 成功后会返回 `service_id` 和 `service_alias`（k8s component name），**记住并在本轮后续 mutating 操作里直接复用**。**禁止**在每次 `rainbond_manage_component_*` / `rainbond_operate_app` 之前都先 `rainbond_query_components` 重查一遍 alias —— 创建时已经返回过，重查只是浪费轮次（仅当 `service_id` 出处不明、按 Iron Law 34 必须重新建立 provenance 时才查）。
     - **不重复调 `rainbond_get_current_user`**：身份（user_id / username / enterprise_id / team_name / region_name）在一次会话内不变，已在 system prompt 的 session-context 段提供，需要时直接读（见 Iron Law 35 第 2 类）。
     - **同一 mutating 调用成功后禁止原样重复**：一个写工具用相同入参成功返回后，不要在同一轮再发一次相同调用"确认一下"——成功就是成功，要确认状态用读工具（`rainbond_get_component_summary` 等），不要重发写调用。
+40. **对外访问地址必须引用工具返回的真实值，禁止按格式拼装。** 组件的对外访问地址是**事实信息**，唯一权威来源是 `rainbond_get_component_summary` 返回的 `access_infos` 字段（来自网关真实绑定）。
+    - 本轮已调用该工具拿到真实地址 → 报告里引用 `access_infos` 的真实值。
+    - 本轮**未**调用该工具、或该工具未返回可用地址 → 最终报告必须写"请在控制台该组件的端口页查看对外访问地址"，**禁止**按记忆或文档示例的 URL 格式（`<name>.<ip>.nip.io`、`<service>-<port>-<team>.<ip>.nip.io` 等）拼装一个地址当成真的。
+    - **禁止**把任何拼装/猜测出来的访问地址写进任何组件 env（如 `APP_WEB_URL` / `*_BASE_URL` / `*_PUBLIC_URL` 等）。需要把对外地址回填给某个组件时，同样只能用 `access_infos` 的真实值；拿不到真实值就停下来让用户在控制台确认后提供，不要先拼一个填进去。
+    - 真实事故：模型在没有任何工具返回访问地址的情况下，照文档示例格式拼出 `http://dify.<ip>.nip.io`，既写进最终报告又配进了组件 `APP_WEB_URL`，全是编造的。这是 Iron Law 违反。
 
   ## 主线流程
 
@@ -857,11 +862,11 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
   - `### 处理记录` when non-trivial fixes, proxy changes, or local binding updates occurred
   - `### 注意事项` when there are production-readiness caveats
 
-  Example concise delivery reply:
+  Example concise delivery reply (the `203.0.113.10` host below is an RFC 5737 placeholder used **only** to show the report shape — per Iron Law 40 the real access URL must come verbatim from `rainbond_get_component_summary`'s `access_infos`; if it was not fetched this run, write "请在控制台该组件的端口页查看对外访问地址" instead of this URL pattern):
 
   ```markdown
   ### 部署结果
-  已部署到 Rainbond 开发环境，访问地址：http://example.14.103.233.199.nip.io
+  已部署到 Rainbond 开发环境，访问地址：http://example.203.0.113.10.nip.io
 
   ### 应用信息
   - Team：开发环境 / kz5igqh4

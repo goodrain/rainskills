@@ -14,6 +14,7 @@ assert:
     BootstrapResult.deployment_plan.workflow.skipped_reasons: {}
     BootstrapResult.deployment_plan.workflow.deferred_dependencies: []
     BootstrapResult.deployment_plan.workflow.frontend_access_mode: reverse-proxy
+    BootstrapResult.deployment_plan.workflow.proxy_routing_config: mounted
     BootstrapResult.runtime_state.overall: runtime_healthy
     BootstrapResult.runtime_state.blocking_bucket: null
     BootstrapResult.next_handoff: delivery_verifier
@@ -22,6 +23,9 @@ assert:
       nginx: running
       web: running
       api: running
+    BootstrapResult.deployment_plan.workflow.dependency_edges:
+      - nginx -> api
+      - nginx -> web
   excludes:
     BootstrapResult.deployment_plan.workflow.skipped:
       - nginx
@@ -32,6 +36,8 @@ assert:
     - enable_outer
     - upstream
     - internal domain
+    - routing config
+    - config-file
     - delivery-verifier
   prose_not_contains:
     - dropped the nginx proxy

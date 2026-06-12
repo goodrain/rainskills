@@ -161,6 +161,30 @@ properties:
                 type: object
                 additionalProperties:
                   $ref: "#/$defs/build_strategy_decision"
+              dependency_edges:
+                # Optional. The complete set of wired dependency edges
+                # (compose depends_on edges PLUS env-reference consumption
+                # edges) the dependency-completeness gate verified before
+                # deploy. Each entry is "<consumer> -> <provider>". Populate
+                # this for multi-component topologies so the user can audit
+                # that env-reference edges were not dropped. See
+                # modules/40-source-and-package-rules.md § dependency gate.
+                type: array
+                items:
+                  $ref: "#/$defs/non_empty_string"
+                uniqueItems: true
+              proxy_routing_config:
+                # Optional. Records whether a kept reverse-proxy/gateway
+                # component had its routing config mounted before deploy.
+                # "mounted" => routing config-file mounted + upstreams wired,
+                # proxy deployed. "blocked" => config could not be mounted or
+                # an upstream edge could not be wired, so the proxy was NOT
+                # deployed and a delivery blocker was reported instead.
+                # See modules/40-source-and-package-rules.md § proxy deploy blocker.
+                enum:
+                  - mounted
+                  - blocked
+                  - not-applicable
       runtime_state:
         type: object
         additionalProperties: false

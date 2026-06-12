@@ -1,0 +1,47 @@
+case: env-reference-dependency-completeness
+in_scope_components:
+  - db
+  - redis
+  - api
+  - worker
+  - sandbox
+  - plugin_daemon
+assert:
+  equal:
+    BootstrapResult.deployment_plan.workflow.reused: []
+    BootstrapResult.deployment_plan.workflow.skipped: []
+    BootstrapResult.deployment_plan.workflow.skipped_reasons: {}
+    BootstrapResult.deployment_plan.workflow.deferred_dependencies: []
+    BootstrapResult.runtime_state.overall: runtime_healthy
+    BootstrapResult.runtime_state.blocking_bucket: null
+    BootstrapResult.next_handoff: delivery_verifier
+  contains:
+    BootstrapResult.deployment_plan.workflow.created:
+      - db
+      - redis
+      - api
+      - worker
+      - sandbox
+      - plugin_daemon
+    BootstrapResult.runtime_state.component_status:
+      db: running
+      redis: running
+      api: running
+      worker: running
+      sandbox: running
+      plugin_daemon: running
+    # The env-reference edges that compose depends_on never declared must
+    # appear in the wired edge set — this is the core assertion of the case.
+    BootstrapResult.deployment_plan.workflow.dependency_edges:
+      - api -> sandbox
+      - api -> plugin_daemon
+      - worker -> sandbox
+      - worker -> plugin_daemon
+      - plugin_daemon -> db
+      - plugin_daemon -> api
+  prose_contains:
+    - dependency-completeness gate
+    - env-reference edge
+    - depends_on
+    - empty diff
+    - delivery-verifier
