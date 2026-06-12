@@ -66,6 +66,46 @@ FORBIDDEN_CODE_HANDOFF_ACTION_PATTERNS = (
 )
 
 
+# Canonical next_action vocabulary.
+#
+# 修改需同步: this list is the validator-side mirror of the "Canonical next_action
+# vocabulary" table in SKILL.md (### Structured contract mode). Editing one without
+# the other breaks the contract. Fixed phrases must match verbatim (after whitespace
+# normalization); template phrases match by their leading + trailing literal segments
+# (the text before the first <slot> and after the last <slot>), so the <...> slot can
+# be filled with any value or, where the table allows, omitted.
+CANONICAL_NEXT_ACTIONS = (
+    "stop",
+    "run bootstrap",
+    "run troubleshooter",
+    "run troubleshooter on the same source path",
+    "run delivery verifier",
+    "fix cluster capacity first",
+    "handoff to code/build agent",
+    "stop and validate URL manually",
+    "stop and ask the user to choose the team/app identity",
+    "stop and ask the user to provide a descriptor or template",
+    "build the linked source app on the user-provided GitHub URL",
+    "configure ports and envs on the known service_alias from the create return",
+)
+
+# Template phrases keyed by their literal prefix (before the first <slot>) and
+# literal suffix (after the last <slot>). A candidate matches when it starts with the
+# prefix and ends with the suffix and is at least as long as prefix+suffix combined.
+CANONICAL_NEXT_ACTION_TEMPLATES = (
+    {
+        "template": "stop after reporting testing app verification for <app>",
+        "prefix": "stop after reporting testing app verification for ",
+        "suffix": "",
+    },
+    {
+        "template": "delete the abandoned half-installed template app <app> before building the source path",
+        "prefix": "delete the abandoned half-installed template app",
+        "suffix": "before building the source path",
+    },
+)
+
+
 class ValidationFailure(Exception):
     """Raised when validation cannot continue."""
 
@@ -386,6 +426,8 @@ def validate_cross_field_rules(sections: dict[str, str], payload: dict[str, Any]
     next_action = normalize_space(result.get("next_action"))
     orchestration_state = normalize_space(result.get("orchestration_state"))
 
+    errors.extend(validate_next_action_vocabulary(next_action))
+
     phase = normalize_space(runtime.get("phase"))
     combined_text = "\n".join(
         [
@@ -476,6 +518,44 @@ def validate_cross_field_rules(sections: dict[str, str], payload: dict[str, Any]
             errors.extend(validate_delivery_summary(testing_delivery, path_prefix="promotion_result.testing_delivery_state"))
 
     return errors
+
+
+def validate_next_action_vocabulary(next_action: str) -> list[str]:
+    """next_action must come from the canonical vocabulary (see SKILL.md).
+
+    Fixed phrases match verbatim after whitespace normalization. Template phrases
+    match by their literal prefix + suffix so the <slot> can carry any value.
+    """
+    candidate = normalize_space(next_action)
+    if not candidate:
+        # Empty / missing next_action is already caught by the schema (non_empty_string).
+        return []
+
+    if candidate in CANONICAL_NEXT_ACTIONS:
+        return []
+
+    for template in CANONICAL_NEXT_ACTION_TEMPLATES:
+        if matches_next_action_template(candidate, template):
+            return []
+
+    return [
+        "next_action must be drawn from the canonical vocabulary in SKILL.md "
+        f"(fixed phrase verbatim, or a template with its slot filled); got {next_action!r}"
+    ]
+
+
+def matches_next_action_template(candidate: str, template: dict[str, str]) -> bool:
+    prefix = normalize_space(template["prefix"])
+    suffix = normalize_space(template["suffix"])
+    lowered = candidate.lower()
+
+    if prefix and not lowered.startswith(prefix.lower()):
+        return False
+    if suffix and not lowered.endswith(suffix.lower()):
+        return False
+    if len(candidate) < len(prefix) + len(suffix):
+        return False
+    return True
 
 
 def validate_delivery_summary(summary: dict[str, Any], path_prefix: str = "delivery_state") -> list[str]:

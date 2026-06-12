@@ -5,7 +5,7 @@ The project is `linked-and-source-build-failed` for the `preview` environment wi
 This run kept the source-backed path intact. `rainbond-fullstack-bootstrap` stopped after the source build failed, and it did not switch to package upload, image creation, or template install. `rainbond-fullstack-troubleshooter` is the next bounded step on the same source path.
 
 ### Current Health
-db status null, api/service status building, frontend-access status null, overall status topology_building.
+db status null, api/service status building, frontend-access status null, overall status source_build_failed.
 
 ### Blocking Issue
 The current source build failed on the linked source app, so the next step is source-build-first troubleshooting on the same source path rather than any package/image/template fallback.
@@ -35,7 +35,7 @@ AppAssistantResult:
     resolved_kind: source
   orchestration_state: linked-and-source-build-failed
   runtime_state:
-    phase: topology_building
+    phase: source_build_failed
     db_status: null
     api_status: building
     frontend_status: null

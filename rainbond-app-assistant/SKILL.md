@@ -678,6 +678,7 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
   - `linked-and-topology-missing` maps to `RuntimeState = topology_missing`
   - `linked-and-topology-building` maps to `RuntimeState = topology_building`
   - `linked-and-cluster-capacity-blocked` maps to `RuntimeState = capacity_blocked`
+  - `linked-and-source-build-failed` maps to `RuntimeState = source_build_failed`
   - `linked-and-topology-present-but-runtime-unhealthy` maps to `RuntimeState = runtime_unhealthy`
   - `linked-and-needs-code-handoff` maps to `RuntimeState = code_or_build_handoff_needed`
   - `linked-and-needs-delivery-verification` is a handoff state that usually follows `RuntimeState = runtime_healthy` and precedes a final `DeliveryState`
@@ -932,7 +933,7 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
       resolved_kind: source | image | package | template | unknown
     orchestration_state: string
     runtime_state:
-      phase: topology_missing | topology_building | runtime_unhealthy | runtime_healthy | capacity_blocked | code_or_build_handoff_needed | null
+      phase: topology_missing | topology_building | runtime_unhealthy | runtime_healthy | capacity_blocked | code_or_build_handoff_needed | source_build_failed | null
       db_status: building | waiting | running | abnormal | capacity-blocked | null
       api_status: building | waiting | running | abnormal | capacity-blocked | null
       frontend_status: building | waiting | running | abnormal | capacity-blocked | null
@@ -987,6 +988,8 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
     - remains the workflow label used by the assistant
   - `runtime_state.phase`
     - must use canonical runtime labels
+    - use `source_build_failed` when a source-backed build or source detection has failed and the run is handing off to the troubleshooter on the same source path; this is the canonical phase for the source-build-first routing of Iron Law 6 (source-backed failure routes to troubleshooter, never to package/image/template fallback)
+    - in `source_build_failed`, `delivery_state` must stay `null` and `next_action` must point to a troubleshooter recommendation (the `run troubleshooter on the same source path` vocabulary entry)
   - `runtime_state.db_status`, `api_status`, `frontend_status`
     - must be based on current runtime evidence when available
     - must use the canonical vocabulary `building`, `waiting`, `running`, `abnormal`, or `capacity-blocked`
@@ -1016,6 +1019,35 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
     - if no lower-level skill was run, still record the inspection/classification pass and any intentionally skipped downstream skills that matter to the recommendation
   - `next_action`
     - must be the normalized form of the prose next-step recommendation
+    - **must be selected from the canonical `next_action` vocabulary below.** Fixed phrases are used verbatim; template phrases keep the literal words and only fill the `<...>` slots. Do not invent free-form wording — the vocabulary exists to keep the orchestration contract phrase-stable across runs.
+
+  #### Canonical `next_action` vocabulary
+
+  Fixed phrases — emit exactly as written, no slots, no rewording:
+
+  | Phrase | When |
+  |--------|------|
+  | `stop` | terminal state with nothing further to recommend (already delivered, or a clean stop) |
+  | `run bootstrap` | topology is missing and the source app must be created/bootstrapped next |
+  | `run troubleshooter` | topology is building/unhealthy and the next bounded step is the troubleshooter |
+  | `run troubleshooter on the same source path` | a source-backed build/detection failed; route to the troubleshooter on the same source path, never to a package/image/template fallback (pairs with `runtime_state.phase = source_build_failed`) |
+  | `run delivery verifier` | runtime looks healthy and the next step is delivery verification |
+  | `fix cluster capacity first` | the dominant blocker is cluster capacity and it must be resolved before anything else |
+  | `handoff to code/build agent` | the run reached `code_or_build_handoff_needed`; hand off to the code/build agent |
+  | `stop and validate URL manually` | delivery ended `delivered-but-needs-manual-validation`; user must validate the URL manually |
+  | `stop and ask the user to choose the team/app identity` | identity is ambiguous; stop and ask the user to pick the team/app |
+  | `stop and ask the user to provide a descriptor or template` | a complex multi-service suite needs a descriptor/template before continuing |
+  | `build the linked source app on the user-provided GitHub URL` | an explicit Git URL locks the source path; build the linked source app on that URL |
+  | `configure ports and envs on the known service_alias from the create return` | the service alias is already known from the create return; configure ports/envs on it next |
+
+  Template phrases — keep the literal words, fill only the `<...>` slot(s):
+
+  | Template | Slot(s) | When |
+  |----------|---------|------|
+  | `stop after reporting testing app verification for <app>` | `<app>` = testing app name | dev-to-test promotion finished; stop after reporting the testing app verification |
+  | `delete the abandoned half-installed template app <app> before building the source path` | `<app>` = abandoned app name (omit the slot, leaving `... template app before ...`, if no concrete name applies) | a strategy switch left a half-installed template app that must be cleaned up before building the source path |
+
+  > **修改需同步**：这张词表是 `next_action` 的唯一权威来源。`scripts/validate_app_assistant_output.py` 里的 `CANONICAL_NEXT_ACTIONS` / `CANONICAL_NEXT_ACTION_TEMPLATES` 必须与本表保持一致；改一处必须改另一处。
 
   Consistency rules:
 
@@ -1025,6 +1057,7 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
   - if app-level runtime labels say `closed` but current component evidence shows active capacity scheduling failure, canonical component status must still be `capacity-blocked`
   - only use `abnormal` for raw `closed` when no stronger canonical state can be supported from current evidence
   - if the app is still `part_running` due to a critical capacity blocker, `next_action` must not point to delivery verification
+  - if `runtime_state.phase = source_build_failed`, `delivery_state` must be `null` and `next_action` must point to a troubleshooter recommendation; never fall back to package/image/template
   - if delivery verifier has not run, do not invent a non-null delivery outcome
   - if the run stopped during `project-init`, `bootstrap`, or `troubleshooter`, `delivery_state` must be `null`
   - if the source app is runtime-healthy enough that the remaining issue is outer access or final URL selection, prefer `linked-and-needs-delivery-verification` over `linked-and-topology-present-but-runtime-unhealthy`

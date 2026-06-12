@@ -45,6 +45,10 @@ $defs:
       - runtime_healthy
       - capacity_blocked
       - code_or_build_handoff_needed
+      # source-backed build/detection failed and the run is handing off to the
+      # troubleshooter on the same source path instead of falling back to
+      # package/image/template; delivery_state must stay null in this phase.
+      - source_build_failed
   component_status:
     anyOf:
       - enum:

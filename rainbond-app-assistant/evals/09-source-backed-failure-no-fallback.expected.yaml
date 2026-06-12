@@ -4,7 +4,7 @@ assert:
     AppAssistantResult.execution_path.requested_kind: source
     AppAssistantResult.execution_path.resolved_kind: source
     AppAssistantResult.orchestration_state: linked-and-source-build-failed
-    AppAssistantResult.runtime_state.phase: topology_building
+    AppAssistantResult.runtime_state.phase: source_build_failed
     AppAssistantResult.delivery_state: null
     AppAssistantResult.promotion_result: null
     AppAssistantResult.next_action: run troubleshooter on the same source path
