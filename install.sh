@@ -434,6 +434,8 @@ normalize_rainbond_url() {
   fi
 
   raw="${raw%/}"
+  raw="${raw%/console/mcp/rainskills/codex/query}"
+  raw="${raw%/console/mcp/rainskills/claude-code/query}"
   raw="${raw%/console/mcp/query}"
   raw="${raw%/console/users/login}"
   raw="${raw%/console/}"
@@ -1075,7 +1077,9 @@ configure_codex_mcp() {
 
   backup_file "$HOME/.codex/config.toml"
   codex mcp remove rainbond >/dev/null 2>&1 || true
-  codex mcp add rainbond --url "$mcp_url" --bearer-token-env-var RAINBOND_JWT >/dev/null
+  if ! codex mcp add rainbond --url "$mcp_url" --bearer-token-env-var RAINBOND_JWT >/dev/null; then
+    return 1
+  fi
   log "[configure] 已配置 Codex MCP"
 }
 
@@ -1089,12 +1093,14 @@ configure_claude_mcp() {
 
   backup_file "$HOME/.claude.json"
   claude mcp remove --scope user rainbond >/dev/null 2>&1 || true
-  claude mcp add --scope user --transport http rainbond "$mcp_url" -H 'Authorization: GRJWT ${RAINBOND_JWT}' >/dev/null
+  if ! claude mcp add --scope user --transport http rainbond "$mcp_url" -H 'Authorization: GRJWT ${RAINBOND_JWT}' >/dev/null; then
+    return 1
+  fi
   log "[configure] 已配置 Claude MCP"
 }
 
 validate_mcp_connectivity() {
-  local base_url="$1"
+  local mcp_url="$1"
   local token="$2"
   local response_file header_file
   response_file="$(mktemp)"
@@ -1110,7 +1116,7 @@ validate_mcp_connectivity() {
       --dump-header "$header_file" \
       --write-out '%{http_code}' \
       -X POST \
-      "${base_url}/console/mcp/query" \
+      "$mcp_url" \
       -H 'Accept: application/json' \
       -H 'Content-Type: application/json' \
       -H "Authorization: GRJWT ${token}" \
@@ -1121,7 +1127,10 @@ validate_mcp_connectivity() {
   if [[ ! "$http_code" =~ ^2 ]]; then
     rm -f "$response_file" "$header_file"
     if [[ "$http_code" == "404" ]]; then
-      die "Rainbond MCP 校验失败：${base_url} 未暴露 /console/mcp/query。登录已成功，说明这个环境可达，但当前部署的 Rainbond Console 可能未包含 MCP 接口，或你连接到了错误的 Rainbond 主机。"
+      local mcp_path
+      mcp_path="${mcp_url#*://}"
+      mcp_path="/${mcp_path#*/}"
+      die "Rainbond MCP 校验失败：${mcp_url} 未暴露 ${mcp_path}。登录已成功，说明这个环境可达，但当前部署的 Rainbond Console 可能未包含 RainSkills MCP 接口，或你连接到了错误的 Rainbond 主机。"
     fi
     die "Rainbond MCP 校验失败，HTTP 状态码 ${http_code}"
   fi
@@ -1188,6 +1197,40 @@ PY
 
   rm -f "$response_file" "$header_file"
   log "[verify] Rainbond MCP 可访问"
+}
+
+migrate_codex_mcp_if_generic() {
+  local generic_url="$1"
+  local dedicated_url="$2"
+  local config_file="$HOME/.codex/config.toml"
+  codex_config_matches "$generic_url" || return 0
+
+  local backup="${config_file}.rainskills-backup"
+  cp "$config_file" "$backup"
+  log "[backup] 已备份 $backup"
+  if ! configure_codex_mcp "$dedicated_url"; then
+    cp "$backup" "$config_file"
+    warn "Codex MCP 迁移失败，已恢复原配置。"
+    return 1
+  fi
+  log "[migrate] Codex MCP 已切换到 RainSkills 专用地址"
+}
+
+migrate_claude_mcp_if_generic() {
+  local generic_url="$1"
+  local dedicated_url="$2"
+  local config_file="$HOME/.claude.json"
+  claude_config_matches "$generic_url" || return 0
+
+  local backup="${config_file}.rainskills-backup"
+  cp "$config_file" "$backup"
+  log "[backup] 已备份 $backup"
+  if ! configure_claude_mcp "$dedicated_url"; then
+    cp "$backup" "$config_file"
+    warn "Claude MCP 迁移失败，已恢复原配置。"
+    return 1
+  fi
+  log "[migrate] Claude MCP 已切换到 RainSkills 专用地址"
 }
 
 looks_like_jwt() {
@@ -1407,17 +1450,53 @@ do_refresh() {
   base_url="$(normalize_rainbond_url "$base_url_input")"
   confirm_insecure_http_if_needed "$base_url"
 
-  local token
+  local token generic_mcp_url codex_mcp_url claude_mcp_url
+  local migrate_codex=0 migrate_claude=0 validate_codex=0 validate_claude=0
   token="$(obtain_rainbond_token "$base_url" "$DEPLOYMENT_MODE_INPUT")"
-  validate_mcp_connectivity "$base_url" "$token"
-  token="$VALIDATED_TOKEN"
+  generic_mcp_url="${base_url}/console/mcp/query"
+  codex_mcp_url="${base_url}/console/mcp/rainskills/codex/query"
+  claude_mcp_url="${base_url}/console/mcp/rainskills/claude-code/query"
+
+  if codex_config_matches "$generic_mcp_url"; then
+    migrate_codex=1
+    validate_codex=1
+  elif codex_config_matches "$codex_mcp_url"; then
+    validate_codex=1
+  fi
+  if claude_config_matches "$generic_mcp_url"; then
+    migrate_claude=1
+    validate_claude=1
+  elif claude_config_matches "$claude_mcp_url"; then
+    validate_claude=1
+  fi
+  if (( validate_codex == 0 && validate_claude == 0 )); then
+    validate_codex=1
+  fi
+
+  if (( validate_codex == 1 )); then
+    validate_mcp_connectivity "$codex_mcp_url" "$token"
+    token="$VALIDATED_TOKEN"
+  fi
+  if (( validate_claude == 1 )); then
+    validate_mcp_connectivity "$claude_mcp_url" "$token"
+    token="$VALIDATED_TOKEN"
+  fi
 
   export RAINBOND_JWT="$token"
   write_token_file "$token" "$base_url"
   configure_shell_autoload
 
+  if (( migrate_codex == 1 )); then
+    migrate_codex_mcp_if_generic "$generic_mcp_url" "$codex_mcp_url" \
+      || die "Codex MCP 专用地址迁移失败"
+  fi
+  if (( migrate_claude == 1 )); then
+    migrate_claude_mcp_if_generic "$generic_mcp_url" "$claude_mcp_url" \
+      || die "Claude MCP 专用地址迁移失败"
+  fi
+
   log ""
-  log "JWT 刷新完成。Codex / Claude Code 的 MCP 注册没有变化，无需重新执行 install.sh all。"
+  log "JWT 刷新完成。脚本管理的旧通用 MCP 地址已按需迁移到 RainSkills 专用地址。"
   log "请重启 Claude Code 或 Codex 让新 JWT 生效（它们在启动时一次性读取 RAINBOND_JWT）。"
   if [[ -n "$ACTIVE_SHELL_RC" ]]; then
     log "如果想立刻在当前终端使用，请执行：source ${ACTIVE_SHELL_RC}"
@@ -1465,28 +1544,44 @@ configure_mcp() {
   base_url="$(normalize_rainbond_url "$base_url_input")"
   confirm_insecure_http_if_needed "$base_url"
 
-  local token mcp_url
+  local token codex_mcp_url claude_mcp_url
   token="$(obtain_rainbond_token "$base_url" "$DEPLOYMENT_MODE_INPUT")"
-  validate_mcp_connectivity "$base_url" "$token"
-  token="$VALIDATED_TOKEN"
+  codex_mcp_url="${base_url}/console/mcp/rainskills/codex/query"
+  claude_mcp_url="${base_url}/console/mcp/rainskills/claude-code/query"
+
+  case "$TARGET" in
+    codex)
+      validate_mcp_connectivity "$codex_mcp_url" "$token"
+      token="$VALIDATED_TOKEN"
+      ;;
+    claude)
+      validate_mcp_connectivity "$claude_mcp_url" "$token"
+      token="$VALIDATED_TOKEN"
+      ;;
+    all)
+      validate_mcp_connectivity "$codex_mcp_url" "$token"
+      token="$VALIDATED_TOKEN"
+      validate_mcp_connectivity "$claude_mcp_url" "$token"
+      token="$VALIDATED_TOKEN"
+      ;;
+  esac
 
   # Refresh this process's env for any downstream CLI behavior that resolves it.
   export RAINBOND_JWT="$token"
   write_token_file "$token" "$base_url"
   configure_shell_autoload
 
-  mcp_url="${base_url}/console/mcp/query"
   local configured=0
   case "$TARGET" in
     codex)
-      configure_codex_mcp "$mcp_url" && configured=1 || true
+      configure_codex_mcp "$codex_mcp_url" && configured=1 || true
       ;;
     claude)
-      configure_claude_mcp "$mcp_url" && configured=1 || true
+      configure_claude_mcp "$claude_mcp_url" && configured=1 || true
       ;;
     all)
-      configure_codex_mcp "$mcp_url" && configured=$((configured + 1)) || true
-      configure_claude_mcp "$mcp_url" && configured=$((configured + 1)) || true
+      configure_codex_mcp "$codex_mcp_url" && configured=$((configured + 1)) || true
+      configure_claude_mcp "$claude_mcp_url" && configured=$((configured + 1)) || true
       ;;
   esac
 

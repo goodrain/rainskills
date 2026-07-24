@@ -97,9 +97,11 @@ bash <(curl -fsSL https://raw.githubusercontent.com/goodrain/rainskills/main/ins
   - **私有化部署**：你自己输入 Console 地址
 - 浏览器中完成登录并授权（无需在终端输入用户名/密码）
 - 自动接收 JWT 并写入 `~/.rainbond/mcp.env`
-- 自动配置 `Codex` / `Claude Code` 的 MCP
+- 自动配置 `Codex` / `Claude Code` 的 RainSkills 专用 MCP 地址
 - 自动把环境变量加载逻辑写入当前 shell 的 rc 文件
-- 自动验证 `/console/mcp/query` 是否可用
+- 自动验证所选客户端的专用 MCP 地址是否可用：
+  - Codex：`/console/mcp/rainskills/codex/query`
+  - Claude Code：`/console/mcp/rainskills/claude-code/query`
 
 #### 浏览器登录是怎么发生的
 
@@ -304,7 +306,7 @@ bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh) refresh
 # 或：bash ~/.rainbond/skills/install.sh refresh
 ```
 
-`refresh` 只做浏览器登录 → 重写 `~/.rainbond/mcp.env`，不会动 skill 文件，也不会改 `~/.codex/config.toml` / `~/.claude.json`。
+`refresh` 不会改动 skill 文件。它会刷新 `~/.rainbond/mcp.env`，并检查 RainSkills 早期版本写入的旧通用 MCP 地址。只有地址完全等于当前 Rainbond 的 `/console/mcp/query` 且认证配置仍是脚本管理格式时，才会先生成 `.rainskills-backup` 备份，再迁移到对应客户端的专用地址；自定义 MCP 地址不会被修改。迁移失败时会恢复原配置。
 
 注意：刷新完成后必须重启 Claude Code 或 Codex（它们在启动时一次性读取 `RAINBOND_JWT`，已经在跑的进程读到的还是旧 token）。
 
