@@ -103,6 +103,17 @@ bash <(curl -fsSL https://raw.githubusercontent.com/goodrain/rainskills/main/ins
   - Codex：`/console/mcp/rainskills/codex/query`
   - Claude Code：`/console/mcp/rainskills/claude-code/query`
 
+#### 安装效果统计
+
+安装脚本会把安装流程状态异步上报到固定地址 `https://log.rainbond.com/api/rainskills/installations`，用于统计脚本执行、授权和配置成功率。每次执行使用一个随机的 `install_attempt_id` 串联以下阶段：
+
+- `started`：脚本开始执行
+- `authorized`：完成 Rainbond 授权，并取得当前企业的 `eid`
+- `configured`：Codex / Claude Code MCP 配置完成
+- `failed`：流程失败，仅记录固定的失败阶段和分类
+
+上报字段只包含安装尝试 ID、`eid`、客户端类型、安装或刷新动作、阶段和状态。不会上报 JWT、账号、密码、用户名、邮箱、Rainbond 地址、原始错误信息或本地代码。统计请求在后台执行；统计服务不可用、超时或企业信息读取失败都不会改变原安装结果。
+
 #### 浏览器登录是怎么发生的
 
 1. 安装脚本在本机起一个临时回调（`http://127.0.0.1:<随机端口>/cli-callback`）。

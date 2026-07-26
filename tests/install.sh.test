@@ -37,6 +37,24 @@ assert_line_count() {
   [[ "$count" == "$expected" ]] || fail "expected '$pattern' to appear $expected times in $path, got $count"
 }
 
+wait_for_file_line_count() {
+  local path="$1"
+  local expected="$2"
+  local attempt count
+  for ((attempt = 0; attempt < 100; attempt++)); do
+    if [[ -f "$path" ]]; then
+      count="$(wc -l < "$path" | tr -d ' ')"
+    else
+      count="0"
+    fi
+    if [[ "$count" == "$expected" ]]; then
+      return 0
+    fi
+    sleep 0.02
+  done
+  fail "expected $expected lines in $path, got ${count:-0}"
+}
+
 file_mode() {
   if stat -f '%Lp' "$1" >/dev/null 2>&1; then
     stat -f '%Lp' "$1"
@@ -174,6 +192,7 @@ printf '%s\n' "$*" >> "${TEST_LOG_DIR}/curl.log"
 output_file=""
 header_file=""
 write_out=""
+request_data=""
 url=""
 args=("$@")
 i=0
@@ -192,6 +211,10 @@ while [[ $i -lt ${#args[@]} ]]; do
       i=$((i + 1))
       write_out="${args[$i]}"
       ;;
+    --data|--data-binary)
+      i=$((i + 1))
+      request_data="${args[$i]}"
+      ;;
     http://*|https://*)
       url="$arg"
       ;;
@@ -200,7 +223,19 @@ while [[ $i -lt ${#args[@]} ]]; do
 done
 
 body='{}'
-if [[ "$url" == *"/console/users/login" ]]; then
+if [[ "$url" == "https://log.rainbond.com/api/rainskills/installations" ]]; then
+  printf '%s\n' "$request_data" >> "${TEST_LOG_DIR}/install-report.log"
+  if [[ "${TEST_FAKE_INSTALL_REPORT_FAIL:-}" == "1" ]]; then
+    exit 22
+  fi
+  body='{"status":"success"}'
+elif [[ "$url" == *"/console/users/details" ]]; then
+  if [[ -n "${TEST_FAKE_DETAILS_HTTP_CODE:-}" && "${TEST_FAKE_DETAILS_HTTP_CODE}" != "200" ]]; then
+    body='{"code":500,"msg":"details unavailable"}'
+  else
+    body='{"code":200,"data":{"bean":{"enterprise_id":"enterprise-test"}}}'
+  fi
+elif [[ "$url" == *"/console/users/login" ]]; then
   login_token="${TEST_FAKE_LOGIN_TOKEN:-}"
   if [[ -z "$login_token" ]]; then
     login_token="$(
@@ -250,6 +285,8 @@ fi
 if [[ "$write_out" == "%{http_code}" ]]; then
   if [[ "$url" == *"/console/mcp/"*"query" && -n "${TEST_FAKE_MCP_HTTP_CODE:-}" ]]; then
     printf '%s' "$TEST_FAKE_MCP_HTTP_CODE"
+  elif [[ "$url" == *"/console/users/details" && -n "${TEST_FAKE_DETAILS_HTTP_CODE:-}" ]]; then
+    printf '%s' "$TEST_FAKE_DETAILS_HTTP_CODE"
   else
     printf '200'
   fi
@@ -276,6 +313,8 @@ run_installer() {
     TEST_FAKE_LOGIN_TOKEN="${TEST_FAKE_LOGIN_TOKEN:-}" \
     TEST_FAKE_RENEWED_TOKEN="${TEST_FAKE_RENEWED_TOKEN:-}" \
     TEST_FAKE_CODEX_ADD_FAIL="${TEST_FAKE_CODEX_ADD_FAIL:-}" \
+    TEST_FAKE_INSTALL_REPORT_FAIL="${TEST_FAKE_INSTALL_REPORT_FAIL:-}" \
+    TEST_FAKE_DETAILS_HTTP_CODE="${TEST_FAKE_DETAILS_HTTP_CODE:-}" \
     bash "$REPO_ROOT/install.sh" "$@"
   )
 }
@@ -524,6 +563,18 @@ test_expired_flag_token_fails_without_writing_config() {
   [[ $rc -ne 0 ]] || fail "expected expired --token to fail"
   [[ ! -f "$tmpdir/home/.rainbond/mcp.env" ]] || fail "did not expect token file for expired --token"
   grep -F -- "--token 提供的 Rainbond JWT 已过期" /tmp/rainbond-install-expired-flag.out >/dev/null || fail "expected expired --token guidance"
+  wait_for_file_line_count "$tmpdir/logs/install-report.log" "2"
+  python3 - "$tmpdir/logs/install-report.log" <<'PY'
+import json
+import sys
+
+records = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8") if line.strip()]
+failed = [record for record in records if record["phase"] == "failed"]
+if len(failed) != 1:
+    raise SystemExit("expected exactly one failed report: {!r}".format(records))
+if failed[0]["failure_stage"] != "authorization" or failed[0]["failure_category"] != "authorization_failed":
+    raise SystemExit("unexpected authorization failure report: {!r}".format(failed[0]))
+PY
 }
 
 test_mcp_renewed_token_is_persisted_after_validation() {
@@ -680,6 +731,157 @@ test_mcp_404_reports_missing_endpoint() {
 
   [[ $rc -ne 0 ]] || fail "expected installer to fail when MCP endpoint returns 404"
   grep -F -- "未暴露 /console/mcp/rainskills/codex/query" /tmp/rainbond-install-404.out >/dev/null || fail "expected missing endpoint guidance"
+
+  wait_for_file_line_count "$tmpdir/logs/install-report.log" "3"
+  python3 - "$tmpdir/logs/install-report.log" <<'PY'
+import json
+import sys
+
+records = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8") if line.strip()]
+failed = next((record for record in records if record["phase"] == "failed"), None)
+if failed is None:
+    raise SystemExit("missing failed report: {!r}".format(records))
+if failed["phase"] != "failed" or failed["status"] != "failure":
+    raise SystemExit("expected final failed report, got {!r}".format(failed))
+if failed["failure_stage"] != "verification":
+    raise SystemExit("unexpected failure stage: {!r}".format(failed))
+if failed["failure_category"] != "mcp_verification_failed":
+    raise SystemExit("unexpected failure category: {!r}".format(failed))
+if failed["eid"] != "enterprise-test" or failed["install_client"] != "codex":
+    raise SystemExit("failure report lost enterprise/client metadata: {!r}".format(failed))
+PY
+}
+
+test_installer_reports_installation_lifecycle() {
+  local tmpdir report_file
+  tmpdir="$(mktemp -d)"
+  trap 'rm -rf "$tmpdir"' RETURN
+  mkdir -p "$tmpdir/home" "$tmpdir/logs"
+  make_fake_commands "$tmpdir/bin"
+
+  run_installer "$tmpdir" codex --non-interactive --rainbond-url http://rainbond.internal \
+    --username demo --allow-insecure-http --force >/tmp/rainbond-install-report.out 2>&1
+
+  report_file="$tmpdir/logs/install-report.log"
+  wait_for_file_line_count "$report_file" "3"
+  python3 - "$report_file" <<'PY'
+import json
+import sys
+
+records = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8") if line.strip()]
+by_phase = {record["phase"]: record for record in records}
+if set(by_phase) != {"started", "authorized", "configured"} or len(records) != 3:
+    raise SystemExit("unexpected installation phases: {!r}".format([record["phase"] for record in records]))
+
+attempt_ids = {record["install_attempt_id"] for record in records}
+if len(attempt_ids) != 1 or not next(iter(attempt_ids)):
+    raise SystemExit("installation reports must share one non-empty attempt id")
+
+started = by_phase["started"]
+authorized = by_phase["authorized"]
+configured = by_phase["configured"]
+if started != {
+    "install_attempt_id": started["install_attempt_id"],
+    "eid": "",
+    "install_client": "codex",
+    "action": "install",
+    "phase": "started",
+    "status": "started",
+    "failure_stage": "",
+    "failure_category": "",
+}:
+    raise SystemExit("unexpected started report: {!r}".format(started))
+
+for record, phase in ((authorized, "authorized"), (configured, "configured")):
+    if record["eid"] != "enterprise-test":
+        raise SystemExit("{} report is missing enterprise id".format(phase))
+    if record["install_client"] != "codex" or record["action"] != "install":
+        raise SystemExit("unexpected {} metadata: {!r}".format(phase, record))
+    if record["status"] != "success":
+        raise SystemExit("unexpected {} status: {!r}".format(phase, record))
+
+raw = open(sys.argv[1], encoding="utf-8").read()
+for secret_marker in ("GRJWT", "Authorization", ".signature", "secret-password"):
+    if secret_marker in raw:
+        raise SystemExit("installation report leaked secret marker: {}".format(secret_marker))
+PY
+}
+
+test_installation_reporting_failures_do_not_block_installation() {
+  local tmpdir
+  tmpdir="$(mktemp -d)"
+  trap 'rm -rf "$tmpdir"' RETURN
+  mkdir -p "$tmpdir/home" "$tmpdir/logs"
+  make_fake_commands "$tmpdir/bin"
+
+  TEST_FAKE_INSTALL_REPORT_FAIL=1 \
+    run_installer "$tmpdir" codex --non-interactive --rainbond-url http://rainbond.internal \
+      --username demo --allow-insecure-http --force >/tmp/rainbond-install-report-failure.out 2>&1
+
+  assert_file_exists "$tmpdir/home/.rainbond/mcp.env"
+  assert_file_exists "$tmpdir/home/.codex/config.toml"
+  wait_for_file_line_count "$tmpdir/logs/install-report.log" "3"
+}
+
+test_enterprise_lookup_failure_does_not_block_installation() {
+  local tmpdir
+  tmpdir="$(mktemp -d)"
+  trap 'rm -rf "$tmpdir"' RETURN
+  mkdir -p "$tmpdir/home" "$tmpdir/logs"
+  make_fake_commands "$tmpdir/bin"
+
+  TEST_FAKE_DETAILS_HTTP_CODE=500 \
+    run_installer "$tmpdir" claude --non-interactive --rainbond-url http://rainbond.internal \
+      --username demo --allow-insecure-http --force >/tmp/rainbond-install-details-failure.out 2>&1
+
+  assert_file_exists "$tmpdir/home/.rainbond/mcp.env"
+  assert_file_exists "$tmpdir/home/.claude.json"
+  wait_for_file_line_count "$tmpdir/logs/install-report.log" "1"
+  python3 - "$tmpdir/logs/install-report.log" <<'PY'
+import json
+import sys
+
+records = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8") if line.strip()]
+if [record["phase"] for record in records] != ["started"]:
+    raise SystemExit("enterprise lookup failure should leave only started report: {!r}".format(records))
+if records[0]["install_client"] != "claude_code":
+    raise SystemExit("unexpected install client: {!r}".format(records[0]))
+PY
+}
+
+test_unhandled_skill_installation_failure_is_reported() {
+  local tmpdir source_dir
+  tmpdir="$(mktemp -d)"
+  trap 'rm -rf "$tmpdir"' RETURN
+  source_dir="$tmpdir/source"
+  mkdir -p "$tmpdir/home" "$tmpdir/logs" "$source_dir/rainbond-invalid"
+  make_fake_commands "$tmpdir/bin"
+  cp "$REPO_ROOT/install.sh" "$source_dir/install.sh"
+
+  set +e
+  HOME="$tmpdir/home" \
+  TEST_LOG_DIR="$tmpdir/logs" \
+  PATH="$tmpdir/bin:/usr/bin:/bin" \
+    bash "$source_dir/install.sh" codex --skip-mcp --force \
+      >/tmp/rainbond-install-invalid-skill.out 2>&1
+  local rc=$?
+  set -e
+
+  [[ $rc -ne 0 ]] || fail "expected invalid skill directory to fail installation"
+  wait_for_file_line_count "$tmpdir/logs/install-report.log" "2"
+  python3 - "$tmpdir/logs/install-report.log" <<'PY'
+import json
+import sys
+
+records = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8") if line.strip()]
+failed = next((record for record in records if record["phase"] == "failed"), None)
+if failed is None:
+    raise SystemExit("missing unhandled failure report: {!r}".format(records))
+if failed["phase"] != "failed" or failed["failure_stage"] != "skill_installation":
+    raise SystemExit("unexpected unhandled failure report: {!r}".format(failed))
+if failed["failure_category"] != "skill_installation_failed":
+    raise SystemExit("unexpected unhandled failure category: {!r}".format(failed))
+PY
 }
 
 test_noninteractive_http_requires_explicit_opt_in
@@ -693,6 +895,10 @@ test_refresh_rewrites_token_and_migrates_script_managed_mcp_urls
 test_refresh_leaves_custom_mcp_urls_untouched
 test_refresh_restores_generic_config_when_migration_fails
 test_mcp_404_reports_missing_endpoint
+test_installer_reports_installation_lifecycle
+test_installation_reporting_failures_do_not_block_installation
+test_enterprise_lookup_failure_does_not_block_installation
+test_unhandled_skill_installation_failure_is_reported
 test_installer_configures_both_platforms_and_shell_autoload
 test_dedicated_mcp_url_input_is_normalized_to_console_base
 

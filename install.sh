@@ -145,6 +145,14 @@ LOGIN_TIMEOUT="${RAINBOND_LOGIN_TIMEOUT:-300}"
 JWT_MIN_TTL_SECONDS="${RAINBOND_JWT_MIN_TTL_SECONDS:-600}"
 ACTIVE_SHELL_RC=""
 VALIDATED_TOKEN=""
+RAINSKILLS_INSTALL_REPORT_URL="https://log.rainbond.com/api/rainskills/installations"
+RAINSKILLS_INSTALL_ATTEMPT_ID=""
+RAINSKILLS_INSTALL_EID=""
+RAINSKILLS_INSTALL_CLIENT="unknown"
+RAINSKILLS_INSTALL_ACTION="install"
+RAINSKILLS_INSTALL_FAILURE_STAGE="bootstrap"
+RAINSKILLS_INSTALL_FAILURE_CATEGORY="invalid_arguments"
+RAINSKILLS_INSTALL_TERMINAL_REPORTED=0
 
 usage() {
   cat <<'EOF'
@@ -197,7 +205,189 @@ warn() {
   printf '警告：%s\n' "$1" >&2
 }
 
+new_rainskills_install_attempt_id() {
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - <<'PY'
+import uuid
+
+print(uuid.uuid4().hex)
+PY
+    return 0
+  fi
+  printf '%s-%s-%s\n' "$(date +%s)" "$$" "${RANDOM:-0}"
+}
+
+rainskills_install_client_for_target() {
+  case "$1" in
+    codex)
+      printf 'codex\n'
+      ;;
+    claude)
+      printf 'claude_code\n'
+      ;;
+    all)
+      printf 'both\n'
+      ;;
+    *)
+      printf 'unknown\n'
+      ;;
+  esac
+}
+
+report_rainskills_installation() {
+  local phase="$1"
+  local status="$2"
+  local failure_stage="${3:-}"
+  local failure_category="${4:-}"
+
+  [[ -n "$RAINSKILLS_INSTALL_ATTEMPT_ID" ]] || return 0
+  if [[ "$phase" == "authorized" || "$phase" == "configured" ]]; then
+    [[ -n "$RAINSKILLS_INSTALL_EID" ]] || return 0
+  fi
+  command -v curl >/dev/null 2>&1 || return 0
+  command -v python3 >/dev/null 2>&1 || return 0
+
+  local payload
+  payload="$(
+    python3 - \
+      "$RAINSKILLS_INSTALL_ATTEMPT_ID" \
+      "$RAINSKILLS_INSTALL_EID" \
+      "$RAINSKILLS_INSTALL_CLIENT" \
+      "$RAINSKILLS_INSTALL_ACTION" \
+      "$phase" \
+      "$status" \
+      "$failure_stage" \
+      "$failure_category" <<'PY'
+import json
+import sys
+
+keys = (
+    "install_attempt_id",
+    "eid",
+    "install_client",
+    "action",
+    "phase",
+    "status",
+    "failure_stage",
+    "failure_category",
+)
+print(json.dumps(dict(zip(keys, sys.argv[1:])), separators=(",", ":")))
+PY
+  )" || return 0
+
+  (
+    curl \
+      --silent \
+      --show-error \
+      --connect-timeout 2 \
+      --max-time 3 \
+      -X POST \
+      "$RAINSKILLS_INSTALL_REPORT_URL" \
+      -H 'Content-Type: application/json' \
+      --data-binary "$payload" \
+      >/dev/null 2>&1 || true
+  ) &
+}
+
+initialize_rainskills_installation_reporting() {
+  local arg target=""
+  RAINSKILLS_INSTALL_ATTEMPT_ID="$(new_rainskills_install_attempt_id)"
+  for arg in "$@"; do
+    case "$arg" in
+      refresh)
+        RAINSKILLS_INSTALL_ACTION="refresh"
+        ;;
+      codex|claude|all)
+        target="$arg"
+        ;;
+    esac
+  done
+  RAINSKILLS_INSTALL_CLIENT="$(rainskills_install_client_for_target "$target")"
+  report_rainskills_installation "started" "started"
+}
+
+resolve_rainskills_enterprise_id() {
+  local base_url="$1"
+  local token="$2"
+  local response_file http_code eid
+  response_file="$(mktemp)"
+  http_code="$({
+    curl \
+      --silent \
+      --show-error \
+      --connect-timeout 2 \
+      --max-time 5 \
+      --output "$response_file" \
+      --write-out '%{http_code}' \
+      "${base_url}/console/users/details" \
+      -H "Authorization: GRJWT ${token}"
+  } 2>/dev/null || true)"
+
+  if [[ ! "$http_code" =~ ^2 ]]; then
+    rm -f "$response_file"
+    return 1
+  fi
+
+  eid="$({
+    python3 - "$response_file" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], "r", encoding="utf-8") as fh:
+        payload = json.load(fh)
+except Exception:
+    raise SystemExit(1)
+
+eid = (((payload.get("data") or {}).get("bean") or {}).get("enterprise_id"))
+if not isinstance(eid, str) or not eid.strip():
+    raise SystemExit(1)
+print(eid.strip())
+PY
+  } 2>/dev/null || true)"
+  rm -f "$response_file"
+  [[ -n "$eid" ]] || return 1
+  printf '%s\n' "$eid"
+}
+
+record_rainskills_authorization() {
+  local base_url="$1"
+  local token="$2"
+  local eid
+  eid="$(resolve_rainskills_enterprise_id "$base_url" "$token" || true)"
+  [[ -n "$eid" ]] || return 0
+  RAINSKILLS_INSTALL_EID="$eid"
+  report_rainskills_installation "authorized" "success"
+}
+
+set_rainskills_failure_context() {
+  RAINSKILLS_INSTALL_FAILURE_STAGE="$1"
+  RAINSKILLS_INSTALL_FAILURE_CATEGORY="$2"
+}
+
+report_unhandled_rainskills_installation_failure() {
+  local exit_status="$1"
+  if [[ "$exit_status" -ne 0 && \
+        "${BASH_SUBSHELL:-0}" -eq 0 && \
+        "$RAINSKILLS_INSTALL_TERMINAL_REPORTED" -eq 0 ]]; then
+    RAINSKILLS_INSTALL_TERMINAL_REPORTED=1
+    report_rainskills_installation \
+      "failed" \
+      "failure" \
+      "$RAINSKILLS_INSTALL_FAILURE_STAGE" \
+      "$RAINSKILLS_INSTALL_FAILURE_CATEGORY"
+  fi
+}
+
 die() {
+  if [[ "${BASH_SUBSHELL:-0}" -eq 0 && "$RAINSKILLS_INSTALL_TERMINAL_REPORTED" -eq 0 ]]; then
+    RAINSKILLS_INSTALL_TERMINAL_REPORTED=1
+    report_rainskills_installation \
+      "failed" \
+      "failure" \
+      "$RAINSKILLS_INSTALL_FAILURE_STAGE" \
+      "$RAINSKILLS_INSTALL_FAILURE_CATEGORY"
+  fi
   printf '错误：%s\n' "$1" >&2
   exit 1
 }
@@ -1409,6 +1599,7 @@ read_cached_rainbond_url() {
 }
 
 do_refresh() {
+  set_rainskills_failure_context "authorization" "authorization_failed"
   ensure_python3
 
   # Refresh exists because the cached JWT is broken; ignore inherited tokens
@@ -1473,6 +1664,16 @@ do_refresh() {
     validate_codex=1
   fi
 
+  if (( validate_codex == 1 && validate_claude == 1 )); then
+    RAINSKILLS_INSTALL_CLIENT="both"
+  elif (( validate_claude == 1 )); then
+    RAINSKILLS_INSTALL_CLIENT="claude_code"
+  else
+    RAINSKILLS_INSTALL_CLIENT="codex"
+  fi
+  record_rainskills_authorization "$base_url" "$token"
+
+  set_rainskills_failure_context "verification" "mcp_verification_failed"
   if (( validate_codex == 1 )); then
     validate_mcp_connectivity "$codex_mcp_url" "$token"
     token="$VALIDATED_TOKEN"
@@ -1486,6 +1687,7 @@ do_refresh() {
   write_token_file "$token" "$base_url"
   configure_shell_autoload
 
+  set_rainskills_failure_context "configuration" "mcp_configuration_failed"
   if (( migrate_codex == 1 )); then
     migrate_codex_mcp_if_generic "$generic_mcp_url" "$codex_mcp_url" \
       || die "Codex MCP 专用地址迁移失败"
@@ -1501,6 +1703,8 @@ do_refresh() {
   if [[ -n "$ACTIVE_SHELL_RC" ]]; then
     log "如果想立刻在当前终端使用，请执行：source ${ACTIVE_SHELL_RC}"
   fi
+  RAINSKILLS_INSTALL_TERMINAL_REPORTED=1
+  report_rainskills_installation "configured" "success"
 }
 
 configure_mcp() {
@@ -1513,6 +1717,7 @@ configure_mcp() {
     return 0
   fi
 
+  set_rainskills_failure_context "authorization" "authorization_failed"
   ensure_python3
   resolve_deployment_mode
 
@@ -1546,9 +1751,12 @@ configure_mcp() {
 
   local token codex_mcp_url claude_mcp_url
   token="$(obtain_rainbond_token "$base_url" "$DEPLOYMENT_MODE_INPUT")"
+  RAINSKILLS_INSTALL_CLIENT="$(rainskills_install_client_for_target "$TARGET")"
+  record_rainskills_authorization "$base_url" "$token"
   codex_mcp_url="${base_url}/console/mcp/rainskills/codex/query"
   claude_mcp_url="${base_url}/console/mcp/rainskills/claude-code/query"
 
+  set_rainskills_failure_context "verification" "mcp_verification_failed"
   case "$TARGET" in
     codex)
       validate_mcp_connectivity "$codex_mcp_url" "$token"
@@ -1571,6 +1779,7 @@ configure_mcp() {
   write_token_file "$token" "$base_url"
   configure_shell_autoload
 
+  set_rainskills_failure_context "configuration" "mcp_configuration_failed"
   local configured=0
   case "$TARGET" in
     codex)
@@ -1586,6 +1795,8 @@ configure_mcp() {
   esac
 
   (( configured > 0 )) || die "所选平台都未能完成 MCP 配置。"
+  RAINSKILLS_INSTALL_TERMINAL_REPORTED=1
+  report_rainskills_installation "configured" "success"
 
   if [[ -n "$ACTIVE_SHELL_RC" ]]; then
     log "当前 shell 提示：新开的终端会自动从 ${ACTIVE_SHELL_RC} 加载 RAINBOND_JWT。"
@@ -1602,6 +1813,8 @@ main() {
   fi
 
   resolve_target
+  RAINSKILLS_INSTALL_CLIENT="$(rainskills_install_client_for_target "$TARGET")"
+  set_rainskills_failure_context "skill_installation" "skill_installation_failed"
 
   local skills=()
   local skill_dir
@@ -1638,4 +1851,6 @@ main() {
   fi
 }
 
+trap 'report_unhandled_rainskills_installation_failure "$?"' EXIT
+initialize_rainskills_installation_reporting "$@"
 main "$@"
