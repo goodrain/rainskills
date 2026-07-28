@@ -145,6 +145,7 @@ LOGIN_TIMEOUT="${RAINBOND_LOGIN_TIMEOUT:-300}"
 JWT_MIN_TTL_SECONDS="${RAINBOND_JWT_MIN_TTL_SECONDS:-600}"
 ACTIVE_SHELL_RC=""
 VALIDATED_TOKEN=""
+OBTAINED_RAINBOND_TOKEN=""
 RAINSKILLS_INSTALL_REPORT_URL="https://log.rainbond.com/api/rainskills/installations"
 RAINSKILLS_INSTALL_ATTEMPT_ID=""
 RAINSKILLS_INSTALL_EID=""
@@ -153,6 +154,9 @@ RAINSKILLS_INSTALL_ACTION="install"
 RAINSKILLS_INSTALL_FAILURE_STAGE="bootstrap"
 RAINSKILLS_INSTALL_FAILURE_CATEGORY="invalid_arguments"
 RAINSKILLS_INSTALL_TERMINAL_REPORTED=0
+RAINSKILLS_BROWSER_LOGIN_SERVER_PID=""
+RAINSKILLS_BROWSER_LOGIN_READER_PID=""
+RAINSKILLS_BROWSER_LOGIN_RESULT_FILE=""
 
 usage() {
   cat <<'EOF'
@@ -377,6 +381,50 @@ report_unhandled_rainskills_installation_failure() {
       "$RAINSKILLS_INSTALL_FAILURE_STAGE" \
       "$RAINSKILLS_INSTALL_FAILURE_CATEGORY"
   fi
+}
+
+cleanup_browser_login() {
+  local process_id
+
+  for process_id in \
+      "$RAINSKILLS_BROWSER_LOGIN_READER_PID" \
+      "$RAINSKILLS_BROWSER_LOGIN_SERVER_PID"; do
+    if [[ -n "$process_id" ]] && kill -0 "$process_id" 2>/dev/null; then
+      kill "$process_id" 2>/dev/null || true
+    fi
+  done
+
+  for process_id in \
+      "$RAINSKILLS_BROWSER_LOGIN_READER_PID" \
+      "$RAINSKILLS_BROWSER_LOGIN_SERVER_PID"; do
+    if [[ -n "$process_id" ]]; then
+      wait "$process_id" 2>/dev/null || true
+    fi
+  done
+
+  if [[ -n "$RAINSKILLS_BROWSER_LOGIN_RESULT_FILE" ]]; then
+    rm -f \
+      "$RAINSKILLS_BROWSER_LOGIN_RESULT_FILE" \
+      "${RAINSKILLS_BROWSER_LOGIN_RESULT_FILE}.port" \
+      "${RAINSKILLS_BROWSER_LOGIN_RESULT_FILE}.err"
+  fi
+
+  RAINSKILLS_BROWSER_LOGIN_READER_PID=""
+  RAINSKILLS_BROWSER_LOGIN_SERVER_PID=""
+  RAINSKILLS_BROWSER_LOGIN_RESULT_FILE=""
+}
+
+handle_installer_signal() {
+  local exit_code="$1"
+  trap - INT TERM
+  cleanup_browser_login
+  exit "$exit_code"
+}
+
+handle_installer_exit() {
+  local exit_code="$1"
+  cleanup_browser_login
+  report_unhandled_rainskills_installation_failure "$exit_code"
 }
 
 die() {
@@ -855,8 +903,9 @@ manual_paste_reader() {
 
 browser_login_to_rainbond() {
   local base_url="$1"
-  local result_file state port auth_url reader_pid=""
-  result_file="$(mktemp)"
+  local result_file state port auth_url
+  result_file="$(mktemp "${TMPDIR:-/tmp}/rainskills-auth.XXXXXX")"
+  RAINSKILLS_BROWSER_LOGIN_RESULT_FILE="$result_file"
 
   state="$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"
 
@@ -975,6 +1024,7 @@ with open(result_path, "w", encoding="utf-8") as fh:
     fh.write(received["token"])
 PY
   local server_pid=$!
+  RAINSKILLS_BROWSER_LOGIN_SERVER_PID="$server_pid"
 
   # Server prints chosen port to stdout (file) on first line, then waits
   local waited=0
@@ -982,13 +1032,12 @@ PY
     sleep 0.1
     waited=$((waited + 1))
     if [[ "$waited" -gt 50 ]]; then
-      kill "$server_pid" 2>/dev/null || true
-      rm -f "$result_file" "${result_file}.port" "${result_file}.err"
+      cleanup_browser_login
       die "无法启动本地回调服务（端口准备超时）。"
     fi
     if ! kill -0 "$server_pid" 2>/dev/null; then
       cat "${result_file}.err" >&2 || true
-      rm -f "$result_file" "${result_file}.port" "${result_file}.err"
+      cleanup_browser_login
       die "本地回调服务启动失败。"
     fi
   done
@@ -1015,7 +1064,7 @@ PY
 
     if [[ -r /dev/tty ]]; then
       manual_paste_reader "$port" "$state" "$server_pid" &
-      reader_pid=$!
+      RAINSKILLS_BROWSER_LOGIN_READER_PID=$!
     else
       warn "/dev/tty 不可读，无法接收手动粘贴。请改用 --token <jwt> 重新执行 install.sh。"
     fi
@@ -1024,29 +1073,22 @@ PY
   if ! wait "$server_pid"; then
     local err
     err="$(cat "${result_file}.err" 2>/dev/null || true)"
-    if [[ -n "$reader_pid" ]]; then
-      kill "$reader_pid" 2>/dev/null || true
-      wait "$reader_pid" 2>/dev/null || true
-    fi
-    rm -f "$result_file" "${result_file}.port" "${result_file}.err"
+    RAINSKILLS_BROWSER_LOGIN_SERVER_PID=""
+    cleanup_browser_login
     if [[ -n "$err" ]]; then
       die "$err"
     fi
     die "Rainbond 浏览器授权失败。"
   fi
-
-  if [[ -n "$reader_pid" ]]; then
-    kill "$reader_pid" 2>/dev/null || true
-    wait "$reader_pid" 2>/dev/null || true
-  fi
+  RAINSKILLS_BROWSER_LOGIN_SERVER_PID=""
 
   local token
   token="$(cat "$result_file")"
-  rm -f "$result_file" "${result_file}.port" "${result_file}.err"
+  cleanup_browser_login
   if [[ -z "$token" ]]; then
     die "Rainbond 浏览器授权未返回 token。"
   fi
-  printf '%s\n' "$token"
+  OBTAINED_RAINBOND_TOKEN="$token"
 }
 
 login_to_rainbond() {
@@ -1109,7 +1151,7 @@ PY
   fi
 
   rm -f "$response_file"
-  printf '%s\n' "$token"
+  OBTAINED_RAINBOND_TOKEN="$token"
 }
 
 shell_quote_single() {
@@ -1526,6 +1568,7 @@ check_reusable_token_or_clear() {
 obtain_rainbond_token() {
   local base_url="$1"
   local mode="$2"
+  OBTAINED_RAINBOND_TOKEN=""
 
   if [[ -n "$RAINBOND_TOKEN_INPUT" ]]; then
     if ! looks_like_jwt "$RAINBOND_TOKEN_INPUT"; then
@@ -1538,7 +1581,7 @@ obtain_rainbond_token() {
     elif [[ "$RAINBOND_TOKEN_FROM_FLAG" -eq 1 ]]; then
       check_reusable_token_or_clear "--token 提供的 Rainbond JWT" || true
       printf '使用 --token 提供的 Rainbond JWT，跳过登录。\n' >&2
-      printf '%s\n' "$RAINBOND_TOKEN_INPUT"
+      OBTAINED_RAINBOND_TOKEN="$RAINBOND_TOKEN_INPUT"
       return 0
     elif [[ -n "$RAINBOND_CACHED_URL" && "$RAINBOND_CACHED_URL" != "$base_url" ]]; then
       warn "检测到 shell 中已加载的 RAINBOND_JWT 来自 ${RAINBOND_CACHED_URL}，与本次目标 ${base_url} 不一致；忽略旧 token，将重新登录。"
@@ -1547,7 +1590,7 @@ obtain_rainbond_token() {
       check_reusable_token_or_clear "shell 中已加载的 RAINBOND_JWT" || true
       if [[ -n "$RAINBOND_TOKEN_INPUT" ]]; then
         printf '复用 shell 中已加载的 RAINBOND_JWT。\n' >&2
-        printf '%s\n' "$RAINBOND_TOKEN_INPUT"
+        OBTAINED_RAINBOND_TOKEN="$RAINBOND_TOKEN_INPUT"
         return 0
       fi
     else
@@ -1559,7 +1602,7 @@ obtain_rainbond_token() {
         read -r reuse_answer
         case "$reuse_answer" in
           y|Y|yes|YES)
-            printf '%s\n' "$RAINBOND_TOKEN_INPUT"
+            OBTAINED_RAINBOND_TOKEN="$RAINBOND_TOKEN_INPUT"
             return 0
             ;;
           *)
@@ -1643,7 +1686,8 @@ do_refresh() {
 
   local token generic_mcp_url codex_mcp_url claude_mcp_url
   local migrate_codex=0 migrate_claude=0 validate_codex=0 validate_claude=0
-  token="$(obtain_rainbond_token "$base_url" "$DEPLOYMENT_MODE_INPUT")"
+  obtain_rainbond_token "$base_url" "$DEPLOYMENT_MODE_INPUT"
+  token="$OBTAINED_RAINBOND_TOKEN"
   generic_mcp_url="${base_url}/console/mcp/query"
   codex_mcp_url="${base_url}/console/mcp/rainskills/codex/query"
   claude_mcp_url="${base_url}/console/mcp/rainskills/claude-code/query"
@@ -1750,7 +1794,8 @@ configure_mcp() {
   confirm_insecure_http_if_needed "$base_url"
 
   local token codex_mcp_url claude_mcp_url
-  token="$(obtain_rainbond_token "$base_url" "$DEPLOYMENT_MODE_INPUT")"
+  obtain_rainbond_token "$base_url" "$DEPLOYMENT_MODE_INPUT"
+  token="$OBTAINED_RAINBOND_TOKEN"
   RAINSKILLS_INSTALL_CLIENT="$(rainskills_install_client_for_target "$TARGET")"
   record_rainskills_authorization "$base_url" "$token"
   codex_mcp_url="${base_url}/console/mcp/rainskills/codex/query"
@@ -1851,6 +1896,8 @@ main() {
   fi
 }
 
-trap 'report_unhandled_rainskills_installation_failure "$?"' EXIT
+trap 'handle_installer_signal 130' INT
+trap 'handle_installer_signal 143' TERM
+trap 'handle_installer_exit "$?"' EXIT
 initialize_rainskills_installation_reporting "$@"
 main "$@"
