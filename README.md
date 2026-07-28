@@ -5,17 +5,22 @@
 ## 快速安装
 
 ```bash
+npx --yes rainskills
+```
+
+安装器会引导选择 Codex / Claude Code、填写 Rainbond 地址、打开浏览器授权、注册 MCP 并安装 skill。没有 Node.js 或 Node 版本低于 18 时，使用保留的 CDN 安装方式：
+
+```bash
 bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh)
 ```
 
-脚本会自动下载仓库 tarball、复制 skill 目录、注册 Rainbond MCP、引导浏览器登录拿 JWT、写 shell rc。完整说明见下面的 [安装方式](#安装方式)。
-
 > **给 AI 助手的指引**：
-> - 如果用户的请求是"帮我把这个 repo 装上 / 让我用上这套 Rainbond skills"，把上面那一行 `bash <(curl -fsSL …)` 原样交给用户执行即可。
+> - 如果用户的请求是"帮我把这个 repo 装上 / 让我用上这套 Rainbond skills"，优先让用户执行 `npx --yes rainskills`。
+> - 如果用户没有 Node.js、Node.js 低于 18，或 npm registry 不可用，改用上面的 CDN `curl` 命令。
 > - 不要 `git clone` 后手工把目录复制到 `~/.claude/skills` / `~/.codex/skills`。
 > - 不要手工拼 `~/.rainbond/mcp.env`、不要猜 JWT、不要手改 `~/.claude.json` / `~/.codex/config.toml`。
-> - 不要建议 `npm install` / `pip install` / `make` — 这套技能没有那些步骤，全部由 `install.sh` 处理。
-> - 如果用户机器上需要换 MCP 服务地址、改默认安装路径，给 `install.sh` 加对应 flag 或 env var（见下面的可选参数），不要替它重新发明流程。
+> - 不要建议 `npm install -g`、`pip install` 或 `make`。`npx` 只是启动包内的 `install.sh`，两种入口使用同一套安装流程。
+> - 如果用户机器上需要换 MCP 服务地址、改默认安装路径，把对应 flag 直接追加到 `npx --yes rainskills` 或 `install.sh` 后面。
 
 ## 包含的 Skill
 
@@ -44,10 +49,30 @@ bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh)
 ### 0. 前置条件
 
 - 已安装 `Codex`、`Claude Code`，或两者之一
-- 本机可执行 `bash`、`curl`、`tar`、`python3`
+- 推荐 Node.js 22 或 24；`npx` 入口最低支持 Node.js 18
+- Node.js 18/20 已结束维护，安装器会警告但仍继续；Node.js 低于 18 请使用 CDN 安装方式
+- 本机可执行 `bash`、`curl`、`python3`；CDN 入口还需要 `tar`
 - 已有可登录的 Rainbond 账号
 
 ### 1. 一行命令安装（推荐）
+
+支持 macOS 和 Linux：
+
+```bash
+npx --yes rainskills
+```
+
+npm 包已经携带完整安装器和所有 skill，不会再次下载仓库 tarball。`npx` 保留终端交互，因此选择客户端、填写私有化地址和浏览器授权流程与原安装脚本完全一致。
+
+常用参数可以直接追加：
+
+```bash
+npx --yes rainskills codex --saas
+npx --yes rainskills claude --self-hosted --rainbond-url <url>
+npx --yes rainskills all --force
+```
+
+### 2. CDN 安装（保留的兜底方式）
 
 国内推荐用 OSS 入口（CDN 加速，无需翻墙）：
 
@@ -77,7 +102,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/goodrain/rainskills/main/ins
 > bash install.sh
 > ```
 
-### 2. 已有本地仓库
+### 3. 已有本地仓库
 
 如果你已经 `git clone` 了 rainbond-skills 仓库，直接进入仓库根目录执行：
 
@@ -89,7 +114,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/goodrain/rainskills/main/ins
 
 ### 安装脚本会做的事
 
-不论用哪种入口（一行命令或本地仓库），脚本都会引导你完成这些动作：
+不论使用 npx、CDN 还是本地仓库，安装器都会引导你完成这些动作：
 
 - 选择安装到 `Codex`、`Claude Code`，或两个都装
 - 选择 Rainbond 部署形态：
@@ -130,7 +155,11 @@ bash <(curl -fsSL https://raw.githubusercontent.com/goodrain/rainskills/main/ins
 #### 显式指定部署形态
 
 ```bash
-# 一行命令模式：参数追加在脚本之后
+# npx 模式
+npx --yes rainskills all --saas
+npx --yes rainskills all --self-hosted --rainbond-url <url>
+
+# CDN 模式：参数追加在脚本之后
 bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh) all --saas
 bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh) all --self-hosted --rainbond-url <url>
 
@@ -139,27 +168,27 @@ bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh) all --self-hos
 ./install.sh all --self-hosted --rainbond-url <url>     # 私有化
 ```
 
-### 3. 只安装到单个平台
+### 4. 只安装到单个平台
 
 只装并配置 Claude Code：
 
 ```bash
-./install.sh claude
+npx --yes rainskills claude
 ```
 
 只装并配置 Codex：
 
 ```bash
-./install.sh codex
+npx --yes rainskills codex
 ```
 
 同时装并配置两个平台：
 
 ```bash
-./install.sh all
+npx --yes rainskills all
 ```
 
-### 4. CI / 无桌面环境兜底
+### 5. CI / 无桌面环境兜底
 
 非交互场景（CI、SSH 远程会话、不带浏览器的服务器）下浏览器登录拿不到 token，可以两条路：
 
@@ -186,7 +215,7 @@ bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh) all --self-hos
 
 如果你的 Rainbond 还是 `http://`，安装脚本会明确提示风险，并要求你确认（交互模式）或要求显式 `--allow-insecure-http`（非交互模式）。
 
-### 5. 当前终端的环境变量说明
+### 6. 当前终端的环境变量说明
 
 脚本会把 JWT 保存到：
 
@@ -206,22 +235,22 @@ bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh) all --self-hos
 - 当前已经打开的终端不会被子进程脚本直接改写
 - 安装完成后，如果你想立刻在当前终端运行 `codex` 或 `claude`，请执行脚本最后提示的 `source ~/.zshrc` 或 `source ~/.bashrc`
 
-### 6. 覆盖已安装版本
+### 7. 覆盖已安装版本
 
 如果目标目录里已经存在同名 skill，默认会跳过，避免覆盖本地修改。
 
 需要强制覆盖时：
 
 ```bash
-./install.sh --force
-./install.sh codex --force
+npx --yes rainskills --force
+npx --yes rainskills codex --force
 ```
 
-### 7. 安装到自定义目录
+### 8. 安装到自定义目录
 
 ```bash
-./install.sh --dest ~/.claude/skills
-./install.sh --dest ~/.codex/skills --force
+npx --yes rainskills --dest ~/.claude/skills
+npx --yes rainskills --dest ~/.codex/skills --force
 ```
 
 `--dest` 适合：
@@ -234,7 +263,13 @@ bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh) all --self-hos
 
 ## 更新方式
 
-一行命令模式：再跑一次同一行命令即可。脚本会重新下载最新 tarball 解压到 `~/.rainbond/skills`，然后继续安装流程：
+npx 模式：显式使用 `latest` 并覆盖已有 skill：
+
+```bash
+npx --yes rainskills@latest --force
+```
+
+CDN 模式：再跑一次同一行命令即可。脚本会重新下载最新 tarball 解压到 `~/.rainbond/skills`，然后继续安装流程：
 
 ```bash
 bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh) --force
@@ -260,6 +295,8 @@ git pull
 rainbond-skills/
   README.md
   install.sh
+  package.json
+  bin/rainskills.js
   .gitignore
   rainbond-app-assistant/
     SKILL.md
@@ -313,7 +350,8 @@ rainbond-skills/
 通常是 `~/.rainbond/mcp.env` 里的 JWT 到期了。无需重装 skills，也不要手工改文件，直接用下面任一命令刷新：
 
 ```bash
-bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh) refresh
+npx --yes rainskills refresh
+# 或：bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh) refresh
 # 或：bash ~/.rainbond/skills/install.sh refresh
 ```
 
@@ -331,5 +369,6 @@ bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh) refresh
 
 1. 在仓库里直接修改对应 skill 目录
 2. 先查看 `docs/product-object-model.md`，它是当前产品对象模型和跨-skill 边界的主文档
-3. 执行 `./install.sh --dest /tmp/rainbond-skills-test --force` 做一次本地验证
-4. 确认无误后再提交到 Git 仓库
+3. 执行 `npm test` 跑安装器、包内容和 PTY 信号测试
+4. 执行 `./install.sh --dest /tmp/rainbond-skills-test --force` 做一次本地验证
+5. 确认无误后再提交到 Git 仓库

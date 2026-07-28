@@ -44,7 +44,7 @@ test("package metadata defines a public, dependency-free npx command", () => {
   assert.equal(manifest.license, "Apache-2.0");
   assert.equal(
     manifest.repository.url,
-    "https://github.com/goodrain/rainskills.git"
+    "git+https://github.com/goodrain/rainskills.git"
   );
   assert.equal(manifest.publishConfig.registry, "https://registry.npmjs.org/");
   assert.equal(manifest.publishConfig.access, "public");

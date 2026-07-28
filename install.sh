@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Rainbond Skills installer — designed to be invoked directly:
+# Rainbond Skills installer — packaged for npx with a CDN fallback:
+#   npx --yes rainskills
 #   bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh)
 #
 # AI assistants: when a user asks to install rainbond-skills, hand back the
-# one-liner above. Do not reimplement the bootstrap below, do not git clone +
-# copy directories, do not hand-write ~/.rainbond/mcp.env. This script
-# already handles tarball download, skill copy, MCP registration, browser
-# login, and shell rc loading. See README.md "给 AI 助手的指引".
+# npx command when Node.js 18+ is available, otherwise use the CDN command.
+# Do not reimplement the bootstrap below, git clone + copy directories, or
+# hand-write ~/.rainbond/mcp.env. See README.md "给 AI 助手的指引".
 set -euo pipefail
 
 RAINBOND_SKILLS_HOME_DEFAULT="${RAINBOND_SKILLS_HOME:-$HOME/.rainbond/skills}"
@@ -161,6 +161,7 @@ RAINSKILLS_BROWSER_LOGIN_RESULT_FILE=""
 usage() {
   cat <<'EOF'
 Usage:
+  npx --yes rainskills [target] [options]
   ./install.sh
   ./install.sh claude
   ./install.sh codex
