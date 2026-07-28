@@ -37,6 +37,24 @@ assert_line_count() {
   [[ "$count" == "$expected" ]] || fail "expected '$pattern' to appear $expected times in $path, got $count"
 }
 
+assert_appears_before() {
+  local path="$1"
+  local first="$2"
+  local second="$3"
+  python3 - "$path" "$first" "$second" <<'PY'
+import sys
+
+path, first, second = sys.argv[1:4]
+with open(path, encoding="utf-8", errors="replace") as fh:
+    content = fh.read()
+
+first_index = content.find(first)
+second_index = content.find(second)
+if first_index < 0 or second_index < 0 or first_index >= second_index:
+    raise SystemExit("expected {!r} before {!r}".format(first, second))
+PY
+}
+
 wait_for_file_line_count() {
   local path="$1"
   local expected="$2"
@@ -501,6 +519,27 @@ test_interactive_prompts_are_visible() {
 
   assert_contains "$output_file" "Rainbond Console 地址: "
   assert_contains "$output_file" "Rainbond 用户名: "
+  assert_contains "$output_file" "[重要] 私有化部署需要先准备一个可访问的 Rainbond 环境"
+  assert_contains "$output_file" "curl -o install.sh https://get.rainbond.com && bash ./install.sh"
+  assert_contains "$output_file" "https://www.rainbond.com/docs/quick-start/quick-install/"
+  assert_appears_before "$output_file" \
+    "[重要] 私有化部署需要先准备一个可访问的 Rainbond 环境" \
+    "Rainbond Console 地址: "
+}
+
+test_saas_mode_does_not_show_self_hosted_install_hint() {
+  local tmpdir token output_file
+  tmpdir="$(mktemp -d)"
+  output_file="$tmpdir/saas.out"
+  trap 'rm -rf "$tmpdir"' RETURN
+  mkdir -p "$tmpdir/home" "$tmpdir/logs"
+  make_fake_commands "$tmpdir/bin"
+  token="$(make_test_jwt 1893456000)"
+
+  run_installer "$tmpdir" codex --non-interactive --saas --token "$token" --force \
+    >"$output_file" 2>&1
+
+  assert_not_contains "$output_file" "[重要] 私有化部署需要先准备一个可访问的 Rainbond 环境"
 }
 
 test_expired_cached_token_reauthenticates_before_write() {
@@ -887,6 +926,7 @@ PY
 test_noninteractive_http_requires_explicit_opt_in
 test_noninteractive_without_rainbond_params_skips_mcp
 test_interactive_prompts_are_visible
+test_saas_mode_does_not_show_self_hosted_install_hint
 test_expired_cached_token_reauthenticates_before_write
 test_expiring_cached_token_reauthenticates_before_write
 test_expired_flag_token_fails_without_writing_config

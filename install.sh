@@ -787,6 +787,20 @@ ensure_python3() {
   command -v python3 >/dev/null 2>&1 || die "需要 python3 来解析 JSON。"
 }
 
+show_self_hosted_install_hint() {
+  log ""
+  log "============================================================"
+  log "[重要] 私有化部署需要先准备一个可访问的 Rainbond 环境"
+  log ""
+  log "如果尚未安装 Rainbond，请在目标机器执行快速安装命令："
+  log "  curl -o install.sh https://get.rainbond.com && bash ./install.sh"
+  log ""
+  log "安装完成后，请使用安装脚本输出的 Console 地址继续下面的配置。"
+  log "安装文档：https://www.rainbond.com/docs/quick-start/quick-install/"
+  log "============================================================"
+  log ""
+}
+
 resolve_deployment_mode() {
   if [[ -n "$DEPLOYMENT_MODE_INPUT" ]]; then
     return 0
@@ -819,6 +833,7 @@ resolve_deployment_mode() {
         ;;
       2)
         DEPLOYMENT_MODE_INPUT="self-hosted"
+        show_self_hosted_install_hint
         return 0
         ;;
       *)

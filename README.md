@@ -119,7 +119,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/goodrain/rainskills/main/ins
 - 选择安装到 `Codex`、`Claude Code`，或两个都装
 - 选择 Rainbond 部署形态：
   - **Rainbond Cloud（SaaS，默认）**：地址固定为 `https://run.rainbond.com`
-  - **私有化部署**：你自己输入 Console 地址
+  - **私有化部署**：你自己输入 Console 地址；交互选择后会先醒目提示 Rainbond 前置条件、官方快速安装命令和安装文档，但不会中断 RainSkills 流程
 - 浏览器中完成登录并授权（无需在终端输入用户名/密码）
 - 自动接收 JWT 并写入 `~/.rainbond/mcp.env`
 - 自动配置 `Codex` / `Claude Code` 的 RainSkills 专用 MCP 地址
