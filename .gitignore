@@ -3,3 +3,5 @@ __pycache__/
 *.iml
 .idea/
 .vscode/
+node_modules/
+*.tgz

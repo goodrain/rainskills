@@ -1,0 +1,55 @@
+{
+  "name": "rainskills",
+  "version": "0.1.0-rc.0",
+  "description": "Interactive Rainbond skill installer for Codex and Claude Code",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/goodrain/rainskills#readme",
+  "bugs": {
+    "url": "https://github.com/goodrain/rainskills/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/goodrain/rainskills.git"
+  },
+  "keywords": [
+    "rainbond",
+    "codex",
+    "claude-code",
+    "skills",
+    "installer"
+  ],
+  "bin": {
+    "rainskills": "bin/rainskills.js"
+  },
+  "files": [
+    "bin/",
+    "install.sh",
+    "rainbond-app-assistant/",
+    "rainbond-app-version-assistant/",
+    "rainbond-delivery-verifier/",
+    "rainbond-env-sync/",
+    "rainbond-fullstack-bootstrap/",
+    "rainbond-fullstack-troubleshooter/",
+    "rainbond-project-init/",
+    "rainbond-template-installer/"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "darwin",
+    "linux"
+  ],
+  "scripts": {
+    "test": "npm run test:launcher && npm run test:package && npm run test:installer && npm run test:signal && npm run test:npx-pty",
+    "test:launcher": "node --test tests/npx-launcher.test.js",
+    "test:package": "node --test tests/npm-package.test.js",
+    "test:installer": "bash tests/install.sh.test",
+    "test:signal": "python3 tests/installer_signal_cleanup_test.py",
+    "test:npx-pty": "python3 tests/npx_pty_test.py"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
+}
