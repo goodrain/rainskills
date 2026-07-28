@@ -369,6 +369,6 @@ npx --yes rainskills refresh
 
 1. 在仓库里直接修改对应 skill 目录
 2. 先查看 `docs/product-object-model.md`，它是当前产品对象模型和跨-skill 边界的主文档
-3. 执行 `npm test` 跑安装器、包内容和 PTY 信号测试
+3. 执行 `npm test` 跑安装器、包内容和 PTY 信号测试；测试在隔离临时目录中运行，无需输入，也不应打开真实浏览器
 4. 执行 `./install.sh --dest /tmp/rainbond-skills-test --force` 做一次本地验证
 5. 确认无误后再提交到 Git 仓库

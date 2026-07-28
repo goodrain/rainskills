@@ -1046,7 +1046,7 @@ PY
   port="$(head -n 1 "${result_file}.port")"
   auth_url="${base_url}/#/cli-auth?callback=$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=""))' "http://127.0.0.1:${port}/cli-callback")&state=${state}"
 
-  # Stderr only — this function's stdout is captured by the caller as the JWT.
+  printf '终端会自动等待授权结果（最长 %s 秒），无需在终端按回车；授权完成后会自动继续，Ctrl+C 可取消。\n' "$LOGIN_TIMEOUT" >&2
   if can_open_browser; then
     printf '正在浏览器中打开 Rainbond CLI 授权页面，请在浏览器中完成登录并点击「授权」按钮。\n' >&2
     printf '授权地址：%s\n' "$auth_url" >&2

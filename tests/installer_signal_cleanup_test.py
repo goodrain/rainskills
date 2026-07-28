@@ -161,7 +161,10 @@ def assert_signal_cleans_browser_authorization_processes(
         status = None
         tracked_pids = [pid]
         try:
-            _, match = read_until(master_fd, AUTH_READY_PATTERN, timeout=15)
+            output, match = read_until(master_fd, AUTH_READY_PATTERN, timeout=15)
+            assert "无需在终端按回车" in output.decode("utf-8", errors="replace"), (
+                "browser authorization did not explain that terminal input is unnecessary"
+            )
             port = int(match.group(1))
             tracked_pids.extend(descendant_pids(pid))
 

@@ -44,7 +44,7 @@
     "test": "npm run test:launcher && npm run test:package && npm run test:installer && npm run test:signal && npm run test:npx-pty",
     "test:launcher": "node --test tests/npx-launcher.test.js",
     "test:package": "node --test tests/npm-package.test.js",
-    "test:installer": "bash tests/install.sh.test",
+    "test:installer": "python3 tests/install_test_suite_tty_test.py",
     "test:signal": "python3 tests/installer_signal_cleanup_test.py",
     "test:npx-pty": "python3 tests/npx_pty_test.py"
   },

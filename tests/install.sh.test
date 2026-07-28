@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-unset RAINBOND_JWT RAINBOND_URL
+unset RAINBOND_JWT RAINBOND_URL RAINBOND_USERNAME RAINBOND_PASSWORD
 
 fail() {
   printf 'FAIL: %s\n' "$1" >&2
@@ -428,7 +428,7 @@ test_noninteractive_without_rainbond_params_skips_mcp() {
   mkdir -p "$tmpdir/home" "$tmpdir/logs"
   make_fake_commands "$tmpdir/bin"
 
-  TEST_RAINBOND_PASSWORD="" run_installer "$tmpdir" all --force >/tmp/rainbond-install-skip.out 2>&1
+  TEST_RAINBOND_PASSWORD="" run_installer "$tmpdir" all --non-interactive --force >/tmp/rainbond-install-skip.out 2>&1
 
   [[ ! -f "$tmpdir/home/.rainbond/mcp.env" ]] || fail "did not expect JWT file when MCP setup is auto-skipped"
   grep -F -- "非交互模式下未提供 Rainbond 连接信息，已跳过 MCP 配置。" /tmp/rainbond-install-skip.out >/dev/null || fail "expected auto-skip guidance"
