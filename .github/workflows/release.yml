@@ -1,10 +1,13 @@
-name: Release to TOS
+name: Release RainSkills
 
 on:
   push:
     branches: [main]
     tags: ['stable-*']
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   # ─────────────────────────────────────────────────────────────
@@ -115,11 +118,28 @@ jobs:
   promote_stable:
     if: startsWith(github.ref, 'refs/tags/stable-')
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 1
+
+      - name: Set up Node for npm release
+        if: startsWith(github.ref, 'refs/tags/stable-v')
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org/
+          package-manager-cache: false
+
+      - name: Install OIDC-compatible npm
+        if: startsWith(github.ref, 'refs/tags/stable-v')
+        run: |
+          npm install --global npm@11.5.1
+          test "$(npm --version)" = "11.5.1"
 
       - name: Resolve tagged commit metadata
         id: meta
@@ -127,9 +147,65 @@ jobs:
           SHA="$(git rev-parse --short HEAD)"
           TAG="${GITHUB_REF#refs/tags/}"
           TARBALL_URL="https://get.rainbond.com/rainskills/rainskills-${SHA}.tar.gz"
+          PACKAGE_NAME="$(node -p "require('./package.json').name")"
+          VERSION="$(node -p "require('./package.json').version")"
+
+          if [[ "$TAG" == stable-v* ]]; then
+            EXPECTED_TAG="stable-v${VERSION}"
+            if [[ "$VERSION" == *-* ]]; then
+              echo "ERROR: stable npm releases cannot use prerelease version ${VERSION}." >&2
+              exit 1
+            fi
+            if [[ "$TAG" != "$EXPECTED_TAG" ]]; then
+              echo "ERROR: tag ${TAG} must exactly match ${EXPECTED_TAG}." >&2
+              exit 1
+            fi
+          fi
+
           echo "sha=${SHA}"           >> "$GITHUB_OUTPUT"
           echo "tag=${TAG}"           >> "$GITHUB_OUTPUT"
           echo "tarball=${TARBALL_URL}" >> "$GITHUB_OUTPUT"
+          echo "package_name=${PACKAGE_NAME}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Test and pack npm artifact
+        if: startsWith(github.ref, 'refs/tags/stable-v')
+        id: npm_artifact
+        run: |
+          npm ci --ignore-scripts
+          npm test
+
+          PACK_DIR="$RUNNER_TEMP/npm-pack"
+          mkdir -p "$PACK_DIR"
+          npm pack --json --pack-destination "$PACK_DIR" > "$RUNNER_TEMP/npm-pack.json"
+          PACK_FILENAME="$(node -e "const [p] = require(process.env.RUNNER_TEMP + '/npm-pack.json'); process.stdout.write(p.filename)")"
+          LOCAL_INTEGRITY="$(node -e "const [p] = require(process.env.RUNNER_TEMP + '/npm-pack.json'); process.stdout.write(p.integrity)")"
+          PACKAGE_SPEC="${{ steps.meta.outputs.package_name }}@${{ steps.meta.outputs.version }}"
+
+          set +e
+          npm view "$PACKAGE_SPEC" dist.integrity --json \
+            > "$RUNNER_TEMP/npm-remote-integrity.json" \
+            2> "$RUNNER_TEMP/npm-view.err"
+          VIEW_STATUS=$?
+          set -e
+
+          ALREADY_PUBLISHED=false
+          if [[ "$VIEW_STATUS" -eq 0 ]]; then
+            REMOTE_INTEGRITY="$(node -e "const value = require(process.env.RUNNER_TEMP + '/npm-remote-integrity.json'); process.stdout.write(value)")"
+            if [[ "$REMOTE_INTEGRITY" != "$LOCAL_INTEGRITY" ]]; then
+              echo "ERROR: ${PACKAGE_SPEC} already exists with different content." >&2
+              exit 1
+            fi
+            ALREADY_PUBLISHED=true
+          elif ! grep -q 'E404' "$RUNNER_TEMP/npm-view.err"; then
+            cat "$RUNNER_TEMP/npm-view.err" >&2
+            echo "ERROR: unable to determine whether ${PACKAGE_SPEC} already exists." >&2
+            exit 1
+          fi
+
+          echo "tarball=${PACK_DIR}/${PACK_FILENAME}" >> "$GITHUB_OUTPUT"
+          echo "integrity=${LOCAL_INTEGRITY}" >> "$GITHUB_OUTPUT"
+          echo "already_published=${ALREADY_PUBLISHED}" >> "$GITHUB_OUTPUT"
 
       - name: Validate tagged commit has a tarball on CDN
         run: |
@@ -177,12 +253,48 @@ jobs:
           TOS_ACCESS_KEY_SECRET: ${{ secrets.TOS_ACCESS_KEY_SECRET }}
           TOS_PREFIX: ${{ secrets.TOS_PREFIX }}
         run: |
+          for v in TOS_ENDPOINT TOS_REGION TOS_BUCKET TOS_ACCESS_KEY_ID TOS_ACCESS_KEY_SECRET; do
+            if [[ -z "${!v}" ]]; then
+              echo "ERROR: secret $v is not configured on this repo" >&2
+              exit 1
+            fi
+          done
           PREFIX="${TOS_PREFIX:-rainskills}"
           PREFIX="${PREFIX%/}/"
           /tmp/tosutil cp stable.json \
             "tos://${TOS_BUCKET}/${PREFIX}channels/stable.json" \
             "-e=${TOS_ENDPOINT}" "-re=${TOS_REGION}" \
             "-i=${TOS_ACCESS_KEY_ID}" "-k=${TOS_ACCESS_KEY_SECRET}"
+
+      - name: Publish npm package with OIDC
+        if: startsWith(github.ref, 'refs/tags/stable-v') && steps.npm_artifact.outputs.already_published != 'true'
+        run: npm publish "${{ steps.npm_artifact.outputs.tarball }}" --access public
+
+      - name: Verify npm package integrity
+        if: startsWith(github.ref, 'refs/tags/stable-v')
+        run: |
+          PACKAGE_SPEC="${{ steps.meta.outputs.package_name }}@${{ steps.meta.outputs.version }}"
+          EXPECTED_INTEGRITY="${{ steps.npm_artifact.outputs.integrity }}"
+          VERIFIED=false
+
+          for attempt in $(seq 1 12); do
+            REMOTE_INTEGRITY="$(npm view "$PACKAGE_SPEC" dist.integrity --json 2>/dev/null || true)"
+            REMOTE_INTEGRITY="$(node -e 'const raw = process.argv[1]; if (raw) process.stdout.write(JSON.parse(raw))' "$REMOTE_INTEGRITY")"
+            if [[ "$REMOTE_INTEGRITY" == "$EXPECTED_INTEGRITY" ]]; then
+              VERIFIED=true
+              break
+            fi
+            if [[ -n "$REMOTE_INTEGRITY" ]]; then
+              echo "ERROR: ${PACKAGE_SPEC} was published with unexpected content." >&2
+              exit 1
+            fi
+            sleep 5
+          done
+
+          if [[ "$VERIFIED" != true ]]; then
+            echo "ERROR: ${PACKAGE_SPEC} was not visible on npm after 60 seconds." >&2
+            exit 1
+          fi
 
       - name: Notify rainbond-copilot for vendor sync
         if: success()
@@ -259,5 +371,8 @@ jobs:
             echo "Promoted to stable: ${{ steps.meta.outputs.tag }}"
             echo "- sha: ${{ steps.meta.outputs.sha }}"
             echo "- stable.json updated"
+            if [[ "${{ steps.meta.outputs.tag }}" == stable-v* ]]; then
+              echo "- npm: ${{ steps.meta.outputs.package_name }}@${{ steps.meta.outputs.version }}"
+            fi
             echo "- rainbond-copilot vendor sync issue opened"
           } >> "$GITHUB_STEP_SUMMARY"
