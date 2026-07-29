@@ -45,11 +45,15 @@ Use this file for low-frequency reminders. Do not treat it as the source of trut
 
 ## Local Package Reminder
 
-- use `source.local_path` for the file or directory to upload
+- `source.local_path` is read only by `upload_local_package.py`; never send it to MCP
 - `source.local_path: "."` means package the current project directory
 - `source.archive_name` is optional and only matters when `local_path` is a directory
-- stage generated local packages under `.rainbond/staging/<component>/` inside the current workspace
-- avoid `/tmp` for staging unless the upload tool has already proven it can read that path
+- stage generated local packages under `.rainbond/staging/<component>/` inside the current workspace; never use `/tmp`
+- required order: local `prepare` -> MCP initialize (`event_id` + `upload_request`) -> local HTTP `upload` with the exact request contract -> immediate local `cleanup` -> non-empty MCP status -> create by `event_id`
+- init failure: local cleanup and stop
+- upload failure: local cleanup -> remote upload-event deletion -> stop
+- empty status: remote upload-event deletion -> stop
+- server-local package tools are compatibility-only, not RainSkills execution options
 
 ## Preferred Creation Order
 

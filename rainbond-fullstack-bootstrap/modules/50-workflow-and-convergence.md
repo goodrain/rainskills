@@ -71,6 +71,19 @@ Then:
 - for package-backed frontends, use package upload instead of image creation
 - for template-backed frontends, skip and report them as non-bootstrap components
 
+### 5a. Converge package uploads before topology configuration
+
+For every package-backed component, treat local preparation, event initialization, client HTTP upload, local cleanup, remote status verification, and event-based component creation as one bounded transaction. Execute the concrete contract in [40-source-and-package-rules.md](40-source-and-package-rules.md) before configuring ports, envs, storage, dependencies, or deploy state for that component.
+
+Convergence gates:
+- `source.local_path` is client-local input and is read only by the local helper
+- the initialization response must provide both `event_id` and the complete `upload_request`
+- the local cleanup attempt happens immediately after the HTTP attempt, before any MCP status or create call
+- failed HTTP upload means local cleanup, remote upload-event deletion, and stop
+- a successful HTTP response is not proof that Rainbond recorded the file; uploaded-file status must be non-empty before create-by-event
+- empty status means remote upload-event deletion and stop
+- only a successful create-by-event result makes the component eligible for the remaining topology and deploy steps
+
 ### 6. Ensure minimum topology
 
 - ensure dependencies exist from manifest `depends_on` with `rainbond_manage_component_dependency`
@@ -187,6 +200,15 @@ If source creation or source build fails:
 - if the failure evidence points to Rainbond console, MCP, or control-plane exceptions while creating the source component, use `blocking_bucket = mcp backend issue` and `next_handoff = none`
 - do not retry the same component through the image path unless the user explicitly changes the source definition
 - do not retry the same component with a different Git branch or ref unless the user explicitly changes the source definition
+
+## Package Upload Failure Convergence
+
+Package upload is a pre-create transaction, not a partially healthy component state:
+- if prepare or initialization fails, no package component was created; record it as skipped/waiting with the concrete local-helper or MCP blocker
+- if the HTTP upload fails, local cleanup and remote upload deletion must both be attempted before reporting the stop
+- if upload status is empty, delete the remote event and stop instead of calling create-by-event
+- do not deploy, wire dependencies to, or report a package component as created until event-based creation returns a component identity
+- after event-based creation succeeds, use the normal component summary, event, build, and runtime evidence paths; do not repeat the upload merely because runtime convergence is still pending
 
 ## Deferred Dependency Recording
 

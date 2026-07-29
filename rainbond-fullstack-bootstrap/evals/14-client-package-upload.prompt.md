@@ -1,0 +1,1 @@
+当前项目的 `rainbond.app.json` 声明了一个 package-backed `api` 组件，`source.local_path` 是 `./dist`，`source.archive_name` 是 `api-release.zip`。目标 app 已存在但还没有组件。请按 RainSkills 的客户端 package upload 契约执行；假设初始化返回完整的 `event_id` / `upload_request`、客户端 HTTP 上传成功、上传状态返回非空文件列表，随后组件创建和运行都成功。请输出完整 BootstrapResult。

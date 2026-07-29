@@ -220,26 +220,54 @@ If the source repository ships SQL initialization files (`sql/*.sql`, `db/init/*
 For v2-style package components:
 - `source.kind = package` means the component should be created through the Rainbond package-upload flow
 - map:
-  - `source.local_path` -> local package path
+  - `source.local_path` -> input read by the local upload helper only
   - `source.archive_name` -> optional zip filename when `local_path` is a directory
 
-Rules:
-- resolve `source.local_path` relative to the current project directory unless it is absolute and the MCP upload tool is known to be able to read that absolute path
-- if staging is needed, place generated package content under the current workspace, preferably `.rainbond/staging/<component>/`, not `/tmp`
-- if `source.local_path` points to a directory, compress it to zip before upload
-- if `source.local_path` points to a file, upload it directly
-- prefer the high-level MCP tool `rainbond_create_component_from_local_package`
-- if finer control is needed, use:
-  - `rainbond_init_package_upload`
-  - `rainbond_upload_package_file`
-  - `rainbond_get_package_upload_status`
-  - `rainbond_create_component_from_package`
+### Client Upload Contract
+
+Package bytes live on the MCP client machine. The local helper is the only process allowed to resolve, read, archive, or upload the local source. Never pass `source.local_path` to an MCP tool.
+
+Follow this transaction in the exact order below:
+
+1. Run `upload_local_package.py prepare` locally:
+   - resolve `source.local_path` relative to the current project directory unless it is already absolute
+   - use a workspace-local staging root such as `.rainbond/staging/<component>/`; never stage under `/tmp`
+   - pass `source.archive_name` only when supplied
+   - capture the helper's `archive_path`, `file_name`, `generated`, and `staging_root` result fields
+   - a supported package file is reused directly; a directory is converted to a zip archive by the helper
+2. Call `rainbond_init_package_upload` with Rainbond context only. It must return a non-empty `event_id` and an `upload_request`. Do not continue when either is absent or malformed.
+3. Run `upload_local_package.py upload` locally with `archive_path` plus the exact returned `upload_request` contract:
+   - `upload_request.url` -> `--upload-url`
+   - `upload_request.url_scope` -> `--url-scope`
+   - `upload_request.method` -> `--method`
+   - `upload_request.content_type` -> `--content-type`
+   - `upload_request.file_field` -> `--file-field`
+   - `upload_request.authorization` -> `--authorization`
+   - do not invent a URL, authorization mode, form field, HTTP method, or content type; the helper validates the same-Console-origin upload contract before invoking HTTP
+4. Run `upload_local_package.py cleanup` immediately after the HTTP attempt returns, whether upload succeeded, failed, or timed out. Pass the captured `archive_path`, `staging_root`, and `generated` flag. This cleanup must finish or be reported before any upload-status or component-create call.
+5. If and only if the HTTP upload succeeded, call `rainbond_get_package_upload_status(event_id=...)`. The returned uploaded-file status must be non-empty and must identify at least one uploaded file.
+6. If and only if status is non-empty, call `rainbond_create_component_from_package(event_id=...)`. Package creation is event-based; no local filesystem path belongs in this call.
+
+The helper command is `python3 rainbond-fullstack-bootstrap/scripts/upload_local_package.py <prepare|upload|cleanup> ...`. Preserve its JSON result fields exactly between phases; do not reconstruct paths or upload parameters from memory.
+
+### Cleanup and Stop Rules
+
+- prepare failure -> stop before initialization; there is no upload event to delete
+- initialization failure or a response without a complete `event_id` / `upload_request` -> run local helper cleanup using the prepare result, then stop
+- HTTP upload failure or timeout -> run local helper cleanup first, then call `rainbond_delete_package_upload(event_id=...)`, then stop; never query status or create a component
+- empty uploaded-file status -> call `rainbond_delete_package_upload(event_id=...)` and stop; never create a component from an empty event
+- if remote deletion also fails, report both the original failure and the deletion failure; do not continue to create
+- a create-by-event failure does not justify re-reading `source.local_path` through MCP or switching delivery mode; stop with the event evidence and apply the normal attempt budget
+
+### Compatibility Boundary
+
+The legacy server-local tools `rainbond_upload_package_file` and `rainbond_create_component_from_local_package` remain compatibility-only server interfaces. They are not RainSkills execution options because their filesystem view is the MCP server's, not the user's client workspace. RainSkills always uses the local helper plus the event-based MCP sequence above.
 
 If `source.local_path` cannot be resolved safely:
 - mark the package component as `needs-confirmation`
 - do not guess a different path
 
-If the package upload tool reports "local path does not exist" for an absolute path outside the workspace:
-- first verify the path from the current process
-- if the path exists, restage under `.rainbond/staging/` and retry once
-- if it still fails, classify the issue as a package-upload/tooling blocker and stop; do not pivot to local Docker or image push without explicit user confirmation
+If the local helper reports that the path does not exist or is unsafe:
+- resolve the path once from the current project process and correct only an objective relative-path resolution error
+- otherwise classify the issue as a local package preparation blocker and stop
+- do not pivot to local Docker, image push, or a server-local compatibility tool without explicit user confirmation

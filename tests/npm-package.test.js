@@ -8,6 +8,8 @@ const test = require("node:test");
 const repoRoot = path.resolve(__dirname, "..");
 const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
 const npxCommand = process.platform === "win32" ? "npx.cmd" : "npx";
+const uploadHelper =
+  "rainbond-fullstack-bootstrap/scripts/upload_local_package.py";
 const skillNames = [
   "rainbond-app-assistant",
   "rainbond-app-version-assistant",
@@ -52,6 +54,14 @@ test("package metadata defines a public, dependency-free npx command", () => {
   assert.equal(manifest.dependencies, undefined);
   assert.equal(manifest.devDependencies, undefined);
   assert.equal(manifest.scripts.postinstall, undefined);
+  assert.equal(
+    manifest.scripts["test:package-upload"],
+    "python3 tests/package_upload_helper_test.py && python3 tests/package_upload_workflow_contract_test.py && python3 rainbond-fullstack-bootstrap/scripts/run_bootstrap_evals.py"
+  );
+  assert.equal(
+    manifest.scripts.test,
+    "npm run test:launcher && npm run test:package-upload && npm run test:package && npm run test:installer && npm run test:signal && npm run test:npx-pty"
+  );
 });
 
 test("packed artifact contains the installer and all skills but no development files", () => {
@@ -67,6 +77,7 @@ test("packed artifact contains the installer and all skills but no development f
   for (const skillName of skillNames) {
     assert(filePaths.has(`${skillName}/SKILL.md`), `${skillName} is missing`);
   }
+  assert(filePaths.has(uploadHelper), `${uploadHelper} is missing`);
 
   for (const filePath of filePaths) {
     assert(!filePath.startsWith("tests/"), `${filePath} should not be published`);
@@ -118,6 +129,7 @@ test("npm exec installs from the packed skills without downloading a repository 
   for (const skillName of skillNames) {
     assert(fs.existsSync(path.join(destination, skillName, "SKILL.md")));
   }
+  assert(fs.existsSync(path.join(destination, uploadHelper)));
   const curlCalls = fs.existsSync(curlLog) ? fs.readFileSync(curlLog, "utf8") : "";
   assert(!/rainskills-(latest|[a-f0-9]+)\.tar\.gz/.test(curlCalls), curlCalls);
 });

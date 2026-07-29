@@ -1,0 +1,29 @@
+case: client-package-upload
+in_scope_components:
+  - api
+assert:
+  equal:
+    BootstrapResult.deployment_plan.workflow.created:
+      - api
+    BootstrapResult.deployment_plan.workflow.reused: []
+    BootstrapResult.deployment_plan.workflow.skipped: []
+    BootstrapResult.deployment_plan.workflow.skipped_reasons: {}
+    BootstrapResult.deployment_plan.workflow.deferred_dependencies: []
+    BootstrapResult.runtime_state.overall: runtime_healthy
+    BootstrapResult.runtime_state.blocking_bucket: null
+    BootstrapResult.next_handoff: delivery_verifier
+  contains:
+    BootstrapResult.runtime_state.component_status:
+      api: running
+  prose_contains:
+    - source.local_path was read only by the local helper
+    - non-empty event_id and complete upload_request
+    - exact upload_request contract
+    - local cleanup ran immediately after the HTTP attempt
+    - non-empty uploaded-file status
+    - created api by event_id
+    - delivery-verifier
+  prose_not_contains:
+    - rainbond_upload_package_file
+    - rainbond_create_component_from_local_package
+    - passed source.local_path to MCP
