@@ -194,8 +194,8 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
     具体的 provider 命名约定、connection env 变量名（`DB_*` / `REDIS_*` / `KAFKA_*` 等是示例，按 provider 文档实际名字为准）、以及依赖 alias 细节，详见 bootstrap modules/30-creation-rules.md 的相关章节。
 24. 不要自动拉起本地 Docker Desktop/OrbStack、执行本地 Docker build/push、或推送临时镜像作为兜底；这属于 delivery-mode 策略切换，必须先得到用户明确确认。
 25. 每次运行内部仍必须形成 `AppAssistantResult` 结果对象，但默认用户答复不一定暴露 YAML。
-    当 source app 已严格 `delivered`、`next_action = stop`、没有 promotion、没有 blocker，且用户没有要求结构化/调试输出时，默认使用简洁中文交付报告，不追加 `### Structured Output`。
-26. 只有在自动化/评测/调试模式、用户明确要求结构化输出、结果未完全交付、需要人工验证、需要 handoff、或进入 dev-to-test promotion 时，才把 `AppAssistantResult` 渲染为最终 fenced `yaml`。
+    当 `source_app_delivery` 的 runtime healthy、没有 blocker、控制台部署位置和公网访问地址都已确定，且 delivery 已 `delivered` 或只剩浏览器人工确认时，默认使用简洁中文交付报告，不追加 `### Structured Output`。
+26. 只有在自动化/评测/调试明确要求结构化结果、用户明确要求 YAML/JSON、结果仍在构建或异常、存在 blocker/handoff/身份歧义、或进入 dev-to-test promotion 时，才把 `AppAssistantResult` 渲染为最终 fenced `yaml`。仅因当前 agent 无法打开公网地址而需要用户确认，不是暴露 YAML 的理由。
 27. 如果本次使用了 Git、镜像仓库或其他传输代理，必须在默认交付报告的处理记录或注意事项中说明；在结构化模式下也必须写入 `actions_performed[].details`。
     代理事实属于执行记录，不是强制暴露 YAML 的理由。
 28. `rbd-*` 组件（rbd-gateway、rbd-api、rbd-worker、rbd-chaos、rbd-db、rbd-mq、rbd-monitor、rbd-node 等）是 Rainbond 平台自身的基础设施组件，不是用户应用组件。
@@ -398,6 +398,9 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
     - 本轮**未**调用该工具、或该工具未返回可用地址 → 最终报告必须写"请在控制台该组件的端口页查看对外访问地址"，**禁止**按记忆或文档示例的 URL 格式（`<name>.<ip>.nip.io`、`<service>-<port>-<team>.<ip>.nip.io` 等）拼装一个地址当成真的。
     - **禁止**把任何拼装/猜测出来的访问地址写进任何组件 env（如 `APP_WEB_URL` / `*_BASE_URL` / `*_PUBLIC_URL` 等）。需要把对外地址回填给某个组件时，同样只能用 `access_infos` 的真实值；拿不到真实值就停下来让用户在控制台确认后提供，不要先拼一个填进去。
     - 真实事故：模型在没有任何工具返回访问地址的情况下，照文档示例格式拼出 `http://dify.<ip>.nip.io`，既写进最终报告又配进了组件 `APP_WEB_URL`，全是编造的。这是 Iron Law 违反。
+41. **部署位置和访问地址必须分开。** `project.deployment_location_url` 是 Rainbond 控制台应用概览地址；仅在可信 Console base（`RAINBOND_URL` 或等价 session context）、`team_name`、`region_name` 和 `app_id` 全部已知时生成：
+    `<console_base>/#/team/<urlencoded-team>/region/<urlencoded-region>/apps/<urlencoded-app-id>/overview`。
+    生成时去掉 `console_base` 末尾 `/`，逐段 URL encode；任一值缺失就写 `null`，禁止从公网访问域名反推 Console host。`delivery_state.preferred_access_url` 仍按 Iron Law 40 只引用网关真实返回值，两者禁止混用。
 
   ## 主线流程
 
@@ -838,70 +841,72 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
 
   Use this mode by default when all of the following are true:
   - `request_intent = source_app_delivery`
-  - `delivery_state.status = delivered`
-  - `delivery_state.verification_mode = verified`
-  - `next_action = stop`
+  - `runtime_state.phase = runtime_healthy`
+  - `delivery_state.status` is `delivered` or `delivered-but-needs-manual-validation`
+  - `delivery_state.verification_mode` is `verified`, `inferred`, or `manual_validation_needed` consistently with that status
+  - `next_action` is `stop` or `stop and validate URL manually`
   - `promotion_result = null`
   - there is no unresolved `runtime_state.blocker` or `delivery_state.blocker`
+  - `project.deployment_location_url` is non-null
+  - `delivery_state.preferred_access_url` is non-null
   - the user did not explicitly request structured output, YAML, JSON, debug output, or machine-readable output
-  - this is not an eval/automation capture that needs deterministic schema validation
+  - no eval/automation consumer explicitly requires structured contract mode
 
   In concise delivery report mode:
   - do not append `### Structured Output`
   - do not expose the fenced YAML block
   - keep the report short and directly useful to the user
-  - include the access URL prominently
-  - include component status and verification evidence
+  - state `部署成功`; when only browser confirmation remains, state `部署成功，待浏览器访问确认`
+  - include application name and selected environment
+  - include `部署位置` as a clickable `project.deployment_location_url`
+  - include `访问地址` as a clickable `delivery_state.preferred_access_url`
+  - include only the essential user-facing component status and HTTP verification evidence
+  - when browser confirmation remains, add at most one short validation note
   - include proxy/mirror usage when it affected the deployment
   - include warnings that matter after delivery, such as development-only database auth or missing production persistence
+  - do not expose orchestration enums, lower-level skill names, `Blocking Issue: none`, or the internal action ledger
 
   Default concise section order:
   - `### 部署结果`
-  - `### 应用信息`
-  - `### 组件状态`
-  - `### 验证结果`
-  - `### 处理记录` when non-trivial fixes, proxy changes, or local binding updates occurred
+  - `### 运行状态`
+  - `### 处理记录` only when non-trivial fixes or proxy changes materially affect later operation
   - `### 注意事项` when there are production-readiness caveats
 
-  Example concise delivery reply (the `203.0.113.10` host below is an RFC 5737 placeholder used **only** to show the report shape — per Iron Law 40 the real access URL must come verbatim from `rainbond_get_component_summary`'s `access_infos`; if it was not fetched this run, write "请在控制台该组件的端口页查看对外访问地址" instead of this URL pattern):
+  Example concise delivery reply (the public URL is an example only; a real reply must use the exact gateway value from Iron Law 40):
 
   ```markdown
   ### 部署结果
-  已部署到 Rainbond 开发环境，访问地址：http://example.203.0.113.10.nip.io
+  部署成功，待浏览器访问确认。
 
-  ### 应用信息
-  - Team：开发环境 / kz5igqh4
-  - Region：rainbond
-  - App：spring-postgres-dev
-  - App ID：180
+  应用：`demo-2048`
+  环境：`preview`
 
-  ### 组件状态
-  - db：RUNNING，镜像使用代理 `m.daocloud.io/docker.io/library/postgres:17`
-  - backend：RUNNING，源码使用代理 `https://ghfast.top/https://github.com/docker/awesome-compose.git?dir=spring-postgres/backend`
+  - 部署位置：[打开 Rainbond 应用](https://run.rainbond.com/#/team/aw9qu6gd/region/rainbond/apps/3283/overview)
+  - 访问地址：[打开 2048](http://example.invalid/2048)
 
-  ### 验证结果
-  外部 8080 URL 已返回 Spring 页面，内容包含 `Hello from Docker!`。
+  ### 运行状态
+
+  - `web`：运行中
+  - HTTP 检查：200 OK
+
+  服务运行正常。当前环境无法访问公网域名，请打开访问地址确认页面交互。
 
   ### 处理记录
-  - 已补充 `rainbond.app.json` 和 `.rainbond/local.json`
-  - Compose 导入不可用，已改为显式创建 `db` 和 `backend`
-  - 后端内存已调到 1024Mi，数据库地址已改为 Rainbond 内部服务名
-
-  ### 注意事项
-  开发环境数据库当前使用 `POSTGRES_HOST_AUTH_METHOD=trust`，不适合生产。
+  - 使用镜像代理完成依赖拉取
   ```
 
   ### Structured contract mode
 
   Use this mode when any of the following is true:
   - the user asks for structured output, YAML, JSON, debug details, or machine-readable output
-  - an eval, wrapper, or automation flow needs deterministic schema validation
-  - `delivery_state.status` is not `delivered`
-  - `delivery_state.verification_mode` is `inferred` or `manual_validation_needed`
-  - `next_action` is not `stop`
+  - an eval, wrapper, or automation flow explicitly needs deterministic structured schema validation
+  - any concise delivery report condition above is not met
+  - the app is building, unhealthy, blocked, identity-ambiguous, or requires handoff
   - `promotion_result` is non-null or the user requested dev-to-test promotion
   - there is any unresolved blocker or handoff
   - another skill or wrapper will consume the result as input
+
+  Building, unhealthy, blocked, ambiguous, handoff, and incomplete promotion states should keep the detailed human-readable sections and evidence below. Do not make non-success output terse merely because successful output is concise.
 
   In structured contract mode:
   - the human-readable sections below are the narrative view over `AppAssistantResult`
@@ -931,6 +936,7 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
         app_id: string | null
       linked: boolean
       selected_environment: preview | production
+      deployment_location_url: string | null
     environment:
       name: preview | production
       source: explicit | local_preference | default
@@ -986,6 +992,10 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
     - do not force `false` only because local metadata is stale when MCP confirms the same bound app in the current run
   - `project.selected_environment`
     - must match the resolved environment for the current run
+  - `project.deployment_location_url`
+    - must always be present and may be `null` when trusted Console base or resolved identity is unavailable
+    - when non-null, must be built from trusted Console base plus the URL-encoded team, region, and app ID overview route from Iron Law 41
+    - must never be copied from or inferred from `delivery_state.preferred_access_url`
   - `environment`
     - must describe the selected environment and whether env/secrets layers are present enough to matter to orchestration
   - `request_intent`
@@ -1100,6 +1110,7 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
         app_id: app-4fd2
       linked: true
       selected_environment: preview
+      deployment_location_url: https://run.rainbond.com/#/team/rainbond-demo/region/singapore/apps/app-4fd2/overview
     environment:
       name: preview
       source: local_preference
@@ -1162,6 +1173,7 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
         app_id: app-9a2b
       linked: true
       selected_environment: preview
+      deployment_location_url: https://run.rainbond.com/#/team/alpha-org/region/us-south/apps/app-9a2b/overview
     environment:
       name: preview
       source: default
@@ -1255,7 +1267,10 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
   - running troubleshooter before confirming the project is linked
   - assuming env sync is mandatory for every run
   - treating env files as runtime truth
-  - exposing a large YAML block for a fully delivered, verified, stop-state source app when the user did not ask for structured/debug output
+  - exposing a large YAML block for an eligible successful source delivery, including browser-confirmation-only delivery, when the user did not ask for structured/debug output
+  - reporting team/region/app identity as a substitute for the clickable Rainbond deployment location
+  - using the public service URL as the Rainbond deployment location, or constructing the public service URL from naming conventions
+  - stripping useful diagnostic evidence from building, blocked, unhealthy, ambiguous, handoff, or incomplete promotion states
   - omitting the required `### Structured Output` section in structured contract mode
   - replacing the required five human-readable sections with freeform narrative in structured contract mode
   - treating a project as unlinked only because `.rainbond/local.json.metadata.status` is stale even though MCP confirms the same app in the current run
@@ -1301,7 +1316,7 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
   - topology exists but unhealthy -> troubleshoot
   - runtime appears converged -> delivery verifier
   - strict delivered plus explicit dev-to-test intent -> create snapshot and testing app
-  - delivered-but-needs-manual-validation -> stop for manual URL validation before promotion
+  - delivered-but-needs-manual-validation -> stop for manual URL validation before promotion; use concise success output for source-only delivery when all concise-mode conditions are met
   - runtime fixed but browser path broken -> code/build handoff
   - healthy -> stop
 

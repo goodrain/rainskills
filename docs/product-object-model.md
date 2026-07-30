@@ -106,6 +106,7 @@ Project:
   topology:
     components: Component[]
   selected_environment: preview | production
+  deployment_location_url: string | null
   binding:
     source: local_binding | manifest | explicit | discovered
 ```
@@ -116,6 +117,7 @@ Design rules:
 - `topology` is the committed project baseline, normally projected through `rainbond.app.json`
 - `app_id` may be unknown before linking, but it becomes part of the resolved project identity once binding is confirmed
 - selected environment is part of project context, but environment-specific data belongs to the `Environment` object
+- `deployment_location_url` is the Rainbond Console app overview URL derived from trusted Console context plus team, region, and app ID; it is distinct from the gateway-provided public service URL
 
 Ownership split:
 
@@ -1369,7 +1371,11 @@ Target output object:
 
 ```yaml
 AppAssistantResult:
-  project: Project
+  project:
+    identity: Project.identity
+    linked: boolean | null
+    selected_environment: preview | production | null
+    deployment_location_url: string | null
   environment: Environment
   orchestration_state: string
   runtime_state: RuntimeState | null
@@ -1465,14 +1471,15 @@ High-priority backlog by skill:
 
 Recommended repo-wide convention for future skill outputs:
 
-1. keep the existing human-readable sections first
-2. append one final `Structured Output` section after the human-readable report
-3. render the canonical object in a fenced `yaml` block
-4. use exact canonical field names and enum values from this document
-5. mask or omit secrets in the structured object just as they are masked in prose
-6. if a field is applicable but currently unknown, prefer `null` over inventing a value
-7. if a field is not applicable for the skill, omit it rather than forcing placeholder noise
-8. the structured object must never contradict the human-readable sections above it
+1. keep detailed human-readable sections for building, unhealthy, blocked, ambiguous, handoff, and incomplete promotion states
+2. append one final `Structured Output` section when the user or a machine consumer requests it, or when a non-success workflow needs the detailed contract
+3. for an eligible successful source delivery, default to a concise user report with application, environment, Rainbond deployment location, public access URL, essential runtime status, and verification evidence; keep the canonical object internal
+4. browser confirmation alone does not force visible YAML when runtime is healthy, no blocker remains, and both URLs are known
+5. render visible canonical objects in a fenced `yaml` block with exact field names and enum values
+6. mask or omit secrets in the structured object just as they are masked in prose
+7. if a field is applicable but currently unknown, prefer `null` over inventing a value
+8. if a field is not applicable for the skill, omit it rather than forcing placeholder noise
+9. the structured object must never contradict the human-readable sections above it
 
 Recommended shape:
 
