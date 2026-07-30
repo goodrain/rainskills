@@ -36,6 +36,9 @@ Normative Chinese example:
 
 部署成功，待浏览器访问确认。
 
+应用：`demo-2048`
+环境：`preview`
+
 - 部署位置：[打开 Rainbond 应用](https://run.rainbond.com/#/team/aw9qu6gd/region/rainbond/apps/3283/overview)
 - 访问地址：[打开应用](http://grc99e8f-8080-aw9qu6gd.dev.goodrain.com)
 
@@ -52,10 +55,11 @@ Normative Chinese example:
 The default successful-delivery response must include:
 
 1. A clear success state. If only browser-side validation remains, render `部署成功，待浏览器访问确认` rather than downgrading the deployment to a failure or blocker.
-2. A clickable Rainbond app-management URL.
-3. A clickable public service URL returned by Rainbond gateway evidence.
-4. The minimum useful runtime summary, such as the user-facing component state and the HTTP result already verified.
-5. At most one short validation note when the current environment cannot resolve or open the public URL.
+2. The application name and selected environment.
+3. A clickable Rainbond app-management URL.
+4. A clickable public service URL returned by Rainbond gateway evidence.
+5. The minimum useful runtime summary, such as the user-facing component state and the HTTP result already verified.
+6. At most one short validation note when the current environment cannot resolve or open the public URL.
 
 Do not include by default:
 
@@ -107,6 +111,8 @@ Use structured contract mode only when:
 - promotion was requested or another downstream machine workflow consumes the result
 
 Manual browser confirmation alone must not expose structured contract output to a normal user.
+
+Only successful source-delivery output is intentionally concise. Building, unhealthy, blocked, ambiguous, handoff, and incomplete promotion states retain detailed diagnostic sections, supporting evidence, actions already attempted, the dominant blocker, and the next action.
 
 ## Internal Contract
 
