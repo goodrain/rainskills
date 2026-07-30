@@ -1,0 +1,20 @@
+case: source-delivered-manual-validation
+presentation_mode: concise
+assert:
+  prose_contains:
+    - 部署成功，待浏览器访问确认
+    - demo-2048
+    - preview
+    - 部署位置
+    - 访问地址
+    - https://run.rainbond.com/#/team/aw9qu6gd/region/rainbond/apps/3283/overview
+    - http://grc99e8f-8080-aw9qu6gd.dev.goodrain.com
+    - web
+    - 200 OK
+  prose_not_contains:
+    - AppAssistantResult
+    - Structured Output
+    - linked-and-needs-delivery-verification
+    - linked-and-needs-manual-url-validation
+    - Blocking Issue
+    - Actions Performed

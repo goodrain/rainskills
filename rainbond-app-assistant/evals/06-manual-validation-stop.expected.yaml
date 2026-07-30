@@ -3,6 +3,7 @@ assert:
   equal:
     AppAssistantResult.request_intent: dev_to_test_promotion
     AppAssistantResult.orchestration_state: linked-and-needs-manual-url-validation
+    AppAssistantResult.project.deployment_location_url: https://run.rainbond.com/#/team/demo-team/region/cn/apps/app-206/overview
     AppAssistantResult.delivery_state.status: delivered-but-needs-manual-validation
     AppAssistantResult.delivery_state.verification_mode: inferred
     AppAssistantResult.delivery_state.verifier_next_action: manual_url_validation

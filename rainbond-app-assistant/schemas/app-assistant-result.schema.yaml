@@ -215,6 +215,7 @@ properties:
           - identity
           - linked
           - selected_environment
+          - deployment_location_url
         properties:
           identity:
             $ref: "#/$defs/app_identity"
@@ -226,6 +227,8 @@ properties:
             anyOf:
               - $ref: "#/$defs/environment_name"
               - type: "null"
+          deployment_location_url:
+            $ref: "#/$defs/nullable_non_empty_string"
       environment:
         type: object
         additionalProperties: false

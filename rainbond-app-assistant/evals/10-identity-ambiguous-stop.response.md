@@ -24,6 +24,7 @@ AppAssistantResult:
       app_id: null
     linked: null
     selected_environment: null
+    deployment_location_url: null
   environment:
     name: preview
     source: default

@@ -10,6 +10,7 @@ import re
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote, urlsplit
 
 import yaml
 
@@ -22,6 +23,31 @@ REQUIRED_SECTIONS = [
     "### Next Step",
     "### Structured Output",
 ]
+
+CONCISE_SUCCESS_SECTIONS = [
+    "### 部署结果",
+    "### 运行状态",
+]
+
+CONCISE_SUCCESS_SECTION_ORDERS = {
+    tuple(CONCISE_SUCCESS_SECTIONS),
+    (*CONCISE_SUCCESS_SECTIONS, "### 处理记录"),
+    (*CONCISE_SUCCESS_SECTIONS, "### 注意事项"),
+    (*CONCISE_SUCCESS_SECTIONS, "### 处理记录", "### 注意事项"),
+}
+
+FORBIDDEN_CONCISE_INTERNAL_PATTERNS = (
+    r"\bAppAssistantResult\b",
+    r"\blinked-and-",
+    r"\borchestration_state\b",
+    r"\bruntime_state\b",
+    r"\bdelivery_state\b",
+    r"\bpromotion_result\b",
+    r"\bactions_performed\b",
+    r"\bnext_action\b",
+    r"\bdelivered-but-needs-manual-validation\b",
+    r"\bruntime_(?:healthy|unhealthy)\b",
+)
 
 SECRET_KEYWORDS = (
     "password",
@@ -165,6 +191,14 @@ def validate_response_file(
 
     errors: list[str] = []
 
+    presentation_mode = (expected or {}).get("presentation_mode", "structured")
+    if presentation_mode == "concise":
+        errors.extend(check_for_secret_leaks(response_text, "", {}))
+        errors.extend(validate_concise_response(response_text, expected or {}))
+        return errors
+    if presentation_mode != "structured":
+        return [f"unsupported presentation_mode: {presentation_mode!r}"]
+
     try:
         sections = parse_required_sections(response_text)
     except ValidationFailure as exc:
@@ -193,6 +227,43 @@ def validate_response_file(
     if expected_path and not errors:
         errors.extend(validate_expected_fixture(sections, payload, expected or {}))
 
+    return errors
+
+
+def validate_concise_response(response_text: str, expected: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    headings = re.findall(r"(?m)^### [^\n]+$", response_text)
+
+    if tuple(headings) not in CONCISE_SUCCESS_SECTION_ORDERS:
+        errors.append(
+            "concise success headings must start with: "
+            + ", ".join(CONCISE_SUCCESS_SECTIONS)
+            + "; optional trailing sections are ### 处理记录 and ### 注意事项"
+            + f"; got: {headings}"
+        )
+
+    required_patterns = {
+        "a successful deployment result": r"部署成功",
+        "an application name": r"(?m)^应用：`?[^`\n]+`?\s*$",
+        "an environment name": r"(?m)^环境：`?[^`\n]+`?\s*$",
+        "a Rainbond deployment location link": r"(?m)^- 部署位置：\[[^\]]+\]\(https?://[^)\s]+\)\s*$",
+        "a public access link": r"(?m)^- 访问地址：\[[^\]]+\]\(https?://[^)\s]+\)\s*$",
+        "component runtime status": r"(?m)^- `?[^`\n：]+`?：运行中\s*$",
+        "HTTP verification evidence": r"(?im)^- HTTP (?:检查|验证)：[^\n]+$",
+    }
+    for label, pattern in required_patterns.items():
+        if not re.search(pattern, response_text):
+            errors.append(f"concise success response requires {label}")
+
+    if re.search(r"(?s)```(?:yaml|yml|json)?\s*\n", response_text, flags=re.IGNORECASE):
+        errors.append("concise success response must not contain fenced structured output")
+
+    for pattern in FORBIDDEN_CONCISE_INTERNAL_PATTERNS:
+        if re.search(pattern, response_text, flags=re.IGNORECASE):
+            errors.append("concise success response must not expose internal orchestration fields or enum values")
+            break
+
+    errors.extend(validate_expected_prose(response_text, expected))
     return errors
 
 
@@ -427,6 +498,7 @@ def validate_cross_field_rules(sections: dict[str, str], payload: dict[str, Any]
     orchestration_state = normalize_space(result.get("orchestration_state"))
 
     errors.extend(validate_next_action_vocabulary(next_action))
+    errors.extend(validate_deployment_location(result))
 
     phase = normalize_space(runtime.get("phase"))
     combined_text = "\n".join(
@@ -518,6 +590,40 @@ def validate_cross_field_rules(sections: dict[str, str], payload: dict[str, Any]
             errors.extend(validate_delivery_summary(testing_delivery, path_prefix="promotion_result.testing_delivery_state"))
 
     return errors
+
+
+def validate_deployment_location(result: dict[str, Any]) -> list[str]:
+    project = result.get("project") or {}
+    identity = project.get("identity") or {}
+    deployment_url = project.get("deployment_location_url")
+
+    if deployment_url is None:
+        return []
+
+    identity_parts = [
+        identity.get("team_name"),
+        identity.get("region_name"),
+        identity.get("app_id"),
+    ]
+    if any(value is None for value in identity_parts):
+        return ["project.deployment_location_url requires team_name, region_name, and app_id"]
+
+    parsed = urlsplit(deployment_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return ["project.deployment_location_url must be an absolute HTTP(S) Console URL"]
+
+    team_name, region_name, app_id = (quote(str(value), safe="") for value in identity_parts)
+    expected_fragment = f"/team/{team_name}/region/{region_name}/apps/{app_id}/overview"
+    if parsed.fragment != expected_fragment:
+        return [
+            "project.deployment_location_url must point to the resolved Rainbond app overview route"
+        ]
+
+    delivery = result.get("delivery_state") or {}
+    if deployment_url == delivery.get("preferred_access_url"):
+        return ["deployment location and public service URL must remain distinct"]
+
+    return []
 
 
 def validate_next_action_vocabulary(next_action: str) -> list[str]:
@@ -783,6 +889,15 @@ def validate_expected_fixture(
             sections["### Next Step"],
         ]
     )
+
+    errors.extend(validate_expected_prose(prose_body, expected))
+
+    return errors
+
+
+def validate_expected_prose(prose_body: str, expected: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    assertions = expected.get("assert", {})
 
     for needle in assertions.get("prose_contains", []):
         if needle not in prose_body:

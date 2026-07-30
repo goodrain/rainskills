@@ -1,28 +1,24 @@
 case: delivered-with-proxy-and-local-binding
+presentation_mode: concise
 assert:
-  equal:
-    AppAssistantResult.request_intent: source_app_delivery
-    AppAssistantResult.execution_path.requested_kind: source
-    AppAssistantResult.execution_path.resolved_kind: source
-    AppAssistantResult.orchestration_state: linked-and-delivered
-    AppAssistantResult.runtime_state.phase: runtime_healthy
-    AppAssistantResult.delivery_state.status: delivered
-    AppAssistantResult.delivery_state.preferred_access_url: http://gr0c90d0-8080-kz5igqh4.203.0.113.10.nip.io
-    AppAssistantResult.delivery_state.verification_mode: verified
-    AppAssistantResult.promotion_result: null
-    AppAssistantResult.next_action: stop
-  contains:
-    AppAssistantResult.actions_performed:
-      - skill: rainbond-fullstack-troubleshooter
-        status: completed
-        details: Used proxy image m.daocloud.io/docker.io/library/postgres:17, proxy Git source https://ghfast.top/https://github.com/docker/awesome-compose.git?dir=spring-postgres/backend, 1024Mi backend memory, and Rainbond internal database host wiring.
-      - skill: rainbond-delivery-verifier
-        status: completed
-        details: Verified the external 8080 URL returned the Spring page containing Hello from Docker!.
   prose_contains:
+    - 部署成功
+    - spring-postgres-dev
+    - preview
+    - https://run.rainbond.com/#/team/kz5igqh4/region/rainbond/apps/180/overview
+    - http://gr0c90d0-8080-kz5igqh4.203.0.113.10.nip.io
+    - db
+    - backend
+    - 200 OK
+    - 镜像代理
+    - Git 代理
+    - 1024Mi
+    - Rainbond 内部服务地址
+  prose_not_contains:
+    - AppAssistantResult
+    - Structured Output
     - linked-and-delivered
-    - runtime_healthy
-    - delivery status delivered
-    - proxy image
-    - proxy Git source
-    - stop
+    - Actions Performed
+    - rainbond-project-init
+    - rainbond-fullstack-bootstrap
+    - rainbond-fullstack-troubleshooter

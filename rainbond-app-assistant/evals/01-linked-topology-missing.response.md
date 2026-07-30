@@ -24,6 +24,7 @@ AppAssistantResult:
       app_id: app-201
     linked: true
     selected_environment: preview
+    deployment_location_url: https://run.rainbond.com/#/team/demo-team/region/cn/apps/app-201/overview
   environment:
     name: preview
     source: local_preference
