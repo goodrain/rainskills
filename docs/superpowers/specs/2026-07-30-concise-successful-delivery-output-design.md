@@ -110,7 +110,7 @@ Manual browser confirmation alone must not expose structured contract output to 
 
 ## Internal Contract
 
-Keep producing `AppAssistantResult` internally. Add `project.deployment_location_url` as a required nullable derived field so validators and downstream automation can distinguish the management location from `delivery_state.preferred_access_url`. Every result contains the field; use `null` when the identity or trusted Console base is unavailable. Successful and manual-validation source delivery requires a non-null value.
+Keep producing `AppAssistantResult` internally. Add `project.deployment_location_url` as a required nullable derived field so validators and downstream automation can distinguish the management location from `delivery_state.preferred_access_url`. Every result contains the field; use `null` when the identity or trusted Console base is unavailable. A non-null value is a concise-mode invariant for successful and manual-validation source delivery. When it is `null`, retain the evidence-backed delivery status but use structured mode to expose the incomplete location contract.
 
 For a runtime-healthy manual-validation result:
 
@@ -126,7 +126,7 @@ Add a source-delivery manual-validation eval whose response is concise and conta
 
 - a valid `deployment_location_url` when all location inputs are available
 - `preferred_access_url` to remain present for successful or manual-validation delivery
-- no structured YAML in the default manual-validation response
+- no structured YAML in an eligible `source_app_delivery` manual-validation response
 - no internal state labels in the default successful response
 
 The response-mode validator selects concise mode only when the full eligibility predicate under Presentation Modes is true. All other cases retain structured validation.
