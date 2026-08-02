@@ -13,6 +13,34 @@ function classifyNodeMajor(major) {
   return "supported";
 }
 
+function resolveInvocation(args) {
+  const installerPath = path.resolve(__dirname, "..", "install.sh");
+  const platformInstallerPath = path.resolve(
+    __dirname,
+    "..",
+    "rainbond-platform-installer",
+    "scripts",
+    "platform-installer.js"
+  );
+
+  if (args[0] === "platform" && args[1] === "install") {
+    return {
+      executable: process.execPath,
+      args: [platformInstallerPath, "install", ...args.slice(2)],
+    };
+  }
+  if (args[0] === "resume") {
+    return {
+      executable: process.execPath,
+      args: [platformInstallerPath, "resume", ...args.slice(1)],
+    };
+  }
+  return {
+    executable: "bash",
+    args: [installerPath, ...args],
+  };
+}
+
 function run() {
   const major = Number.parseInt(process.versions.node.split(".", 1)[0], 10);
   const support = classifyNodeMajor(major);
@@ -34,8 +62,8 @@ function run() {
     );
   }
 
-  const installerPath = path.resolve(__dirname, "..", "install.sh");
-  const child = spawn("bash", [installerPath, ...process.argv.slice(2)], {
+  const invocation = resolveInvocation(process.argv.slice(2));
+  const child = spawn(invocation.executable, invocation.args, {
     env: process.env,
     stdio: "inherit",
   });
@@ -64,7 +92,7 @@ function run() {
   });
 }
 
-module.exports = { classifyNodeMajor };
+module.exports = { classifyNodeMajor, resolveInvocation };
 
 if (require.main === module) {
   run();

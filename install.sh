@@ -140,6 +140,8 @@ RAINBOND_TOKEN_FROM_FLAG=0
 RAINBOND_URL_FROM_FLAG=0
 RAINBOND_CACHED_URL="${RAINBOND_URL:-}"
 DEPLOYMENT_MODE_INPUT=""
+SELF_HOSTED_PATH_RESOLVED=0
+RAINSKILLS_INSTALL_DEFERRED=0
 SAAS_DEFAULT_URL="https://run.rainbond.com"
 LOGIN_TIMEOUT="${RAINBOND_LOGIN_TIMEOUT:-300}"
 JWT_MIN_TTL_SECONDS="${RAINBOND_JWT_MIN_TTL_SECONDS:-600}"
@@ -789,16 +791,160 @@ ensure_python3() {
 
 show_self_hosted_install_hint() {
   log ""
-  log "============================================================"
-  log "[重要] 私有化部署需要先准备一个可访问的 Rainbond 环境"
+  log "[RAINSKILLS_USER_INPUT_REQUIRED:rainbond_console_url]"
+  log "请发送浏览器中访问 Rainbond 控制台的完整地址，例如："
+  log "https://rainbond.example.com"
+}
+
+create_rainskills_onboarding_checkpoint() {
+  ensure_python3
+  python3 - "$HOME" "$SCRIPT_DIR" "$TARGET" <<'PY'
+import json
+import os
+import stat
+import sys
+import tempfile
+import uuid
+from datetime import datetime, timezone
+
+home, script_dir, target = sys.argv[1:]
+state_dir = os.path.join(home, ".rainbond")
+state_path = os.path.join(state_dir, "rainskills-onboarding-v1.json")
+
+if os.path.lexists(state_dir) and os.path.islink(state_dir):
+    raise SystemExit("拒绝使用符号链接状态目录：{}".format(state_dir))
+if os.path.exists(state_dir):
+    directory_stat = os.stat(state_dir)
+else:
+    os.makedirs(state_dir, mode=0o700)
+    directory_stat = os.stat(state_dir)
+if directory_stat.st_uid != os.getuid() or not stat.S_ISDIR(directory_stat.st_mode):
+    raise SystemExit("状态目录不属于当前用户：{}".format(state_dir))
+os.chmod(state_dir, 0o700)
+if os.path.lexists(state_path) and os.path.islink(state_path):
+    raise SystemExit("拒绝覆盖符号链接状态文件：{}".format(state_path))
+
+package_version = "unknown"
+manifest_path = os.path.join(script_dir, "package.json")
+try:
+    with open(manifest_path, encoding="utf-8") as manifest_file:
+        package_version = json.load(manifest_file).get("version", "unknown")
+except (OSError, ValueError):
+    pass
+
+operation_id = str(uuid.uuid4())
+platform_state_path = os.path.join(
+    state_dir, "platform-installer", operation_id, "state.json"
+)
+state = {
+    "schema": "rainskills.onboarding.v1",
+    "version": 1,
+    "operation_id": operation_id,
+    "package_version": package_version,
+    "updated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    "stage": "awaiting-platform",
+    "target": target,
+    "deployment_mode": "self-hosted",
+    "platform_state_path": platform_state_path,
+    "console_url": None,
+}
+
+fd, temporary_path = tempfile.mkstemp(
+    prefix=".rainskills-onboarding-", dir=state_dir
+)
+try:
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as state_file:
+        json.dump(state, state_file, ensure_ascii=False, indent=2)
+        state_file.write("\n")
+        state_file.flush()
+        os.fsync(state_file.fileno())
+    os.replace(temporary_path, state_path)
+    os.chmod(state_path, 0o600)
+    directory_fd = os.open(state_dir, os.O_RDONLY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+except BaseException:
+    try:
+        os.unlink(temporary_path)
+    except OSError:
+        pass
+    raise
+
+print(operation_id)
+PY
+}
+
+defer_to_platform_installer() {
+  local onboarding_id package_spec
+  onboarding_id="$(create_rainskills_onboarding_checkpoint)"
+  package_spec="$({
+    python3 - "$SCRIPT_DIR/package.json" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as manifest_file:
+        version = json.load(manifest_file).get("version")
+except (OSError, ValueError):
+    version = None
+print("rainskills@{}".format(version) if version else "rainskills")
+PY
+  } 2>/dev/null || printf 'rainskills')"
+  RAINSKILLS_INSTALL_DEFERRED=1
   log ""
-  log "如果尚未安装 Rainbond，请在目标机器执行快速安装命令："
-  log "  curl -o install.sh https://get.rainbond.com && bash ./install.sh"
+  log "Rainbond 平台安装将在独立步骤中继续，前面的选择已经保存。"
+  log "支持 Linux 本机单机安装；macOS 将使用 OrbStack，准备时间通常更长。"
   log ""
-  log "安装完成后，请使用安装脚本输出的 Console 地址继续下面的配置。"
-  log "安装文档：https://www.rainbond.com/docs/quick-start/quick-install/"
-  log "============================================================"
+  log "如果由 AI 代为安装，请按下面的固定参数继续；终端用户也可以直接执行："
+  log "npx ${package_spec} platform install --onboarding-id ${onboarding_id}"
+  python3 - "$onboarding_id" <<'PY'
+import json
+import sys
+
+operation_id = sys.argv[1]
+print(json.dumps({
+    "schema": "rainskills.next-action.v1",
+    "action": "install-platform",
+    "onboarding_id": operation_id,
+    "argv": ["platform", "install", "--onboarding-id", operation_id],
+}, ensure_ascii=False, separators=(",", ":")))
+PY
+}
+
+resolve_self_hosted_path() {
+  [[ "$SELF_HOSTED_PATH_RESOLVED" -eq 0 ]] || return 0
+  SELF_HOSTED_PATH_RESOLVED=1
+
+  if [[ "$NON_INTERACTIVE" -eq 1 || ! -t 0 ]]; then
+    die "非交互私有化部署必须提供 --rainbond-url；平台安装向导需要交互确认。"
+  fi
+
   log ""
+  log "你现在是否已经有可以访问的 Rainbond 平台？"
+  log ""
+  log "  1) 已经有，填写平台地址"
+  log "  2) 还没有，帮我安装"
+
+  while true; do
+    printf '请输入选项 [1-2]: '
+    read -r choice
+    case "$choice" in
+      1)
+        show_self_hosted_install_hint
+        return 0
+        ;;
+      2)
+        defer_to_platform_installer
+        return 0
+        ;;
+      *)
+        log "请输入 1 或 2。"
+        ;;
+    esac
+  done
 }
 
 resolve_deployment_mode() {
@@ -819,21 +965,36 @@ resolve_deployment_mode() {
     die "非交互模式下必须指定 --saas 或 --self-hosted（搭配 --rainbond-url）。"
   fi
 
-  log "请选择 Rainbond 部署形态："
-  log "  1) Rainbond Cloud（SaaS：${SAAS_DEFAULT_URL}）"
-  log "  2) 私有化部署（自填 Console 地址）"
+  log ""
+  log "RainSkills 文件已安装完成。"
+  log ""
+  log "为了让 AI 能够创建、部署和管理应用，还需要连接你的 Rainbond 账号。"
+  log "接下来会打开浏览器完成登录和授权，无需在终端输入账号或密码。"
+  log ""
+  log "[RAINSKILLS_USER_INPUT_REQUIRED:rainbond_connection]"
+  log "如果由 AI 代为安装，请暂停执行并让用户选择，不得自动代选。"
+  log ""
+  log "请选择要连接的 Rainbond："
+  log ""
+  log "  1) Rainbond Cloud"
+  log "     无需自行安装 Rainbond，登录后即可使用"
+  log "     地址：${SAAS_DEFAULT_URL}"
+  log ""
+  log "  2) 私有化部署"
+  log "     已有平台可填写地址；没有平台可进入单机安装向导"
+  log ""
 
   while true; do
-    printf '请输入选项 [1-2，回车默认 1]: '
+    printf '请输入选项 [1-2]: '
     read -r choice
     case "$choice" in
-      1|"")
+      1)
         DEPLOYMENT_MODE_INPUT="saas"
         return 0
         ;;
       2)
         DEPLOYMENT_MODE_INPUT="self-hosted"
-        show_self_hosted_install_hint
+        resolve_self_hosted_path
         return 0
         ;;
       *)
@@ -1781,6 +1942,13 @@ configure_mcp() {
   ensure_python3
   resolve_deployment_mode
 
+  if [[ "$DEPLOYMENT_MODE_INPUT" == "self-hosted" && "$RAINBOND_URL_FROM_FLAG" -eq 0 ]]; then
+    resolve_self_hosted_path
+  fi
+  if [[ "$RAINSKILLS_INSTALL_DEFERRED" -eq 1 ]]; then
+    return 0
+  fi
+
   local base_url_input base_url
   case "$DEPLOYMENT_MODE_INPUT" in
     saas)
@@ -1902,6 +2070,10 @@ main() {
   done
 
   configure_mcp
+
+  if [[ "$RAINSKILLS_INSTALL_DEFERRED" -eq 1 ]]; then
+    return 0
+  fi
 
   log ""
   log "安装完成。本次：${INSTALL_COUNT_NEW} 项新装 / ${INSTALL_COUNT_UPDATED} 项已更新 / ${INSTALL_COUNT_UNCHANGED} 项已是最新 / ${INSTALL_COUNT_FORCED} 项强制覆盖"

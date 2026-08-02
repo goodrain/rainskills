@@ -1,0 +1,19 @@
+{
+  "schema": "rainskills.platform-installation-policy.v1",
+  "minimums": {
+    "cpu_cores": 4,
+    "memory_bytes": 8589934592,
+    "disk_bytes": 53687091200
+  },
+  "required_ports": [80, 443, 6060, 7070],
+  "supported_control_platforms": ["linux", "darwin", "win32"],
+  "supported_platforms": ["linux", "darwin"],
+  "supported_architectures": ["x64", "arm64"],
+  "installer": {
+    "url": "https://get.rainbond.com/",
+    "allowed_origins": ["https://get.rainbond.com"],
+    "sha256": "5b82d0b0fdfe8f049bf0b5495b7565da769bf8e21874052b39c39493b0c7d071",
+    "tested_rainbond_version": "v6.9.6-release",
+    "verified_at": "2026-08-02"
+  }
+}

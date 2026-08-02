@@ -1,6 +1,6 @@
 {
   "name": "rainskills",
-  "version": "0.1.0-rc.0",
+  "version": "0.1.0-rc.3",
   "description": "Interactive Rainbond skill installer for Codex and Claude Code",
   "license": "Apache-2.0",
   "homepage": "https://github.com/goodrain/rainskills#readme",
@@ -30,19 +30,24 @@
     "rainbond-env-sync/",
     "rainbond-fullstack-bootstrap/",
     "rainbond-fullstack-troubleshooter/",
+    "rainbond-platform-installer/",
     "rainbond-project-init/",
-    "rainbond-template-installer/"
+    "rainbond-template-installer/",
+    "!**/__pycache__/",
+    "!**/*.pyc"
   ],
   "engines": {
     "node": ">=18"
   },
   "os": [
     "darwin",
-    "linux"
+    "linux",
+    "win32"
   ],
   "scripts": {
-    "test": "npm run test:launcher && npm run test:package-upload && npm run test:package && npm run test:installer && npm run test:signal && npm run test:npx-pty",
+    "test": "npm run test:launcher && npm run test:platform && npm run test:package-upload && npm run test:package && npm run test:installer && npm run test:signal && npm run test:npx-pty",
     "test:launcher": "node --test tests/npx-launcher.test.js",
+    "test:platform": "node --test tests/platform-installer.test.js",
     "test:package-upload": "python3 tests/package_upload_helper_test.py && python3 tests/package_upload_workflow_contract_test.py && python3 rainbond-fullstack-bootstrap/scripts/run_bootstrap_evals.py",
     "test:package": "node --test tests/npm-package.test.js",
     "test:installer": "python3 tests/install_test_suite_tty_test.py",

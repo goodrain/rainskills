@@ -12,12 +12,16 @@ test("launcher has the Node shebang and classifies supported runtimes", () => {
   const source = fs.readFileSync(launcherPath, "utf8");
   assert.equal(source.split("\n", 1)[0], "#!/usr/bin/env node");
 
-  const { classifyNodeMajor } = require(launcherPath);
+  const { classifyNodeMajor, resolveInvocation } = require(launcherPath);
   assert.equal(classifyNodeMajor(16), "unsupported");
   assert.equal(classifyNodeMajor(18), "eol");
   assert.equal(classifyNodeMajor(20), "eol");
   assert.equal(classifyNodeMajor(22), "supported");
   assert.equal(classifyNodeMajor(24), "supported");
+  assert.deepEqual(resolveInvocation(["codex", "--skip-mcp"]), {
+    executable: "bash",
+    args: [path.join(repoRoot, "install.sh"), "codex", "--skip-mcp"],
+  });
 });
 
 test("launcher preserves arguments and environment and returns the Bash exit code", () => {

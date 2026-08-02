@@ -17,6 +17,7 @@ const skillNames = [
   "rainbond-env-sync",
   "rainbond-fullstack-bootstrap",
   "rainbond-fullstack-troubleshooter",
+  "rainbond-platform-installer",
   "rainbond-project-init",
   "rainbond-template-installer",
 ];
@@ -50,7 +51,7 @@ test("package metadata defines a public, dependency-free npx command", () => {
   );
   assert.equal(manifest.publishConfig.registry, "https://registry.npmjs.org/");
   assert.equal(manifest.publishConfig.access, "public");
-  assert.deepEqual(manifest.os, ["darwin", "linux"]);
+  assert.deepEqual(manifest.os, ["darwin", "linux", "win32"]);
   assert.equal(manifest.dependencies, undefined);
   assert.equal(manifest.devDependencies, undefined);
   assert.equal(manifest.scripts.postinstall, undefined);
@@ -60,7 +61,11 @@ test("package metadata defines a public, dependency-free npx command", () => {
   );
   assert.equal(
     manifest.scripts.test,
-    "npm run test:launcher && npm run test:package-upload && npm run test:package && npm run test:installer && npm run test:signal && npm run test:npx-pty"
+    "npm run test:launcher && npm run test:platform && npm run test:package-upload && npm run test:package && npm run test:installer && npm run test:signal && npm run test:npx-pty"
+  );
+  assert.equal(
+    manifest.scripts["test:platform"],
+    "node --test tests/platform-installer.test.js"
   );
 });
 
@@ -72,6 +77,10 @@ test("packed artifact contains the installer and all skills but no development f
   assert(filePaths.has("package.json"));
   assert(filePaths.has("bin/rainskills.js"));
   assert(filePaths.has("install.sh"));
+  assert(filePaths.has("rainbond-platform-installer/scripts/platform-installer.js"));
+  assert(filePaths.has("rainbond-platform-installer/agents/openai.yaml"));
+  assert(filePaths.has("rainbond-platform-installer/references/installation-policy.json"));
+  assert(filePaths.has("rainbond-platform-installer/references/installation-policy.md"));
   assert(filePaths.has("README.md"));
   assert(filePaths.has("LICENSE"));
   for (const skillName of skillNames) {
@@ -83,6 +92,8 @@ test("packed artifact contains the installer and all skills but no development f
     assert(!filePath.startsWith("tests/"), `${filePath} should not be published`);
     assert(!filePath.startsWith(".github/"), `${filePath} should not be published`);
     assert(!filePath.startsWith("docs/"), `${filePath} should not be published`);
+    assert(!filePath.includes("/__pycache__/"), `${filePath} should not be published`);
+    assert(!filePath.endsWith(".pyc"), `${filePath} should not be published`);
     assert.notEqual(filePath, ".npmrc");
   }
 });
@@ -146,4 +157,21 @@ test("the packed artifact exposes a real npx command", () => {
   assert.equal(result.status, 0, result.stderr || result.stdout);
   assert.match(result.stdout, /Usage:/);
   assert.match(result.stdout, /--rainbond-url URL/);
+});
+
+test("the packed artifact exposes platform install and resume commands", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-platform-npx-"));
+  const packed = packPackage(tempDir);
+  for (const args of [
+    ["platform", "install", "--help"],
+    ["resume", "--help"],
+  ]) {
+    const result = spawnSync(
+      npxCommand,
+      ["--yes", `--package=${packed.tarballPath}`, "rainskills", ...args],
+      { cwd: tempDir, encoding: "utf8" }
+    );
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.match(result.stdout, /--onboarding-id ID/);
+  }
 });

@@ -1,5 +1,7 @@
 # Rainbond Platform Installer Skill Design
 
+> Implementation scope for `0.1.0-rc.3`: the first shipped slice covers current-host Linux and current-host macOS single-node installation, checkpoint/resume, verified Console discovery, and handoff back to existing Codex/Claude authorization. Remote SSH installation and OpenClaw registration remain follow-up work and must not be advertised as available in this release.
+
 ## Goal
 
 Add a dedicated `rainbond-platform-installer` skill that handles the missing-platform branch of the RainSkills self-hosted onboarding flow. When a user selects private deployment but does not yet have Rainbond, the agent should inspect a target machine, install the supported single-node Rainbond edition, verify the Console, return its address, and resume the existing RainSkills authorization flow without making the user repeat earlier choices.
@@ -80,7 +82,7 @@ The marker contains no shell string to evaluate. Agents must pass the fixed `arg
 
 The agent detects the current operating system before asking how to proceed.
 
-For a suitable current Linux machine, combine target selection, preflight result, installation effects, and confirmation into one response:
+For Linux, ask whether to use the current device or another Linux server. Pressing Enter defaults to the current device. After selection, combine preflight result, installation effects, and confirmation into one response:
 
 ```text
 检测到当前设备为 Linux，环境检查已通过：
@@ -91,7 +93,7 @@ For a suitable current Linux machine, combine target selection, preflight result
 是否直接在当前设备安装 Rainbond？
 ```
 
-For macOS, present one compact target reply before doing lengthy work:
+For macOS, present remote Linux first and the current Mac second before doing lengthy work:
 
 ```text
 检测到当前设备为 macOS。
@@ -99,9 +101,11 @@ For macOS, present one compact target reply before doing lengthy work:
 可以安装 Rainbond，但需要准备 OrbStack，下载时间通常比 Linux 更长。
 建议使用 Linux 服务器，也可以继续在当前 Mac 安装。
 
-1. 继续在当前 Mac 安装
-2. 改用 Linux 服务器（回复时同时提供 SSH 目标，例如：2 root@192.168.1.20）
+1. 使用 Linux 服务器（推荐；提供 SSH 目标，例如 root@192.168.1.20）
+2. 继续在当前 Mac 安装
 ```
+
+For Windows, explain that Rainbond cannot be installed on the current device and ask only for a remote Linux SSH target. Never show a macOS option.
 
 When a different Linux host is selected, accept only an existing SSH target such as `root@192.168.1.20` or a host alias from `~/.ssh/config`. If the user selected option 2 without the target, ask the one missing-field question, but classify that as a corrected incomplete reply rather than a normal extra decision. Do not ask for SSH passwords or key contents. Validate connectivity with a non-interactive, read-only probe before continuing.
 

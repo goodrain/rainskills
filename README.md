@@ -30,6 +30,7 @@ bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh)
 - `rainbond-env-sync`
 - `rainbond-fullstack-bootstrap`
 - `rainbond-fullstack-troubleshooter`
+- `rainbond-platform-installer`（内部安装流程，不作为独立产品使用）
 - `rainbond-project-init`
 - `rainbond-template-installer`
 
@@ -43,6 +44,7 @@ bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh)
 - 管理 Rainbond 应用版本中心中的创建快照、发布、本地/云市场发布事件和快照回滚流程
 - 对 Rainbond 全栈应用进行低风险排障
 - 在部署结束后做交付验收
+- 选择私有化但尚无平台时，在当前 Linux、当前 macOS 或远程 Linux 服务器部署 Rainbond 单机版
 
 ## 安装方式
 
@@ -51,12 +53,12 @@ bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh)
 - 已安装 `Codex`、`Claude Code`，或两者之一
 - 推荐 Node.js 22 或 24；`npx` 入口最低支持 Node.js 18
 - Node.js 18/20 已结束维护，安装器会警告但仍继续；Node.js 低于 18 请使用 CDN 安装方式
-- 本机可执行 `bash`、`curl`、`python3`；CDN 入口还需要 `tar`
-- 已有可登录的 Rainbond 账号
+- 本机可执行 `bash`、`curl`、`python3`；CDN 入口还需要 `tar`。远程 Linux 安装还需要系统 `ssh` 和 `scp`
+- 使用 Rainbond Cloud 时需要可登录账号；私有化新安装会先创建平台，再在浏览器完成初始化和授权
 
 ### 1. 一行命令安装（推荐）
 
-支持 macOS 和 Linux：
+支持 macOS 和 Linux。Windows 作为控制端时需要可用的 Bash、Python 3 和 OpenSSH，Rainbond 只会安装到远程 Linux 服务器：
 
 ```bash
 npx --yes rainskills
@@ -117,9 +119,9 @@ bash <(curl -fsSL https://raw.githubusercontent.com/goodrain/rainskills/main/ins
 不论使用 npx、CDN 还是本地仓库，安装器都会引导你完成这些动作：
 
 - 选择安装到 `Codex`、`Claude Code`，或两个都装
-- 选择 Rainbond 部署形态：
-  - **Rainbond Cloud（SaaS，默认）**：地址固定为 `https://run.rainbond.com`
-  - **私有化部署**：你自己输入 Console 地址；交互选择后会先醒目提示 Rainbond 前置条件、官方快速安装命令和安装文档，但不会中断 RainSkills 流程
+- Skill 文件安装完成后，选择要连接的 Rainbond：
+  - **Rainbond Cloud（SaaS）**：无需自行安装 Rainbond，地址固定为 `https://run.rainbond.com`
+  - **私有化部署**：已有平台时填写 Console 地址；尚无平台时进入内置单机安装向导
 - 浏览器中完成登录并授权（无需在终端输入用户名/密码）
 - 自动接收 JWT 并写入 `~/.rainbond/mcp.env`
 - 自动配置 `Codex` / `Claude Code` 的 RainSkills 专用 MCP 地址
@@ -127,6 +129,53 @@ bash <(curl -fsSL https://raw.githubusercontent.com/goodrain/rainskills/main/ins
 - 自动验证所选客户端的专用 MCP 地址是否可用：
   - Codex：`/console/mcp/rainskills/codex/query`
   - Claude Code：`/console/mcp/rainskills/claude-code/query`
+
+#### AI 代为安装时的用户选择
+
+如果用户尚未明确要连接的 Rainbond 环境，AI 不得在安装命令中自行添加 `--saas`、`--self-hosted` 或 `--rainbond-url`，也不得根据已有缓存替用户做决定。安装器会在 Skill 文件安装完成后进入用户选择阶段并输出：
+
+```text
+[RAINSKILLS_USER_INPUT_REQUIRED:rainbond_connection]
+```
+
+AI 看到该标记后必须暂停安装，把 Rainbond Cloud / 私有化部署的选择交给最终用户，不得代替用户选择，也不得通过空回车采用默认项。用户回答后，AI 应把选择写回仍在等待的安装进程。如果用户在发起安装时已经明确指定 Rainbond Cloud 或给出了私有化地址，AI 可以直接采用该选择，不必重复询问。
+
+用户选择私有化部署后，还需要明确选择“已经有平台”或“还没有，帮我安装”。已有平台时，安装器输出：
+
+```text
+[RAINSKILLS_USER_INPUT_REQUIRED:rainbond_console_url]
+```
+
+AI 看到该标记后，让用户发送浏览器中访问 Rainbond Console 的完整地址，然后把地址写回仍在等待的安装进程。
+
+选择“还没有，帮我安装”时，当前阶段会保存 `0600` 权限的非敏感断点并输出一行固定 JSON：
+
+```json
+{"schema":"rainskills.next-action.v1","action":"install-platform","onboarding_id":"<id>","argv":["platform","install","--onboarding-id","<id>"]}
+```
+
+AI 必须把 `argv` 数组作为参数传回同一个 `rainskills` 命令，不得把输出拼成任意 shell 字符串。平台安装器会：
+
+- 检查系统、架构、4 核 CPU、8 GB 内存、50 GB 磁盘、权限和端口
+- 展示官方脚本实际可能修改的主机项目，并等待用户一次明确确认
+- 从固定 HTTPS 来源下载并校验官方脚本 SHA-256
+- 展示下载和启动阶段，保留受保护的本地日志
+- 独立验证 Rainbond 容器、K3s、`rbd-system` 组件和 Console
+- 自动执行 `npx rainskills resume --onboarding-id <id>`，继续浏览器授权
+
+平台安装器会先识别当前设备：Linux 可选择“当前设备（回车默认）”或“其他 Linux 服务器”；macOS 可选择“Linux 服务器（推荐）”或“当前 Mac”；Windows 不展示本机或 macOS，只要求提供 Linux 服务器。远程连接使用已有的 SSH Key 或 `~/.ssh/config`，不会索取密码和私钥。
+
+当前支持单机版，包括本机和远程 Linux 安装；不支持多节点、高可用、离线安装或自动清理已有容器和端口冲突。
+
+如果 AI 使用的执行工具不能保持交互终端，平台预检后会输出：
+
+```text
+[RAINSKILLS_USER_INPUT_REQUIRED:platform_install_confirmation]
+```
+
+AI 应先把检测结果和系统变更展示给用户；用户明确同意后，再用相同参数追加 `--yes`，不得自行确认。
+
+`Ctrl+C` 会停止当前下载或安装子进程并保留断点。重新执行安装器输出的固定 `platform install` 命令即可从真实机器状态继续；Rainbond 已部署但授权未完成时，执行固定 `resume` 命令即可，不需要重新部署平台。
 
 #### 安装效果统计
 
