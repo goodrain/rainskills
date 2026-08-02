@@ -4,7 +4,7 @@
 
 Add a dedicated `rainbond-platform-installer` skill that handles the missing-platform branch of the RainSkills self-hosted onboarding flow. When a user selects private deployment but does not yet have Rainbond, the agent should inspect a target machine, install the supported single-node Rainbond edition, verify the Console, return its address, and resume the existing RainSkills authorization flow without making the user repeat earlier choices.
 
-The normal path should require no more than two user decisions after the user says that no Rainbond platform exists. Environment discovery, resource checks, installation monitoring, and health verification should otherwise proceed automatically.
+The normal path should require no more than two user reply turns after the user says that no Rainbond platform exists: one reply may select or identify the target, and one reply confirms the detected installation plan. Environment discovery, resource checks, installation monitoring, and health verification should otherwise proceed automatically.
 
 ## Scope
 
@@ -15,6 +15,8 @@ The first release supports:
 - macOS single-node quick installation on the current Mac through OrbStack.
 - `amd64` and `arm64` where the official Rainbond quick installer supports them.
 - resuming the interrupted RainSkills setup after the new Console URL is known.
+- end-to-end browser authorization when `npx rainskills` runs on a browser-capable control machine.
+- skill and Rainbond MCP registration for Codex, Claude Code, and OpenClaw.
 
 Linux is the recommended path. macOS is fully represented in the flow but is presented as slower because OrbStack and the Rainbond runtime artifacts may need to be downloaded first.
 
@@ -24,6 +26,7 @@ The first release does not support:
 - multi-node, high-availability, offline, air-gapped, or existing-Kubernetes installation;
 - remote macOS installation;
 - password-based SSH setup or accepting passwords, private keys, API tokens, or other credentials in chat;
+- a server-side Device Authorization Flow for a control machine with no usable browser;
 - silently stopping conflicting services, deleting existing containers or data, changing firewall rules, or resizing infrastructure.
 
 ## Skill Ownership And Triggering
@@ -54,9 +57,24 @@ Extend the interactive self-hosted branch with one compact question:
 2. 还没有，帮我安装
 ```
 
-Option 1 continues to the existing Console URL prompt. Option 2 saves a resumable RainSkills checkpoint and emits a stable machine-readable marker telling the agent to activate `rainbond-platform-installer`.
+Option 1 continues to the existing Console URL prompt. Option 2 saves a resumable RainSkills checkpoint and emits a stable machine-readable marker telling the agent to start the platform bootstrap command.
 
-The original installer must not remain dependent on a long-lived hidden terminal process. It may stop at this checkpoint, but the installed skill files, selected client targets, and deployment choice must be retained. After platform installation, the agent resumes the same setup at Rainbond authorization rather than repeating skill installation or platform selection.
+The npm launcher must expose these commands in addition to the current default installer:
+
+```text
+npx rainskills platform install --onboarding-id <id>
+npx rainskills resume --onboarding-id <id>
+```
+
+The platform command is the first-install bootstrap path. It is bundled in the npm package and is executable immediately, even though Codex or Claude Code may not discover a newly copied skill until their next session. OpenClaw normally watches managed skill directories, but the bootstrap must not depend on that behavior either. The `rainbond-platform-installer` skill provides the same dialogue policy for later direct requests, while the bootstrap command guarantees that the first installation does not depend on dynamic skill loading.
+
+After writing the checkpoint, `install.sh` exits normally instead of waiting in a hidden terminal. It prints a human resume command and exactly one JSON marker on its own line:
+
+```json
+{"schema":"rainskills.next-action.v1","action":"install-platform","onboarding_id":"<uuid>","argv":["platform","install","--onboarding-id","<uuid>"]}
+```
+
+The marker contains no shell string to evaluate. Agents must pass the fixed `argv` array back to the same launcher, not execute arbitrary text from the marker. A terminal user may run the displayed command manually. The installed skill files, selected client targets, and deployment choice remain in the checkpoint. After platform installation, the bootstrap command invokes the resume command, which continues at Rainbond authorization rather than repeating skill installation or platform selection.
 
 ### Compact Normal Path
 
@@ -73,7 +91,7 @@ For a suitable current Linux machine, combine target selection, preflight result
 是否直接在当前设备安装 Rainbond？
 ```
 
-For macOS, present one choice before doing lengthy work:
+For macOS, present one compact target reply before doing lengthy work:
 
 ```text
 检测到当前设备为 macOS。
@@ -82,10 +100,10 @@ For macOS, present one choice before doing lengthy work:
 建议使用 Linux 服务器，也可以继续在当前 Mac 安装。
 
 1. 继续在当前 Mac 安装
-2. 改用 Linux 服务器
+2. 改用 Linux 服务器（回复时同时提供 SSH 目标，例如：2 root@192.168.1.20）
 ```
 
-When a different Linux host is selected, ask only for an existing SSH target such as `root@192.168.1.20` or a host alias from `~/.ssh/config`. Do not ask for SSH passwords or key contents. Validate connectivity with a non-interactive, read-only probe before continuing.
+When a different Linux host is selected, accept only an existing SSH target such as `root@192.168.1.20` or a host alias from `~/.ssh/config`. If the user selected option 2 without the target, ask the one missing-field question, but classify that as a corrected incomplete reply rather than a normal extra decision. Do not ask for SSH passwords or key contents. Validate connectivity with a non-interactive, read-only probe before continuing.
 
 After the user approves the summarized plan, do not ask separately about Docker, directories, individual ports, or each installation phase. Additional questions are allowed only for blockers, genuine ambiguity, operating-system permission prompts, or destructive/conflicting remediation.
 
@@ -101,15 +119,21 @@ Run preflight checks as one read-only batch and report a compact pass summary. C
 - availability of ports `80`, `443`, `6060`, and `7070`;
 - existing Docker-compatible runtime, OrbStack, Rainbond container, and `/opt/rainbond` state where applicable.
 
-Keep resource thresholds in one versioned reference or helper definition so the skill text, tests, and installer do not diverge. The initial baseline is 4 CPU cores, 8 GB memory, and 50 GB usable disk, subject to alignment with the current official quick-install requirements.
+Keep resource thresholds in one versioned reference or helper definition so the skill text, tests, and installer do not diverge. Version 1 freezes the RainSkills product baseline at 4 CPU cores, 8 GB memory, and 50 GB usable disk. The policy also records the tested official quick-installer URL, detected Rainbond release, allowed redirect origins, and expected script digest. Updating that policy is a reviewed package release, not a runtime guess.
 
 When all checks pass, show only the summary and the final installation confirmation. When checks fail, show only failed or risky checks and a concrete next action. Do not bury the blocker in a full successful-check table.
 
 ### Installation
 
-After explicit confirmation, download the official installer to a temporary file before execution. Do not use an opaque `curl | bash` pipeline. Validate the download source and fail closed on an unexpected redirect, empty response, or non-script payload.
+After explicit confirmation, download the official installer to the operation workspace before execution. Do not use an opaque `curl | bash` pipeline. Require HTTPS, allow only origins recorded in the package policy, and fail closed on an unexpected redirect, digest mismatch, empty response, or non-script payload. Record the final URL, digest, and detected Rainbond version in the non-secret operation metadata.
 
-The Linux path prepares a supported Docker-compatible runtime when missing and then runs the official Rainbond quick installer. The macOS path first prepares and starts OrbStack, verifies the Docker API, and then runs the same official Rainbond quick-install entry. Do not install a new package manager solely to acquire OrbStack. A macOS system permission dialog is a legitimate user-action pause and must be explained in one short prompt.
+The tested official Linux quick installer changes more than Rainbond files: depending on detected state, it can stop and disable `firewalld` or `ufw`, disable swap and edit `/etc/fstab`, load and persist a kernel module, install or start a container runtime, and launch a privileged container. Preflight must detect which of these effects apply. The single final confirmation must list the applicable effects explicitly; a generic “install Rainbond” confirmation is insufficient. Declining that confirmation stops before the official script runs. No script rewriting or partial bypass of these prerequisites is part of version 1.
+
+The local Linux path executes the helper, installer, logs, and verification on the current Linux host. It requires either UID 0 or previously working non-interactive `sudo -n`; it never opens a password prompt.
+
+The remote Linux path keeps the authoritative onboarding and operation checkpoints on the local control machine. It creates a non-secret remote workspace at `~/.rainbond/platform-installer/<operation-id>/` for the downloaded script and remote log, runs every probe and mutation through `ssh -o BatchMode=yes`, and requires remote UID 0 or `sudo -n`. The official installer remains a foreground child of a remote wrapper. `INT` or `TERM` reaches that wrapper, which terminates its installer process group before the local SSH process exits. Re-entry reconnects and inspects real remote container, filesystem, and service state rather than trusting the local stage alone. Local verification checks Console reachability from the control machine; remote verification checks containers, K3s, and listening ports on the target.
+
+The macOS path executes the official script on Darwin while Docker commands target the verified OrbStack context. Preflight checks both Mac resources and the OrbStack Linux VM allocation. OrbStack must already be installed or be downloaded from its official signed distribution after user confirmation; do not install a new package manager solely to acquire it. Starting OrbStack or accepting a macOS system permission dialog is a legitimate user-action pause and must be explained in one short prompt. Rainbond and K3s run inside the privileged `rainbond` container, so K3s and component verification runs through `docker exec rainbond ...`, not against the Darwin host.
 
 Never automatically stop an occupied service, remove an existing Rainbond installation, delete `/opt/rainbond`, or overwrite an unknown Docker context. Detect these conditions and ask for a decision or stop with remediation guidance.
 
@@ -140,13 +164,17 @@ For runtime startup, display observable milestones and readiness rather than a s
 [4/4] Console 健康检查中
 ```
 
-The deterministic helper should emit both terminal-friendly output and line-delimited structured progress events. A minimum event shape is:
+The deterministic helper has three output channels: human progress on stdout, actionable diagnostics on stderr, and append-only JSONL events in the operation's `events.jsonl`. When file descriptor 3 is supplied by the launcher, each JSON event is also written to FD 3 for live machine consumption. Raw installer output goes only to the protected operation log and never shares the JSONL stream.
+
+A minimum event shape is:
 
 ```json
-{"schema":"rainskills.platform-progress.v1","stage":"download_images","status":"running","current":8,"total":11,"unit":"layers"}
+{"schema":"rainskills.platform-progress.v1","operation_id":"<uuid>","sequence":18,"timestamp":"<RFC3339>","stage":"download_images","status":"running","current":8,"total":11,"unit":"layers","elapsed_seconds":42}
 ```
 
-Clients with a streaming terminal can render a progress bar. Clients that batch tool output can render stage changes from the same events. If no new low-level output is available for a bounded interval, emit a heartbeat containing the current stage and elapsed time so the user does not mistake normal work for a hang.
+Valid statuses are `started`, `running`, `waiting_user`, `completed`, `failed`, and `interrupted`. Each operation begins with `started`, ends with one terminal status, and uses a monotonically increasing sequence. A parser translates only recognized download-layer, container, K3s, and HTTP probe evidence; unknown raw lines do not advance progress. If no new recognized evidence appears for 10 seconds, emit a `running` heartbeat with the current stage and elapsed time but no invented `current`, `total`, or percentage.
+
+Clients with a streaming terminal can render a progress bar. Clients that batch tool output can render stage changes from the persisted events. In-place terminal repaint is allowed only when stdout is a TTY; otherwise output one line per stage change or heartbeat.
 
 Default output hides raw installation logs. Preserve them in a local log file and expose the path on failure or when the user asks for details. Never include credentials or authorization tokens in progress events or logs.
 
@@ -175,11 +203,23 @@ Console 地址：http://192.168.1.20:7070
 接下来将连接该平台并完成授权。
 ```
 
-The agent then passes the verified Console URL to the RainSkills resume command. RainSkills continues with administrator initialization when needed, browser or device authorization, MCP registration, and verification. The user must not re-enter the URL or repeat earlier installer choices.
+The local control machine then invokes `npx rainskills resume --onboarding-id <id>`. The resume command owns the loopback callback server on `127.0.0.1`, opens the verified remote or local Console URL in the control machine's browser, and waits for authorization. If the Console has no account yet, the browser flow tells the user to create the first administrator, then automatically reopens the original `/#/cli-auth` URL after initialization or asks for one explicit “已完成初始化” acknowledgement when automatic detection is unavailable. Credentials stay in the browser and are never returned to the agent.
+
+Version 1 supports this complete handoff only when the `npx` control machine can open a browser that can reach the new Console and its own loopback callback. On a truly headless control machine, platform installation still completes and the checkpoint is preserved, but the installer reports that account authorization requires the existing manual fallback or a later Device Authorization Flow. It must not claim full RainSkills readiness or ask the user to paste a JWT into chat.
+
+After the callback returns a valid token, RainSkills registers and verifies the selected MCP clients. Codex and Claude Code continue to use their existing protected environment-variable approach. The OpenClaw adapter installs each skill through `openclaw skills install <local-path> --global` so OpenClaw's install policy is honored, stores the token only in an owner-readable OpenClaw environment file, and configures the Rainbond MCP header as `GRJWT ${RAINBOND_JWT}` rather than embedding the token in `openclaw.json` or a command argument. It then runs `openclaw mcp reload` and `openclaw mcp doctor rainbond --probe`. A blocked OpenClaw install policy is reported, not bypassed.
+
+When verification succeeds, RainSkills atomically marks the onboarding checkpoint `configured`, removes transient callback files, and retains only the non-secret completion record and protected credential files. OpenClaw can use watched skills and reloaded MCP state without a full process restart; existing Codex and Claude Code sessions still receive their platform-specific reload or restart instruction. The user must not re-enter the URL or repeat earlier installer choices.
 
 ## State And Resume
 
-Persist non-secret checkpoints under `~/.rainbond` with mode `0600`. The state model should cover at least:
+Persist non-secret checkpoints under `~/.rainbond` with directory mode `0700` and file mode `0600`. RainSkills owns exactly one onboarding file, `~/.rainbond/rainskills-onboarding-v1.json`. The platform helper owns one operation directory, `~/.rainbond/platform-installer/<operation-id>/`, containing `state.json`, `events.jsonl`, `install.log`, and downloaded artifact metadata. The onboarding file references the platform state path; helper code never writes RainSkills fields directly.
+
+Both JSON state files contain `schema`, integer `version`, UUID `operation_id`, package version, `updated_at`, and `stage`. The onboarding file additionally stores selected client targets, deployment mode, platform state path, and verified Console URL. Platform state stores target kind, non-secret host identifier, remote workspace path if applicable, artifact URL/digest/version, applicable approved system effects, and last verified evidence. It never stores shell command strings.
+
+Every state update writes a `0600` temporary file in the same directory, flushes it, and atomically renames it over the prior state. Unknown schema versions, mismatched operation IDs, invalid stage transitions, symlinks, or state files not owned by the current user fail closed. The only cross-component protocol is the versioned onboarding file plus the fixed marker and CLI arguments described above.
+
+The state model covers:
 
 ```text
 target-selection
@@ -193,9 +233,7 @@ platform-ready
 rainskills-resume
 ```
 
-Store target type, non-secret host identifier, current stage, artifact metadata, log path, and verified Console URL. Do not store SSH passwords, private keys, Rainbond credentials, or tokens.
-
-Re-entry must inspect real machine state before trusting a checkpoint. Reuse completed downloads and existing image layers when safe, and resume from the earliest unverified stage. `Ctrl+C` must stop foreground work, clean up temporary callback or helper processes, preserve useful downloaded artifacts, and leave a clear resume instruction.
+Re-entry must inspect real machine state before trusting a checkpoint. Reuse completed downloads and existing image layers when safe, and resume from the earliest unverified stage. `Ctrl+C` must stop foreground work locally and remotely, clean up temporary callback or helper processes, preserve useful downloaded artifacts, atomically mark `interrupted`, and leave the exact fixed-argument resume instruction.
 
 ## Skill And Helper Structure
 
@@ -227,9 +265,10 @@ The implementation is expected to touch:
 - `README.md`: describe the compact private-install path and supported environments;
 - npm package metadata/tests: include the ninth skill and all bundled resources;
 - `rainbond-platform-installer/`: add the skill and deterministic helpers;
+- client target handling: add OpenClaw detection and selection, native global skill installation, protected environment setup, MCP registration, reload, and probe verification;
 - installer and PTY tests: cover pause/resume, progress rendering, interruption, and terminal behavior.
 
-Do not rewrite existing user-modified installer code unrelated to this flow. The new branch must preserve Rainbond Cloud behavior, explicit `--rainbond-url`, non-interactive token flows, refresh behavior, and existing Codex/Claude installation targets.
+Do not rewrite existing user-modified installer code unrelated to this flow. The new branch must preserve Rainbond Cloud behavior, explicit `--rainbond-url`, non-interactive token flows, refresh behavior, and existing Codex/Claude installation targets while adding OpenClaw as a first-class target.
 
 ## Security And Safety
 
@@ -264,19 +303,27 @@ Add isolated tests with fake system commands and temporary homes. No CI test may
 Required coverage includes:
 
 - skill metadata triggers platform installation and excludes application deployment;
+- first-install bootstrap works before the host reloads newly copied skills;
+- onboarding and platform state schemas, ownership, atomic writes, stage transitions, and fixed JSON marker contract;
 - Linux current-host happy path;
 - preflight failures for CPU, memory, disk, network, privilege, and occupied ports;
 - existing Rainbond/runtime conflict behavior;
 - non-interactive SSH validation and rejection of password prompts;
 - macOS routing with OrbStack already present and OrbStack missing;
 - no mutating command before explicit confirmation;
+- detected firewall, swap, module, runtime, and privileged-container effects appear in that confirmation;
+- remote workspace, `sudo -n`, foreground process-group cleanup, and reconnect verification behavior;
+- macOS execution against the OrbStack context and K3s probes through the Rainbond container;
 - real download progress with known and unknown totals;
 - stage/readiness output for non-download work without fake percentages;
-- heartbeat output during quiet operations;
+- JSONL sequencing, separate output channels, terminal statuses, and 10-second heartbeat output during quiet operations;
 - interrupt cleanup and checkpoint preservation;
 - resume from each durable stage using real-state revalidation;
 - concise successful output with a verified Console URL;
 - RainSkills checkpoint to platform skill to RainSkills authorization handoff;
+- first-administrator browser flow and browser-capable loopback callback ownership;
+- headless control-machine stop state does not claim full readiness or expose JWTs;
+- OpenClaw native skill install policy, protected token environment, MCP reload, and live probe behavior;
 - unchanged SaaS, explicit URL, refresh, and non-interactive installer flows;
 - npm tarball contains the ninth skill and its resources.
 
@@ -284,4 +331,4 @@ Run focused helper tests, the installer test suite, PTY/signal tests, package te
 
 ## Success Criteria
 
-The first version is successful when a novice user can choose private deployment, state that no Rainbond exists, approve at most two normal-path decisions, observe meaningful progress, receive a verified Console address, and continue RainSkills authorization without restarting the onboarding flow or handling a JWT manually.
+The first version is successful when a novice user on a browser-capable control machine can choose private deployment, state that no Rainbond exists, finish target selection and confirmation in at most two normal-path reply turns, observe meaningful progress, receive a verified Console address, and continue RainSkills authorization without restarting the onboarding flow or handling a JWT manually. A headless control machine is successful only through verified platform deployment plus a preserved, truthful authorization checkpoint until Device Authorization Flow support is added.
