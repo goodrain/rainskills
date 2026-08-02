@@ -1097,7 +1097,10 @@ if raw.startswith("http://") or raw.startswith("https://"):
     if not token:
         print("回调 URL 中未找到 token 参数。", file=sys.stderr)
         sys.exit(1)
-    if state and state != expected_state:
+    if not state:
+        print("回调 URL 中未找到 state 参数，请重新点击「授权」并复制完整地址。", file=sys.stderr)
+        sys.exit(1)
+    if state != expected_state:
         print("回调 URL 中的 state 与当前授权会话不一致；可能是过期或错混的链接，请重新点击「授权」。", file=sys.stderr)
         sys.exit(1)
     print(token)
@@ -1118,9 +1121,11 @@ manual_paste_reader() {
   local pasted token_out
   while kill -0 "$server_pid" 2>/dev/null; do
     printf '\n请粘贴回调 URL 或 JWT（按回车确认，Ctrl+C 取消）: ' >&2
-    if ! IFS= read -r pasted </dev/tty; then
+    if ! IFS= read -r -s pasted </dev/tty; then
+      printf '\n' >&2
       return 0
     fi
+    printf '\n' >&2
     pasted="$(trim "$pasted")"
     [[ -n "$pasted" ]] || continue
     if token_out="$(extract_token_from_paste "$pasted" "$state")"; then

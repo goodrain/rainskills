@@ -15,6 +15,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 AUTH_READY_PATTERN = re.compile(rb"127\.0\.0\.1:(\d+)/cli-callback")
+MANUAL_PASTE_PATTERN = re.compile("请粘贴回调 URL 或 JWT".encode())
 
 
 def write_executable(path: Path, content: str) -> None:
@@ -198,7 +199,106 @@ def assert_signal_cleans_browser_authorization_processes(
                     pass
 
 
+def assert_manual_callback_input_is_not_echoed() -> None:
+    with tempfile.TemporaryDirectory(prefix="rainskills-no-echo-test-") as workdir_raw:
+        workdir = Path(workdir_raw)
+        home = workdir / "home"
+        temp_dir = workdir / "tmp"
+        bin_dir = workdir / "bin"
+        home.mkdir()
+        temp_dir.mkdir()
+        bin_dir.mkdir()
+
+        real_curl = subprocess.check_output(
+            ["/usr/bin/env", "sh", "-c", "command -v curl"], text=True
+        ).strip()
+        write_executable(bin_dir / "uname", "#!/bin/sh\nprintf 'Linux\\n'\n")
+        write_executable(
+            bin_dir / "curl",
+            """#!/bin/sh
+case "$*" in
+  *http://127.0.0.1:*) exec "$REAL_CURL" "$@" ;;
+esac
+exit 0
+""",
+        )
+
+        env = os.environ.copy()
+        env.update(
+            {
+                "HOME": str(home),
+                "TMPDIR": str(temp_dir),
+                "PATH": f"{bin_dir}:/usr/bin:/bin",
+                "SHELL": "/bin/bash",
+                "REAL_CURL": real_curl,
+                "RAINBOND_LOGIN_TIMEOUT": "60",
+                "RAINSKILLS_NO_BROWSER": "1",
+            }
+        )
+        for name in (
+            "RAINBOND_JWT",
+            "RAINBOND_URL",
+            "RAINBOND_USERNAME",
+            "RAINBOND_PASSWORD",
+        ):
+            env.pop(name, None)
+
+        test_jwt = b"noecho.payload.signature"
+        pid, master_fd = pty.fork()
+        if pid == 0:
+            os.chdir(REPO_ROOT)
+            os.execve(
+                "/bin/bash",
+                [
+                    "bash",
+                    str(REPO_ROOT / "install.sh"),
+                    "codex",
+                    "--saas",
+                    "--no-cached-token",
+                    "--force",
+                ],
+                env,
+            )
+
+        output = bytearray()
+        status = None
+        try:
+            prompt_output, _ = read_until(master_fd, MANUAL_PASTE_PATTERN, timeout=15)
+            output.extend(prompt_output)
+            port_match = AUTH_READY_PATTERN.search(prompt_output)
+            assert port_match, prompt_output.decode("utf-8", errors="replace")
+
+            os.write(master_fd, test_jwt + b"\n")
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                waited_pid, wait_status = os.waitpid(pid, os.WNOHANG)
+                if waited_pid == pid:
+                    status = wait_status
+                    break
+                readable, _, _ = select.select([master_fd], [], [], 0.1)
+                if readable:
+                    try:
+                        output.extend(os.read(master_fd, 4096))
+                    except OSError as error:
+                        if error.errno != errno.EIO:
+                            raise
+                        break
+
+            assert test_jwt not in output, (
+                "manual callback input was echoed to terminal output"
+            )
+        finally:
+            os.close(master_fd)
+            if status is None:
+                terminate_process_tree(pid)
+                try:
+                    os.waitpid(pid, 0)
+                except ChildProcessError:
+                    pass
+
+
 if __name__ == "__main__":
+    assert_manual_callback_input_is_not_echoed()
     assert_signal_cleans_browser_authorization_processes("Ctrl+C", 130)
     assert_signal_cleans_browser_authorization_processes("SIGTERM", 143)
     print("PASS: installer signal cleanup test")

@@ -99,6 +99,22 @@ assert_container_fixture() {
   fi
 }
 
+assert_equal() {
+  local name="$1"
+  local expected="$2"
+  local actual="$3"
+  [[ "$actual" == "$expected" ]] \
+    || fail "$name: expected $expected, got $actual"
+}
+
+assert_rejected() {
+  local name="$1"
+  shift
+  if "$@" >/dev/null 2>&1; then
+    fail "$name: expected input to be rejected"
+  fi
+}
+
 assert_mode "explicit flag overrides desktop" manual-copy \
   Linux 0 1 0 DISPLAY=:0 --parse-no-browser
 assert_mode "environment override wins over desktop" manual-copy \
@@ -119,6 +135,24 @@ assert_mode "local Linux Wayland opens its browser" local-browser \
   Linux 0 1 0 WAYLAND_DISPLAY=wayland-0
 assert_mode "headless Linux uses manual copy" manual-copy \
   Linux 0 1 0
+
+TEST_JWT="header.payload.signature"
+assert_equal "matching callback state" "$TEST_JWT" "$(
+  extract_token_from_paste \
+    "http://127.0.0.1:43210/cli-callback?token=${TEST_JWT}&state=expected-state" \
+    "expected-state"
+)"
+assert_rejected "mismatched callback state" \
+  extract_token_from_paste \
+  "http://127.0.0.1:43210/cli-callback?token=${TEST_JWT}&state=wrong-state" \
+  "expected-state"
+assert_rejected "missing callback state" \
+  extract_token_from_paste \
+  "http://127.0.0.1:43210/cli-callback?token=${TEST_JWT}" \
+  "expected-state"
+assert_equal "raw JWT compatibility" "$TEST_JWT" "$(
+  extract_token_from_paste "$TEST_JWT" "expected-state"
+)"
 
 mkdir -p "$TEST_ROOT/docker" "$TEST_ROOT/podman/run" "$TEST_ROOT/cgroup/proc/1"
 touch "$TEST_ROOT/docker/.dockerenv"
