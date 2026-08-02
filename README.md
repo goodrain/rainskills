@@ -4,6 +4,16 @@
 
 ## 快速安装
 
+从 Skill 市场安装完整的 Rainskills 产品：
+
+```bash
+npx skills add goodrain/rainskills
+```
+
+市场只展示一个 `rainskills` 入口。首次使用时，该入口会启动随包携带的交互式安装器，继续完成客户端选择、Rainbond 环境选择、浏览器授权和 MCP 配置；内部 `rainbond-*` Skill 不需要单独安装。
+
+也可以直接运行安装器：
+
 ```bash
 npx --yes rainskills
 ```

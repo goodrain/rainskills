@@ -22,6 +22,8 @@
     "rainskills": "bin/rainskills.js"
   },
   "files": [
+    "SKILL.md",
+    "agents/",
     "bin/",
     "install.sh",
     "rainbond-app-assistant/",
@@ -45,8 +47,9 @@
     "win32"
   ],
   "scripts": {
-    "test": "npm run test:launcher && npm run test:platform && npm run test:package-upload && npm run test:package && npm run test:installer && npm run test:signal && npm run test:npx-pty",
+    "test": "npm run test:launcher && npm run test:marketplace && npm run test:platform && npm run test:package-upload && npm run test:package && npm run test:installer && npm run test:signal && npm run test:npx-pty",
     "test:launcher": "node --test tests/npx-launcher.test.js",
+    "test:marketplace": "node --test tests/marketplace-entry.test.js",
     "test:platform": "node --test tests/platform-installer.test.js",
     "test:package-upload": "python3 tests/package_upload_helper_test.py && python3 tests/package_upload_workflow_contract_test.py && python3 rainbond-fullstack-bootstrap/scripts/run_bootstrap_evals.py",
     "test:package": "node --test tests/npm-package.test.js",
