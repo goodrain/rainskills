@@ -207,19 +207,43 @@ The local control machine then invokes `npx rainskills resume --onboarding-id <i
 
 Version 1 supports this complete handoff only when the `npx` control machine can open a browser that can reach the new Console and its own loopback callback. On a truly headless control machine, platform installation still completes and the checkpoint is preserved, but the installer reports that account authorization requires the existing manual fallback or a later Device Authorization Flow. It must not claim full RainSkills readiness or ask the user to paste a JWT into chat.
 
-After the callback returns a valid token, RainSkills registers and verifies the selected MCP clients. Codex and Claude Code continue to use their existing protected environment-variable approach. The OpenClaw adapter installs each skill through `openclaw skills install <local-path> --global` so OpenClaw's install policy is honored, stores the token only in an owner-readable OpenClaw environment file, and configures the Rainbond MCP header as `GRJWT ${RAINBOND_JWT}` rather than embedding the token in `openclaw.json` or a command argument. It then runs `openclaw mcp reload` and `openclaw mcp doctor rainbond --probe`. A blocked OpenClaw install policy is reported, not bypassed.
+After the callback returns a valid token, RainSkills registers and verifies the selected MCP clients. Codex and Claude Code continue to use their existing protected environment-variable approach.
 
-When verification succeeds, RainSkills atomically marks the onboarding checkpoint `configured`, removes transient callback files, and retains only the non-secret completion record and protected credential files. OpenClaw can use watched skills and reloaded MCP state without a full process restart; existing Codex and Claude Code sessions still receive their platform-specific reload or restart instruction. The user must not re-enter the URL or repeat earlier installer choices.
+OpenClaw is a first-class target with the following versioned CLI contract:
+
+- `openclaw` installs only OpenClaw;
+- existing `codex`, `claude`, and `all` values retain their current meanings, with `all` remaining Codex plus Claude Code for compatibility;
+- new `all-supported` installs Codex, Claude Code, and OpenClaw;
+- the interactive menu retains existing choices 1 through 3, adds 4 for OpenClaw, and adds 5 for all supported clients;
+- explicit OpenClaw selection requires the minimum CLI version recorded in `installation-policy.md`; version 1 tests against OpenClaw `2026.7.1` or newer;
+- a missing or older OpenClaw binary fails that selected target with its official installation or upgrade guidance and is never silently omitted;
+- `--refresh` updates the protected OpenClaw token source, rewrites the MCP definition if its URL changed, safely activates the new state, and probes it just like initial setup.
+
+The OpenClaw adapter installs each skill through `openclaw skills install <local-path> --global` so OpenClaw's install policy is honored. It atomically merges `RAINBOND_JWT=<value>` into `~/.openclaw/.env`: preserve unrelated lines and comments, remove every prior `RAINBOND_JWT` assignment, append exactly one current assignment, use directory mode `0700` and file mode `0600`, reject symlinks or unexpected ownership, and never pass the value in argv. It configures the Rainbond MCP header as the literal template `GRJWT ${RAINBOND_JWT}` rather than embedding the token in `openclaw.json`. A blocked OpenClaw install policy is reported, not bypassed.
+
+`mcp.*` configuration is hot-reloadable, but an already-running Gateway does not inherit a newly written process environment. Therefore, when the Gateway is running, the adapter records its process identity, performs `openclaw gateway restart --safe`, waits for a different ready process, and requires `openclaw gateway status --require-rpc` to pass. A healthy post-restart Gateway proves that `${RAINBOND_JWT}` resolved during startup; `openclaw mcp doctor rainbond --probe` then proves the saved Rainbond server can initialize and list tools. When no Gateway is running, the adapter validates configuration and runs the same MCP probe without starting a service the user did not request. If a managed, foreground, or externally supervised Gateway cannot complete the safe restart, OpenClaw remains unverified and the onboarding checkpoint must not become `configured`.
+
+When verification succeeds, RainSkills atomically marks the onboarding checkpoint `configured`, removes transient callback files, and retains only the non-secret completion record and protected credential files. OpenClaw uses watched skills plus the verified safe Gateway restart when it was already running; existing Codex and Claude Code sessions still receive their platform-specific reload or restart instruction. The user must not re-enter the URL or repeat earlier installer choices.
 
 ## State And Resume
 
 Persist non-secret checkpoints under `~/.rainbond` with directory mode `0700` and file mode `0600`. RainSkills owns exactly one onboarding file, `~/.rainbond/rainskills-onboarding-v1.json`. The platform helper owns one operation directory, `~/.rainbond/platform-installer/<operation-id>/`, containing `state.json`, `events.jsonl`, `install.log`, and downloaded artifact metadata. The onboarding file references the platform state path; helper code never writes RainSkills fields directly.
 
-Both JSON state files contain `schema`, integer `version`, UUID `operation_id`, package version, `updated_at`, and `stage`. The onboarding file additionally stores selected client targets, deployment mode, platform state path, and verified Console URL. Platform state stores target kind, non-secret host identifier, remote workspace path if applicable, artifact URL/digest/version, applicable approved system effects, and last verified evidence. It never stores shell command strings.
+Both JSON state files contain `schema`, integer `version`, UUID `operation_id`, package version, `updated_at`, and `stage`. The onboarding file additionally stores selected client targets, deployment mode, platform state path, and verified Console URL. Platform state additionally stores `status`, target kind, non-secret host identifier, remote workspace path if applicable, artifact URL/digest/version, applicable approved system effects, and last verified evidence. It never stores shell command strings.
 
 Every state update writes a `0600` temporary file in the same directory, flushes it, and atomically renames it over the prior state. Unknown schema versions, mismatched operation IDs, invalid stage transitions, symlinks, or state files not owned by the current user fail closed. The only cross-component protocol is the versioned onboarding file plus the fixed marker and CLI arguments described above.
 
-The state model covers:
+The onboarding `stage` enum is:
+
+```text
+skills-installed
+awaiting-platform
+platform-ready
+authorizing
+configured
+```
+
+The platform `stage` enum is:
 
 ```text
 target-selection
@@ -233,7 +257,9 @@ platform-ready
 rainskills-resume
 ```
 
-Re-entry must inspect real machine state before trusting a checkpoint. Reuse completed downloads and existing image layers when safe, and resume from the earliest unverified stage. `Ctrl+C` must stop foreground work locally and remotely, clean up temporary callback or helper processes, preserve useful downloaded artifacts, atomically mark `interrupted`, and leave the exact fixed-argument resume instruction.
+Platform state has a separate `status` enum: `pending`, `running`, `waiting_user`, `completed`, `failed`, or `interrupted`. `configured` is only an onboarding stage, and `interrupted` is only a platform status. Allowed stage and status transitions live in one helper definition shared by validation and tests.
+
+Re-entry must inspect real machine state before trusting a checkpoint. Reuse completed downloads and existing image layers when safe, and resume from the earliest unverified stage. `Ctrl+C` must stop foreground work locally and remotely, clean up temporary callback or helper processes, preserve useful downloaded artifacts, atomically set platform `status` to `interrupted` without inventing a new stage, and leave the exact fixed-argument resume instruction.
 
 ## Skill And Helper Structure
 
@@ -324,6 +350,9 @@ Required coverage includes:
 - first-administrator browser flow and browser-capable loopback callback ownership;
 - headless control-machine stop state does not claim full readiness or expose JWTs;
 - OpenClaw native skill install policy, protected token environment, MCP reload, and live probe behavior;
+- backward-compatible `all`, new `openclaw` and `all-supported` target parsing, interactive choices, missing/old binary failures, and refresh behavior;
+- atomic `~/.openclaw/.env` merge without duplicate token assignments or unrelated-line loss;
+- running Gateway safe restart with changed process identity, RPC readiness, and post-restart Rainbond MCP probe;
 - unchanged SaaS, explicit URL, refresh, and non-interactive installer flows;
 - npm tarball contains the ninth skill and its resources.
 
