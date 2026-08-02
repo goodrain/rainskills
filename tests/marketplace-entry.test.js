@@ -41,3 +41,10 @@ test("npm artifact includes the marketplace entry", () => {
   );
   assert.match(manifest.scripts.test, /npm run test:marketplace/);
 });
+
+test("README distinguishes marketplace and direct installer Node requirements", () => {
+  const readme = read("README.md");
+
+  assert.match(readme, /Skill 市场.*Node\.js 22\.20\.0/s);
+  assert.match(readme, /直接运行.*最低支持 Node\.js 18/s);
+});

@@ -10,6 +10,8 @@
 npx skills add goodrain/rainskills
 ```
 
+Skill 市场命令当前要求 Node.js 22.20.0 或更高版本。无法升级时，可以直接运行下面的 Rainskills 安装器（最低支持 Node.js 18），或使用 CDN 入口。
+
 市场只展示一个 `rainskills` 入口。首次使用时，该入口会启动随包携带的交互式安装器，继续完成客户端选择、Rainbond 环境选择、浏览器授权和 MCP 配置；内部 `rainbond-*` Skill 不需要单独安装。
 
 也可以直接运行安装器：
@@ -61,7 +63,8 @@ bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh)
 ### 0. 前置条件
 
 - 已安装 `Codex`、`Claude Code`，或两者之一
-- 推荐 Node.js 22 或 24；`npx` 入口最低支持 Node.js 18
+- Skill 市场的 `npx skills add` 当前要求 Node.js 22.20.0 或更高版本
+- 直接运行 `npx rainskills` 推荐 Node.js 22 或 24，最低支持 Node.js 18
 - Node.js 18/20 已结束维护，安装器会警告但仍继续；Node.js 低于 18 请使用 CDN 安装方式
 - 本机可执行 `bash`、`curl`、`python3`；CDN 入口还需要 `tar`。远程 Linux 安装还需要系统 `ssh` 和 `scp`
 - 使用 Rainbond Cloud 时需要可登录账号；私有化新安装会先创建平台，再在浏览器完成初始化和授权
