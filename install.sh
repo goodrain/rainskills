@@ -132,6 +132,10 @@ INSTALL_COUNT_FORCED=0
 SKIP_MCP=0
 NON_INTERACTIVE=0
 ALLOW_INSECURE_HTTP=0
+NO_BROWSER=0
+if [[ "${RAINSKILLS_NO_BROWSER:-}" == "1" ]]; then
+  NO_BROWSER=1
+fi
 RAINBOND_URL_INPUT="${RAINBOND_URL:-}"
 RAINBOND_USERNAME_INPUT="${RAINBOND_USERNAME:-}"
 RAINBOND_PASSWORD_INPUT="${RAINBOND_PASSWORD:-}"
@@ -190,6 +194,7 @@ Options:
   --non-interactive      Require all installer inputs through flags or env vars
   --rainbond-url URL     Rainbond base URL, for example http://example.com:7070
   --token JWT            Use an existing Rainbond JWT, skip browser login
+  --no-browser           Do not open a local browser; paste the callback URL
   --no-cached-token      Ignore RAINBOND_JWT inherited from the shell and re-login
   --username NAME        Legacy: Rainbond login username (self-hosted only)
   --allow-insecure-http  Allow plain HTTP for internal trial environments
@@ -201,6 +206,7 @@ Environment:
   RAINBOND_USERNAME      Legacy: same as --username
   RAINBOND_PASSWORD      Legacy: Rainbond login password for non-interactive runs
   RAINBOND_LOGIN_TIMEOUT Browser login timeout in seconds (default 300)
+  RAINSKILLS_NO_BROWSER  Set to 1 to force callback URL copy mode
 EOF
 }
 
@@ -561,6 +567,10 @@ parse_args() {
       --no-cached-token)
         RAINBOND_TOKEN_INPUT=""
         RAINBOND_CACHED_URL=""
+        shift
+        ;;
+      --no-browser)
+        NO_BROWSER=1
         shift
         ;;
       --saas)
@@ -1004,14 +1014,58 @@ resolve_deployment_mode() {
   done
 }
 
-can_open_browser() {
-  if [[ "$(uname -s)" == "Darwin" ]] && command -v open >/dev/null 2>&1; then
+is_ssh_session() {
+  [[ -n "${SSH_CONNECTION:-}" || -n "${SSH_CLIENT:-}" || -n "${SSH_TTY:-}" ]]
+}
+
+is_container_environment() {
+  local root_prefix="${1:-}"
+  local cgroup_file="${root_prefix}/proc/1/cgroup"
+
+  if [[ -f "${root_prefix}/.dockerenv" || -f "${root_prefix}/run/.containerenv" ]]; then
     return 0
   fi
-  if command -v xdg-open >/dev/null 2>&1 && { [[ -n "${DISPLAY:-}" ]] || [[ -n "${WAYLAND_DISPLAY:-}" ]]; }; then
+  if [[ -n "${container:-}" ]]; then
+    return 0
+  fi
+  if [[ -r "$cgroup_file" ]] \
+    && grep -Eiq '(^|[/_.-])(docker|containerd|kubepods|libpod|lxc)([/_.-]|$)' "$cgroup_file"; then
     return 0
   fi
   return 1
+}
+
+browser_authorization_mode() {
+  if [[ "$NO_BROWSER" -eq 1 || "${RAINSKILLS_NO_BROWSER:-}" == "1" ]]; then
+    printf 'manual-copy\n'
+    return 0
+  fi
+  if is_ssh_session || is_container_environment; then
+    printf 'manual-copy\n'
+    return 0
+  fi
+
+  case "$(uname -s)" in
+    Darwin)
+      if command -v open >/dev/null 2>&1; then
+        printf 'local-browser\n'
+        return 0
+      fi
+      ;;
+    Linux)
+      if command -v xdg-open >/dev/null 2>&1 \
+        && { [[ -n "${DISPLAY:-}" ]] || [[ -n "${WAYLAND_DISPLAY:-}" ]]; }; then
+        printf 'local-browser\n'
+        return 0
+      fi
+      ;;
+  esac
+
+  printf 'manual-copy\n'
+}
+
+can_open_browser() {
+  [[ "$(browser_authorization_mode)" == "local-browser" ]]
 }
 
 open_browser() {
@@ -2084,8 +2138,10 @@ main() {
   fi
 }
 
-trap 'handle_installer_signal 130' INT
-trap 'handle_installer_signal 143' TERM
-trap 'handle_installer_exit "$?"' EXIT
-initialize_rainskills_installation_reporting "$@"
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  trap 'handle_installer_signal 130' INT
+  trap 'handle_installer_signal 143' TERM
+  trap 'handle_installer_exit "$?"' EXIT
+  initialize_rainskills_installation_reporting "$@"
+  main "$@"
+fi
