@@ -4,6 +4,7 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const http = require("node:http");
 const https = require("node:https");
+const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 const readline = require("node:readline/promises");
@@ -17,13 +18,15 @@ const PROGRESS_SCHEMA = "rainskills.platform-progress.v1";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 let activeChild = null;
+let activeChildDetached = false;
 let activeRequest = null;
 let activeOperation = null;
+let activeSshSession = null;
 let interruptedSignal = null;
 
 function usage() {
   process.stdout.write(`Usage:
-  npx rainskills platform install --onboarding-id <id> [--target <kind>] [--ssh <target>] [--ssh-port <port>] [--yes] [--no-resume]
+  npx rainskills platform install --onboarding-id <id> [--target <kind>] [--ssh <target>] [--ssh-port <port>] [--console-host <host>] [--yes] [--no-resume]
   npx rainskills resume --onboarding-id <id>
 
 Commands:
@@ -35,6 +38,7 @@ Options:
   --target KIND       Use local-linux, local-macos, or remote-linux
   --ssh TARGET        Existing SSH alias or user@host for remote-linux
   --ssh-port PORT     SSH port (default: 22)
+  --console-host HOST Public IP or DNS name used to reach Console on port 7070
   --yes               Confirm the displayed installation effects non-interactively
   --no-resume         Stop after verified platform installation
   -h, --help          Show this help
@@ -48,6 +52,7 @@ function parseArgs(argv) {
     target: "",
     ssh: "",
     sshPort: 22,
+    consoleHost: "",
     yes: false,
     noResume: false,
   };
@@ -68,6 +73,10 @@ function parseArgs(argv) {
     } else if (argument === "--ssh-port") {
       if (!argv[index + 1]) throw new Error("--ssh-port 需要一个值");
       result.sshPort = argv[index + 1];
+      index += 1;
+    } else if (argument === "--console-host") {
+      if (!argv[index + 1]) throw new Error("--console-host 需要一个值");
+      result.consoleHost = normalizeConsoleHost(argv[index + 1]);
       index += 1;
     } else if (argument === "--yes") {
       result.yes = true;
@@ -211,6 +220,107 @@ function runCommand(command, args, options = {}) {
   });
 }
 
+function createSshTempDirectory() {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-ssh-"));
+  fs.chmodSync(directory, 0o700);
+  return directory;
+}
+
+function removeSshTempDirectory(directory) {
+  if (!directory) return;
+  const resolved = path.resolve(directory);
+  const tempRoot = path.resolve(os.tmpdir());
+  if (path.dirname(resolved) !== tempRoot || !path.basename(resolved).startsWith("rainskills-ssh-")) {
+    throw new Error(`拒绝清理非 Rainskills SSH 临时目录：${resolved}`);
+  }
+  fs.rmSync(resolved, { recursive: true, force: true });
+}
+
+function sshSessionOptions(session) {
+  return session?.controlPath ? ["-o", `ControlPath=${session.controlPath}`] : [];
+}
+
+function closeSshSession(session, runner = runCommand) {
+  if (!session || session.closed) return;
+  session.closed = true;
+  if (session.controlPath) {
+    runner("ssh", [
+      "-o", `ControlPath=${session.controlPath}`,
+      "-O", "exit",
+      "-p", String(session.target.port),
+      session.target.host,
+    ], { timeout: 10000 });
+  }
+  removeSshTempDirectory(session.tempDirectory);
+}
+
+async function establishSshSession(target, {
+  interactive = process.stdin.isTTY && process.stdout.isTTY,
+  runner = runCommand,
+  attachedRunner = spawnAttached,
+  createTempDirectory = createSshTempDirectory,
+  write = (value) => process.stdout.write(value),
+} = {}) {
+  const normalized = normalizeRemoteTarget(target.host, target.port);
+  const probe = runner("ssh", [...sshArgs(normalized), "true"], { timeout: 30000 });
+  if (probe.error) throw new Error(`无法启动 SSH：${probe.error.message}`);
+  if (probe.status === 0) {
+    return {
+      target: normalized,
+      controlPath: null,
+      tempDirectory: null,
+      multiplexed: false,
+      closed: false,
+    };
+  }
+
+  const detail = String(probe.stderr || probe.stdout || "连接失败").trim();
+  if (/REMOTE HOST IDENTIFICATION HAS CHANGED/i.test(detail)) {
+    throw new Error(`SSH 主机密钥已发生变化，已停止连接 ${normalized.host}。请先核对服务器指纹并修复 known_hosts`);
+  }
+  if (!/(Permission denied|Host key verification failed|authentication failed|no supported authentication methods)/i.test(detail)) {
+    throw new Error(`无法通过 SSH 连接 ${normalized.host}：${detail}`);
+  }
+  if (!interactive) {
+    write("\n[RAINSKILLS_USER_INPUT_REQUIRED:ssh_authentication]\n");
+    write("该服务器需要确认主机指纹或输入 SSH 密码，请在交互终端继续。\n");
+    return null;
+  }
+
+  const tempDirectory = createTempDirectory();
+  fs.chmodSync(tempDirectory, 0o700);
+  const controlPath = path.join(tempDirectory, "control");
+  write("\n首次连接可能需要确认服务器指纹，并输入一次 SSH 密码。\n");
+  write("密码由系统 ssh 直接读取，Rainskills 不会保存。完成后安装将自动继续。\n\n");
+  const result = await attachedRunner(
+    "ssh",
+    [
+      "-o", "ControlMaster=yes",
+      "-o", "ControlPersist=600",
+      "-o", `ControlPath=${controlPath}`,
+      "-o", "BatchMode=no",
+      "-o", "ConnectTimeout=10",
+      "-p", String(normalized.port),
+      normalized.host,
+      "true",
+    ],
+    { env: process.env, interactive: true },
+    null
+  );
+  if (result.signal || result.code !== 0) {
+    removeSshTempDirectory(tempDirectory);
+    if (result.signal) throw new Error(`SSH 认证被信号 ${result.signal} 中断`);
+    throw new Error(`SSH 认证未完成，无法连接 ${normalized.host}`);
+  }
+  return {
+    target: normalized,
+    controlPath,
+    tempDirectory,
+    multiplexed: true,
+    closed: false,
+  };
+}
+
 function targetChoicesForPlatform(platform) {
   if (platform === "linux") {
     return [
@@ -242,10 +352,167 @@ function normalizeRemoteTarget(host, port = 22) {
   return { host: normalizedHost, port: normalizedPort };
 }
 
-function sshArgs(target) {
+function normalizeConsoleHost(value) {
+  let host = String(value || "").trim();
+  if (host.startsWith("[") && host.endsWith("]")) host = host.slice(1, -1);
+  if (net.isIP(host)) return host;
+  if (/^[0-9.]+$/.test(host)) {
+    throw new Error("Console 地址无效，请填写 IP 或域名，不要包含协议、端口或路径");
+  }
+  const validDomain = host.length <= 253
+    && host.split(".").every((label) => (
+      label.length >= 1
+      && label.length <= 63
+      && /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/.test(label)
+    ));
+  if (!validDomain) {
+    throw new Error("Console 地址无效，请填写 IP 或域名，不要包含协议、端口或路径");
+  }
+  return host.toLowerCase();
+}
+
+function consoleUrlForHost(host) {
+  const normalized = normalizeConsoleHost(host);
+  const urlHost = net.isIP(normalized) === 6 ? `[${normalized}]` : normalized;
+  return `http://${urlHost}:7070`;
+}
+
+function sshTargetHost(target) {
+  return String(target || "").split("@").pop();
+}
+
+function resolveSshHostname(target, runner = runCommand) {
+  const normalized = normalizeRemoteTarget(target.host, target.port);
+  const result = runner("ssh", ["-G", "-p", String(normalized.port), normalized.host], {
+    timeout: 10000,
+  });
+  if (!result.error && result.status === 0) {
+    const hostnameLine = String(result.stdout || "")
+      .split("\n")
+      .find((line) => /^hostname\s+/i.test(line.trim()));
+    if (hostnameLine) {
+      const hostname = hostnameLine.trim().split(/\s+/, 2)[1];
+      try {
+        return normalizeConsoleHost(hostname);
+      } catch {
+        // Fall back to the literal SSH target below.
+      }
+    }
+  }
+  return normalizeConsoleHost(sshTargetHost(normalized.host));
+}
+
+function buildRemoteConsoleCandidates({
+  explicitHost = "",
+  effectiveSshHost = "",
+  sshTarget = "",
+  reportedEip = "",
+  primaryIp = "",
+} = {}) {
+  const candidates = [];
+  const seen = new Set();
+  const values = [
+    { value: explicitHost, required: Boolean(explicitHost) },
+    { value: effectiveSshHost, required: false },
+    { value: sshTarget ? sshTargetHost(sshTarget) : "", required: false },
+    { value: reportedEip, required: false },
+    { value: primaryIp, required: false },
+  ];
+  for (const { value, required } of values) {
+    if (!value) continue;
+    let url;
+    try {
+      url = consoleUrlForHost(value);
+    } catch (error) {
+      if (required) throw error;
+      continue;
+    }
+    if (!seen.has(url)) {
+      seen.add(url);
+      candidates.push(url);
+    }
+  }
+  return candidates;
+}
+
+function selectRemoteInstallationEip({
+  explicitHost = "",
+  effectiveSshHost = "",
+  primaryIp = "",
+} = {}) {
+  for (const host of [explicitHost, effectiveSshHost, primaryIp]) {
+    if (!host) continue;
+    try {
+      return normalizeConsoleHost(host);
+    } catch {
+      // Try the next evidence-backed host.
+    }
+  }
+  return "";
+}
+
+async function selectReachableConsole(candidates, probe = probeConsole) {
+  const attempts = [];
+  for (const url of candidates) {
+    try {
+      const statusCode = await probe(url);
+      attempts.push({ url, ok: true, statusCode });
+      return { consoleUrl: url, attempts };
+    } catch (error) {
+      attempts.push({ url, ok: false, error: error.message });
+    }
+  }
+  return { consoleUrl: null, attempts };
+}
+
+async function resolveRemoteConsole({
+  candidates,
+  interactive = process.stdin.isTTY && process.stdout.isTTY,
+  ask,
+  write = (value) => process.stdout.write(value),
+  probe = probeConsole,
+}) {
+  const automatic = await selectReachableConsole(candidates, probe);
+  if (automatic.consoleUrl) return automatic;
+
+  write("\nRainbond 已启动，但自动发现的 Console 地址不可访问：\n");
+  for (const attempt of automatic.attempts) {
+    write(`- ${attempt.url}：${attempt.error || "访问失败"}\n`);
+  }
+  if (!interactive) {
+    write("\n[RAINSKILLS_USER_INPUT_REQUIRED:console_address]\n");
+    write("请提供服务器公网 IP 或域名，并在原命令后添加 --console-host <IP或域名>。\n");
+    return null;
+  }
+
+  let prompt;
+  let ownsPrompt = false;
+  if (!ask) {
+    prompt = readline.createInterface({ input: process.stdin, output: process.stdout });
+    ownsPrompt = true;
+    ask = (question) => prompt.question(question);
+  }
+  try {
+    const answer = await ask("请输入服务器公网 IP 或域名: ");
+    const consoleUrl = consoleUrlForHost(answer);
+    const statusCode = await probe(consoleUrl);
+    write(`已选择 Console 地址：${consoleUrl}\n`);
+    return {
+      consoleUrl,
+      attempts: [...automatic.attempts, { url: consoleUrl, ok: true, statusCode }],
+    };
+  } catch (error) {
+    throw new Error(`提供的 Console 地址不可访问：${error.message}`);
+  } finally {
+    if (ownsPrompt) prompt.close();
+  }
+}
+
+function sshArgs(target, session = null) {
   return [
     "-o", "BatchMode=yes",
     "-o", "ConnectTimeout=10",
+    ...sshSessionOptions(session),
     "-p", String(target.port),
     target.host,
   ];
@@ -345,19 +612,23 @@ disk_kb="$(df -Pk "$HOME" 2>/dev/null | awk 'END { print $4 }')"
 disk_bytes="$((disk_kb * 1024))"
 occupied=""
 for port in 80 443 6060 7070; do
-  if command -v ss >/dev/null 2>&1 && ss -lntH 2>/dev/null | awk '{print $4}' | grep -Eq "(^|:)\${port}$"; then
-    occupied="\${occupied}\${occupied:+,}\${port}"
+  if command -v ss >/dev/null 2>&1 && ss -lntH 2>/dev/null | awk '{print $4}' | grep -Eq "(^|:)$port$"; then
+    if [ -n "$occupied" ]; then occupied="$occupied,$port"; else occupied="$port"; fi
   elif command -v lsof >/dev/null 2>&1 && lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
-    occupied="\${occupied}\${occupied:+,}\${port}"
+    if [ -n "$occupied" ]; then occupied="$occupied,$port"; else occupied="$port"; fi
   fi
 done
 if [ "$(id -u)" -eq 0 ] || sudo -n true >/dev/null 2>&1; then privilege=true; else privilege=false; fi
-docker_prefix=""
-if docker info >/dev/null 2>&1; then docker_ok=true
-elif sudo -n docker info >/dev/null 2>&1; then docker_ok=true; docker_prefix="sudo -n "
-else docker_ok=false
+if docker info >/dev/null 2>&1; then
+  docker_ok=true
+  if docker inspect rainbond >/dev/null 2>&1; then rainbond=true; else rainbond=false; fi
+elif sudo -n docker info >/dev/null 2>&1; then
+  docker_ok=true
+  if sudo -n docker inspect rainbond >/dev/null 2>&1; then rainbond=true; else rainbond=false; fi
+else
+  docker_ok=false
+  rainbond=false
 fi
-if [ "$docker_ok" = true ] && \${docker_prefix}docker inspect rainbond >/dev/null 2>&1; then rainbond=true; else rainbond=false; fi
 if systemctl is-active --quiet firewalld 2>/dev/null; then firewall=firewalld
 elif command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi 'Status: active'; then firewall=ufw
 else firewall=inactive
@@ -392,9 +663,9 @@ function parseKeyValueOutput(output) {
   return values;
 }
 
-function inspectRemoteSystem(target, runner = runCommand) {
+function inspectRemoteSystem(target, runner = runCommand, session = null) {
   const normalized = normalizeRemoteTarget(target.host, target.port);
-  const result = runner("ssh", [...sshArgs(normalized), "bash", "-s"], {
+  const result = runner("ssh", [...sshArgs(normalized, session), "bash", "-s"], {
     timeout: 30000,
     input: REMOTE_INSPECTION_SCRIPT,
   });
@@ -406,13 +677,20 @@ function inspectRemoteSystem(target, runner = runCommand) {
   const values = parseKeyValueOutput(result.stdout);
   const number = (key) => Number.parseInt(values[key] || "0", 10);
   const boolean = (key) => values[key] === "true";
+  const occupiedPorts = (values.OCCUPIED_PORTS || "")
+    .split(",")
+    .filter(Boolean)
+    .map((value) => Number(value));
+  if (occupiedPorts.some((port) => !Number.isInteger(port) || port < 1 || port > 65535)) {
+    throw new Error("远程端口检查结果无效，请重新执行安装");
+  }
   return {
     platform: values.PLATFORM || "unknown",
     arch: values.ARCH || "unknown",
     cpuCores: number("CPU_CORES"),
     memoryBytes: number("MEMORY_BYTES"),
     diskBytes: number("DISK_BYTES"),
-    occupiedPorts: (values.OCCUPIED_PORTS || "").split(",").filter(Boolean).map(Number),
+    occupiedPorts,
     hasPrivilege: boolean("HAS_PRIVILEGE"),
     hasDocker: boolean("HAS_DOCKER"),
     hasRainbond: boolean("HAS_RAINBOND"),
@@ -437,7 +715,7 @@ function remoteWorkspacePath(operationId) {
   return `.rainbond/platform-installer/${operationId}`;
 }
 
-function prepareRemoteInstaller(target, operationId, installerPath, runner = runCommand) {
+function prepareRemoteInstaller(target, operationId, installerPath, runner = runCommand, session = null) {
   const normalized = normalizeRemoteTarget(target.host, target.port);
   const workspace = remoteWorkspacePath(operationId);
   const prepareScript = [
@@ -447,7 +725,7 @@ function prepareRemoteInstaller(target, operationId, installerPath, runner = run
     'chmod 700 "$HOME/.rainbond" "$HOME/.rainbond/platform-installer" "$workspace"',
     "",
   ].join("\n");
-  const prepare = runner("ssh", [...sshArgs(normalized), "bash", "-s", "--", operationId], {
+  const prepare = runner("ssh", [...sshArgs(normalized, session), "bash", "-s", "--", operationId], {
     timeout: 30000,
     input: prepareScript,
   });
@@ -456,6 +734,7 @@ function prepareRemoteInstaller(target, operationId, installerPath, runner = run
   const copy = runner("scp", [
     "-o", "BatchMode=yes",
     "-o", "ConnectTimeout=10",
+    ...sshSessionOptions(session),
     "-P", String(normalized.port),
     installerPath,
     `${normalized.host}:${workspace}/rainbond-install.sh`,
@@ -514,7 +793,7 @@ const REMOTE_INSTALL_SCRIPT = [
   "",
 ].join("\n");
 
-function remoteInstallerInvocation(target, operationId, digest, primaryIp = "") {
+function remoteInstallerInvocation(target, operationId, digest, primaryIp = "", session = null) {
   const normalized = normalizeRemoteTarget(target.host, target.port);
   const workspace = remoteWorkspacePath(operationId);
   if (!/^[a-f0-9]{64}$/.test(digest || "")) throw new Error("安装脚本 SHA-256 无效");
@@ -522,7 +801,7 @@ function remoteInstallerInvocation(target, operationId, digest, primaryIp = "") 
   if (eip && !/^[A-Za-z0-9_.:-]+$/.test(eip)) throw new Error("远程服务器地址无效");
   return {
     command: "ssh",
-    args: [...sshArgs(normalized), "bash", "-s", "--", workspace, digest, eip],
+    args: [...sshArgs(normalized, session), "bash", "-s", "--", workspace, digest, eip],
     input: REMOTE_INSTALL_SCRIPT,
   };
 }
@@ -547,9 +826,9 @@ const REMOTE_VERIFICATION_SCRIPT = [
   "",
 ].join("\n");
 
-function verifyRemoteRainbond(target, fallbackHost, runner = runCommand) {
+function verifyRemoteRainbond(target, fallbackHost, runner = runCommand, session = null) {
   const normalized = normalizeRemoteTarget(target.host, target.port);
-  const result = runner("ssh", [...sshArgs(normalized), "bash", "-s"], {
+  const result = runner("ssh", [...sshArgs(normalized, session), "bash", "-s"], {
     timeout: 30000,
     input: REMOTE_VERIFICATION_SCRIPT,
   });
@@ -558,13 +837,46 @@ function verifyRemoteRainbond(target, fallbackHost, runner = runCommand) {
   if (values.CONTAINER_STATE !== "true") throw new Error("rainbond 容器未处于运行状态");
   if (values.NODE_READY !== "true") throw new Error("Rainbond 内置 K3s 节点尚未 Ready");
   if (values.COMPONENTS_READY !== "true") throw new Error("rbd-system 仍有未就绪组件");
-  const host = values.EIP || fallbackHost || normalized.host.split("@").pop();
-  if (!host || !/^[A-Za-z0-9_.:-]+$/.test(host)) throw new Error("无法从远程 Rainbond 确定 Console 地址");
   return {
-    consoleUrl: `http://${host}:7070`,
     containerState: values.CONTAINER_STATE,
     nodeReady: true,
     componentsReady: true,
+    reportedEip: values.EIP || fallbackHost || null,
+  };
+}
+
+async function verifyRemoteDeployment({
+  target,
+  fallbackHost = "",
+  explicitHost = "",
+  effectiveSshHost = "",
+  session = null,
+  runner = runCommand,
+  probe = probeConsole,
+  interactive = process.stdin.isTTY && process.stdout.isTTY,
+  ask,
+  write = (value) => process.stdout.write(value),
+}) {
+  const runtime = verifyRemoteRainbond(target, fallbackHost, runner, session);
+  const candidates = buildRemoteConsoleCandidates({
+    explicitHost,
+    effectiveSshHost,
+    sshTarget: target.host,
+    reportedEip: runtime.reportedEip,
+    primaryIp: fallbackHost,
+  });
+  const selection = await resolveRemoteConsole({
+    candidates,
+    interactive,
+    ask,
+    write,
+    probe,
+  });
+  if (!selection) return null;
+  return {
+    ...runtime,
+    consoleUrl: selection.consoleUrl,
+    consoleAttempts: selection.attempts,
   };
 }
 
@@ -747,6 +1059,8 @@ function createPlatformState(operationId, paths) {
     target_kind: null,
     host: null,
     ssh_port: null,
+    effective_ssh_host: null,
+    console_host: null,
     remote_workspace: null,
     artifact_url: null,
     artifact_sha256: null,
@@ -908,14 +1222,18 @@ function validateInstaller(filePath) {
 
 function spawnAttached(command, args, options, logPath) {
   return new Promise((resolve, reject) => {
-    const { input, ...spawnOptions } = options;
+    const { input, interactive = false, ...spawnOptions } = options;
     const logFd = logPath ? fs.openSync(logPath, "a", 0o600) : null;
+    const detached = !interactive && process.platform !== "win32";
     const child = spawn(command, args, {
       ...spawnOptions,
-      detached: process.platform !== "win32",
-      stdio: [input === undefined ? "inherit" : "pipe", "pipe", "pipe"],
+      detached,
+      stdio: interactive
+        ? "inherit"
+        : [input === undefined ? "inherit" : "pipe", "pipe", "pipe"],
     });
     activeChild = child;
+    activeChildDetached = detached;
     if (input !== undefined) {
       child.stdin.end(input);
     }
@@ -925,11 +1243,14 @@ function spawnAttached(command, args, options, logPath) {
         if (logFd !== null) fs.writeSync(logFd, chunk);
       });
     };
-    forward(child.stdout, process.stdout);
-    forward(child.stderr, process.stderr);
+    if (!interactive) {
+      forward(child.stdout, process.stdout);
+      forward(child.stderr, process.stderr);
+    }
     child.on("error", (error) => {
       if (logFd !== null) fs.closeSync(logFd);
       activeChild = null;
+      activeChildDetached = false;
       reject(error);
     });
     child.on("close", (code, signal) => {
@@ -939,6 +1260,7 @@ function spawnAttached(command, args, options, logPath) {
         fs.chmodSync(logPath, 0o600);
       }
       activeChild = null;
+      activeChildDetached = false;
       resolve({ code, signal });
     });
   });
@@ -1074,7 +1396,7 @@ async function completePlatform(onboarding, state, paths, verification, noResume
   if (!noResume) await runResume(onboarding.operation_id);
 }
 
-async function runInstall(options) {
+async function runInstallOperation(options) {
   assertOperationId(options.onboardingId);
   ensurePrivateOperationDirectory(path.dirname(onboardingStatePath()));
   let onboarding = readOnboardingState(onboardingStatePath(), options.onboardingId);
@@ -1126,22 +1448,68 @@ async function runInstall(options) {
 
   state = updateState(paths.state, state, { stage: "preflight", status: "running" });
   appendEvent(paths, state, "preflight", "started");
-  if (remoteTarget) process.stdout.write(`\n正在通过 SSH 检查 Linux 服务器 ${remoteTarget.host}...\n`);
-  const facts = remoteTarget ? inspectRemoteSystem(remoteTarget) : inspectSystem();
+  let sshSession = null;
+  let effectiveSshHost = "";
+  if (remoteTarget) {
+    process.stdout.write(`\n正在连接 Linux 服务器 ${remoteTarget.host}...\n`);
+    try {
+      sshSession = await establishSshSession(remoteTarget);
+    } catch (error) {
+      state = updateState(paths.state, state, { status: "failed", blocker: error.message });
+      appendEvent(paths, state, "ssh-authentication", "failed");
+      throw error;
+    }
+    if (!sshSession) {
+      state = updateState(paths.state, state, {
+        stage: "ssh-authentication",
+        status: "waiting_user",
+      });
+      appendEvent(paths, state, "ssh-authentication", "waiting_user");
+      process.stdout.write(`请在交互终端继续：\n  npx rainskills@${packageManifest.version} platform install --onboarding-id ${options.onboardingId} --target remote-linux --ssh ${remoteTarget.host} --ssh-port ${remoteTarget.port}\n`);
+      return;
+    }
+    activeSshSession = sshSession;
+    effectiveSshHost = resolveSshHostname(remoteTarget);
+    state = updateState(paths.state, state, {
+      effective_ssh_host: effectiveSshHost,
+      console_host: options.consoleHost || state.console_host || null,
+    });
+    activeOperation.state = state;
+    process.stdout.write(`正在通过 SSH 检查 Linux 服务器 ${remoteTarget.host}...\n`);
+  }
+  const facts = remoteTarget ? inspectRemoteSystem(remoteTarget, runCommand, sshSession) : inspectSystem();
   if (!remoteTarget) facts.networkReachable = await probeInstallerEndpoint(POLICY.installer.url);
 
   if (facts.hasRainbond && state.status !== "pending") {
     try {
       const priorOutput = fs.existsSync(paths.log) ? fs.readFileSync(paths.log, "utf8") : "";
-      const verification = remoteTarget
-        ? verifyRemoteRainbond(remoteTarget, facts.primaryIp)
-        : verifyRainbond(priorOutput);
-      try {
-        await probeConsole(verification.consoleUrl);
-      } catch (error) {
-        if (remoteTarget) throw error;
-        await probeConsole("http://127.0.0.1:7070");
-        verification.consoleUrl = "http://127.0.0.1:7070";
+      let verification;
+      if (remoteTarget) {
+        verification = await verifyRemoteDeployment({
+          target: remoteTarget,
+          fallbackHost: facts.primaryIp,
+          explicitHost: options.consoleHost || state.console_host || "",
+          effectiveSshHost,
+          session: sshSession,
+        });
+        if (!verification) {
+          state = updateState(paths.state, state, {
+            stage: "verifying",
+            status: "waiting_user",
+            blocker: null,
+          });
+          appendEvent(paths, state, "verifying", "waiting_user");
+          activeOperation.state = state;
+          return;
+        }
+      } else {
+        verification = verifyRainbond(priorOutput);
+        try {
+          await probeConsole(verification.consoleUrl);
+        } catch (error) {
+          await probeConsole("http://127.0.0.1:7070");
+          verification.consoleUrl = "http://127.0.0.1:7070";
+        }
       }
       process.stdout.write("\n检测到中断前启动的 Rainbond 已经就绪，将从验证结果继续。\n");
       await completePlatform(onboarding, state, paths, verification, options.noResume);
@@ -1204,12 +1572,18 @@ async function runInstall(options) {
     process.stdout.write("\n[1/4] 运行环境准备中\n[2/4] 下载并启动 Rainbond 组件\n");
     let result;
     if (remoteTarget) {
-      prepareRemoteInstaller(remoteTarget, options.onboardingId, paths.installer);
+      prepareRemoteInstaller(remoteTarget, options.onboardingId, paths.installer, runCommand, sshSession);
+      const installationEip = selectRemoteInstallationEip({
+        explicitHost: options.consoleHost || state.console_host || "",
+        effectiveSshHost,
+        primaryIp: facts.primaryIp || "",
+      });
       const invocation = remoteInstallerInvocation(
         remoteTarget,
         options.onboardingId,
         digest,
-        facts.primaryIp || ""
+        installationEip,
+        sshSession
       );
       result = await spawnAttached(
         invocation.command,
@@ -1235,15 +1609,33 @@ async function runInstall(options) {
     process.stdout.write("[3/4] Rainbond 组件就绪检查\n");
     state = updateState(paths.state, state, { stage: "verifying", status: "running" });
     appendEvent(paths, state, "verifying", "started");
-    const verification = remoteTarget
-      ? verifyRemoteRainbond(remoteTarget, facts.primaryIp)
-      : verifyRainbond(fs.readFileSync(paths.log, "utf8"));
-    try {
-      await probeConsole(verification.consoleUrl);
-    } catch (error) {
-      if (remoteTarget) throw error;
-      await probeConsole("http://127.0.0.1:7070");
-      verification.consoleUrl = "http://127.0.0.1:7070";
+    let verification;
+    if (remoteTarget) {
+      verification = await verifyRemoteDeployment({
+        target: remoteTarget,
+        fallbackHost: facts.primaryIp,
+        explicitHost: options.consoleHost || state.console_host || "",
+        effectiveSshHost,
+        session: sshSession,
+      });
+      if (!verification) {
+        state = updateState(paths.state, state, {
+          stage: "verifying",
+          status: "waiting_user",
+          blocker: null,
+        });
+        appendEvent(paths, state, "verifying", "waiting_user");
+        activeOperation.state = state;
+        return;
+      }
+    } else {
+      verification = verifyRainbond(fs.readFileSync(paths.log, "utf8"));
+      try {
+        await probeConsole(verification.consoleUrl);
+      } catch (error) {
+        await probeConsole("http://127.0.0.1:7070");
+        verification.consoleUrl = "http://127.0.0.1:7070";
+      }
     }
     process.stdout.write("[4/4] Console 健康检查通过\n");
     await completePlatform(onboarding, state, paths, verification, options.noResume);
@@ -1256,6 +1648,15 @@ async function runInstall(options) {
   }
 }
 
+async function runInstall(options) {
+  try {
+    await runInstallOperation(options);
+  } finally {
+    closeSshSession(activeSshSession);
+    activeSshSession = null;
+  }
+}
+
 function interruptActiveOperation(signal) {
   interruptedSignal = signal;
   if (activeRequest) {
@@ -1264,12 +1665,14 @@ function interruptActiveOperation(signal) {
   }
   if (activeChild?.pid) {
     try {
-      if (process.platform !== "win32") process.kill(-activeChild.pid, signal);
+      if (activeChildDetached && process.platform !== "win32") process.kill(-activeChild.pid, signal);
       else activeChild.kill(signal);
     } catch {
       // The child may already have exited.
     }
   }
+  closeSshSession(activeSshSession);
+  activeSshSession = null;
   if (activeOperation) {
     const { paths } = activeOperation;
     try {
@@ -1301,16 +1704,26 @@ module.exports = {
   REMOTE_INSTALL_SCRIPT,
   REMOTE_VERIFICATION_SCRIPT,
   atomicWriteJson,
+  buildRemoteConsoleCandidates,
+  closeSshSession,
+  establishSshSession,
   evaluatePreflight,
   extractConsoleUrl,
   inspectRemoteSystem,
+  normalizeConsoleHost,
   normalizeRemoteTarget,
+  parseArgs,
   prepareRemoteInstaller,
   readOnboardingState,
   readPlatformState,
   remoteInstallerInvocation,
+  resolveRemoteConsole,
+  resolveSshHostname,
   selectInstallTarget,
+  selectReachableConsole,
+  selectRemoteInstallationEip,
   targetChoicesForPlatform,
+  verifyRemoteDeployment,
   verifyRemoteRainbond,
 };
 

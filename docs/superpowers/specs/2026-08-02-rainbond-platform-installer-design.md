@@ -27,7 +27,7 @@ The first release does not support:
 - provisioning or purchasing a cloud server;
 - multi-node, high-availability, offline, air-gapped, or existing-Kubernetes installation;
 - remote macOS installation;
-- password-based SSH setup or accepting passwords, private keys, API tokens, or other credentials in chat;
+- accepting passwords, private keys, API tokens, or other credentials in chat or storing them in Rainskills; password authentication remains available only through the attached system OpenSSH client;
 - a server-side Device Authorization Flow for a control machine with no usable browser;
 - silently stopping conflicting services, deleting existing containers or data, changing firewall rules, or resizing infrastructure.
 
@@ -107,7 +107,7 @@ For macOS, present remote Linux first and the current Mac second before doing le
 
 For Windows, explain that Rainbond cannot be installed on the current device and ask only for a remote Linux SSH target. Never show a macOS option.
 
-When a different Linux host is selected, accept only an existing SSH target such as `root@192.168.1.20` or a host alias from `~/.ssh/config`. If the user selected option 2 without the target, ask the one missing-field question, but classify that as a corrected incomplete reply rather than a normal extra decision. Do not ask for SSH passwords or key contents. Validate connectivity with a non-interactive, read-only probe before continuing.
+When a different Linux host is selected, accept only an SSH target such as `root@192.168.1.20` or a host alias from `~/.ssh/config`. If the user selected option 2 without the target, ask the one missing-field question, but classify that as a corrected incomplete reply rather than a normal extra decision. First validate connectivity with a non-interactive, read-only probe. When authentication or first-use host trust is required, keep the terminal attached and let the system OpenSSH client prompt once; never ask for SSH passwords or key contents in chat and never store them in Rainskills.
 
 After the user approves the summarized plan, do not ask separately about Docker, directories, individual ports, or each installation phase. Additional questions are allowed only for blockers, genuine ambiguity, operating-system permission prompts, or destructive/conflicting remediation.
 
@@ -135,7 +135,7 @@ The tested official Linux quick installer changes more than Rainbond files: depe
 
 The local Linux path executes the helper, installer, logs, and verification on the current Linux host. It requires either UID 0 or previously working non-interactive `sudo -n`; it never opens a password prompt.
 
-The remote Linux path keeps the authoritative onboarding and operation checkpoints on the local control machine. It creates a non-secret remote workspace at `~/.rainbond/platform-installer/<operation-id>/` for the downloaded script and remote log, runs every probe and mutation through `ssh -o BatchMode=yes`, and requires remote UID 0 or `sudo -n`. The official installer remains a foreground child of a remote wrapper. `INT` or `TERM` reaches that wrapper, which terminates its installer process group before the local SSH process exits. Re-entry reconnects and inspects real remote container, filesystem, and service state rather than trusting the local stage alone. Local verification checks Console reachability from the control machine; remote verification checks containers, K3s, and listening ports on the target.
+The remote Linux path keeps the authoritative onboarding and operation checkpoints on the local control machine. It creates a non-secret remote workspace at `~/.rainbond/platform-installer/<operation-id>/` for the downloaded script and remote log. It first probes with `ssh -o BatchMode=yes`; if native interaction is required, OpenSSH establishes a temporary multiplexed connection and all later `ssh` / `scp` calls reuse it in batch mode. The password remains inside OpenSSH. The target requires remote UID 0 or `sudo -n`. The official installer remains a foreground child of a remote wrapper. `INT` or `TERM` reaches that wrapper, which terminates its installer process group before the local SSH process exits and closes the control connection. Re-entry reconnects and inspects real remote container, filesystem, and service state rather than trusting the local stage alone. Local verification checks Console reachability from the control machine; remote verification checks containers, K3s, and listening ports on the target.
 
 The macOS path executes the official script on Darwin while Docker commands target the verified OrbStack context. Preflight checks both Mac resources and the OrbStack Linux VM allocation. OrbStack must already be installed or be downloaded from its official signed distribution after user confirmation; do not install a new package manager solely to acquire it. Starting OrbStack or accepting a macOS system permission dialog is a legitimate user-action pause and must be explained in one short prompt. Rainbond and K3s run inside the privileged `rainbond` container, so K3s and component verification runs through `docker exec rainbond ...`, not against the Darwin host.
 

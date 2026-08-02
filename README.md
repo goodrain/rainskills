@@ -163,9 +163,11 @@ AI 必须把 `argv` 数组作为参数传回同一个 `rainskills` 命令，不�
 - 独立验证 Rainbond 容器、K3s、`rbd-system` 组件和 Console
 - 自动执行 `npx rainskills resume --onboarding-id <id>`，继续浏览器授权
 
-平台安装器会先识别当前设备：Linux 可选择“当前设备（回车默认）”或“其他 Linux 服务器”；macOS 可选择“Linux 服务器（推荐）”或“当前 Mac”；Windows 不展示本机或 macOS，只要求提供 Linux 服务器。远程连接使用已有的 SSH Key 或 `~/.ssh/config`，不会索取密码和私钥。
+平台安装器会先识别当前设备：Linux 可选择“当前设备（回车默认）”或“其他 Linux 服务器”；macOS 可选择“Linux 服务器（推荐）”或“当前 Mac”；Windows 不展示本机或 macOS，只要求提供 Linux 服务器。远程连接优先使用已有的 SSH Key；需要密码时由系统 SSH 在终端读取一次并复用连接，Rainskills 不会保存密码或私钥。
 
 当前支持单机版，包括本机和远程 Linux 安装；不支持多节点、高可用、离线安装或自动清理已有容器和端口冲突。
+
+远程部署完成后，Rainskills 会从当前设备验证 SSH 地址、Rainbond 上报地址和远端主网卡地址，自动选择实际可访问的 Console。云服务器的内网地址不可达时会优先使用 SSH 公网地址；只有全部候选都失败时才询问公网 IP 或域名。
 
 如果 AI 使用的执行工具不能保持交互终端，平台预检后会输出：
 
