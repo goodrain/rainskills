@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const { EventEmitter } = require("node:events");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -36,6 +37,12 @@ function writeSkill(root, name, body = "initial\n") {
     `---\nname: ${name}\ndescription: Test skill\n---\n\n${body}`
   );
   return directory;
+}
+
+function authorizationParams(url) {
+  const parsed = new URL(url);
+  const queryIndex = parsed.hash.indexOf("?");
+  return new URLSearchParams(queryIndex >= 0 ? parsed.hash.slice(queryIndex + 1) : "");
 }
 
 test("secure state preserves POSIX modes and blocks paths outside home", () => {
@@ -293,4 +300,458 @@ test("native main saves private onboarding and emits the fixed next action", asy
     )),
     false
   );
+});
+
+test("Windows authorization accepts GET and POST loopback callbacks with exact state", async (t) => {
+  const {
+    authorizeWithLoopback,
+    looksLikeJwt,
+  } = require(path.join(
+    repoRoot,
+    "rainbond-platform-installer",
+    "scripts",
+    "windows-auth.js"
+  ));
+  const token = "header.payload.signature";
+  assert.equal(looksLikeJwt(token), true);
+  assert.equal(looksLikeJwt("not-a-token"), false);
+
+  for (const method of ["GET", "POST"]) {
+    await t.test(method, async () => {
+      let openedUrl = "";
+      const result = await authorizeWithLoopback({
+        baseUrl: "https://rainbond.example.com",
+        timeoutMs: 1000,
+        async openBrowser(url) {
+          openedUrl = url;
+          const parameters = authorizationParams(url);
+          const callback = new URL(parameters.get("callback"));
+          const state = parameters.get("state");
+          const preflight = await fetch(callback, {
+            method: "OPTIONS",
+            headers: {
+              "access-control-request-private-network": "true",
+              origin: "https://rainbond.example.com",
+            },
+          });
+          assert.equal(preflight.status, 204);
+          assert.equal(preflight.headers.get("access-control-allow-private-network"), "true");
+          if (method === "GET") {
+            callback.searchParams.set("token", token);
+            callback.searchParams.set("state", state);
+            const response = await fetch(callback);
+            assert.equal(response.status, 200);
+          } else {
+            const response = await fetch(callback, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ token, state }),
+            });
+            assert.equal(response.status, 200);
+          }
+        },
+      });
+      assert.equal(result, token);
+      assert.match(openedUrl, /^https:\/\/rainbond\.example\.com\/#\/cli-auth\?/);
+    });
+  }
+});
+
+test("Windows loopback authorization rejects state mismatch, timeout, and abort", async () => {
+  const { authorizeWithLoopback } = require(path.join(
+    repoRoot,
+    "rainbond-platform-installer",
+    "scripts",
+    "windows-auth.js"
+  ));
+  await assert.rejects(
+    authorizeWithLoopback({
+      baseUrl: "https://rainbond.example.com",
+      timeoutMs: 1000,
+      async openBrowser(url) {
+        const callback = new URL(authorizationParams(url).get("callback"));
+        callback.searchParams.set("token", "header.payload.signature");
+        callback.searchParams.set("state", "wrong");
+        await fetch(callback);
+      },
+    }),
+    /state/i
+  );
+  await assert.rejects(
+    authorizeWithLoopback({
+      baseUrl: "https://rainbond.example.com",
+      timeoutMs: 20,
+      openBrowser() {},
+    }),
+    /超时|timeout/i
+  );
+
+  const controller = new AbortController();
+  let callbackUrl = "";
+  const pending = authorizeWithLoopback({
+    baseUrl: "https://rainbond.example.com",
+    timeoutMs: 1000,
+    signal: controller.signal,
+    openBrowser(url) {
+      callbackUrl = authorizationParams(url).get("callback");
+      controller.abort();
+    },
+  });
+  await assert.rejects(pending, /取消|abort/i);
+  await assert.rejects(fetch(callbackUrl));
+});
+
+test("Windows Device Flow pins origin and follows pending, slow_down, and Retry-After", async () => {
+  const { authorizeWithDeviceFlow } = require(path.join(
+    repoRoot,
+    "rainbond-platform-installer",
+    "scripts",
+    "windows-auth.js"
+  ));
+  const responses = [
+    new Response(JSON.stringify({
+      device_code: "private-device-code",
+      user_code: "BCDF-GHJK",
+      verification_uri: "https://attacker.example/device",
+      verification_uri_complete: "https://attacker.example/complete",
+      expires_in: 600,
+      interval: 1,
+    }), { status: 200, headers: { "content-type": "application/json" } }),
+    new Response(JSON.stringify({ error: "authorization_pending" }), { status: 400 }),
+    new Response(JSON.stringify({ error: "slow_down" }), { status: 400 }),
+    new Response(JSON.stringify({ error: "authorization_pending" }), {
+      status: 429,
+      headers: { "retry-after": "9" },
+    }),
+    new Response(JSON.stringify({
+      access_token: "header.payload.signature",
+      token_type: "Bearer",
+    }), { status: 200 }),
+  ];
+  const calls = [];
+  const sleeps = [];
+  let openedUrl = "";
+
+  const token = await authorizeWithDeviceFlow({
+    baseUrl: "https://rainbond.example.com",
+    openBrowser(url) {
+      openedUrl = url;
+    },
+    async fetchImpl(url, options) {
+      calls.push({ url, options });
+      return responses.shift();
+    },
+    async sleep(seconds) {
+      sleeps.push(seconds);
+    },
+    now: (() => {
+      let value = 0;
+      return () => value++;
+    })(),
+  });
+
+  assert.equal(token, "header.payload.signature");
+  assert.equal(openedUrl, "https://rainbond.example.com/#/device?user_code=BCDF-GHJK");
+  assert.deepEqual(calls.map((call) => new URL(call.url).pathname), [
+    "/console/mcp/device/code",
+    "/console/mcp/device/token",
+    "/console/mcp/device/token",
+    "/console/mcp/device/token",
+    "/console/mcp/device/token",
+  ]);
+  assert.deepEqual(sleeps, [1, 1, 6, 9]);
+  assert.equal(calls.some((call) => call.url.includes("private-device-code")), false);
+});
+
+test("Windows Device Flow handles unsupported, expiration, and cancellation", async () => {
+  const { authorizeWithDeviceFlow } = require(path.join(
+    repoRoot,
+    "rainbond-platform-installer",
+    "scripts",
+    "windows-auth.js"
+  ));
+  await assert.rejects(
+    authorizeWithDeviceFlow({
+      baseUrl: "https://rainbond.example.com",
+      fetchImpl: async () => new Response("Not Found", { status: 404 }),
+    }),
+    (error) => error.code === "DEVICE_FLOW_UNSUPPORTED"
+  );
+  await assert.rejects(
+    authorizeWithDeviceFlow({
+      baseUrl: "https://rainbond.example.com",
+      fetchImpl: async () => new Response(JSON.stringify({ error: "not_found" }), {
+        status: 404,
+        headers: { "content-type": "application/json" },
+      }),
+    }),
+    (error) => error.code !== "DEVICE_FLOW_UNSUPPORTED"
+  );
+
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(
+    authorizeWithDeviceFlow({
+      baseUrl: "https://rainbond.example.com",
+      signal: controller.signal,
+      fetchImpl: async () => {
+        throw new Error("must not fetch");
+      },
+    }),
+    /取消|abort/i
+  );
+
+  let nowValue = 0;
+  await assert.rejects(
+    authorizeWithDeviceFlow({
+      baseUrl: "https://rainbond.example.com",
+      fetchImpl: async () => new Response(JSON.stringify({
+        device_code: "private-device-code",
+        user_code: "BCDF-GHJK",
+        verification_uri: "https://rainbond.example.com/#/device",
+        verification_uri_complete: "https://rainbond.example.com/#/device?user_code=BCDF-GHJK",
+        expires_in: 1,
+        interval: 1,
+      }), { status: 200 }),
+      openBrowser() {},
+      sleep: async () => {},
+      now() {
+        nowValue += 1;
+        return nowValue;
+      },
+    }),
+    /超时|过期/
+  );
+});
+
+test("Windows browser opener uses a fixed PowerShell file and treats URL as data", async () => {
+  const { openWindowsBrowser } = require(path.join(
+    repoRoot,
+    "rainbond-platform-installer",
+    "scripts",
+    "windows-auth.js"
+  ));
+  const calls = [];
+  const helperPath = path.join(repoRoot, "rainbond-platform-installer", "scripts", "windows-browser.ps1");
+  function spawnImpl(command, args, options) {
+    calls.push({ command, args, options });
+    const child = new EventEmitter();
+    queueMicrotask(() => child.emit("close", 0, null));
+    return child;
+  }
+  const url = "https://rainbond.example.com/#/device?user_code=BCDF-GHJK&next=a;b";
+
+  await openWindowsBrowser(url, { spawnImpl, helperPath });
+
+  assert.equal(calls[0].command, "powershell.exe");
+  assert.deepEqual(calls[0].args, [
+    "-NoProfile",
+    "-NonInteractive",
+    "-File",
+    helperPath,
+    "-Url",
+    url,
+  ]);
+  assert.equal(calls[0].args.includes("-Command"), false);
+});
+
+test("Windows MCP validation and client configuration keep JWT out of argv", async () => {
+  const {
+    configureSelectedClients,
+    persistWindowsEnvironment,
+    validateMcp,
+  } = require(path.join(
+    repoRoot,
+    "rainbond-platform-installer",
+    "scripts",
+    "windows-client-config.js"
+  ));
+  const token = "header.payload.signature";
+  let request = null;
+  const validation = await validateMcp({
+    url: "https://rainbond.example.com/console/mcp/rainskills/codex/query",
+    token,
+    async fetchImpl(url, options) {
+      request = { url, options };
+      return new Response(JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        result: { serverInfo: { name: "rainbond-console-mcp" } },
+      }), {
+        status: 200,
+        headers: { "x-renewed-token": "renewed.payload.signature" },
+      });
+    },
+  });
+  assert.equal(request.options.headers.Authorization, `GRJWT ${token}`);
+  assert.equal(JSON.parse(request.options.body).method, "initialize");
+  assert.equal(validation.token, "renewed.payload.signature");
+
+  const calls = [];
+  function spawnImpl(command, args, options) {
+    calls.push({ command, args, options });
+    return { status: 0, stdout: "", stderr: "" };
+  }
+  persistWindowsEnvironment({
+    token,
+    baseUrl: "https://rainbond.example.com",
+    spawnImpl,
+    helperPath: "C:\\Program Files\\Rainskills\\windows-client-config.ps1",
+  });
+  configureSelectedClients({
+    target: "all",
+    baseUrl: "https://rainbond.example.com",
+    token,
+    spawnImpl,
+  });
+
+  assert.equal(calls.some((call) => call.args.some((argument) => argument.includes(token))), false);
+  assert.ok(calls.some((call) => call.command === "codex" && call.args.includes(
+    "https://rainbond.example.com/console/mcp/rainskills/codex/query"
+  )));
+  assert.ok(calls.some((call) => call.command === "claude" && call.args.includes(
+    "https://rainbond.example.com/console/mcp/rainskills/claude-code/query"
+  )));
+  assert.deepEqual(
+    calls.filter((call) => call.command === "codex").map((call) => call.args.slice(0, 3)),
+    [["mcp", "remove", "rainbond"], ["mcp", "add", "rainbond"]]
+  );
+  assert.deepEqual(
+    calls.filter((call) => call.command === "claude").map((call) => call.args.slice(0, 5)),
+    [
+      ["mcp", "remove", "--scope", "user", "rainbond"],
+      ["mcp", "add", "--scope", "user", "--transport"],
+    ]
+  );
+  assert.equal(calls[0].options.env.RAINSKILLS_RAINBOND_JWT, token);
+
+  assert.throws(
+    () => configureSelectedClients({
+      target: "codex",
+      baseUrl: "https://rainbond.example.com",
+      token,
+      spawnImpl() {
+        return { status: null, error: Object.assign(new Error("missing"), { code: "ENOENT" }) };
+      },
+    }),
+    /未找到.*codex/
+  );
+});
+
+test("native authorization orchestration falls back from Device Flow and configures clients", async () => {
+  const { authorizeAndConfigure } = require(windowsOnboardingPath);
+  const calls = [];
+  const result = await authorizeAndConfigure({
+    target: "codex",
+    baseUrl: "https://rainbond.example.com",
+    authorizeWithDeviceFlowImpl: async () => {
+      const error = new Error("unsupported");
+      error.code = "DEVICE_FLOW_UNSUPPORTED";
+      throw error;
+    },
+    authorizeWithLoopbackImpl: async () => "header.payload.signature",
+    validateMcpImpl: async ({ url, token }) => {
+      calls.push({ kind: "validate", url, token });
+      return { token: "renewed.payload.signature" };
+    },
+    persistWindowsEnvironmentImpl(options) {
+      calls.push({ kind: "persist", ...options });
+    },
+    configureSelectedClientsImpl(options) {
+      calls.push({ kind: "configure", ...options });
+    },
+    openBrowser() {},
+  });
+
+  assert.deepEqual(result, { status: "configured" });
+  assert.equal(calls[0].url, "https://rainbond.example.com/console/mcp/rainskills/codex/query");
+  assert.equal(calls.at(-1).token, "renewed.payload.signature");
+});
+
+test("native main completes an explicit SaaS configuration", async () => {
+  const { createSecureStateStore } = require(secureStatePath);
+  const { main } = require(windowsOnboardingPath);
+  const home = temporaryHome();
+  const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-package-saas-"));
+  writeSkill(packageRoot, "rainbond-test");
+  fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ version: "0.1.0-test" }));
+  const calls = [];
+  const output = [];
+
+  const result = await main(["codex", "--saas"], {
+    authorizeAndConfigure(options) {
+      calls.push(options);
+      return { status: "configured" };
+    },
+    control: {
+      mode: "windows-native",
+      hostPlatform: "win32",
+      controlPlatform: "win32",
+    },
+    home,
+    packageRoot,
+    stateStore: createSecureStateStore({ platform: "linux", home }),
+    logger(message) {
+      output.push(message);
+    },
+  });
+
+  assert.equal(result.status, "configured");
+  assert.equal(calls[0].baseUrl, "https://run.rainbond.com");
+  assert.equal(calls[0].target, "codex");
+  assert.match(output.join("\n"), /重新启动 Codex/);
+});
+
+test("native deployment selection preserves Cloud, private URL, and no-platform choices", async () => {
+  const {
+    parseWindowsInstallerArgs,
+    resolveDeployment,
+  } = require(windowsOnboardingPath);
+
+  assert.deepEqual(await resolveDeployment(
+    parseWindowsInstallerArgs(["--saas"]),
+    { isTty: false }
+  ), {
+    mode: "saas",
+    baseUrl: "https://run.rainbond.com",
+    needsPlatform: false,
+  });
+  assert.deepEqual(await resolveDeployment(
+    parseWindowsInstallerArgs(["--rainbond-url", "https://rainbond.example.com"]),
+    { isTty: false }
+  ), {
+    mode: "self-hosted",
+    baseUrl: "https://rainbond.example.com",
+    needsPlatform: false,
+  });
+  assert.deepEqual(await resolveDeployment(
+    parseWindowsInstallerArgs(["--self-hosted"]),
+    { isTty: false }
+  ), {
+    mode: "self-hosted",
+    baseUrl: "",
+    needsPlatform: true,
+  });
+  assert.deepEqual(await resolveDeployment(
+    parseWindowsInstallerArgs([]),
+    { isTty: false }
+  ), {
+    needsUserInput: true,
+  });
+
+  assert.deepEqual(await resolveDeployment(
+    parseWindowsInstallerArgs([]),
+    {
+      isTty: true,
+      promptDeployment: async () => ({
+        mode: "self-hosted",
+        baseUrl: "",
+        needsPlatform: true,
+      }),
+    }
+  ), {
+    mode: "self-hosted",
+    baseUrl: "",
+    needsPlatform: true,
+  });
 });

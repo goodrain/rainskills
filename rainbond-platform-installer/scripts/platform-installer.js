@@ -1312,6 +1312,26 @@ async function confirmInstall(assumeYes) {
   }
 }
 
+function resumeInvocationForOnboarding(onboarding, execPath = process.execPath) {
+  const args = [
+    onboarding.target,
+    "--self-hosted",
+    "--rainbond-url",
+    onboarding.console_url,
+  ];
+  if (onboarding.console_url.startsWith("http://")) args.push("--allow-insecure-http");
+  if (onboarding.control_mode === "windows-native") {
+    return {
+      executable: execPath,
+      args: [path.resolve(__dirname, "windows-onboarding.js"), ...args],
+    };
+  }
+  return {
+    executable: "bash",
+    args: [path.resolve(__dirname, "..", "..", "install.sh"), ...args],
+  };
+}
+
 async function runResume(onboardingId) {
   assertOperationId(onboardingId);
   ensurePrivateOperationDirectory(path.dirname(onboardingStatePath()));
@@ -1321,18 +1341,15 @@ async function runResume(onboardingId) {
   }
 
   onboarding = updateOnboarding(onboarding, { stage: "authorizing" });
-  const installScript = path.resolve(__dirname, "..", "..", "install.sh");
-  const args = [
-    installScript,
-    onboarding.target,
-    "--self-hosted",
-    "--rainbond-url",
-    onboarding.console_url,
-  ];
-  if (onboarding.console_url.startsWith("http://")) args.push("--allow-insecure-http");
+  const invocation = resumeInvocationForOnboarding(onboarding);
 
   process.stdout.write("\n正在恢复 RainSkills 授权流程，将在浏览器中完成登录和授权。\n");
-  const result = await spawnAttached("bash", args, { env: process.env }, null);
+  const result = await spawnAttached(
+    invocation.executable,
+    invocation.args,
+    { env: process.env },
+    null
+  );
   if (result.signal) throw new Error(`授权流程被信号 ${result.signal} 中断`);
   if (result.code !== 0) {
     process.stdout.write(`\nRainbond 已部署，授权尚未完成。稍后继续：\n  npx rainskills@${packageManifest.version} resume --onboarding-id ${onboardingId}\n`);
@@ -1683,6 +1700,7 @@ module.exports = {
   readPlatformState,
   remoteInstallerInvocation,
   resolveRemoteConsole,
+  resumeInvocationForOnboarding,
   resolveSshHostname,
   selectInstallTarget,
   selectReachableConsole,

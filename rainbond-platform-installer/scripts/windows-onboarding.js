@@ -9,6 +9,16 @@ const readline = require("node:readline/promises");
 const { stdin, stdout } = require("node:process");
 const { detectControlEnvironment } = require("./control-environment.js");
 const { createSecureStateStore } = require("./secure-state.js");
+const {
+  authorizeWithDeviceFlow,
+  authorizeWithLoopback,
+  openWindowsBrowser,
+} = require("./windows-auth.js");
+const {
+  configureSelectedClients,
+  persistWindowsEnvironment,
+  validateMcp,
+} = require("./windows-client-config.js");
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CONTROL_MODES = new Set(["windows-native", "wsl", "posix"]);
@@ -274,6 +284,62 @@ function createNextAction(operationId) {
   };
 }
 
+async function authorizeAndConfigure({
+  target,
+  baseUrl,
+  noBrowser = false,
+  signal,
+  logger = () => {},
+  openBrowser = openWindowsBrowser,
+  authorizeWithDeviceFlowImpl = authorizeWithDeviceFlow,
+  authorizeWithLoopbackImpl = authorizeWithLoopback,
+  validateMcpImpl = validateMcp,
+  persistWindowsEnvironmentImpl = persistWindowsEnvironment,
+  configureSelectedClientsImpl = configureSelectedClients,
+  fetchImpl = globalThis.fetch,
+  sleep,
+  now,
+  spawnImpl,
+}) {
+  const browserOpener = noBrowser
+    ? async (url) => logger(`授权地址：${url}`)
+    : openBrowser;
+  let token;
+  try {
+    token = await authorizeWithDeviceFlowImpl({
+      baseUrl,
+      fetchImpl,
+      now,
+      openBrowser: browserOpener,
+      signal,
+      sleep,
+    });
+  } catch (error) {
+    if (error.code !== "DEVICE_FLOW_UNSUPPORTED") throw error;
+    token = await authorizeWithLoopbackImpl({
+      baseUrl,
+      openBrowser: browserOpener,
+      signal,
+    });
+  }
+
+  const endpoints = [];
+  if (target === "codex" || target === "all") {
+    endpoints.push(`${baseUrl}/console/mcp/rainskills/codex/query`);
+  }
+  if (target === "claude" || target === "all") {
+    endpoints.push(`${baseUrl}/console/mcp/rainskills/claude-code/query`);
+  }
+  if (endpoints.length === 0) throw new Error("安装目标无效");
+  for (const url of endpoints) {
+    const validation = await validateMcpImpl({ fetchImpl, token, url });
+    token = validation.token;
+  }
+  persistWindowsEnvironmentImpl({ baseUrl, spawnImpl, token });
+  configureSelectedClientsImpl({ baseUrl, spawnImpl, target, token });
+  return { status: "configured" };
+}
+
 async function promptTarget() {
   const terminal = readline.createInterface({ input: stdin, output: stdout });
   try {
@@ -288,6 +354,71 @@ async function promptTarget() {
   } finally {
     terminal.close();
   }
+}
+
+async function promptDeployment() {
+  const terminal = readline.createInterface({ input: stdin, output: stdout });
+  try {
+    stdout.write(
+      "请选择要连接的 Rainbond：\n"
+      + "  1) Rainbond Cloud（直接使用：https://run.rainbond.com）\n"
+      + "  2) 私有化部署（已有平台可填写地址；没有平台可继续安装）\n"
+    );
+    let mode = "";
+    while (!mode) {
+      const answer = (await terminal.question("请输入选项 [1-2，回车默认 1]: ")).trim();
+      if (answer === "" || answer === "1") mode = "saas";
+      else if (answer === "2") mode = "self-hosted";
+      else stdout.write("请输入 1 或 2。\n");
+    }
+    if (mode === "saas") {
+      return { mode, baseUrl: "https://run.rainbond.com", needsPlatform: false };
+    }
+
+    stdout.write(
+      "\n你现在是否已经有可以访问的 Rainbond 平台？\n"
+      + "  1) 已经有，填写平台地址\n"
+      + "  2) 还没有，帮我安装\n"
+    );
+    for (;;) {
+      const answer = (await terminal.question("请输入选项 [1-2]: ")).trim();
+      if (answer === "2") return { mode, baseUrl: "", needsPlatform: true };
+      if (answer === "1") {
+        const baseUrl = (await terminal.question("Rainbond Console 地址: ")).trim();
+        if (baseUrl) return { mode, baseUrl, needsPlatform: false };
+        stdout.write("Rainbond Console 地址不能为空。\n");
+      } else {
+        stdout.write("请输入 1 或 2。\n");
+      }
+    }
+  } finally {
+    terminal.close();
+  }
+}
+
+async function resolveDeployment(options, {
+  isTty = Boolean(stdin.isTTY && stdout.isTTY),
+  promptDeployment: promptImpl = promptDeployment,
+} = {}) {
+  if (options.deploymentMode === "saas") {
+    return {
+      mode: "saas",
+      baseUrl: options.rainbondUrl || "https://run.rainbond.com",
+      needsPlatform: false,
+    };
+  }
+  if (options.rainbondUrl) {
+    return {
+      mode: "self-hosted",
+      baseUrl: options.rainbondUrl,
+      needsPlatform: false,
+    };
+  }
+  if (options.deploymentMode === "self-hosted") {
+    return { mode: "self-hosted", baseUrl: "", needsPlatform: true };
+  }
+  if (options.nonInteractive || !isTty) return { needsUserInput: true };
+  return promptImpl();
 }
 
 function usage() {
@@ -319,7 +450,18 @@ async function main(argv, dependencies = {}) {
   });
   if (options.customDest || options.skipMcp) return { status: "skills-installed", counts };
 
-  if (options.deploymentMode === "self-hosted" && !options.rainbondUrl) {
+  const deployment = await resolveDeployment(options, {
+    isTty: dependencies.isTty,
+    promptDeployment: dependencies.promptDeployment,
+  });
+  const logger = dependencies.logger || ((message) => stdout.write(`${message}\n`));
+  if (deployment.needsUserInput) {
+    logger("[RAINSKILLS_USER_INPUT_REQUIRED:rainbond_environment]");
+    logger("请选择 Rainbond Cloud，或选择私有化部署并提供平台地址/继续平台安装。");
+    return { status: "waiting-user", counts };
+  }
+
+  if (deployment.needsPlatform) {
     const packageManifest = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"));
     const stateStore = dependencies.stateStore || createSecureStateStore({
       platform: process.platform,
@@ -337,17 +479,44 @@ async function main(argv, dependencies = {}) {
         stateStore,
       });
       const nextAction = createNextAction(operationId);
-      (dependencies.logger || ((message) => stdout.write(`${message}\n`)))(JSON.stringify(nextAction));
+      logger(JSON.stringify(nextAction));
       return { status: "awaiting-platform", counts, checkpoint, nextAction };
     } finally {
       operationLock.release();
     }
   }
 
-  throw new Error("Windows Rainbond 授权将在下一阶段继续；当前可使用 --skip-mcp 验证 Skill 安装");
+  const baseUrl = deployment.baseUrl;
+  const parsedBase = new URL(baseUrl);
+  if (!["http:", "https:"].includes(parsedBase.protocol)) {
+    throw new Error("Rainbond Console 地址必须使用 HTTP 或 HTTPS");
+  }
+  if (parsedBase.protocol === "http:" && !options.allowInsecureHttp) {
+    throw new Error("默认禁用明文 HTTP；如需继续请添加 --allow-insecure-http");
+  }
+  parsedBase.pathname = parsedBase.pathname.replace(/\/$/, "");
+  parsedBase.search = "";
+  parsedBase.hash = "";
+  const normalizedBase = parsedBase.toString().replace(/\/$/, "");
+  const configure = dependencies.authorizeAndConfigure || authorizeAndConfigure;
+  await configure({
+    target,
+    baseUrl: normalizedBase,
+    noBrowser: options.noBrowser,
+    logger: dependencies.logger,
+    ...(dependencies.authorizationDependencies || {}),
+  });
+  const clientLabel = target === "codex"
+    ? "Codex"
+    : target === "claude"
+      ? "Claude Code"
+      : "Codex 和 Claude Code";
+  logger(`安装和授权已完成。请重新启动 ${clientLabel}，让新 Skills、MCP 和环境变量生效。`);
+  return { status: "configured", counts };
 }
 
 module.exports = {
+  authorizeAndConfigure,
   copySkills,
   createNextAction,
   createOnboardingCheckpoint,
@@ -355,6 +524,7 @@ module.exports = {
   discoverSkills,
   main,
   parseWindowsInstallerArgs,
+  resolveDeployment,
 };
 
 if (require.main === module) {

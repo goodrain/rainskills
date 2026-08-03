@@ -49,6 +49,50 @@ test("launcher routes platform and resume commands to the bundled helper", () =>
   });
 });
 
+test("platform resume selects native Node or POSIX Bash from onboarding control mode", () => {
+  const { resumeInvocationForOnboarding } = require(platformInstallerPath);
+  const windowsOnboardingPath = path.join(
+    repoRoot,
+    "rainbond-platform-installer",
+    "scripts",
+    "windows-onboarding.js"
+  );
+  const installScriptPath = path.join(repoRoot, "install.sh");
+  const base = {
+    target: "codex",
+    console_url: "http://127.0.0.1:7070",
+  };
+
+  assert.deepEqual(resumeInvocationForOnboarding({
+    ...base,
+    control_mode: "windows-native",
+  }, "/fake/node"), {
+    executable: "/fake/node",
+    args: [
+      windowsOnboardingPath,
+      "codex",
+      "--self-hosted",
+      "--rainbond-url",
+      "http://127.0.0.1:7070",
+      "--allow-insecure-http",
+    ],
+  });
+  assert.deepEqual(resumeInvocationForOnboarding({
+    ...base,
+    control_mode: "posix",
+  }, "/fake/node"), {
+    executable: "bash",
+    args: [
+      installScriptPath,
+      "codex",
+      "--self-hosted",
+      "--rainbond-url",
+      "http://127.0.0.1:7070",
+      "--allow-insecure-http",
+    ],
+  });
+});
+
 test("platform CLI accepts an explicit Console host without accepting a URL", () => {
   const { parseArgs } = require(platformInstallerPath);
   const options = parseArgs([
