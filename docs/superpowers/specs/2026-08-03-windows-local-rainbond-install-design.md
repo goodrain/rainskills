@@ -84,7 +84,7 @@
 WSL2 可以自动准备
 端口和网络检查正常
 
-安装将创建专用的 Rainbond WSL2 环境，并配置开机后自动启动。
+安装将创建专用的 Rainbond WSL2 环境，并配置为当前用户登录后自动启动。
 首次准备需要下载系统和 Rainbond 文件，是否继续？ [Y/n]:
 ```
 
@@ -94,7 +94,7 @@ WSL2 可以自动准备
 - 安装或更新 Microsoft WSL2 运行组件；
 - 创建名为 `Rainbond` 的专用 WSL2 发行版及其数据目录；
 - 在专用发行版中安装 Docker Engine 和 Rainbond；
-- 创建 Rainskills 管理的 Windows 端口转发和登录启动任务；
+- 创建 Rainskills 管理的 Windows 端口转发和当前用户登录启动任务；
 - 可能需要 Windows 重启。
 
 未确认前不得执行任何改变系统状态的命令。资源不足、端口冲突或已有同名但不受 Rainskills 管理的发行版时，只展示失败项和处理方向，不展示一长串成功项。
@@ -113,8 +113,9 @@ WSL2 组件已准备完成，需要重启 Windows 后继续。
 - 默认不重启；必须由用户明确输入确认。
 - 用户同意后，安装器先验证续装任务和本地恢复包均可用，再调用系统重启。
 - 用户不同意或当前是非交互终端时，保留状态并输出一条固定参数的续装命令。
-- 重启登录后，Windows 任务计划打开一个可见终端，使用固定版本的本地恢复包继续，不依赖已经消失的 npx 临时缓存，也不要求 AI 会话跨重启存活。
-- 续装进程完成或被用户取消后，删除一次性重启续装任务；安装成功后仅保留维持本地 Rainbond 运行所需的登录启动任务。
+- 重启登录后，高权限机器恢复任务先使用 `%ProgramData%` 中的受保护 helper 完成 WSL/网络阶段并写入机器就绪结果；随后普通权限用户恢复任务打开可见终端，从用户恢复包继续 onboarding。两者都不依赖已经消失的 npx 临时缓存，也不要求 AI 会话跨重启存活。
+- 机器恢复任务不得执行用户目录或 WSL 用户目录中的脚本。用户恢复任务不得启用 Windows 功能、修改网络、任务计划或 `%ProgramData%`。
+- 续装完成或被用户取消后，删除两个一次性任务；安装成功后仅保留维持本地 Rainbond 运行所需的登录启动任务。
 
 ### 2.4 进度展示
 
@@ -208,7 +209,7 @@ Rainskills 直接下载的 Ubuntu rootfs、Microsoft 离线组件和 Rainbond �
 
 WSL 控制模式的 skill 和 MCP 配置仍写入发起命令的 WSL 用户目录，不写入 Windows 用户的 Codex/Claude 配置。Windows helper 路径通过 `wslpath -w` 转换并作为独立参数传递。浏览器由 `powershell.exe Start-Process` 打开；回调服务仍由发起 onboarding 的 WSL Node/Bash 进程拥有，并且必须从 Windows 浏览器对 loopback 回调做真实验证。
 
-需要重启时，恢复状态额外保存控制发行版的固定名称和 Linux 恢复包绝对路径。一次性 Windows 登录任务调用 `wsl.exe -d <validated-distro> --exec <fixed-resume-entry> <operation-id>`，不得使用默认发行版或 shell 命令字符串。控制发行版不存在、被重命名或恢复入口身份不匹配时停止并输出原生 Windows 续装入口。原生 Windows 则完全使用 Node/PowerShell，不要求用户安装 Git Bash、WSL 中的 Node 或 Python。
+需要重启时，恢复状态额外保存控制发行版的固定名称和 Linux 恢复包绝对路径。高权限机器任务只执行 `%ProgramData%` 的固定 helper 和机器状态；完成后写入受保护、带 nonce 的 machine-ready result。普通权限用户任务验证该结果后，才可调用 `wsl.exe -d <validated-distro> --exec <fixed-user-resume-entry> <operation-id>`。不得使用默认发行版或 shell 命令字符串。控制发行版不存在、被重命名或恢复入口身份不匹配时停止并输出原生 Windows 续装入口。原生 Windows 的普通权限用户任务执行用户态 Node 恢复包，不要求 Git Bash、WSL 中的 Node 或 Python。
 
 ## 四、状态、恢复与并发
 
@@ -261,7 +262,13 @@ Windows 操作目录固定为：
 
 未提权 Node 与提权 helper 通过用户操作目录中的版本化 request/result JSON 交换结果。每个请求包含 operation id、installation id、随机 nonce 和白名单 action，路径与参数逐项校验；helper 不接受脚本文本。提权 helper 只写 `%ProgramData%` 机器状态和原 SID 可读取的原子结果文件。
 
-WSL 发行版按 Windows 用户注册，因此一次性重启续装任务和持久启动/网络维护任务都使用原用户 SID、`InteractiveToken` 和 highest run level，只在该用户登录时运行。任务动作是 `%ProgramData%` 中普通权限无法修改的固定绝对路径；持久任务不读取用户 token 或 onboarding 文件。不得改用 `SYSTEM`，因为它不能可靠访问该用户注册的 `Rainbond` 发行版。任务创建后，安装器必须回读 principal、logon type、run level、action、arguments 和 ACL，全部匹配才允许重启或宣告安装完成。
+WSL 发行版按 Windows 用户注册，因此所有任务都使用原用户 SID 和 `InteractiveToken`，只在该用户登录时运行，不使用 `SYSTEM`。任务分为：
+
+- 一次性机器恢复任务：highest run level，只执行 `%ProgramData%` 中普通权限无法修改的固定 helper；
+- 一次性用户恢复任务：least privilege，在机器恢复结果有效后执行用户态 Node 或 WSL onboarding 入口；
+- 持久启动/网络维护任务：highest run level，只执行 `%ProgramData%` 中固定维护入口，不读取用户 token、用户脚本或 onboarding 文件。
+
+高权限任务的 action 和可执行状态都来自机器目录；任何用户可写路径只能由 least-privilege 用户恢复任务执行。任务创建后，安装器必须回读 principal、logon type、run level、action、arguments 和 ACL，全部匹配才允许重启或宣告安装完成。
 
 ### 4.4 锁和重复执行
 
@@ -282,13 +289,15 @@ WSL 发行版按 Windows 用户注册，因此一次性重启续装任务和持�
 
 Rainbond Linux 安装器不接受 `127.0.0.1` 作为 EIP，而 DHCP、Wi-Fi、VPN 和 WSL2 NAT 地址都可能变化，因此不得把 Windows 主网卡地址或 WSL 动态地址持久化为 EIP。
 
+首版只支持 WSL2 默认 NAT 网络模式。预检通过 Windows HNS/WSL 状态和发行版内默认路由交叉验证实际模式，并把 `networking_mode=nat`、HNS network id、Windows adapter ifIndex 和 WSL gateway 写入受保护机器清单。检测到 mirrored、virtioproxy、用户自定义网络或无法证明为 NAT 时安全停止，说明当前本地安装暂不兼容该 WSL 网络模式；不得修改用户全局 `%USERPROFILE%\.wslconfig`。用户仍可选择安装到 Linux 服务器。
+
 确认安装后，helper 从策略声明的 RFC1918 地址池中选择一个不与 Windows 路由、VPN、WSL、Docker 或局域网重叠的 `/30` 子网，并持久化到 `installation_id`。该子网提供：
 
 - Windows WSL 虚拟接口上的 host address；
 - `Rainbond` 发行版由 systemd 恢复的固定 guest address；
 - Rainbond 安装器使用的固定 guest address，也就是 `rainbond_eip`。
 
-地址选择、Windows 路由和 WSL 地址配置均写入受保护机器清单。启动任务先恢复该受管地址，再启动 Docker/Rainbond。地址与后来新增的路由冲突时不换用 DHCP 地址，也不静默选择新 EIP；首版停止平台启动并报告精确冲突，避免在没有 Rainbond 官方地址迁移契约的情况下改写既有平台。首版正式发布前，Windows 10/11 实机验收必须证明系统重启、Wi-Fi DHCP 变化和常见 VPN 开关不会改变该 EIP。
+地址选择、Windows 路由和 WSL 地址配置均写入受保护机器清单。启动任务先启动发行版的网络环境，再恢复受管地址，最后启动 Docker/Rainbond。地址与后来新增的路由冲突时不换用 DHCP 地址，也不静默选择新 EIP；首版停止平台启动并报告精确冲突，避免在没有 Rainbond 官方地址迁移契约的情况下改写既有平台。首版正式发布前，Windows 10/11 实机验收必须证明系统重启、Wi-Fi DHCP 变化和常见 VPN 开关不会改变该 EIP。
 
 状态中分离：
 
@@ -305,7 +314,16 @@ Rainbond Linux 安装器不接受 `127.0.0.1` 作为 EIP，而 DHCP、Wi-Fi、VP
 
 每次修改前必须同时满足：清单 ACL/owner/hash 有效、当前规则与上次受管快照完全一致、目标 installation id 匹配。规则缺失时可以按清单重建；规则存在但与快照不符时视为外部修改并停止。安装器不保存、恢复或改写任何不在清单中的 portproxy 规则。
 
-成功后保留一个最小化登录启动任务：恢复安装级固定 host/guest 地址，启动 `Rainbond` 发行版，等待 Docker/Rainbond 就绪并核对受管转发快照。任务脚本位于受 ACL 保护的固定目录。它不重新安装系统、不下载文件、不执行授权，只维护已安装平台的启动、固定地址和既有转发。
+成功后保留一个最小化登录启动任务，按事实顺序执行：
+
+1. 以无副作用命令启动 `Rainbond` 发行版，使 WSL NAT/HNS adapter 可见；
+2. 按清单重新发现并验证 HNS network id、adapter ifIndex 和 NAT 模式；
+3. 恢复 Windows host address；
+4. 调用发行版内固定 root helper 恢复 guest address，并验证 host/guest 双向路由；
+5. 核对或恢复受管 portproxy；
+6. 释放 `rainskills-network-ready` 条件，启动 Docker/Rainbond 并完成健康检查。
+
+发行版中的 Docker/Rainbond systemd 单元必须依赖 `rainskills-network-ready.service`，防止固定地址准备完成前启动。任务脚本位于受 ACL 保护的固定目录。它不重新安装系统、不下载文件、不执行授权，只维护已安装平台的启动、固定地址和既有转发。
 
 Windows 防火墙规则不在首版自动修改范围内。portproxy 只监听 loopback，不向局域网暴露服务。本机 `127.0.0.1` 和 WSL 控制端到固定 guest address 的访问必须通过；其他设备访问不属于本地 RainSkills 完成标准。
 
@@ -320,6 +338,7 @@ Windows 预检至少验证：
 - BIOS/UEFI 硬件虚拟化可用；
 - 当前用户可触发一次 Windows UAC 提权；
 - WSL、Virtual Machine Platform、WSL2 kernel 和待重启状态；
+- WSL 实际网络模式；仅默认 NAT 可以继续，不修改用户 `.wslconfig`；
 - 端口 `80`、`443`、`6060`、`7070` 的监听进程，以及 portproxy 精确规则与受保护清单的一致性；
 - `Rainbond` 同名发行版、受管目录、计划任务和历史状态；
 - 到 Microsoft、Canonical、Rainbond 官方下载源和镜像仓库的网络；
@@ -407,6 +426,7 @@ CI 中不得真正启用 WSL、重启 Windows、安装 Docker/Rainbond 或修改
 - Windows 解析为 `local-windows`，Windows Server、ARM 和旧 build 被拒绝；
 - 原生 Windows 默认安装和 resume 全程不依赖 Bash/Python，onboarding schema 与 POSIX 路径兼容；
 - WSL 控制端不会误入 `local-linux`，Windows helper、浏览器和重启恢复均使用已验证的控制发行版；
+- 高权限恢复只执行 `%ProgramData%` 机器代码，用户态 onboarding 只由普通权限恢复进程执行；
 - 所有系统变更都发生在明确确认之后；
 - Windows 预检资源、虚拟化、UAC、功能、端口、网络、IPv4 和对象归属；
 - 新版 WSL 命令路径和 Windows 10 DISM 兼容路径；
@@ -418,6 +438,8 @@ CI 中不得真正启用 WSL、重启 Windows、安装 Docker/Rainbond 或修改
 - Ctrl+C、终端关闭、下载断点和每个持久阶段的幂等恢复；
 - 未知同名发行版、端口转发、任务或数据目录不被接管；
 - 安装级固定 EIP 在 DHCP、Wi-Fi、VPN 和 WSL 动态地址变化后保持不变；
+- WSL NAT 被正确识别，mirrored/virtioproxy/自定义模式安全停止且不修改 `.wslconfig`；
+- 登录任务按“启动发行版、发现 adapter、恢复 host/guest 地址、验证路由、应用转发、启动服务”顺序执行；
 - portproxy 归属只由受保护清单和精确规则快照确定，外部修改后停止；
 - UAC 前后 SID、ProgramData 机器目录、原用户任务 principal/logon type/run level 和固定 action 校验；
 - `sha256-pinned` 与 `os-signed-update` 两种下载信任路径分别验证；
@@ -437,11 +459,13 @@ GitHub 托管 Windows runner 不能可靠覆盖 WSL2 嵌套虚拟化和真实重
 2. 已有 WSL 但没有 `Rainbond` 发行版的系统安装；
 3. 下载中断、安装中断和 Windows 重启后的续装；
 4. 端口冲突和未知同名发行版必须安全停止；
-5. Windows 重启后 Rainbond 自动启动，Console 地址仍为 `http://127.0.0.1:7070`；
+5. Windows 重启后、原安装用户登录时 Rainbond 自动启动，Console 地址仍为 `http://127.0.0.1:7070`；
 6. 浏览器授权后 RainSkills MCP 配置验证通过；
 7. 卸载测试环境时只清理测试创建的受管对象，确认未影响用户已有 WSL 发行版。
 
 实机验收记录 Windows build、WSL 版本、Rainbond 版本、各阶段耗时、下载量、重启次数和失败日志。两类系统均通过后才能在 README 中把 Windows 本地安装标记为正式支持。
+
+实机验收还必须覆盖默认 NAT 的识别、mirrored 模式的安全停止、高权限任务不执行用户可写路径，以及“Windows 已启动但原用户尚未登录时 Rainbond 不运行、原用户登录后自动恢复”的可见行为。
 
 ### 9.3 完成标准
 
