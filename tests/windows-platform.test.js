@@ -32,12 +32,7 @@ const wslBootstrapPath = path.join(
   "scripts",
   "wsl-bootstrap.sh"
 );
-const { createSecureStateStore } = require(path.join(
-  repoRoot,
-  "rainbond-platform-installer",
-  "scripts",
-  "secure-state.js"
-));
+const { createPortableSecureStateStore } = require("./helpers/portable-secure-state.js");
 
 const OPERATION_ID = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
 const INSTALLATION_ID = "a72d3cf0-3f8f-4c24-99de-7bd76c65c3a1";
@@ -75,7 +70,7 @@ function passingFacts(overrides = {}) {
 
 function createFixture({ mutateResult } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-windows-platform-"));
-  const stateStore = createSecureStateStore({ platform: "linux", home });
+  const stateStore = createPortableSecureStateStore(home);
   const calls = [];
   const requests = [];
   const runner = async (command, args) => {

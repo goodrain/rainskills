@@ -36,6 +36,19 @@ function Convert-IdentityToSid($IdentityReference) {
   return $IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
 }
 
+function Get-StateAcl([string]$PathValue, [string]$Kind) {
+  if ($Kind -eq "directory") { return [IO.Directory]::GetAccessControl($PathValue) }
+  return [IO.File]::GetAccessControl($PathValue)
+}
+
+function Set-StateAcl([string]$PathValue, [string]$Kind, $Acl) {
+  if ($Kind -eq "directory") {
+    [IO.Directory]::SetAccessControl($PathValue, $Acl)
+    return
+  }
+  [IO.File]::SetAccessControl($PathValue, $Acl)
+}
+
 function Get-StateAclFacts([string]$PathValue, [string]$Kind, [string]$HomeValue) {
   $fullPath = Assert-PathInsideRoot $PathValue $HomeValue
   $item = Get-Item -LiteralPath $fullPath -Force
@@ -43,7 +56,7 @@ function Get-StateAclFacts([string]$PathValue, [string]$Kind, [string]$HomeValue
     throw "TargetPath kind mismatch"
   }
   $reparsePoint = [bool]($item.Attributes -band [IO.FileAttributes]::ReparsePoint)
-  $acl = Get-Acl -LiteralPath $fullPath
+  $acl = Get-StateAcl $fullPath $Kind
   $writeMask = [Security.AccessControl.FileSystemRights]::WriteData -bor
     [Security.AccessControl.FileSystemRights]::CreateFiles -bor
     [Security.AccessControl.FileSystemRights]::AppendData -bor
@@ -75,7 +88,7 @@ function Protect-StatePath([string]$PathValue, [string]$Kind, [string]$Sid, [str
   }
   if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "TargetPath may not be a reparse point" }
 
-  $acl = Get-Acl -LiteralPath $fullPath
+  $acl = Get-StateAcl $fullPath $Kind
   $acl.SetAccessRuleProtection($true, $false)
   foreach ($rule in @($acl.Access)) { [void]$acl.RemoveAccessRuleAll($rule) }
   $owner = [Security.Principal.SecurityIdentifier]::new($Sid)
@@ -96,7 +109,7 @@ function Protect-StatePath([string]$PathValue, [string]$Kind, [string]$Sid, [str
     )
     [void]$acl.AddAccessRule($rule)
   }
-  Set-Acl -LiteralPath $fullPath -AclObject $acl
+  Set-StateAcl $fullPath $Kind $acl
 }
 
 if ($Action -eq "InspectState" -or $Action -eq "ProtectState") {

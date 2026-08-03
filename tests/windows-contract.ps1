@@ -44,4 +44,19 @@ foreach ($unsafeUrl in @(
   if (-not $failedClosed) { throw "Browser helper accepted an unsafe URL" }
 }
 
+$stateRoot = Join-Path ([IO.Path]::GetTempPath()) ("rainskills-acl-contract-" + [Guid]::NewGuid().ToString("N"))
+$currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+try {
+  [void](New-Item -ItemType Directory -Path $stateRoot)
+  & $platformScript -Action ProtectState -TargetPath $stateRoot -ExpectedKind directory `
+    -UserSid $currentSid -UserHome ([IO.Path]::GetTempPath())
+  $aclFacts = & $platformScript -Action InspectState -TargetPath $stateRoot -ExpectedKind directory `
+    -UserSid $currentSid -UserHome ([IO.Path]::GetTempPath()) | ConvertFrom-Json
+  if ($aclFacts.ownerSid -ne $currentSid -or $aclFacts.reparsePoint) {
+    throw "Windows state ACL contract returned invalid ownership facts"
+  }
+} finally {
+  Remove-Item -LiteralPath $stateRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 Write-Host "Windows PowerShell contracts passed."

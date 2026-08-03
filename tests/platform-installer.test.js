@@ -150,7 +150,9 @@ test("platform CLI accepts an explicit Console host without accepting a URL", ()
   );
 });
 
-test("onboarding state is schema checked and must be a protected regular file", () => {
+test("onboarding state is schema checked and must be a protected regular file", {
+  skip: process.platform === "win32",
+}, () => {
   const { readOnboardingState } = require(platformInstallerPath);
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-state-"));
   const { createSecureStateStore } = require(secureStatePath);
@@ -730,7 +732,9 @@ test("non-interactive target selection pauses for the AI instead of choosing for
   assert.match(output.join(""), /--target remote-linux --ssh/);
 });
 
-test("CLI saves target selection before preflight when the AI has no TTY", () => {
+test("CLI saves target selection before preflight when the AI has no TTY", {
+  skip: process.platform === "win32",
+}, () => {
   const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-target-cli-"));
   const stateDir = path.join(tempHome, ".rainbond");
   const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
@@ -1004,7 +1008,9 @@ test("Windows installation batches privileged work and explains the elevated pro
   assert.doesNotMatch(source, /adapter\.(?:installMachineBundle|enableWsl|registerResume|registerFinalize|importDistro|prepareRuntime|configureNetwork|verifyNetwork|prepareDocker|installRainbond|verifyDeployment)\(/);
 });
 
-test("atomic state writes reject a symlink directory", () => {
+test("atomic state writes reject a symlink directory", {
+  skip: process.platform === "win32",
+}, () => {
   const { atomicWriteJson } = require(platformInstallerPath);
   const { createSecureStateStore } = require(secureStatePath);
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-symlink-"));

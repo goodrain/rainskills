@@ -5,6 +5,8 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 
+const { createPortableSecureStateStore } = require("./helpers/portable-secure-state.js");
+
 const repoRoot = path.resolve(__dirname, "..");
 const secureStatePath = path.join(
   repoRoot,
@@ -45,7 +47,9 @@ function authorizationParams(url) {
   return new URLSearchParams(queryIndex >= 0 ? parsed.hash.slice(queryIndex + 1) : "");
 }
 
-test("secure state preserves POSIX modes and blocks paths outside home", () => {
+test("secure state preserves POSIX modes and blocks paths outside home", {
+  skip: process.platform === "win32",
+}, () => {
   const { createSecureStateStore } = require(secureStatePath);
   const home = temporaryHome();
   const store = createSecureStateStore({ platform: "linux", home });
@@ -110,13 +114,10 @@ test("secure state enforces Windows owner, ACL, and reparse-point checks", () =>
 });
 
 test("operation locks reject live owners and reclaim proven stale owners", () => {
-  const { createSecureStateStore } = require(secureStatePath);
   const home = temporaryHome();
   const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
   const live = new Set([101]);
-  const createStore = (pid) => createSecureStateStore({
-    platform: "linux",
-    home,
+  const createStore = (pid) => createPortableSecureStateStore(home, {
     pid,
     processIdentity: `process-${pid}`,
     isProcessAlive(ownerPid) {
@@ -209,14 +210,13 @@ test("Windows skill copying installs, skips, updates, and force-overwrites atomi
 });
 
 test("native Windows checkpoint is protected and accepted by platform resume", () => {
-  const { createSecureStateStore } = require(secureStatePath);
   const {
     createOnboardingCheckpoint,
     createNextAction,
   } = require(windowsOnboardingPath);
   const { readOnboardingState } = require(platformInstallerPath);
   const home = temporaryHome();
-  const stateStore = createSecureStateStore({ platform: "linux", home });
+  const stateStore = createPortableSecureStateStore(home);
   const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
   const checkpoint = createOnboardingCheckpoint({
     home,
@@ -254,7 +254,6 @@ test("native Windows checkpoint is protected and accepted by platform resume", (
 });
 
 test("native main saves private onboarding and emits the fixed next action", async () => {
-  const { createSecureStateStore } = require(secureStatePath);
   const { main } = require(windowsOnboardingPath);
   const home = temporaryHome();
   const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-package-main-"));
@@ -262,7 +261,7 @@ test("native main saves private onboarding and emits the fixed next action", asy
   const output = [];
   writeSkill(packageRoot, "rainbond-test");
   fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ version: "0.1.0-test" }));
-  const baseStateStore = createSecureStateStore({ platform: "linux", home });
+  const baseStateStore = createPortableSecureStateStore(home);
   let lockAcquisitions = 0;
   const stateStore = {
     ...baseStateStore,
@@ -673,7 +672,6 @@ test("native authorization orchestration falls back from Device Flow and configu
 });
 
 test("native main completes an explicit SaaS configuration", async () => {
-  const { createSecureStateStore } = require(secureStatePath);
   const { main } = require(windowsOnboardingPath);
   const home = temporaryHome();
   const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-package-saas-"));
@@ -694,7 +692,7 @@ test("native main completes an explicit SaaS configuration", async () => {
     },
     home,
     packageRoot,
-    stateStore: createSecureStateStore({ platform: "linux", home }),
+    stateStore: createPortableSecureStateStore(home),
     logger(message) {
       output.push(message);
     },
