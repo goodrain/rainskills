@@ -18,4 +18,4 @@ if ($Url.IndexOfAny($controlCharacters) -ge 0) {
     throw "The browser URL contains control characters."
 }
 
-Start-Process -FilePath $uri.AbsoluteUri
+Start-Process -FilePath $Url

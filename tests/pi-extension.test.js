@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const { webcrypto } = require("node:crypto");
 const fs = require("node:fs");
 const http = require("node:http");
 const os = require("node:os");
@@ -8,9 +9,20 @@ const { pathToFileURL } = require("node:url");
 
 const repoRoot = path.resolve(__dirname, "..");
 const extensionPath = path.join(repoRoot, "pi", "rainskills-mcp.ts");
+const extensionTestDir = fs.mkdtempSync(
+  path.join(os.tmpdir(), "rainskills-pi-module-")
+);
+const extensionTestPath = path.join(extensionTestDir, "rainskills-mcp.mjs");
+
+if (!globalThis.crypto) {
+  Object.defineProperty(globalThis, "crypto", { value: webcrypto });
+}
+
+test.after(() => fs.rmSync(extensionTestDir, { recursive: true, force: true }));
 
 async function loadExtension() {
-  return import(`${pathToFileURL(extensionPath).href}?test=${Date.now()}`);
+  fs.copyFileSync(extensionPath, extensionTestPath);
+  return import(`${pathToFileURL(extensionTestPath).href}?test=${Date.now()}`);
 }
 
 test("generated Pi extension has no trailing whitespace", () => {

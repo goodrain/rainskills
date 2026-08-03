@@ -389,6 +389,7 @@ run_installer() {
       export RAINBOND_PASSWORD="secret-password"
     fi
     HOME="$workdir/home" \
+    SHELL="/bin/zsh" \
     TEST_LOG_DIR="$workdir/logs" \
     PATH="$workdir/bin:/usr/bin:/bin" \
     TEST_FAKE_MCP_HTTP_CODE="${TEST_FAKE_MCP_HTTP_CODE:-}" \
@@ -431,6 +432,7 @@ expected_prompts = [
 
 env = os.environ.copy()
 env["HOME"] = os.path.join(workdir, "home")
+env["SHELL"] = "/bin/zsh"
 env["TEST_LOG_DIR"] = os.path.join(workdir, "logs")
 env["PATH"] = os.path.join(workdir, "bin") + ":/usr/bin:/bin"
 env["RAINBOND_PASSWORD"] = "secret-password"

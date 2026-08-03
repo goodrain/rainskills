@@ -553,6 +553,10 @@ test("Windows browser opener uses a fixed PowerShell file and treats URL as data
     url,
   ]);
   assert.equal(calls[0].args.includes("-Command"), false);
+
+  const helperSource = fs.readFileSync(helperPath, "utf8");
+  assert.match(helperSource, /Start-Process -FilePath \$Url\b/);
+  assert.doesNotMatch(helperSource, /Start-Process -FilePath \$uri\.AbsoluteUri/);
 });
 
 test("Windows MCP validation and client configuration keep JWT out of argv", async () => {
