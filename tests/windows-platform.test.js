@@ -395,6 +395,9 @@ test("machine actions are fixed and reboot requires an interactive explicit conf
     "PrepareRuntime",
     "ConfigureNetwork",
     "VerifyNetwork",
+    "PrepareDocker",
+    "InstallRainbond",
+    "VerifyDeployment",
   ]);
   assert.deepEqual(USER_ACTIONS, ["Preflight"]);
   assert.equal(new Set(FIXED_ACTIONS).size, FIXED_ACTIONS.length);
@@ -586,4 +589,81 @@ test("WSL bootstrap enables systemd and gates runtime startup on the fixed netwo
   assert.match(source, /ConditionPathExists/);
   assert.match(source, /rainskills-installation-id/);
   assert.doesNotMatch(source, /eval\s/);
+});
+
+test("Rainbond WSL bootstrap verifies artifacts, prepares Docker, emits heartbeats, and redacts logs", () => {
+  const source = fs.readFileSync(wslBootstrapPath, "utf8");
+  assert.match(source, /PrepareDocker/);
+  assert.match(source, /InstallRainbond/);
+  assert.match(source, /VerifyRainbond/);
+  assert.match(source, /sha256sum/);
+  assert.match(source, /EIP="?\$GUEST_ADDRESS"?/);
+  assert(source.indexOf("docker info") < source.indexOf('bash "$INSTALLER_PATH"'));
+  assert.match(source, /heartbeat/);
+  assert.match(source, /rainskills\.platform-progress\.v1/);
+  assert.match(source, /Authorization|Bearer/);
+  assert(source.includes("device[_-]?code"));
+  assert.match(source, /password/i);
+  assert.match(source, /kubectl[\s\S]*rbd-system/);
+  assert.match(source, /curl[\s\S]*7070/);
+});
+
+test("secret redaction removes credentials before output or persistence", () => {
+  const { redactSensitiveText } = require(windowsPlatformPath);
+  const jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyIn0.signaturevalue";
+  const raw = [
+    `Authorization: Bearer ${jwt}`,
+    `password=plain-secret`,
+    `device_code=device-secret`,
+    `https://example.test/callback?access_token=${jwt}&safe=ok`,
+  ].join("\n");
+  const redacted = redactSensitiveText(raw);
+  assert.doesNotMatch(redacted, /plain-secret|device-secret|signaturevalue/);
+  assert.match(redacted, /\[REDACTED\]/);
+  assert.match(redacted, /safe=ok/);
+});
+
+test("Windows delivery requires WSL and Windows-side health evidence", () => {
+  const { evaluateWindowsDeployment } = require(windowsPlatformPath);
+  const passing = evaluateWindowsDeployment({
+    installationId: INSTALLATION_ID,
+    expectedInstallationId: INSTALLATION_ID,
+    containerRunning: true,
+    nodeReady: true,
+    componentsReady: true,
+    wslConsoleReachable: true,
+    windowsConsoleReachable: true,
+    portsListening: [80, 443, 6060, 7070],
+    guestAddress: "172.31.253.2",
+  }, policy);
+  assert.equal(passing.ok, true);
+  assert.equal(passing.location, "本地（Windows / WSL2）");
+  assert.equal(passing.consoleUrl, "http://127.0.0.1:7070");
+  assert.equal(passing.controlConsoleUrl, "http://127.0.0.1:7070");
+
+  const failing = evaluateWindowsDeployment({
+    installationId: INSTALLATION_ID,
+    expectedInstallationId: INSTALLATION_ID,
+    containerRunning: true,
+    nodeReady: false,
+    componentsReady: false,
+    wslConsoleReachable: true,
+    windowsConsoleReachable: false,
+    portsListening: [7070],
+    guestAddress: "172.31.253.2",
+  }, policy);
+  assert.equal(failing.ok, false);
+  assert.match(failing.blockers.join("\n"), /K3s|rbd-system|Windows|80.*443.*6060/);
+});
+
+test("PowerShell exposes fixed Rainbond install and dual-side verification actions", () => {
+  const source = fs.readFileSync(powershellPath, "utf8");
+  assert.match(source, /PrepareDocker/);
+  assert.match(source, /InstallRainbond/);
+  assert.match(source, /VerifyDeployment/);
+  assert.match(source, /Invoke-WebRequest[\s\S]*127\.0\.0\.1:7070/);
+  assert.match(source, /containerRunning/);
+  assert.match(source, /nodeReady/);
+  assert.match(source, /componentsReady/);
+  assert.match(source, /windowsConsoleReachable/);
 });

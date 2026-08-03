@@ -42,7 +42,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$ACTION" in
-  PrepareRuntime|ConfigureGuestNetwork|InstallRainbond|VerifyRainbond) ;;
+  PrepareRuntime|ConfigureGuestNetwork|PrepareDocker|InstallRainbond|VerifyRainbond) ;;
   *)
     printf 'Unsupported action\n' >&2
     exit 2
@@ -62,6 +62,7 @@ STATE_DIR="/var/lib/rainskills"
 IDENTITY_FILE="/etc/rainskills-installation-id"
 NETWORK_READY_FILE="/run/rainskills/network-ready"
 LOCK_FILE="/run/lock/rainskills-platform.lock"
+INSTALL_LOG="/var/log/rainskills/rainbond-install.log"
 mkdir -p "$STATE_DIR" /run/rainskills /run/lock
 exec 9>"$LOCK_FILE"
 flock -n 9 || { printf 'Another RainSkills WSL action is running\n' >&2; exit 1; }
@@ -145,6 +146,97 @@ verify_installer() {
   [[ "$actual" == "$INSTALLER_SHA256" ]] || { printf 'Installer digest mismatch\n' >&2; exit 1; }
 }
 
+emit_progress() {
+  local stage="$1" status="$2"
+  printf '{"schema":"rainskills.platform-progress.v1","stage":"%s","status":"%s","timestamp":"%s"}\n' \
+    "$stage" "$status" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+
+redact_stream() {
+  sed -E \
+    -e 's/(Authorization:[[:space:]]*Bearer[[:space:]]+)[^[:space:]]+/\1[REDACTED]/Ig' \
+    -e 's/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/[REDACTED]/g' \
+    -e 's/((password|device[_-]?code|access[_-]?token|refresh[_-]?token)=)[^&[:space:]]+/\1[REDACTED]/Ig'
+}
+
+prepare_docker() {
+  assert_identity
+  [[ -f "$NETWORK_READY_FILE" ]] || { printf 'Managed network is not ready\n' >&2; exit 1; }
+  emit_progress preparing-docker started
+  if ! command -v docker >/dev/null 2>&1; then
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    apt-get install -y ca-certificates curl docker.io
+  fi
+  systemctl enable docker >/dev/null
+  systemctl start docker
+  docker info >/dev/null
+  emit_progress preparing-docker completed
+}
+
+install_rainbond() {
+  assert_identity
+  verify_installer
+  is_ipv4 "$GUEST_ADDRESS" || { printf 'Invalid Rainbond EIP\n' >&2; exit 2; }
+  [[ -f "$NETWORK_READY_FILE" ]] || { printf 'Managed network is not ready\n' >&2; exit 1; }
+  docker info >/dev/null
+  local ownership_file="$STATE_DIR/rainbond-installation-id"
+  if docker inspect rainbond >/dev/null 2>&1; then
+    [[ -f "$ownership_file" && "$(tr -d '\r\n' < "$ownership_file")" == "$INSTALLATION_ID" ]] || {
+      printf 'Existing rainbond container is not owned by this installation\n' >&2
+      exit 1
+    }
+    if [[ "$(docker inspect rainbond --format '{{.State.Status}}')" == "running" ]]; then
+      emit_progress installing-rainbond completed
+      return
+    fi
+  elif [[ -f "$ownership_file" && "$(tr -d '\r\n' < "$ownership_file")" != "$INSTALLATION_ID" ]]; then
+    printf 'Rainbond ownership marker mismatch\n' >&2
+    exit 1
+  fi
+  printf '%s\n' "$INSTALLATION_ID" > "$ownership_file"
+  chmod 600 "$ownership_file"
+  mkdir -p "$(dirname "$INSTALL_LOG")"
+  touch "$INSTALL_LOG"
+  chmod 600 "$INSTALL_LOG"
+  emit_progress installing-rainbond started
+  set +e
+  setsid env EIP="$GUEST_ADDRESS" RAINBOND_INSTALL_LANG=zh bash "$INSTALLER_PATH" 2>&1 \
+    | redact_stream | tee -a "$INSTALL_LOG" &
+  local install_pid=$!
+  while kill -0 "$install_pid" >/dev/null 2>&1; do
+    emit_progress installing-rainbond heartbeat
+    sleep 10
+  done
+  wait "$install_pid"
+  local install_status=$?
+  set -e
+  [[ "$install_status" -eq 0 ]] || { printf 'Rainbond installer failed with exit code %s\n' "$install_status" >&2; exit "$install_status"; }
+  emit_progress installing-rainbond completed
+}
+
+verify_rainbond() {
+  assert_identity
+  is_ipv4 "$GUEST_ADDRESS" || { printf 'Invalid Rainbond EIP\n' >&2; exit 2; }
+  [[ "$(docker inspect rainbond --format '{{.State.Status}}')" == "running" ]] || {
+    printf 'Rainbond container is not running\n' >&2
+    exit 1
+  }
+  docker exec rainbond kubectl get nodes --no-headers \
+    | awk 'NF && $2 != "Ready" { exit 1 } END { if (NR == 0) exit 1 }'
+  docker exec rainbond kubectl get pods -n rbd-system --no-headers \
+    | awk 'NF { split($2, ready, "/"); if (ready[1] != ready[2] || ($3 != "Running" && $3 != "Completed")) exit 1 } END { if (NR == 0) exit 1 }'
+  local port
+  for port in 80 443 6060 7070; do
+    ss -lntH | awk '{print $4}' | grep -Eq "(^|:)$port$" || {
+      printf 'Required port %s is not listening\n' "$port" >&2
+      exit 1
+    }
+  done
+  curl -fsS --max-time 10 "http://$GUEST_ADDRESS:7070/" >/dev/null
+  printf 'containerRunning=true\nnodeReady=true\ncomponentsReady=true\nwslConsoleReachable=true\n'
+}
+
 case "$ACTION" in
   PrepareRuntime)
     prepare_runtime
@@ -152,14 +244,13 @@ case "$ACTION" in
   ConfigureGuestNetwork)
     configure_guest_network
     ;;
+  PrepareDocker)
+    prepare_docker
+    ;;
   InstallRainbond)
-    assert_identity
-    verify_installer
-    [[ -f "$NETWORK_READY_FILE" ]] || { printf 'Managed network is not ready\n' >&2; exit 1; }
-    EIP="$GUEST_ADDRESS" RAINBOND_INSTALL_LANG=zh bash "$INSTALLER_PATH"
+    install_rainbond
     ;;
   VerifyRainbond)
-    assert_identity
-    docker inspect rainbond --format '{{.State.Status}}'
+    verify_rainbond
     ;;
 esac

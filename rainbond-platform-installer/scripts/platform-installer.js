@@ -15,6 +15,7 @@ const {
   createWindowsPlatformAdapter,
   createWindowsSecureStateStore,
   ensurePinnedArtifact,
+  evaluateWindowsDeployment,
   managedNetworkFromCidr,
   resolveWindowsUserSid,
   validateWindowsStageTransition,
@@ -1561,6 +1562,115 @@ async function provisionWindowsDistroAndNetwork({ adapter, options, paths, state
   return { state, network };
 }
 
+async function installWindowsRainbond({ adapter, onboarding, options, paths, state }) {
+  const installationId = state.installation_id;
+  if (!["preparing-runtime", "installing-rainbond", "configuring-windows-access", "verifying"].includes(state.stage)) {
+    throw new Error(`当前 Windows 安装阶段不能安装 Rainbond：${state.stage}`);
+  }
+  const common = { operationId: options.onboardingId, installationId };
+  let lastProgressAt = 0;
+  const installer = await ensurePinnedArtifact({
+    destination: paths.installer,
+    url: POLICY.installer.url,
+    sha256: POLICY.installer.sha256,
+    allowedOrigins: POLICY.installer.allowed_origins,
+    onProgress({ current, total }) {
+      const currentTime = Date.now();
+      if (currentTime - lastProgressAt < 250 && current !== total) return;
+      lastProgressAt = currentTime;
+      const totalText = Number.isFinite(total) && total > 0 ? ` / ${total} bytes` : "";
+      process.stdout.write(`\r下载 Rainbond 安装脚本 ${current}${totalText}`);
+    },
+  });
+  process.stdout.write(installer.reused ? "已复用校验通过的 Rainbond 安装脚本。\n" : "\nRainbond 安装脚本下载并校验完成。\n");
+  state = updateState(paths.state, state, {
+    artifact_url: installer.finalUrl,
+    artifact_sha256: POLICY.installer.sha256,
+  });
+
+  if (state.stage === "preparing-runtime") {
+    const docker = await adapter.prepareDocker({ ...common, payload: { network_manifest_verified: true } });
+    validateWindowsStageTransition({
+      from: "preparing-runtime",
+      to: "installing-rainbond",
+      facts: {
+        installationId,
+        observedAt: now(),
+        systemdReady: Boolean(docker.facts.systemdReady),
+        networkGateReady: Boolean(docker.facts.networkGateReady),
+        dockerReady: Boolean(docker.facts.dockerReady),
+      },
+      expectedInstallationId: installationId,
+    });
+    state = updateState(paths.state, state, { stage: "installing-rainbond", status: "running" });
+    appendEvent(paths, state, "installing-rainbond", "started");
+  }
+  if (state.stage === "installing-rainbond") {
+    process.stdout.write("\n正在安装 Rainbond，首次拉取镜像需要一些时间。\n");
+    const installed = await adapter.installRainbond({
+      ...common,
+      payload: { installer_path: paths.installer },
+    });
+    validateWindowsStageTransition({
+      from: "installing-rainbond",
+      to: "configuring-windows-access",
+      facts: {
+        installationId,
+        observedAt: now(),
+        rainbondRuntimeVerified: Boolean(installed.facts.rainbondRuntimeVerified),
+      },
+      expectedInstallationId: installationId,
+    });
+    state = updateState(paths.state, state, { stage: "configuring-windows-access", status: "running" });
+    appendEvent(paths, state, "installing-rainbond", "completed");
+  }
+
+  if (state.stage === "configuring-windows-access") {
+    const network = await adapter.verifyNetwork({ ...common, payload: { after_install: true } });
+    validateWindowsStageTransition({
+      from: "configuring-windows-access",
+      to: "verifying",
+      facts: {
+        installationId,
+        observedAt: now(),
+        networkManifestVerified: Boolean(network.facts.networkManifestVerified),
+        portproxyVerified: Boolean(network.facts.portproxyVerified),
+      },
+      expectedInstallationId: installationId,
+    });
+    state = updateState(paths.state, state, { stage: "verifying", status: "running" });
+    appendEvent(paths, state, "verifying", "started");
+  }
+  const verified = await adapter.verifyDeployment({ ...common, payload: { require_dual_side_health: true } });
+  const delivery = evaluateWindowsDeployment({
+    ...verified.facts,
+    expectedInstallationId: installationId,
+  }, POLICY);
+  if (!delivery.ok) throw new Error(`Rainbond 双侧验证未通过：${delivery.blockers.join("；")}`);
+  validateWindowsStageTransition({
+    from: "verifying",
+    to: "platform-ready",
+    facts: {
+      installationId,
+      observedAt: now(),
+      wslHealthVerified: Boolean(verified.facts.containerRunning && verified.facts.nodeReady && verified.facts.componentsReady && verified.facts.wslConsoleReachable),
+      windowsHealthVerified: Boolean(verified.facts.windowsConsoleReachable),
+    },
+    expectedInstallationId: installationId,
+  });
+  const verification = {
+    consoleUrl: delivery.consoleUrl,
+    containerState: "running",
+    nodeReady: true,
+    componentsReady: true,
+    location: delivery.location,
+    guestAddress: verified.facts.guestAddress,
+  };
+  await completePlatform(onboarding, state, paths, verification, options.noResume);
+  await adapter.finalize({ ...common, payload: { status: "success" } });
+  return { state, verification };
+}
+
 function resumeInvocationForOnboarding(onboarding, execPath = process.execPath) {
   const args = [
     onboarding.target,
@@ -1623,7 +1733,8 @@ async function completePlatform(onboarding, state, paths, verification, noResume
   });
   activeOperation = null;
 
-  process.stdout.write(`\nRainbond 部署成功\n\n部署位置：${state.host}\n运行状态：正常\nConsole 地址：${verification.consoleUrl}\n\n接下来将连接该平台并完成授权。\n`);
+  const deploymentLocation = verification.location || state.host;
+  process.stdout.write(`\nRainbond 部署成功\n\n部署位置：${deploymentLocation}\n运行状态：正常\nConsole 地址：${verification.consoleUrl}\n\n接下来将连接该平台并完成授权。\n`);
   if (!noResume) await runResume(onboarding.operation_id);
 }
 
@@ -1706,6 +1817,13 @@ async function runInstallOperation(options) {
         state: prepared.state,
       });
       activeOperation.state = provisioned.state;
+      await installWindowsRainbond({
+        adapter: windowsAdapter,
+        onboarding,
+        options,
+        paths,
+        state: provisioned.state,
+      });
     }
     return;
   }
@@ -1743,6 +1861,13 @@ async function runInstallOperation(options) {
       state,
     });
     activeOperation.state = provisioned.state;
+    await installWindowsRainbond({
+      adapter: windowsAdapter,
+      onboarding,
+      options,
+      paths,
+      state: provisioned.state,
+    });
     return;
   }
   if (isWindowsLocal && ["downloading-rootfs", "importing-distro", "preparing-runtime"].includes(state.stage)) {
@@ -1753,6 +1878,23 @@ async function runInstallOperation(options) {
       state,
     });
     activeOperation.state = provisioned.state;
+    await installWindowsRainbond({
+      adapter: windowsAdapter,
+      onboarding,
+      options,
+      paths,
+      state: provisioned.state,
+    });
+    return;
+  }
+  if (isWindowsLocal && ["installing-rainbond", "configuring-windows-access", "verifying"].includes(state.stage)) {
+    await installWindowsRainbond({
+      adapter: windowsAdapter,
+      onboarding,
+      options,
+      paths,
+      state,
+    });
     return;
   }
 
@@ -1884,6 +2026,13 @@ async function runInstallOperation(options) {
         state: prepared.state,
       });
       activeOperation.state = provisioned.state;
+      await installWindowsRainbond({
+        adapter: windowsAdapter,
+        onboarding,
+        options,
+        paths,
+        state: provisioned.state,
+      });
     }
     return;
   }

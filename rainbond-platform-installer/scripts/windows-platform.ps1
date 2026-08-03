@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
   [Parameter(Mandatory = $true)]
-  [ValidateSet("Preflight", "InspectState", "ProtectState", "InstallMachineBundle", "EnableWsl", "UpdateWsl", "VerifyWsl", "RegisterResume", "RegisterFinalize", "RequestReboot", "Finalize", "ImportDistro", "PrepareRuntime", "ConfigureNetwork", "VerifyNetwork")]
+  [ValidateSet("Preflight", "InspectState", "ProtectState", "InstallMachineBundle", "EnableWsl", "UpdateWsl", "VerifyWsl", "RegisterResume", "RegisterFinalize", "RequestReboot", "Finalize", "ImportDistro", "PrepareRuntime", "ConfigureNetwork", "VerifyNetwork", "PrepareDocker", "InstallRainbond", "VerifyDeployment")]
   [string]$Action,
 
   [string]$RequestPath = "",
@@ -492,13 +492,13 @@ function Invoke-EnableWsl($Request) {
   if (Test-Path -LiteralPath $wslPath -PathType Leaf) {
     & $wslPath --version *> $null
     if ($LASTEXITCODE -ne 0) {
-      & $wslPath --update --web-download
+      & $wslPath --update --web-download | ForEach-Object { Write-Host $_ }
       if ($LASTEXITCODE -ne 0) { Install-LegacyWslKernel $Request }
     }
   } else {
     throw "wsl.exe is unavailable after enabling Windows features; reboot and resume are required"
   }
-  & $wslPath --set-default-version 2
+  & $wslPath --set-default-version 2 | ForEach-Object { Write-Host $_ }
   if ($LASTEXITCODE -ne 0) { throw "Failed to set WSL default version 2" }
   return Get-WslRuntimeFacts
 }
@@ -506,7 +506,7 @@ function Invoke-EnableWsl($Request) {
 function Invoke-UpdateWsl($Request) {
   $wslPath = Get-TrustedWslPath
   if (-not $wslPath) { throw "wsl.exe is not installed" }
-  & $wslPath --update --web-download
+  & $wslPath --update --web-download | ForEach-Object { Write-Host $_ }
   if ($LASTEXITCODE -ne 0) { Install-LegacyWslKernel $Request }
   return Get-WslRuntimeFacts
 }
@@ -541,7 +541,7 @@ function Invoke-DistroBootstrap($Request, [string]$BootstrapAction, [string]$Hos
   if ($GuestAddress) { $arguments += @("--guest-address", $GuestAddress) }
   if ($InstallerPath) { $arguments += @("--installer-path", $InstallerPath) }
   if ($InstallerDigest) { $arguments += @("--installer-sha256", $InstallerDigest) }
-  & $wslPath @arguments
+  & $wslPath @arguments 2>&1 | ForEach-Object { Write-Host $_ }
   if ($LASTEXITCODE -ne 0) { throw "Managed WSL bootstrap action failed: $BootstrapAction" }
 }
 
@@ -553,7 +553,7 @@ function Get-DistroIdentity($Request) {
 
 function Assert-SystemdPidOne($Request) {
   $wslPath = Get-TrustedWslPath
-  & $wslPath -d Rainbond -u root -- /bin/true
+  & $wslPath -d Rainbond -u root -- /bin/true | Out-Null
   if ($LASTEXITCODE -ne 0) { throw "Failed to start the managed Rainbond distro" }
   $pidOne = (& $wslPath -d Rainbond -u root -- ps -p 1 -o comm= 2>&1 | Out-String).Trim()
   if ($LASTEXITCODE -ne 0 -or $pidOne -ne "systemd") { throw "PID 1 in the managed Rainbond distro is not systemd" }
@@ -580,7 +580,7 @@ function Invoke-ImportDistro($Request) {
     if (Test-Path -LiteralPath $distroRoot) { throw "Unknown existing Rainbond distro directory" }
     New-Item -ItemType Directory -Path $distroRoot -Force | Out-Null
     $wslPath = Get-TrustedWslPath
-    & $wslPath --import Rainbond $distroRoot $rootfsPath --version 2
+    & $wslPath --import Rainbond $distroRoot $rootfsPath --version 2 | ForEach-Object { Write-Host $_ }
     if ($LASTEXITCODE -ne 0) {
       if ((Get-ManagedDistroNames) -notcontains "Rainbond" -and (Test-Path -LiteralPath $distroRoot)) {
         Remove-Item -LiteralPath $distroRoot -Recurse -Force
@@ -588,7 +588,7 @@ function Invoke-ImportDistro($Request) {
       throw "wsl --import Rainbond failed"
     }
     Invoke-DistroBootstrap $Request "PrepareRuntime"
-    & $wslPath --terminate Rainbond
+    & $wslPath --terminate Rainbond | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Failed to terminate the managed Rainbond distro after enabling systemd" }
   }
   [void](Assert-SystemdPidOne $Request)
@@ -606,7 +606,7 @@ function Invoke-PrepareRuntime($Request) {
   }
   Invoke-DistroBootstrap $Request "PrepareRuntime"
   $wslPath = Get-TrustedWslPath
-  & $wslPath --terminate Rainbond
+  & $wslPath --terminate Rainbond | Out-Null
   if ($LASTEXITCODE -ne 0) { throw "Failed to restart the managed Rainbond distro" }
   [void](Assert-SystemdPidOne $Request)
   return [ordered]@{ distroIdentityVerified = $true; systemdReady = $true }
@@ -755,7 +755,7 @@ function Invoke-ConfigureNetwork($Request) {
     }).Count -eq 1
     if (-not $present) {
       & "$env:SystemRoot\System32\netsh.exe" interface portproxy add v4tov4 `
-        listenaddress=127.0.0.1 listenport=$port connectaddress=$guestAddress connectport=$port
+        listenaddress=127.0.0.1 listenport=$port connectaddress=$guestAddress connectport=$port | Out-Null
       if ($LASTEXITCODE -ne 0) { throw "Failed to create managed loopback portproxy for port $port" }
     }
   }
@@ -816,6 +816,61 @@ function Invoke-VerifyNetwork($Request) {
     subnet = $manifest.subnet
     hostAddress = $manifest.host_address
     guestAddress = $manifest.guest_address
+  }
+}
+
+function Get-VerifiedManagedNetwork($Request) {
+  [void](Invoke-VerifyNetwork $Request)
+  $manifest = Get-Content -LiteralPath (Get-NetworkManifestPath $Request) -Raw | ConvertFrom-Json
+  return $manifest
+}
+
+function Invoke-PrepareDocker($Request) {
+  $network = Get-VerifiedManagedNetwork $Request
+  Invoke-DistroBootstrap $Request "PrepareDocker" ([string]$network.host_address) ([string]$network.guest_address)
+  $wslPath = Get-TrustedWslPath
+  & $wslPath -d Rainbond -u root -- docker info *> $null
+  if ($LASTEXITCODE -ne 0) { throw "Docker is not ready in the managed Rainbond distro" }
+  return [ordered]@{ dockerReady = $true; networkGateReady = $true; systemdReady = $true }
+}
+
+function Invoke-InstallRainbond($Request) {
+  $network = Get-VerifiedManagedNetwork $Request
+  $installerPath = Assert-PathInsideRoot ([string](Get-PropertyValue $Request.payload "installer_path")) ([Environment]::GetFolderPath("UserProfile"))
+  [void](Assert-FileDigest $installerPath $Request.policy.installer.sha256)
+  $linuxInstaller = Convert-WindowsPathForDistro $installerPath
+  Invoke-DistroBootstrap $Request "InstallRainbond" ([string]$network.host_address) `
+    ([string]$network.guest_address) $linuxInstaller ([string]$Request.policy.installer.sha256)
+  $wslPath = Get-TrustedWslPath
+  $status = (& $wslPath -d Rainbond -u root -- docker inspect rainbond --format "{{.State.Status}}" 2>$null | Out-String).Trim()
+  if ($status -ne "running") { throw "Rainbond outer container is not running after installation" }
+  return [ordered]@{ dockerReady = $true; rainbondRuntimeVerified = $true; containerRunning = $true }
+}
+
+function Invoke-VerifyDeployment($Request) {
+  $network = Get-VerifiedManagedNetwork $Request
+  Invoke-DistroBootstrap $Request "VerifyRainbond" ([string]$network.host_address) ([string]$network.guest_address)
+  $windowsReachable = $false
+  try {
+    $response = Invoke-WebRequest -Uri "http://127.0.0.1:7070/" -UseBasicParsing -TimeoutSec 15
+    $windowsReachable = $response.StatusCode -ge 200 -and $response.StatusCode -lt 500
+  } catch {
+    $windowsReachable = $false
+  }
+  $ports = @($Request.policy.windows.managed_ports | ForEach-Object { [int]$_ })
+  $listeners = @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue)
+  $portsListening = @($ports | Where-Object { $port = $_; @($listeners | Where-Object { $_.LocalPort -eq $port }).Count -gt 0 })
+  return [ordered]@{
+    installationId = [string]$Request.installation_id
+    containerRunning = $true
+    nodeReady = $true
+    componentsReady = $true
+    wslConsoleReachable = $true
+    windowsConsoleReachable = [bool]$windowsReachable
+    portsListening = $portsListening
+    guestAddress = [string]$network.guest_address
+    windowsConsoleUrl = "http://127.0.0.1:7070"
+    controlConsoleUrl = "http://127.0.0.1:7070"
   }
 }
 
@@ -937,6 +992,17 @@ function Invoke-RequestReboot($Request) {
 
 function Invoke-Finalize($Request) {
   $machineRoot = Get-MachineRoot $Request
+  $requestedStatus = [string](Get-PropertyValue $Request.payload "status")
+  if ($requestedStatus -eq "success") {
+    $fresh = Invoke-VerifyDeployment $Request
+    if (-not $fresh.windowsConsoleReachable) { throw "Cannot finalize before fresh deployment verification passes" }
+    $names = Get-TaskNames $Request
+    foreach ($name in @($names.machine, $names.user, $names.finalizer)) {
+      Unregister-ScheduledTask -TaskName $name -Confirm:$false -ErrorAction SilentlyContinue
+    }
+    Remove-Item -LiteralPath (Join-Path $machineRoot "lease.json") -Force -ErrorAction SilentlyContinue
+    return [ordered]@{ finalized = $true; verified = $true }
+  }
   $terminalMarker = Join-Path $machineRoot "terminal-result.json"
   if (-not (Test-Path -LiteralPath $terminalMarker -PathType Leaf)) {
     return [ordered]@{ finalized = $false; waitingForTerminalMarker = $true }
@@ -996,7 +1062,7 @@ if (Test-Path -LiteralPath $ResultPath) {
   }
 }
 
-$machineActions = @("InstallMachineBundle", "EnableWsl", "UpdateWsl", "VerifyWsl", "RegisterResume", "RegisterFinalize", "RequestReboot", "Finalize", "ImportDistro", "PrepareRuntime", "ConfigureNetwork", "VerifyNetwork")
+$machineActions = @("InstallMachineBundle", "EnableWsl", "UpdateWsl", "VerifyWsl", "RegisterResume", "RegisterFinalize", "RequestReboot", "Finalize", "ImportDistro", "PrepareRuntime", "ConfigureNetwork", "VerifyNetwork", "PrepareDocker", "InstallRainbond", "VerifyDeployment")
 if ($machineActions -contains $Action -and -not (Test-IsElevated)) {
   Invoke-ElevatedSelf
   exit 0
@@ -1032,6 +1098,9 @@ switch ($Action) {
   "PrepareRuntime" { $facts = Invoke-PrepareRuntime $request }
   "ConfigureNetwork" { $facts = Invoke-ConfigureNetwork $request }
   "VerifyNetwork" { $facts = Invoke-VerifyNetwork $request }
+  "PrepareDocker" { $facts = Invoke-PrepareDocker $request }
+  "InstallRainbond" { $facts = Invoke-InstallRainbond $request }
+  "VerifyDeployment" { $facts = Invoke-VerifyDeployment $request }
   default { throw "Unsupported fixed action" }
 }
 Write-ActionResult $request $facts $status

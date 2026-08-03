@@ -26,6 +26,9 @@ const MACHINE_ACTIONS = Object.freeze([
   "PrepareRuntime",
   "ConfigureNetwork",
   "VerifyNetwork",
+  "PrepareDocker",
+  "InstallRainbond",
+  "VerifyDeployment",
 ]);
 const STATE_ACTIONS = Object.freeze(["InspectState", "ProtectState"]);
 const FIXED_ACTIONS = Object.freeze([...USER_ACTIONS, ...MACHINE_ACTIONS, ...STATE_ACTIONS]);
@@ -465,6 +468,39 @@ function managedNetworkFromCidr(cidr) {
   };
 }
 
+function redactSensitiveText(value) {
+  return String(value || "")
+    .replace(/(authorization\s*:\s*bearer\s+)[^\s]+/gi, "$1[REDACTED]")
+    .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, "[REDACTED]")
+    .replace(/((?:password|device[_-]?code|access[_-]?token|refresh[_-]?token)=)[^&\s]+/gi, "$1[REDACTED]")
+    .replace(/("(?:password|device[_-]?code|access[_-]?token|refresh[_-]?token)"\s*:\s*")[^"]+("?)/gi, "$1[REDACTED]$2");
+}
+
+function evaluateWindowsDeployment(facts, policy) {
+  const blockers = [];
+  if (!facts || facts.installationId !== facts.expectedInstallationId) {
+    blockers.push("部署验证的 installation_id 不匹配");
+  }
+  if (!facts?.containerRunning) blockers.push("Rainbond 外层容器未运行");
+  if (!facts?.nodeReady) blockers.push("Rainbond K3s 节点尚未 Ready");
+  if (!facts?.componentsReady) blockers.push("rbd-system 组件尚未全部就绪");
+  if (!facts?.wslConsoleReachable) blockers.push("WSL 内无法访问 Rainbond Console");
+  if (!facts?.windowsConsoleReachable) blockers.push("Windows 无法通过 127.0.0.1 访问 Rainbond Console");
+  const listening = new Set((facts?.portsListening || []).map(Number));
+  const missingPorts = (policy?.windows?.managed_ports || []).filter((port) => !listening.has(port));
+  if (missingPorts.length > 0) blockers.push(`端口 80、443、6060、7070 尚未全部监听，缺少：${missingPorts.join("、")}`);
+  if (!/^(?:\d{1,3}\.){3}\d{1,3}$/.test(String(facts?.guestAddress || ""))) {
+    blockers.push("Rainbond WSL 固定地址无效");
+  }
+  return {
+    ok: blockers.length === 0,
+    blockers,
+    location: "本地（Windows / WSL2）",
+    consoleUrl: "http://127.0.0.1:7070",
+    controlConsoleUrl: "http://127.0.0.1:7070",
+  };
+}
+
 function evaluateWindowsPreflight(facts, policy, expectedUserSid) {
   if (!facts || typeof facts !== "object" || Array.isArray(facts)) {
     throw new Error("Windows 预检事实无效");
@@ -601,6 +637,7 @@ function createWindowsPlatformAdapter({
       user_sid: userSid,
       policy: {
         minimums: policy.minimums,
+        installer: policy.installer,
         windows: policy.windows,
       },
     };
@@ -677,6 +714,15 @@ function createWindowsPlatformAdapter({
     verifyNetwork(options) {
       return invoke("VerifyNetwork", options);
     },
+    prepareDocker(options) {
+      return invoke("PrepareDocker", options);
+    },
+    installRainbond(options) {
+      return invoke("InstallRainbond", options);
+    },
+    verifyDeployment(options) {
+      return invoke("VerifyDeployment", options);
+    },
   };
 }
 
@@ -692,8 +738,10 @@ module.exports = {
   createWindowsSecureStateStore,
   createWindowsPlatformAdapter,
   evaluateWindowsPreflight,
+  evaluateWindowsDeployment,
   ensurePinnedArtifact,
   managedNetworkFromCidr,
+  redactSensitiveText,
   resolveWindowsUserSid,
   selectManagedSubnet,
   validateWindowsStageTransition,
