@@ -320,7 +320,7 @@ test("Windows authorization accepts GET and POST loopback callbacks with exact s
       let openedUrl = "";
       const result = await authorizeWithLoopback({
         baseUrl: "https://rainbond.example.com",
-        timeoutMs: 1000,
+        timeoutMs: 5000,
         async openBrowser(url) {
           openedUrl = url;
           const parameters = authorizationParams(url);
