@@ -20,6 +20,12 @@ const windowsPlatformPath = path.join(
   "scripts",
   "windows-platform.js"
 );
+const platformInstallerPath = path.join(
+  repoRoot,
+  "rainbond-platform-installer",
+  "scripts",
+  "platform-installer.js"
+);
 const powershellPath = path.join(
   repoRoot,
   "rainbond-platform-installer",
@@ -643,6 +649,7 @@ test("Rainbond WSL bootstrap verifies artifacts, prepares Docker, emits heartbea
   assert.match(source, /InstallRainbond/);
   assert.match(source, /VerifyRainbond/);
   assert.match(source, /sha256sum/);
+  assert.match(source, /bash -n "\$INSTALLER_PATH"/);
   assert.match(source, /EIP="?\$GUEST_ADDRESS"?/);
   assert(source.indexOf("docker info") < source.indexOf('bash "$INSTALLER_PATH"'));
   assert.match(source, /heartbeat/);
@@ -652,6 +659,14 @@ test("Rainbond WSL bootstrap verifies artifacts, prepares Docker, emits heartbea
   assert.match(source, /password/i);
   assert.match(source, /kubectl[\s\S]*rbd-system/);
   assert.match(source, /curl[\s\S]*7070/);
+});
+
+test("Windows executes the dynamically hashed installer instead of a package-pinned digest", () => {
+  const powershell = fs.readFileSync(powershellPath, "utf8");
+  const platformInstaller = fs.readFileSync(platformInstallerPath, "utf8");
+  assert.match(powershell, /installer_sha256/);
+  assert.doesNotMatch(powershell, /policy\.installer\.sha256/);
+  assert.doesNotMatch(platformInstaller, /POLICY\.installer\.sha256/);
 });
 
 test("secret redaction removes credentials before output or persistence", () => {

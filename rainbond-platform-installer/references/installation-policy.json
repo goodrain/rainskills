@@ -12,9 +12,10 @@
   "installer": {
     "url": "https://get.rainbond.com/",
     "allowed_origins": ["https://get.rainbond.com"],
-    "sha256": "5b82d0b0fdfe8f049bf0b5495b7565da769bf8e21874052b39c39493b0c7d071",
+    "trust": "https-origin+runtime-validation",
+    "max_bytes": 2097152,
     "tested_rainbond_version": "v6.9.6-release",
-    "verified_at": "2026-08-02"
+    "reviewed_at": "2026-08-04"
   },
   "windows": {
     "minimum_build": 19041,

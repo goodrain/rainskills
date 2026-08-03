@@ -1,6 +1,6 @@
 # Rainbond 单机安装策略
 
-本 Skill 只支持 Rainbond 官方单机快速安装流程。机器可执行策略以同目录下的 `installation-policy.json` 为准，更新安装脚本地址、摘要或资源基线时必须发布新的 Rainskills 版本。
+本 Skill 只支持 Rainbond 官方单机快速安装流程。机器可执行策略以同目录下的 `installation-policy.json` 为准，更新官方来源、允许域名或资源基线时必须发布新的 Rainskills 版本。官方安装脚本内容可以在固定 HTTPS 来源上独立优化，不与 Rainskills 版本绑定。
 
 ## 支持范围
 
@@ -20,7 +20,7 @@
 - 当前用户必须属于 Administrators，UAC 必须开启，CPU 虚拟化必须可用；安装器只在用户确认后请求提权。
 - WSL 必须使用 NAT 网络模式。安装器不会改写用户的 `.wslconfig`，检测到 mirrored 或其他模式时直接停止。
 - Rainbond 安装到独立的 Ubuntu 22.04 `Rainbond` WSL2 发行版，不修改用户已有发行版。发现同名未知发行版、未知计划任务或未知机器目录时停止。
-- Ubuntu rootfs、旧版 WSL 内核包和 Rainbond 安装脚本都使用版本策略中的固定 HTTPS 来源与 SHA-256；下载可续传，但摘要不匹配的文件只会隔离，不会执行。
+- Ubuntu rootfs 和旧版 WSL 内核包使用版本策略中的不可变 HTTPS 来源与固定 SHA-256。Rainbond 安装脚本使用固定 HTTPS 官方来源，限制同源跳转和文件大小，并在 WSL 内执行前再次检查 Bash 语法与本次下载摘要。
 - Windows 侧只管理 `80`、`443`、`6060`、`7070` 的 loopback portproxy 和一个不冲突的 `/30` NAT 网段。任一端口已占用时停止，不关闭现有服务。
 - 首次安装可能启用 WSL/VirtualMachinePlatform 并需要重启。恢复入口固定到受保护的机器包；WSL 控制端通过原发行版和固定参数恢复。
 - 成功必须同时满足：外层容器运行、K3s 节点 Ready、`rbd-system` 组件就绪、WSL 内 Console 可访问、Windows `127.0.0.1:7070` 可访问。
@@ -30,4 +30,4 @@
 
 预检只读取目标机系统状态。执行官方脚本前必须向用户展示目标机实际会发生的系统变更并取得一次明确确认。安装器不接收聊天中的密码、私钥、JWT 或 Token，不自动删除已有容器和 `/opt/rainbond` 数据。
 
-官方脚本必须先下载到控制端受保护的操作目录，来源和 SHA-256 摘要验证通过后才能执行。远程 Linux 会将已校验脚本传到受保护的远端操作目录，并在执行前再次校验摘要。摘要变化时停止安装并提示升级 Rainskills，不允许临时跳过校验。
+官方脚本必须先下载到控制端受保护的操作目录。下载只允许固定 HTTPS 官方来源及同源跳转，响应和实际文件都受大小上限约束；脚本必须是普通文件、使用 Bash shebang、没有 NUL 字节并通过 `bash -n`。控制端为本次下载计算 SHA-256，远程 Linux 和 Windows/WSL 在执行前必须再次匹配同一摘要并复查 Bash 语法。该摘要用于发现传输或缓存篡改，不用于把官方脚本内容固定到某个 Rainskills 版本。

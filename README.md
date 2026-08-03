@@ -207,7 +207,7 @@ AI 必须把 `argv` 数组作为参数传回同一个 `rainskills` 命令，不�
 
 - 检查系统、架构、4 核 CPU、8 GB 内存、50 GB 磁盘、权限和端口
 - 展示官方脚本实际可能修改的主机项目，并等待用户一次明确确认
-- 从固定 HTTPS 来源下载并校验官方脚本 SHA-256
+- 从固定 HTTPS 官方来源下载脚本，限制同源跳转和文件大小，检查 Bash 结构与语法，并用本次 SHA-256 保证远程/WSL 执行内容一致
 - 展示下载和启动阶段，保留受保护的本地日志
 - 独立验证 Rainbond 容器、K3s、`rbd-system` 组件和 Console
 - 自动执行 `npx rainskills resume --onboarding-id <id>`，继续浏览器授权

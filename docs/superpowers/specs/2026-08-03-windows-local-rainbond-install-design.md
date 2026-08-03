@@ -201,7 +201,7 @@ bin/rainskills.js
 
 无法启用虚拟化、企业策略禁止功能或系统版本过低时停止，不尝试绕过。
 
-Rainskills 直接下载的 Ubuntu rootfs、Microsoft 离线组件和 Rainbond 安装器必须同时验证策略允许来源和固定 SHA-256，Windows 可执行制品还要验证 Microsoft Authenticode 签名。`wsl --update --web-download` 属于 Windows 自己管理的系统更新：此路径信任 Windows 的签名安装链，Rainskills 不宣称获得下载包摘要；更新后改为验证 `wsl.exe` 路径、Microsoft 签名、命令状态和实际 WSL 版本。安装策略为每个制品显式标记 `sha256-pinned` 或 `os-signed-update`，两种信任模式不能混用。
+Rainskills 直接下载的 Ubuntu rootfs 和 Microsoft 离线组件必须同时验证策略允许来源和固定 SHA-256，Windows 可执行制品还要验证 Microsoft Authenticode 签名。允许频繁优化的 Rainbond 官方安装脚本使用另一种明确的信任模式：固定 HTTPS 官方来源、只允许同源跳转、限制文件大小并检查 Bash 结构；控制端计算本次下载摘要，Windows/WSL 在执行前匹配同一摘要并运行 `bash -n`。`wsl --update --web-download` 属于 Windows 自己管理的系统更新：此路径信任 Windows 的签名安装链，Rainskills 不宣称获得下载包摘要；更新后改为验证 `wsl.exe` 路径、Microsoft 签名、命令状态和实际 WSL 版本。不同制品的信任模式必须在策略中显式标记，不能混用。
 
 ### 3.4 原生 Windows 与 WSL 控制模式
 
@@ -430,7 +430,7 @@ CI 中不得真正启用 WSL、重启 Windows、安装 Docker/Rainbond 或修改
 - 所有系统变更都发生在明确确认之后；
 - Windows 预检资源、虚拟化、UAC、功能、端口、网络、IPv4 和对象归属；
 - 新版 WSL 命令路径和 Windows 10 DISM 兼容路径；
-- rootfs、Microsoft 组件和 Rainbond 安装器的来源、重定向和摘要校验；
+- rootfs、Microsoft 组件的固定摘要校验，以及 Rainbond 安装器的 HTTPS 来源、同源重定向、大小、Bash 结构和运行时摘要校验；
 - WSL 导入、身份标记、systemd、Docker 和 Rainbond 阶段顺序；
 - 重启前恢复包完整性验证、一次性任务注册、拒绝重启和登录后恢复；
 - Windows ACL、reparse point、所有者和原子状态更新；

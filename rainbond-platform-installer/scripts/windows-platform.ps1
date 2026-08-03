@@ -873,10 +873,12 @@ function Invoke-PrepareDocker($Request) {
 function Invoke-InstallRainbond($Request) {
   $network = Get-VerifiedManagedNetwork $Request
   $installerPath = Assert-PathInsideRoot ([string](Get-PropertyValue $Request.payload "installer_path")) ([Environment]::GetFolderPath("UserProfile"))
-  [void](Assert-FileDigest $installerPath $Request.policy.installer.sha256)
+  $installerDigest = [string](Get-PropertyValue $Request.payload "installer_sha256")
+  if ($installerDigest -notmatch "^[a-f0-9]{64}$") { throw "Rainbond installer SHA-256 is invalid" }
+  [void](Assert-FileDigest $installerPath $installerDigest)
   $linuxInstaller = Convert-WindowsPathForDistro $installerPath
   Invoke-DistroBootstrap $Request "InstallRainbond" ([string]$network.host_address) `
-    ([string]$network.guest_address) $linuxInstaller ([string]$Request.policy.installer.sha256)
+    ([string]$network.guest_address) $linuxInstaller $installerDigest
   $wslPath = Get-TrustedWslPath
   $status = (& $wslPath -d Rainbond -u root -- docker inspect rainbond --format "{{.State.Status}}" 2>$null | Out-String).Trim()
   if ($status -ne "running") { throw "Rainbond outer container is not running after installation" }

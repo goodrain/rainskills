@@ -776,6 +776,10 @@ const REMOTE_INSTALL_SCRIPT = [
   '  echo "远程官方安装脚本摘要不匹配，已停止执行" >&2',
   "  exit 1",
   "fi",
+  'if ! bash -n "$installer"; then',
+  '  echo "远程官方安装脚本 Bash 语法检查失败，已停止执行" >&2',
+  "  exit 1",
+  "fi",
   'chmod 600 "$installer"',
   'child_pid=""',
   "cleanup() {",
@@ -1177,13 +1181,30 @@ function downloadInstaller(url, destination, paths, state, redirectCount = 0) {
         return;
       }
 
-      const total = Number(response.headers["content-length"] || 0);
+      const declaredLength = Number(response.headers["content-length"] || 0);
+      const total = Number.isSafeInteger(declaredLength) && declaredLength > 0 ? declaredLength : 0;
+      if (total > POLICY.installer.max_bytes) {
+        response.resume();
+        reject(new Error(`官方安装脚本大小超出限制（最大 ${POLICY.installer.max_bytes} bytes）`));
+        return;
+      }
       let received = 0;
       let lastReported = -1;
-      const tempPath = `${destination}.${process.pid}.${crypto.randomBytes(6).toString("hex")}.part`;
-      const output = fs.createWriteStream(tempPath, { flags: "wx", mode: 0o600 });
+      const chunks = [];
+      let settled = false;
+      const fail = (error) => {
+        if (settled) return;
+        settled = true;
+        activeRequest = null;
+        reject(error);
+      };
       response.on("data", (chunk) => {
         received += chunk.length;
+        if (received > POLICY.installer.max_bytes) {
+          response.destroy(new Error(`官方安装脚本大小超出限制（最大 ${POLICY.installer.max_bytes} bytes）`));
+          return;
+        }
+        chunks.push(chunk);
         if (total > 0) {
           const percent = Math.floor((received / total) * 100);
           if (percent >= lastReported + 10 || percent === 100) {
@@ -1192,23 +1213,26 @@ function downloadInstaller(url, destination, paths, state, redirectCount = 0) {
           }
         }
       });
-      response.pipe(output);
-      output.on("finish", () => {
-        output.close(() => {
+      response.on("end", () => {
+        if (settled) return;
+        const tempPath = `${destination}.${process.pid}.${crypto.randomBytes(6).toString("hex")}.part`;
+        try {
+          fs.writeFileSync(tempPath, Buffer.concat(chunks), { flag: "wx", mode: 0o600 });
           fs.renameSync(tempPath, destination);
           fs.chmodSync(destination, 0o600);
+          settled = true;
           activeRequest = null;
           resolve({ finalUrl: url, bytes: received });
-        });
+        } catch (error) {
+          try {
+            if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+          } catch {
+            // The original write error is more useful than cleanup failure.
+          }
+          fail(error);
+        }
       });
-      response.on("error", (error) => {
-        activeRequest = null;
-        reject(error);
-      });
-      output.on("error", (error) => {
-        activeRequest = null;
-        reject(error);
-      });
+      response.on("error", fail);
     });
     activeRequest = request;
     request.setTimeout(30000, () => request.destroy(new Error("下载官方安装脚本超时")));
@@ -1223,16 +1247,74 @@ function sha256File(filePath) {
   return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
 }
 
-function validateInstaller(filePath) {
-  const digest = sha256File(filePath);
-  if (digest !== POLICY.installer.sha256) {
-    throw new Error(`官方安装脚本摘要发生变化，已停止执行。请升级 Rainskills 后重试（实际 ${digest}）`);
+function validateInstaller(filePath, {
+  skipSyntaxCheck = process.platform === "win32",
+  syntaxRunner = spawnSync,
+} = {}) {
+  const info = fs.lstatSync(filePath);
+  if (info.isSymbolicLink() || !info.isFile()) {
+    throw new Error("下载内容不是安全的普通文件");
   }
-  const source = fs.readFileSync(filePath, "utf8");
-  if (!source.startsWith("#!/bin/bash") || !source.includes("Rainbond Installation Successful")) {
-    throw new Error("下载内容不是预期的 Rainbond 安装脚本");
+  if (info.size <= 0 || info.size > POLICY.installer.max_bytes) {
+    throw new Error(`官方安装脚本大小超出限制（最大 ${POLICY.installer.max_bytes} bytes）`);
   }
-  return digest;
+  const content = fs.readFileSync(filePath);
+  if (content.includes(0)) {
+    throw new Error("下载内容不是预期的 Bash 安装脚本");
+  }
+  const firstLine = content.toString("utf8", 0, Math.min(content.length, 128)).split("\n", 1)[0].replace(/\r$/, "");
+  if (firstLine !== "#!/bin/bash" && firstLine !== "#!/usr/bin/env bash") {
+    throw new Error("下载内容不是预期的 Bash 安装脚本");
+  }
+  if (!skipSyntaxCheck) {
+    const syntax = syntaxRunner("bash", ["-n", filePath], {
+      encoding: "utf8",
+      timeout: 10000,
+    });
+    if (syntax.error || syntax.status !== 0) {
+      throw new Error("Rainbond 官方安装脚本 Bash 语法检查失败");
+    }
+  }
+  return crypto.createHash("sha256").update(content).digest("hex");
+}
+
+function quarantineInstaller(filePath) {
+  if (!fs.existsSync(filePath)) return null;
+  const info = fs.lstatSync(filePath);
+  if (info.isSymbolicLink() || !info.isFile()) {
+    throw new Error(`安装脚本缓存不是安全的普通文件：${filePath}`);
+  }
+  const quarantine = `${filePath}.invalid-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
+  fs.renameSync(filePath, quarantine);
+  return quarantine;
+}
+
+async function ensureTrustedInstaller(destination, paths, state, options = {}) {
+  if (fs.existsSync(destination)) {
+    try {
+      const sha256 = validateInstaller(destination, options);
+      return {
+        reused: true,
+        finalUrl: state.artifact_url || POLICY.installer.url,
+        bytes: fs.statSync(destination).size,
+        sha256,
+      };
+    } catch (error) {
+      quarantineInstaller(destination);
+      process.stderr.write(`已隔离未通过检查的安装脚本缓存：${error.message}\n`);
+    }
+  }
+  const download = await downloadInstaller(POLICY.installer.url, destination, paths, state);
+  try {
+    return {
+      ...download,
+      reused: false,
+      sha256: validateInstaller(destination, options),
+    };
+  } catch (error) {
+    quarantineInstaller(destination);
+    throw error;
+  }
 }
 
 function spawnAttached(command, args, options, logPath) {
@@ -1544,24 +1626,13 @@ async function provisionWindowsDistroAndNetwork({ adapter, options, paths, state
     || process.env.LOCALAPPDATA
     || path.win32.join(os.homedir(), "AppData", "Local");
   const distroRoot = path.win32.join(localAppData, "RainSkills", "Distros", installationId);
-  let installerProgressAt = 0;
-  const installer = await ensurePinnedArtifact({
-    destination: paths.installer,
-    url: POLICY.installer.url,
-    sha256: POLICY.installer.sha256,
-    allowedOrigins: POLICY.installer.allowed_origins,
-    onProgress({ current, total }) {
-      const currentTime = Date.now();
-      if (currentTime - installerProgressAt < 250 && current !== total) return;
-      installerProgressAt = currentTime;
-      const totalText = Number.isFinite(total) && total > 0 ? ` / ${total} bytes` : "";
-      process.stdout.write(`\r下载 Rainbond 安装脚本 ${current}${totalText}`);
-    },
+  const installer = await ensureTrustedInstaller(paths.installer, paths, state, {
+    skipSyntaxCheck: true,
   });
-  process.stdout.write(installer.reused ? "已复用校验通过的 Rainbond 安装脚本。\n" : "\nRainbond 安装脚本下载并校验完成。\n");
+  process.stdout.write(installer.reused ? "已复用检查通过的 Rainbond 安装脚本。\n" : "Rainbond 安装脚本下载并检查完成。\n");
   state = updateState(paths.state, state, {
     artifact_url: installer.finalUrl,
-    artifact_sha256: POLICY.installer.sha256,
+    artifact_sha256: installer.sha256,
     rootfs_path: rootfsPath,
     rootfs_sha256: POLICY.windows.ubuntu_rootfs.sha256,
     distro_root: distroRoot,
@@ -1578,6 +1649,7 @@ async function provisionWindowsDistroAndNetwork({ adapter, options, paths, state
       host_address: network.hostAddress,
       guest_address: network.guestAddress,
       installer_path: paths.installer,
+      installer_sha256: installer.sha256,
     },
   });
   const stageFacts = () => ({
@@ -2062,16 +2134,9 @@ async function runInstallOperation(options) {
   try {
     state = updateState(paths.state, state, { stage: "downloading", status: "running" });
     appendEvent(paths, state, "downloading", "started");
-    let download;
-    let digest;
-    if (fs.existsSync(paths.installer)) {
-      digest = validateInstaller(paths.installer);
-      download = { finalUrl: state.artifact_url || POLICY.installer.url, bytes: fs.statSync(paths.installer).size };
-      process.stdout.write("已复用校验通过的官方安装脚本。\n");
-    } else {
-      download = await downloadInstaller(POLICY.installer.url, paths.installer, paths, state);
-      digest = validateInstaller(paths.installer);
-    }
+    const download = await ensureTrustedInstaller(paths.installer, paths, state);
+    const digest = download.sha256;
+    if (download.reused) process.stdout.write("已复用检查通过的官方安装脚本。\n");
     state = updateState(paths.state, state, {
       artifact_url: download.finalUrl,
       artifact_sha256: digest,
@@ -2238,6 +2303,7 @@ module.exports = {
   selectRemoteInstallationEip,
   targetChoicesForPlatform,
   translateWslPathToWindows,
+  validateInstaller,
   verifyRemoteDeployment,
   verifyRemoteRainbond,
 };

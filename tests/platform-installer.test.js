@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -805,7 +806,7 @@ test("remote preparation creates a protected workspace and copies the verified a
   );
 });
 
-test("remote installer invocation verifies the digest and preserves signal cleanup", () => {
+test("remote installer invocation verifies the transferred digest and Bash syntax", () => {
   const { remoteInstallerInvocation } = require(platformInstallerPath);
   const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
   const digest = "a".repeat(64);
@@ -829,6 +830,7 @@ test("remote installer invocation verifies the digest and preserves signal clean
   ]);
   assert.match(invocation.input, /sha256sum/);
   assert.match(invocation.input, /摘要不匹配/);
+  assert.match(invocation.input, /bash -n "\$installer"/);
   assert.match(invocation.input, /trap .*INT TERM HUP/);
   assert.match(invocation.input, /setsid/);
   assert(invocation.args.includes(`ControlPath=${session.controlPath}`));
@@ -956,7 +958,7 @@ test("skill routes platform setup but excludes application delivery", () => {
   assert.match(skill, /IP or DNS name.*not.*URL/is);
 });
 
-test("versioned policy pins resources, source, and artifact digest", () => {
+test("official installer policy trusts only the fixed HTTPS origin and bounds mutable content", () => {
   const { POLICY } = require(platformInstallerPath);
   assert.equal(POLICY.minimums.cpu_cores, 4);
   assert.equal(POLICY.minimums.memory_bytes, 8 * 1024 ** 3);
@@ -964,8 +966,41 @@ test("versioned policy pins resources, source, and artifact digest", () => {
   assert.deepEqual(POLICY.required_ports, [80, 443, 6060, 7070]);
   assert.equal(POLICY.installer.url, "https://get.rainbond.com/");
   assert.deepEqual(POLICY.installer.allowed_origins, ["https://get.rainbond.com"]);
+  assert.equal(POLICY.installer.trust, "https-origin+runtime-validation");
+  assert.equal(POLICY.installer.max_bytes, 2 * 1024 * 1024);
   assert.deepEqual(POLICY.supported_control_platforms, ["linux", "darwin", "win32"]);
-  assert.match(POLICY.installer.sha256, /^[a-f0-9]{64}$/);
+  assert.equal(Object.hasOwn(POLICY.installer, "sha256"), false);
+});
+
+test("mutable official installer content is validated and hashed at download time", {
+  skip: process.platform === "win32",
+}, () => {
+  const { POLICY, validateInstaller } = require(platformInstallerPath);
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-installer-validation-"));
+  const installerPath = path.join(tempDir, "install.sh");
+  const first = "#!/bin/bash\nset -eu\nprintf 'first release\\n'\n";
+  const second = "#!/usr/bin/env bash\nset -eu\nprintf 'optimized release\\n'\n";
+
+  fs.writeFileSync(installerPath, first, { mode: 0o600 });
+  assert.equal(
+    validateInstaller(installerPath),
+    crypto.createHash("sha256").update(first).digest("hex")
+  );
+
+  fs.writeFileSync(installerPath, second, { mode: 0o600 });
+  assert.equal(
+    validateInstaller(installerPath),
+    crypto.createHash("sha256").update(second).digest("hex")
+  );
+
+  fs.writeFileSync(installerPath, "<html>not a script</html>\n", { mode: 0o600 });
+  assert.throws(() => validateInstaller(installerPath), /Bash 安装脚本/);
+
+  fs.writeFileSync(installerPath, "#!/bin/bash\nif then\n", { mode: 0o600 });
+  assert.throws(() => validateInstaller(installerPath), /语法检查失败/);
+
+  fs.writeFileSync(installerPath, Buffer.alloc(POLICY.installer.max_bytes + 1, 0x61), { mode: 0o600 });
+  assert.throws(() => validateInstaller(installerPath), /大小超出限制/);
 });
 
 test("published guidance describes local and remote target selection", () => {
@@ -993,7 +1028,7 @@ test("no download or installer execution appears before the confirmation gate", 
   const source = fs.readFileSync(platformInstallerPath, "utf8");
   const runInstall = source.slice(source.indexOf("async function runInstall"));
   const confirmation = runInstall.indexOf("await confirmInstall(options.yes)");
-  const download = runInstall.indexOf("downloadInstaller(POLICY.installer.url");
+  const download = runInstall.indexOf("ensureTrustedInstaller(paths.installer");
   const execution = runInstall.indexOf("spawnAttached(command, args");
   assert(confirmation >= 0);
   assert(download > confirmation);

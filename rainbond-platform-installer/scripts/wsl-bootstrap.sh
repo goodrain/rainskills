@@ -144,6 +144,7 @@ verify_installer() {
   local actual
   actual="$(sha256sum "$INSTALLER_PATH" | awk '{print $1}')"
   [[ "$actual" == "$INSTALLER_SHA256" ]] || { printf 'Installer digest mismatch\n' >&2; exit 1; }
+  bash -n "$INSTALLER_PATH" || { printf 'Installer Bash syntax check failed\n' >&2; exit 1; }
 }
 
 emit_progress() {
