@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
   [Parameter(Mandatory = $true)]
-  [ValidateSet("Preflight", "InspectState", "ProtectState", "InstallMachineBundle", "EnableWsl", "UpdateWsl", "VerifyWsl", "RegisterResume", "RegisterFinalize", "RequestReboot", "Finalize", "ImportDistro", "PrepareRuntime", "ConfigureNetwork", "VerifyNetwork", "PrepareDocker", "InstallRainbond", "VerifyDeployment")]
+  [ValidateSet("Preflight", "InspectState", "ProtectState", "PrepareWsl", "ProvisionRainbond", "InstallMachineBundle", "EnableWsl", "UpdateWsl", "VerifyWsl", "RegisterResume", "RegisterFinalize", "RequestReboot", "Finalize", "ImportDistro", "PrepareRuntime", "ConfigureNetwork", "VerifyNetwork", "PrepareDocker", "InstallRainbond", "VerifyDeployment")]
   [string]$Action,
 
   [string]$RequestPath = "",
@@ -1049,6 +1049,91 @@ function Invoke-Finalize($Request) {
   return [ordered]@{ finalized = $true }
 }
 
+function Invoke-PrepareWsl($Request) {
+  Write-Host "[1/2] Preparing the protected RainSkills recovery bundle..."
+  $bundle = Invoke-InstallMachineBundle $Request
+  Write-Host "[2/2] Enabling and verifying WSL 2..."
+  $wsl = Invoke-EnableWsl $Request
+  $facts = [ordered]@{
+    machineBundleVerified = [bool]$bundle.machineBundleVerified
+    machineRoot = [string]$bundle.machineRoot
+    helperPath = [string]$bundle.helperPath
+    wslFeatureState = [string]$wsl.wslFeatureState
+    virtualMachinePlatformFeatureState = [string]$wsl.virtualMachinePlatformFeatureState
+    wslPath = $wsl.wslPath
+    wslVersion = $wsl.wslVersion
+    wslVersionCommandSucceeded = [bool]$wsl.wslVersionCommandSucceeded
+    wslDefaultVersion = $wsl.wslDefaultVersion
+    rebootPending = [bool]$wsl.rebootPending
+    wslVerified = $false
+    recoveryTasksVerified = $false
+    finalizerTaskVerified = $false
+    finalizerNonce = $null
+  }
+  if ($facts.rebootPending) {
+    Write-Host "Registering verified post-reboot recovery tasks..."
+    $resume = Invoke-RegisterResume $Request
+    $finalizer = Invoke-RegisterFinalize $Request
+    $facts.recoveryTasksVerified = [bool]($resume.recoveryTasksVerified -and $finalizer.finalizerTaskVerified)
+    $facts.finalizerTaskVerified = [bool]$finalizer.finalizerTaskVerified
+    $facts.finalizerNonce = [string]$finalizer.finalizerNonce
+  } else {
+    $verified = Get-WslRuntimeFacts
+    $facts.wslFeatureState = [string]$verified.wslFeatureState
+    $facts.virtualMachinePlatformFeatureState = [string]$verified.virtualMachinePlatformFeatureState
+    $facts.wslPath = $verified.wslPath
+    $facts.wslVersion = $verified.wslVersion
+    $facts.wslVersionCommandSucceeded = [bool]$verified.wslVersionCommandSucceeded
+    $facts.wslDefaultVersion = $verified.wslDefaultVersion
+    $facts.rebootPending = [bool]$verified.rebootPending
+    $facts.wslVerified = [bool](
+      $verified.wslFeatureState -eq "Enabled" -and
+      $verified.virtualMachinePlatformFeatureState -eq "Enabled" -and
+      $verified.wslPath -and
+      $verified.wslVersionCommandSucceeded -and
+      $verified.wslDefaultVersion -eq 2 -and
+      -not $verified.rebootPending
+    )
+  }
+  return $facts
+}
+
+function Invoke-ProvisionRainbond($Request) {
+  Write-Host "[1/6] Importing the dedicated Rainbond WSL environment..."
+  $imported = Invoke-ImportDistro $Request
+  Write-Host "[2/6] Configuring fixed local networking..."
+  $configured = Invoke-ConfigureNetwork $Request
+  $network = Invoke-VerifyNetwork $Request
+  Write-Host "[3/6] Preparing Docker inside the Rainbond environment..."
+  $docker = Invoke-PrepareDocker $Request
+  Write-Host "[4/6] Installing Rainbond (the first image pull can take some time)..."
+  $installed = Invoke-InstallRainbond $Request
+  Write-Host "[5/6] Verifying Rainbond inside WSL..."
+  Write-Host "[6/6] Verifying Windows loopback access..."
+  $verified = Invoke-VerifyDeployment $Request
+  return [ordered]@{
+    installationId = [string]$Request.installation_id
+    distroIdentityVerified = [bool]$imported.distroIdentityVerified
+    systemdReady = [bool]$imported.systemdReady
+    networkGateReady = [bool]$docker.networkGateReady
+    dockerReady = [bool]$docker.dockerReady
+    rainbondRuntimeVerified = [bool]$installed.rainbondRuntimeVerified
+    networkManifestVerified = [bool]($configured.networkManifestVerified -and $network.networkManifestVerified)
+    portproxyVerified = [bool]$network.portproxyVerified
+    containerRunning = [bool]$verified.containerRunning
+    nodeReady = [bool]$verified.nodeReady
+    componentsReady = [bool]$verified.componentsReady
+    wslConsoleReachable = [bool]$verified.wslConsoleReachable
+    windowsConsoleReachable = [bool]$verified.windowsConsoleReachable
+    portsListening = $verified.portsListening
+    subnet = [string]$network.subnet
+    hostAddress = [string]$network.hostAddress
+    guestAddress = [string]$verified.guestAddress
+    windowsConsoleUrl = [string]$verified.windowsConsoleUrl
+    controlConsoleUrl = [string]$verified.controlConsoleUrl
+  }
+}
+
 if ([string]::IsNullOrWhiteSpace($RequestPath) -or [string]::IsNullOrWhiteSpace($ResultPath)) {
   throw "RequestPath and ResultPath are required for this action"
 }
@@ -1091,7 +1176,7 @@ if (Test-Path -LiteralPath $ResultPath) {
   }
 }
 
-$machineActions = @("InstallMachineBundle", "EnableWsl", "UpdateWsl", "VerifyWsl", "RegisterResume", "RegisterFinalize", "RequestReboot", "Finalize", "ImportDistro", "PrepareRuntime", "ConfigureNetwork", "VerifyNetwork", "PrepareDocker", "InstallRainbond", "VerifyDeployment")
+$machineActions = @("PrepareWsl", "ProvisionRainbond", "InstallMachineBundle", "EnableWsl", "UpdateWsl", "VerifyWsl", "RegisterResume", "RegisterFinalize", "RequestReboot", "Finalize", "ImportDistro", "PrepareRuntime", "ConfigureNetwork", "VerifyNetwork", "PrepareDocker", "InstallRainbond", "VerifyDeployment")
 if ($machineActions -contains $Action -and -not (Test-IsElevated)) {
   Invoke-ElevatedSelf
   exit 0
@@ -1104,6 +1189,8 @@ if ($machineActions -contains $Action -and
 $status = "ok"
 switch ($Action) {
   "Preflight" { $facts = Invoke-Preflight $request }
+  "PrepareWsl" { $facts = Invoke-PrepareWsl $request }
+  "ProvisionRainbond" { $facts = Invoke-ProvisionRainbond $request }
   "InstallMachineBundle" { $facts = Invoke-InstallMachineBundle $request }
   "EnableWsl" { $facts = Invoke-EnableWsl $request }
   "UpdateWsl" { $facts = Invoke-UpdateWsl $request }

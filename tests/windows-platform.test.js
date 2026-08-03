@@ -413,6 +413,8 @@ test("machine actions are fixed and reboot requires an interactive explicit conf
     createWindowsPlatformAdapter,
   } = require(windowsPlatformPath);
   assert.deepEqual(MACHINE_ACTIONS, [
+    "PrepareWsl",
+    "ProvisionRainbond",
     "InstallMachineBundle",
     "EnableWsl",
     "UpdateWsl",
@@ -469,6 +471,19 @@ test("machine actions are fixed and reboot requires an interactive explicit conf
   assert.deepEqual(machineRequest.payload, { machine_bundle_verified: true });
   assert(!JSON.stringify(machineRequest).includes('"command"'));
   assert(!JSON.stringify(machineRequest).includes('"script"'));
+
+  await adapter.prepareWsl({
+    operationId: OPERATION_ID,
+    installationId: INSTALLATION_ID,
+    payload: { helper_path: "/tmp/windows-platform.ps1" },
+  });
+  assert.equal(fixture.requests.at(-1).request.action, "PrepareWsl");
+  await adapter.provisionRainbond({
+    operationId: OPERATION_ID,
+    installationId: INSTALLATION_ID,
+    payload: { rootfs_path: "/tmp/rootfs.tar.gz" },
+  });
+  assert.equal(fixture.requests.at(-1).request.action, "ProvisionRainbond");
 });
 
 test("PowerShell machine actions enforce UAC, signed WSL setup, protected tasks, and fixed reboot", () => {
@@ -484,6 +499,8 @@ test("PowerShell machine actions enforce UAC, signed WSL setup, protected tasks,
   assert.match(source, /RunLevel[\s\S]*Highest/);
   assert.match(source, /Start-Process[\s\S]*-Verb[\s\S]*RunAs/);
   assert.match(source, /Restart-Computer/);
+  assert.match(source, /function Invoke-PrepareWsl[\s\S]*Invoke-InstallMachineBundle[\s\S]*Invoke-EnableWsl/);
+  assert.match(source, /function Invoke-ProvisionRainbond[\s\S]*Invoke-ImportDistro[\s\S]*Invoke-ConfigureNetwork[\s\S]*Invoke-PrepareDocker[\s\S]*Invoke-InstallRainbond[\s\S]*Invoke-VerifyDeployment/);
   assert.match(source, /control_mode[\s\S]*wsl/);
   assert.match(source, /wslExecutable[\s\S]*wsl\.exe/);
   assert.match(source, /New-ScheduledTaskAction[\s\S]*-Execute \$wslExecutable/);

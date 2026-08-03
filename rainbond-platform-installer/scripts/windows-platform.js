@@ -14,6 +14,8 @@ const RESULT_SCHEMA = "rainskills.windows-result.v1";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const USER_ACTIONS = Object.freeze(["Preflight"]);
 const MACHINE_ACTIONS = Object.freeze([
+  "PrepareWsl",
+  "ProvisionRainbond",
   "InstallMachineBundle",
   "EnableWsl",
   "UpdateWsl",
@@ -704,6 +706,9 @@ function createWindowsPlatformAdapter({
     installMachineBundle(options) {
       return invoke("InstallMachineBundle", options);
     },
+    prepareWsl(options) {
+      return invoke("PrepareWsl", options);
+    },
     enableWsl(options) {
       return invoke("EnableWsl", options);
     },
@@ -744,6 +749,9 @@ function createWindowsPlatformAdapter({
     },
     installRainbond(options) {
       return invoke("InstallRainbond", options);
+    },
+    provisionRainbond(options) {
+      return invoke("ProvisionRainbond", options);
     },
     verifyDeployment(options) {
       return invoke("VerifyDeployment", options);

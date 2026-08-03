@@ -996,6 +996,14 @@ test("no download or installer execution appears before the confirmation gate", 
   assert(execution > confirmation);
 });
 
+test("Windows installation batches privileged work and explains the elevated progress window", () => {
+  const source = fs.readFileSync(platformInstallerPath, "utf8");
+  assert.match(source, /adapter\.prepareWsl\(/);
+  assert.match(source, /adapter\.provisionRainbond\(/);
+  assert.match(source, /管理员窗口.*进度/s);
+  assert.doesNotMatch(source, /adapter\.(?:installMachineBundle|enableWsl|registerResume|registerFinalize|importDistro|prepareRuntime|configureNetwork|verifyNetwork|prepareDocker|installRainbond|verifyDeployment)\(/);
+});
+
 test("atomic state writes reject a symlink directory", () => {
   const { atomicWriteJson } = require(platformInstallerPath);
   const { createSecureStateStore } = require(secureStatePath);

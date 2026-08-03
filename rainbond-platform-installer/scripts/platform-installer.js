@@ -1420,7 +1420,8 @@ async function prepareWindowsWsl({ adapter, onboarding, options, paths, state })
 
   state = updateState(paths.state, state, { stage: "enabling-wsl", status: "running" });
   appendEvent(paths, state, "enabling-wsl", "started");
-  await adapter.installMachineBundle({
+  process.stdout.write("\n接下来会弹出一次 Windows 管理员确认；WSL 准备进度会显示在管理员窗口。\n");
+  const prepared = await adapter.prepareWsl({
     ...common,
     payload: {
       helper_path: helperPath,
@@ -1437,10 +1438,7 @@ async function prepareWindowsWsl({ adapter, onboarding, options, paths, state })
       control_node_path: onboarding.control_mode === "wsl" ? process.execPath : null,
     },
   });
-  const enabled = await adapter.enableWsl({ ...common, payload: { machine_bundle_verified: true } });
-  if (enabled.facts.rebootPending) {
-    const resume = await adapter.registerResume({ ...common, payload: { reboot_pending: true } });
-    const finalizer = await adapter.registerFinalize({ ...common, payload: { reboot_pending: true } });
+  if (prepared.facts.rebootPending) {
     validateWindowsStageTransition({
       from: "enabling-wsl",
       to: "reboot-required",
@@ -1448,14 +1446,14 @@ async function prepareWindowsWsl({ adapter, onboarding, options, paths, state })
         installationId,
         observedAt: now(),
         rebootPending: true,
-        recoveryTasksVerified: Boolean(resume.facts.recoveryTasksVerified && finalizer.facts.finalizerTaskVerified),
+        recoveryTasksVerified: Boolean(prepared.facts.recoveryTasksVerified && prepared.facts.finalizerTaskVerified),
       },
       expectedInstallationId: installationId,
     });
     state = updateState(paths.state, state, {
       stage: "reboot-required",
       status: "waiting_user",
-      finalizer_nonce: finalizer.facts.finalizerNonce,
+      finalizer_nonce: prepared.facts.finalizerNonce,
     });
     appendEvent(paths, state, "reboot-required", "waiting_user");
     if (!(await confirmWindowsRestart())) {
@@ -1466,8 +1464,7 @@ async function prepareWindowsWsl({ adapter, onboarding, options, paths, state })
     return { state, waiting: true };
   }
 
-  const verified = await adapter.verifyWsl({ ...common, payload: { after_enable: true } });
-  if (!verified.facts.wslVerified) throw new Error("WSL 2 尚未通过完整验证");
+  if (!prepared.facts.wslVerified) throw new Error("WSL 2 尚未通过完整验证");
   validateWindowsStageTransition({
     from: "enabling-wsl",
     to: "downloading-rootfs",
@@ -1476,7 +1473,7 @@ async function prepareWindowsWsl({ adapter, onboarding, options, paths, state })
       observedAt: now(),
       rebootPending: false,
       wslVerified: true,
-      wslDefaultVersion: verified.facts.wslDefaultVersion,
+      wslDefaultVersion: prepared.facts.wslDefaultVersion,
     },
     expectedInstallationId: installationId,
   });
@@ -1498,7 +1495,7 @@ function printWindowsDownloadProgress({ current, total }) {
 
 async function provisionWindowsDistroAndNetwork({ adapter, options, paths, state }) {
   const installationId = state.installation_id;
-  if (!["downloading-rootfs", "importing-distro", "preparing-runtime"].includes(state.stage)) {
+  if (!["downloading-rootfs", "importing-distro", "preparing-runtime", "installing-rainbond", "configuring-windows-access", "verifying"].includes(state.stage)) {
     throw new Error(`当前 Windows 安装阶段不能准备发行版：${state.stage}`);
   }
   const common = { operationId: options.onboardingId, installationId };
@@ -1547,23 +1544,60 @@ async function provisionWindowsDistroAndNetwork({ adapter, options, paths, state
     || process.env.LOCALAPPDATA
     || path.win32.join(os.homedir(), "AppData", "Local");
   const distroRoot = path.win32.join(localAppData, "RainSkills", "Distros", installationId);
-  let imported = null;
+  let installerProgressAt = 0;
+  const installer = await ensurePinnedArtifact({
+    destination: paths.installer,
+    url: POLICY.installer.url,
+    sha256: POLICY.installer.sha256,
+    allowedOrigins: POLICY.installer.allowed_origins,
+    onProgress({ current, total }) {
+      const currentTime = Date.now();
+      if (currentTime - installerProgressAt < 250 && current !== total) return;
+      installerProgressAt = currentTime;
+      const totalText = Number.isFinite(total) && total > 0 ? ` / ${total} bytes` : "";
+      process.stdout.write(`\r下载 Rainbond 安装脚本 ${current}${totalText}`);
+    },
+  });
+  process.stdout.write(installer.reused ? "已复用校验通过的 Rainbond 安装脚本。\n" : "\nRainbond 安装脚本下载并校验完成。\n");
+  state = updateState(paths.state, state, {
+    artifact_url: installer.finalUrl,
+    artifact_sha256: POLICY.installer.sha256,
+    rootfs_path: rootfsPath,
+    rootfs_sha256: POLICY.windows.ubuntu_rootfs.sha256,
+    distro_root: distroRoot,
+  });
+
+  const network = managedNetworkFromCidr(state.windows_subnet);
+  process.stdout.write("\n接下来会弹出一次 Windows 管理员确认；发行版、Docker 和 Rainbond 的安装进度会显示在管理员窗口。\n");
+  const provisioned = await adapter.provisionRainbond({
+    ...common,
+    payload: {
+      rootfs_path: rootfsPath,
+      distro_root: distroRoot,
+      subnet: network.cidr,
+      host_address: network.hostAddress,
+      guest_address: network.guestAddress,
+      installer_path: paths.installer,
+    },
+  });
+  const stageFacts = () => ({
+    ...provisioned.facts,
+    installationId,
+    observedAt: now(),
+  });
+  state = updateState(paths.state, state, {
+    status: "running",
+    windows_network_ready: true,
+    managed_subnet: network.cidr,
+    host_address: network.hostAddress,
+    guest_address: network.guestAddress,
+  });
+
   if (state.stage === "importing-distro") {
-    imported = await adapter.importDistro({
-      ...common,
-      payload: {
-        rootfs_path: rootfsPath,
-        distro_root: distroRoot,
-      },
-    });
     validateWindowsStageTransition({
       from: "importing-distro",
       to: "preparing-runtime",
-      facts: {
-        installationId,
-        observedAt: now(),
-        distroIdentityVerified: Boolean(imported.facts.distroIdentityVerified),
-      },
+      facts: stageFacts(),
       expectedInstallationId: installationId,
     });
     state = updateState(paths.state, state, {
@@ -1574,117 +1608,51 @@ async function provisionWindowsDistroAndNetwork({ adapter, options, paths, state
     appendEvent(paths, state, "preparing-runtime", "started");
   }
 
-  const runtime = imported?.facts.systemdReady
-    ? imported
-    : await adapter.prepareRuntime({ ...common, payload: { distro_identity_verified: true } });
-  if (!runtime.facts.systemdReady) throw new Error("Rainbond 专用 WSL 发行版未能以 systemd 启动");
-  const network = managedNetworkFromCidr(state.windows_subnet);
-  const configured = await adapter.configureNetwork({
-    ...common,
-    payload: {
-      subnet: network.cidr,
-      host_address: network.hostAddress,
-      guest_address: network.guestAddress,
-    },
-  });
-  const verified = await adapter.verifyNetwork({ ...common, payload: { expected_subnet: network.cidr } });
-  if (!configured.facts.networkManifestVerified || !verified.facts.networkManifestVerified || !verified.facts.portproxyVerified) {
-    throw new Error("Windows 与 Rainbond WSL 之间的固定网络未通过验证");
-  }
-  state = updateState(paths.state, state, {
-    status: "running",
-    windows_network_ready: true,
-    managed_subnet: network.cidr,
-    host_address: network.hostAddress,
-    guest_address: network.guestAddress,
-  });
-  appendEvent(paths, state, "preparing-runtime", "completed", {
-    location: "local-windows",
-    guest_address: network.guestAddress,
-  });
-  return { state, network };
-}
-
-async function installWindowsRainbond({ adapter, onboarding, options, paths, state }) {
-  const installationId = state.installation_id;
-  if (!["preparing-runtime", "installing-rainbond", "configuring-windows-access", "verifying"].includes(state.stage)) {
-    throw new Error(`当前 Windows 安装阶段不能安装 Rainbond：${state.stage}`);
-  }
-  const common = { operationId: options.onboardingId, installationId };
-  let lastProgressAt = 0;
-  const installer = await ensurePinnedArtifact({
-    destination: paths.installer,
-    url: POLICY.installer.url,
-    sha256: POLICY.installer.sha256,
-    allowedOrigins: POLICY.installer.allowed_origins,
-    onProgress({ current, total }) {
-      const currentTime = Date.now();
-      if (currentTime - lastProgressAt < 250 && current !== total) return;
-      lastProgressAt = currentTime;
-      const totalText = Number.isFinite(total) && total > 0 ? ` / ${total} bytes` : "";
-      process.stdout.write(`\r下载 Rainbond 安装脚本 ${current}${totalText}`);
-    },
-  });
-  process.stdout.write(installer.reused ? "已复用校验通过的 Rainbond 安装脚本。\n" : "\nRainbond 安装脚本下载并校验完成。\n");
-  state = updateState(paths.state, state, {
-    artifact_url: installer.finalUrl,
-    artifact_sha256: POLICY.installer.sha256,
-  });
-
   if (state.stage === "preparing-runtime") {
-    const docker = await adapter.prepareDocker({ ...common, payload: { network_manifest_verified: true } });
     validateWindowsStageTransition({
       from: "preparing-runtime",
       to: "installing-rainbond",
-      facts: {
-        installationId,
-        observedAt: now(),
-        systemdReady: Boolean(docker.facts.systemdReady),
-        networkGateReady: Boolean(docker.facts.networkGateReady),
-        dockerReady: Boolean(docker.facts.dockerReady),
-      },
+      facts: stageFacts(),
       expectedInstallationId: installationId,
+    });
+    appendEvent(paths, state, "preparing-runtime", "completed", {
+      location: "local-windows",
+      guest_address: network.guestAddress,
     });
     state = updateState(paths.state, state, { stage: "installing-rainbond", status: "running" });
     appendEvent(paths, state, "installing-rainbond", "started");
   }
   if (state.stage === "installing-rainbond") {
-    process.stdout.write("\n正在安装 Rainbond，首次拉取镜像需要一些时间。\n");
-    const installed = await adapter.installRainbond({
-      ...common,
-      payload: { installer_path: paths.installer },
-    });
     validateWindowsStageTransition({
       from: "installing-rainbond",
       to: "configuring-windows-access",
-      facts: {
-        installationId,
-        observedAt: now(),
-        rainbondRuntimeVerified: Boolean(installed.facts.rainbondRuntimeVerified),
-      },
+      facts: stageFacts(),
       expectedInstallationId: installationId,
     });
     state = updateState(paths.state, state, { stage: "configuring-windows-access", status: "running" });
     appendEvent(paths, state, "installing-rainbond", "completed");
   }
-
   if (state.stage === "configuring-windows-access") {
-    const network = await adapter.verifyNetwork({ ...common, payload: { after_install: true } });
     validateWindowsStageTransition({
       from: "configuring-windows-access",
       to: "verifying",
-      facts: {
-        installationId,
-        observedAt: now(),
-        networkManifestVerified: Boolean(network.facts.networkManifestVerified),
-        portproxyVerified: Boolean(network.facts.portproxyVerified),
-      },
+      facts: stageFacts(),
       expectedInstallationId: installationId,
     });
     state = updateState(paths.state, state, { stage: "verifying", status: "running" });
     appendEvent(paths, state, "verifying", "started");
   }
-  const verified = await adapter.verifyDeployment({ ...common, payload: { require_dual_side_health: true } });
+  return { state, network, verifiedFacts: provisioned.facts };
+}
+
+async function installWindowsRainbond({ adapter, onboarding, options, paths, state, verifiedFacts = null }) {
+  const installationId = state.installation_id;
+  if (state.stage !== "verifying") {
+    throw new Error(`当前 Windows 安装阶段不能安装 Rainbond：${state.stage}`);
+  }
+  if (!verifiedFacts) throw new Error("缺少组合安装返回的 Windows 双侧验证结果");
+  const common = { operationId: options.onboardingId, installationId };
+  const verified = { facts: verifiedFacts };
   const delivery = evaluateWindowsDeployment({
     ...verified.facts,
     expectedInstallationId: installationId,
@@ -1712,6 +1680,7 @@ async function installWindowsRainbond({ adapter, onboarding, options, paths, sta
     controlConsoleUrl: delivery.controlConsoleUrl,
   };
   await completePlatform(onboarding, state, paths, verification, options.noResume);
+  process.stdout.write("\n最后会弹出一次 Windows 管理员确认，用于清理自动恢复任务。\n");
   await adapter.finalize({ ...common, payload: { status: "success" } });
   return { state, verification };
 }
@@ -1881,6 +1850,7 @@ async function runInstallOperation(options) {
         options,
         paths,
         state: provisioned.state,
+        verifiedFacts: provisioned.verifiedFacts,
       });
     }
     return;
@@ -1925,10 +1895,11 @@ async function runInstallOperation(options) {
       options,
       paths,
       state: provisioned.state,
+      verifiedFacts: provisioned.verifiedFacts,
     });
     return;
   }
-  if (isWindowsLocal && ["downloading-rootfs", "importing-distro", "preparing-runtime"].includes(state.stage)) {
+  if (isWindowsLocal && ["downloading-rootfs", "importing-distro", "preparing-runtime", "installing-rainbond", "configuring-windows-access", "verifying"].includes(state.stage)) {
     const provisioned = await provisionWindowsDistroAndNetwork({
       adapter: windowsAdapter,
       options,
@@ -1942,16 +1913,7 @@ async function runInstallOperation(options) {
       options,
       paths,
       state: provisioned.state,
-    });
-    return;
-  }
-  if (isWindowsLocal && ["installing-rainbond", "configuring-windows-access", "verifying"].includes(state.stage)) {
-    await installWindowsRainbond({
-      adapter: windowsAdapter,
-      onboarding,
-      options,
-      paths,
-      state,
+      verifiedFacts: provisioned.verifiedFacts,
     });
     return;
   }
@@ -2091,6 +2053,7 @@ async function runInstallOperation(options) {
         options,
         paths,
         state: provisioned.state,
+        verifiedFacts: provisioned.verifiedFacts,
       });
     }
     return;
