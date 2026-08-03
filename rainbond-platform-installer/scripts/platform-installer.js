@@ -14,6 +14,8 @@ const {
   createRecoveryBundle,
   createWindowsPlatformAdapter,
   createWindowsSecureStateStore,
+  ensurePinnedArtifact,
+  managedNetworkFromCidr,
   resolveWindowsUserSid,
   validateWindowsStageTransition,
   verifyRecoveryBundle,
@@ -1374,6 +1376,7 @@ async function prepareWindowsWsl({ adapter, onboarding, options, paths, state })
   const recovery = windowsRecoveryBundle(paths);
   const recoveryManifestPath = path.join(recovery.bundleRoot, "manifest.json");
   const helperPath = path.join(recovery.packageRoot, "rainbond-platform-installer", "scripts", "windows-platform.ps1");
+  const bootstrapPath = path.join(recovery.packageRoot, "rainbond-platform-installer", "scripts", "wsl-bootstrap.sh");
   const recoveryEntry = path.join(recovery.bundleRoot, "bin", "rainskills.js");
   const common = { operationId: options.onboardingId, installationId };
 
@@ -1384,6 +1387,8 @@ async function prepareWindowsWsl({ adapter, onboarding, options, paths, state })
     payload: {
       helper_path: helperPath,
       helper_sha256: sha256File(helperPath),
+      bootstrap_path: bootstrapPath,
+      bootstrap_sha256: sha256File(bootstrapPath),
       recovery_root: recovery.bundleRoot,
       recovery_manifest_sha256: sha256File(recoveryManifestPath),
       recovery_entry: recoveryEntry,
@@ -1436,6 +1441,124 @@ async function prepareWindowsWsl({ adapter, onboarding, options, paths, state })
   state = updateState(paths.state, state, { stage: "downloading-rootfs", status: "running" });
   appendEvent(paths, state, "downloading-rootfs", "started");
   return { state, waiting: false, adapter, onboarding };
+}
+
+function printWindowsDownloadProgress({ current, total }) {
+  const currentMiB = current / 1024 ** 2;
+  if (Number.isFinite(total) && total > 0) {
+    const percent = Math.min(100, Math.floor((current / total) * 100));
+    const filled = Math.floor(percent / 5);
+    process.stdout.write(`\r下载 Ubuntu 根文件系统 [${"#".repeat(filled)}${"-".repeat(20 - filled)}] ${percent}% (${currentMiB.toFixed(1)} MB)`);
+  } else {
+    process.stdout.write(`\r下载 Ubuntu 根文件系统 ${currentMiB.toFixed(1)} MB`);
+  }
+}
+
+async function provisionWindowsDistroAndNetwork({ adapter, options, paths, state }) {
+  const installationId = state.installation_id;
+  if (!["downloading-rootfs", "importing-distro", "preparing-runtime"].includes(state.stage)) {
+    throw new Error(`当前 Windows 安装阶段不能准备发行版：${state.stage}`);
+  }
+  const common = { operationId: options.onboardingId, installationId };
+  const rootfsPath = path.join(paths.root, "ubuntu-jammy-rootfs.tar.gz");
+  let lastProgressAt = 0;
+  let lastProgressEventAt = 0;
+  const rootfs = await ensurePinnedArtifact({
+    destination: rootfsPath,
+    url: POLICY.windows.ubuntu_rootfs.url,
+    sha256: POLICY.windows.ubuntu_rootfs.sha256,
+    allowedOrigins: POLICY.windows.preflight_allowed_origins,
+    onProgress(progress) {
+      const currentTime = Date.now();
+      if (currentTime - lastProgressAt >= 250 || progress.current === progress.total) {
+        lastProgressAt = currentTime;
+        printWindowsDownloadProgress(progress);
+      }
+      if (currentTime - lastProgressEventAt >= 5000 || progress.current === progress.total) {
+        lastProgressEventAt = currentTime;
+        appendEvent(paths, state, "downloading-rootfs", "progress", {
+          current: progress.current,
+          total: progress.total,
+          unit: "bytes",
+        });
+      }
+    },
+  });
+  process.stdout.write(rootfs.reused ? "已复用校验通过的 Ubuntu 根文件系统。\n" : "\nUbuntu 根文件系统下载并校验完成。\n");
+  if (state.stage === "downloading-rootfs") {
+    validateWindowsStageTransition({
+      from: "downloading-rootfs",
+      to: "importing-distro",
+      facts: { installationId, observedAt: now(), rootfsDigestVerified: true },
+      expectedInstallationId: installationId,
+    });
+    state = updateState(paths.state, state, {
+      stage: "importing-distro",
+      status: "running",
+      rootfs_path: rootfsPath,
+      rootfs_sha256: POLICY.windows.ubuntu_rootfs.sha256,
+    });
+    appendEvent(paths, state, "importing-distro", "started");
+  }
+
+  const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local");
+  const distroRoot = path.join(localAppData, "RainSkills", "Distros", installationId);
+  let imported = null;
+  if (state.stage === "importing-distro") {
+    imported = await adapter.importDistro({
+      ...common,
+      payload: {
+        rootfs_path: rootfsPath,
+        distro_root: distroRoot,
+      },
+    });
+    validateWindowsStageTransition({
+      from: "importing-distro",
+      to: "preparing-runtime",
+      facts: {
+        installationId,
+        observedAt: now(),
+        distroIdentityVerified: Boolean(imported.facts.distroIdentityVerified),
+      },
+      expectedInstallationId: installationId,
+    });
+    state = updateState(paths.state, state, {
+      stage: "preparing-runtime",
+      status: "running",
+      distro_root: distroRoot,
+    });
+    appendEvent(paths, state, "preparing-runtime", "started");
+  }
+
+  const runtime = imported?.facts.systemdReady
+    ? imported
+    : await adapter.prepareRuntime({ ...common, payload: { distro_identity_verified: true } });
+  if (!runtime.facts.systemdReady) throw new Error("Rainbond 专用 WSL 发行版未能以 systemd 启动");
+  const network = managedNetworkFromCidr(state.windows_subnet);
+  const configured = await adapter.configureNetwork({
+    ...common,
+    payload: {
+      subnet: network.cidr,
+      host_address: network.hostAddress,
+      guest_address: network.guestAddress,
+    },
+  });
+  const verified = await adapter.verifyNetwork({ ...common, payload: { expected_subnet: network.cidr } });
+  if (!configured.facts.networkManifestVerified || !verified.facts.networkManifestVerified || !verified.facts.portproxyVerified) {
+    throw new Error("Windows 与 Rainbond WSL 之间的固定网络未通过验证");
+  }
+  state = updateState(paths.state, state, {
+    status: "running",
+    windows_network_ready: true,
+    managed_subnet: network.cidr,
+    host_address: network.hostAddress,
+    guest_address: network.guestAddress,
+  });
+  appendEvent(paths, state, "preparing-runtime", "completed", {
+    location: "local-windows",
+    guest_address: network.guestAddress,
+  });
+  return { state, network };
 }
 
 function resumeInvocationForOnboarding(onboarding, execPath = process.execPath) {
@@ -1566,6 +1689,26 @@ async function runInstallOperation(options) {
       userSid: resolveWindowsUserSid(runCommand),
     })
     : null;
+  if (isWindowsLocal && state.stage === "enabling-wsl") {
+    const prepared = await prepareWindowsWsl({
+      adapter: windowsAdapter,
+      onboarding,
+      options,
+      paths,
+      state,
+    });
+    activeOperation.state = prepared.state;
+    if (!prepared.waiting) {
+      const provisioned = await provisionWindowsDistroAndNetwork({
+        adapter: windowsAdapter,
+        options,
+        paths,
+        state: prepared.state,
+      });
+      activeOperation.state = provisioned.state;
+    }
+    return;
+  }
   if (isWindowsLocal && state.stage === "reboot-required") {
     const verified = await windowsAdapter.verifyWsl({
       operationId: options.onboardingId,
@@ -1593,6 +1736,23 @@ async function runInstallOperation(options) {
     appendEvent(paths, state, "downloading-rootfs", "started");
     activeOperation.state = state;
     process.stdout.write("WSL 2 已在重启后通过验证，正在继续准备 Rainbond 专用环境。\n");
+    const provisioned = await provisionWindowsDistroAndNetwork({
+      adapter: windowsAdapter,
+      options,
+      paths,
+      state,
+    });
+    activeOperation.state = provisioned.state;
+    return;
+  }
+  if (isWindowsLocal && ["downloading-rootfs", "importing-distro", "preparing-runtime"].includes(state.stage)) {
+    const provisioned = await provisionWindowsDistroAndNetwork({
+      adapter: windowsAdapter,
+      options,
+      paths,
+      state,
+    });
+    activeOperation.state = provisioned.state;
     return;
   }
 
@@ -1693,6 +1853,7 @@ async function runInstallOperation(options) {
     stage: "awaiting-confirmation",
     status: "waiting_user",
     proposed_effects: assessment.effects,
+    windows_subnet: isWindowsLocal ? facts.availableSubnet : state.windows_subnet,
   });
   appendEvent(paths, state, "awaiting-confirmation", "waiting_user");
   if (!(await confirmInstall(options.yes))) {
@@ -1716,6 +1877,13 @@ async function runInstallOperation(options) {
     activeOperation.state = prepared.state;
     if (!prepared.waiting) {
       process.stdout.write("WSL 2 已准备完成，正在继续安装 Rainbond。\n");
+      const provisioned = await provisionWindowsDistroAndNetwork({
+        adapter: windowsAdapter,
+        options,
+        paths,
+        state: prepared.state,
+      });
+      activeOperation.state = provisioned.state;
     }
     return;
   }

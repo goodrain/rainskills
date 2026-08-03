@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
   [Parameter(Mandatory = $true)]
-  [ValidateSet("Preflight", "InspectState", "ProtectState", "InstallMachineBundle", "EnableWsl", "UpdateWsl", "VerifyWsl", "RegisterResume", "RegisterFinalize", "RequestReboot", "Finalize")]
+  [ValidateSet("Preflight", "InspectState", "ProtectState", "InstallMachineBundle", "EnableWsl", "UpdateWsl", "VerifyWsl", "RegisterResume", "RegisterFinalize", "RequestReboot", "Finalize", "ImportDistro", "PrepareRuntime", "ConfigureNetwork", "VerifyNetwork")]
   [string]$Action,
 
   [string]$RequestPath = "",
@@ -362,12 +362,15 @@ function Invoke-InstallMachineBundle($Request) {
   $recoveryManifestDigest = [string](Get-PropertyValue $payload "recovery_manifest_sha256")
   $nodePath = [string](Get-PropertyValue $payload "node_path")
   $recoveryEntry = [string](Get-PropertyValue $payload "recovery_entry")
+  $bootstrapSource = [string](Get-PropertyValue $payload "bootstrap_path")
+  $bootstrapDigest = [string](Get-PropertyValue $payload "bootstrap_sha256")
   if (-not (Test-Path -LiteralPath $recoveryRoot -PathType Container) -or
       -not (Test-Path -LiteralPath $nodePath -PathType Leaf) -or
       -not (Test-Path -LiteralPath $recoveryEntry -PathType Leaf)) {
     throw "Recovery bundle or Node runtime is missing"
   }
   [void](Assert-FileDigest $sourceHelper $expectedHelperDigest)
+  [void](Assert-FileDigest $bootstrapSource $bootstrapDigest)
   [void](Assert-FileDigest (Join-Path $recoveryRoot "manifest.json") $recoveryManifestDigest)
 
   $machineRoot = Get-MachineRoot $Request
@@ -383,13 +386,17 @@ function Invoke-InstallMachineBundle($Request) {
     New-Item -ItemType Directory -Path $machineRoot | Out-Null
   }
   Copy-Item -LiteralPath $sourceHelper -Destination $machineHelper -Force
+  $machineBootstrap = Join-Path $machineRoot "wsl-bootstrap.sh"
+  Copy-Item -LiteralPath $bootstrapSource -Destination $machineBootstrap -Force
   [void](Assert-FileDigest $machineHelper $expectedHelperDigest)
+  [void](Assert-FileDigest $machineBootstrap $bootstrapDigest)
   $manifest = [ordered]@{
     schema = "rainskills.windows-machine-bundle.v1"
     operation_id = $Request.operation_id
     installation_id = $Request.installation_id
     original_user_sid = $Request.user_sid
     helper_sha256 = $expectedHelperDigest
+    bootstrap_sha256 = $bootstrapDigest
     recovery_root = $recoveryRoot
     recovery_manifest_sha256 = $recoveryManifestDigest
     recovery_entry = $recoveryEntry
@@ -504,6 +511,314 @@ function Invoke-UpdateWsl($Request) {
   return Get-WslRuntimeFacts
 }
 
+function Get-ManagedDistroNames {
+  $wslPath = Get-TrustedWslPath
+  if (-not $wslPath) { throw "wsl.exe is not installed" }
+  return @(& $wslPath --list --quiet 2>$null |
+    ForEach-Object { ([string]$_ -replace "\u0000", "").Trim() } |
+    Where-Object { $_ })
+}
+
+function Convert-WindowsPathForDistro([string]$WindowsPath) {
+  $wslPath = Get-TrustedWslPath
+  $converted = (& $wslPath -d Rainbond -u root -- wslpath -u $WindowsPath 2>&1 | Out-String).Trim()
+  if ($LASTEXITCODE -ne 0 -or $converted -notmatch "^/mnt/[a-zA-Z]/") {
+    throw "wslpath -u failed for the managed helper path"
+  }
+  return $converted
+}
+
+function Invoke-DistroBootstrap($Request, [string]$BootstrapAction, [string]$HostAddress = "", [string]$GuestAddress = "", [string]$InstallerPath = "", [string]$InstallerDigest = "") {
+  $wslPath = Get-TrustedWslPath
+  $machineRoot = Get-MachineRoot $Request
+  $manifest = Assert-MachineManifest $Request
+  $bootstrapPath = Join-Path $machineRoot "wsl-bootstrap.sh"
+  [void](Assert-FileDigest $bootstrapPath $manifest.bootstrap_sha256)
+  $linuxBootstrap = Convert-WindowsPathForDistro $bootstrapPath
+  $arguments = @("-d", "Rainbond", "-u", "root", "--", "/bin/bash", $linuxBootstrap,
+    "--action", $BootstrapAction, "--installation-id", [string]$Request.installation_id)
+  if ($HostAddress) { $arguments += @("--host-address", $HostAddress) }
+  if ($GuestAddress) { $arguments += @("--guest-address", $GuestAddress) }
+  if ($InstallerPath) { $arguments += @("--installer-path", $InstallerPath) }
+  if ($InstallerDigest) { $arguments += @("--installer-sha256", $InstallerDigest) }
+  & $wslPath @arguments
+  if ($LASTEXITCODE -ne 0) { throw "Managed WSL bootstrap action failed: $BootstrapAction" }
+}
+
+function Get-DistroIdentity($Request) {
+  $wslPath = Get-TrustedWslPath
+  $identity = (& $wslPath -d Rainbond -u root -- cat /etc/rainskills-installation-id 2>$null | Out-String).Trim()
+  return $identity
+}
+
+function Assert-SystemdPidOne($Request) {
+  $wslPath = Get-TrustedWslPath
+  & $wslPath -d Rainbond -u root -- /bin/true
+  if ($LASTEXITCODE -ne 0) { throw "Failed to start the managed Rainbond distro" }
+  $pidOne = (& $wslPath -d Rainbond -u root -- ps -p 1 -o comm= 2>&1 | Out-String).Trim()
+  if ($LASTEXITCODE -ne 0 -or $pidOne -ne "systemd") { throw "PID 1 in the managed Rainbond distro is not systemd" }
+  if ((Get-DistroIdentity $Request) -ne $Request.installation_id) { throw "Managed distro identity mismatch" }
+  return $true
+}
+
+function Invoke-ImportDistro($Request) {
+  if ([string]$Request.policy.windows.distro_name -ne "Rainbond") { throw "The policy distro name must be Rainbond" }
+  $payload = $Request.payload
+  $rootfsPath = Assert-PathInsideRoot ([string](Get-PropertyValue $payload "rootfs_path")) ([Environment]::GetFolderPath("UserProfile"))
+  $distroRoot = [IO.Path]::GetFullPath([string](Get-PropertyValue $payload "distro_root")).TrimEnd("\")
+  $expectedDistroRoot = [IO.Path]::GetFullPath((Join-Path ([Environment]::GetFolderPath("LocalApplicationData")) "RainSkills\Distros\$($Request.installation_id)")).TrimEnd("\")
+  if (-not $distroRoot.Equals($expectedDistroRoot, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "Managed distro root is outside the installation-specific LocalAppData path"
+  }
+  [void](Assert-FileDigest $rootfsPath $Request.policy.windows.ubuntu_rootfs.sha256)
+  $distroNames = Get-ManagedDistroNames
+  if ($distroNames -contains "Rainbond") {
+    if ((Get-DistroIdentity $Request) -ne $Request.installation_id) {
+      throw "An existing Rainbond WSL distro is not owned by this installation"
+    }
+  } else {
+    if (Test-Path -LiteralPath $distroRoot) { throw "Unknown existing Rainbond distro directory" }
+    New-Item -ItemType Directory -Path $distroRoot -Force | Out-Null
+    $wslPath = Get-TrustedWslPath
+    & $wslPath --import Rainbond $distroRoot $rootfsPath --version 2
+    if ($LASTEXITCODE -ne 0) {
+      if ((Get-ManagedDistroNames) -notcontains "Rainbond" -and (Test-Path -LiteralPath $distroRoot)) {
+        Remove-Item -LiteralPath $distroRoot -Recurse -Force
+      }
+      throw "wsl --import Rainbond failed"
+    }
+    Invoke-DistroBootstrap $Request "PrepareRuntime"
+    & $wslPath --terminate Rainbond
+    if ($LASTEXITCODE -ne 0) { throw "Failed to terminate the managed Rainbond distro after enabling systemd" }
+  }
+  [void](Assert-SystemdPidOne $Request)
+  return [ordered]@{
+    distroIdentityVerified = $true
+    systemdReady = $true
+    distroName = "Rainbond"
+    distroRoot = $distroRoot
+  }
+}
+
+function Invoke-PrepareRuntime($Request) {
+  if ((Get-ManagedDistroNames) -notcontains "Rainbond" -or (Get-DistroIdentity $Request) -ne $Request.installation_id) {
+    throw "The managed Rainbond distro is missing or has the wrong identity"
+  }
+  Invoke-DistroBootstrap $Request "PrepareRuntime"
+  $wslPath = Get-TrustedWslPath
+  & $wslPath --terminate Rainbond
+  if ($LASTEXITCODE -ne 0) { throw "Failed to restart the managed Rainbond distro" }
+  [void](Assert-SystemdPidOne $Request)
+  return [ordered]@{ distroIdentityVerified = $true; systemdReady = $true }
+}
+
+function Get-WslNetworkingMode {
+  $configPath = Join-Path ([Environment]::GetFolderPath("UserProfile")) ".wslconfig"
+  if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) { return "nat" }
+  $line = Get-Content -LiteralPath $configPath |
+    Where-Object { $_ -match "^\s*networkingMode\s*=" } |
+    Select-Object -Last 1
+  if (-not $line) { return "nat" }
+  return (($line -split "=", 2)[1]).Trim().ToLowerInvariant()
+}
+
+function Get-WslAdapter {
+  $adapters = @(Get-NetAdapter -IncludeHidden -ErrorAction SilentlyContinue |
+    Where-Object { $_.Status -eq "Up" -and ($_.Name -like "*WSL*" -or $_.InterfaceDescription -like "*Hyper-V Virtual Ethernet*") })
+  if ($adapters.Count -ne 1) { throw "Unable to identify exactly one active WSL NAT adapter" }
+  return $adapters[0]
+}
+
+function Get-WslHnsNetworkId($Adapter) {
+  if (Get-Command Get-HnsNetwork -ErrorAction SilentlyContinue) {
+    $networks = @(Get-HnsNetwork | Where-Object { $_.Name -eq "WSL" -or $_.Name -eq "WSL (Hyper-V firewall)" })
+    if ($networks.Count -eq 1) { return [string]$networks[0].ID }
+  }
+  return [string]$Adapter.InterfaceGuid
+}
+
+function Get-NetworkManifestPath($Request) {
+  return Join-Path (Get-MachineRoot $Request) "managed-network.json"
+}
+
+function New-SecureNonce {
+  $bytes = [byte[]]::new(32)
+  $generator = [Security.Cryptography.RandomNumberGenerator]::Create()
+  try { $generator.GetBytes($bytes) } finally { $generator.Dispose() }
+  return -join ($bytes | ForEach-Object { $_.ToString("x2") })
+}
+
+function Assert-NetworkManifestDigest($Request) {
+  $manifestPath = Get-NetworkManifestPath $Request
+  $digestPath = Join-Path (Get-MachineRoot $Request) "managed-network.sha256"
+  if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf) -or
+      -not (Test-Path -LiteralPath $digestPath -PathType Leaf)) {
+    throw "Managed network manifest or digest is missing"
+  }
+  $expected = (Get-Content -LiteralPath $digestPath -Raw).Trim().ToLowerInvariant()
+  [void](Assert-FileDigest $manifestPath $expected)
+}
+
+function Register-NetworkMaintenance($Request, $Manifest) {
+  $machineRoot = Get-MachineRoot $Request
+  $machineHelper = Join-Path $machineRoot "windows-platform.ps1"
+  $nonce = [string]$Manifest.maintenance_nonce
+  $maintenanceRequest = Join-Path $machineRoot "request-$nonce.json"
+  $maintenanceResult = Join-Path $machineRoot "result-$nonce.json"
+  $requestValue = [ordered]@{
+    schema = "rainskills.windows-request.v1"
+    action = "ConfigureNetwork"
+    operation_id = $Request.operation_id
+    installation_id = $Request.installation_id
+    nonce = $nonce
+    user_sid = $Request.user_sid
+    policy = $Request.policy
+    payload = [ordered]@{
+      subnet = $Manifest.subnet
+      host_address = $Manifest.host_address
+      guest_address = $Manifest.guest_address
+      maintenance = $true
+    }
+  }
+  [IO.File]::WriteAllText($maintenanceRequest, (($requestValue | ConvertTo-Json -Depth 12) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+  Set-MachineRootAcl $machineRoot $Request.user_sid
+  $arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $machineHelper +
+    '" -Action ConfigureNetwork -RequestPath "' + $maintenanceRequest + '" -ResultPath "' + $maintenanceResult + '"'
+  $taskAction = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -Argument $arguments
+  $trigger = New-ScheduledTaskTrigger -AtLogOn -User $Request.user_sid
+  $trigger.Delay = "PT10S"
+  $principal = New-ScheduledTaskPrincipal -UserId $Request.user_sid -LogonType Interactive -RunLevel Highest
+  $taskName = "RainSkills-Network-$($Request.installation_id)"
+  Register-VerifiedTask $taskName $taskAction $trigger $principal
+  return $taskName
+}
+
+function Test-ExpectedPortProxy($Tuples, [string]$GuestAddress, [int[]]$Ports) {
+  foreach ($port in $Ports) {
+    $matches = @($Tuples | Where-Object {
+      $_.listenAddress -eq "127.0.0.1" -and $_.listenPort -eq $port -and
+      $_.connectAddress -eq $GuestAddress -and $_.connectPort -eq $port
+    })
+    if ($matches.Count -ne 1) { return $false }
+  }
+  $managed = @($Tuples | Where-Object { $Ports -contains $_.listenPort })
+  return $managed.Count -eq $Ports.Count
+}
+
+function Invoke-ConfigureNetwork($Request) {
+  if ((Get-WslNetworkingMode) -ne "nat") { throw "WSL networkingMode must remain nat" }
+  if ((Get-DistroIdentity $Request) -ne $Request.installation_id) { throw "Managed distro identity mismatch" }
+  $payload = $Request.payload
+  $subnet = [string](Get-PropertyValue $payload "subnet")
+  $hostAddress = [string](Get-PropertyValue $payload "host_address")
+  $guestAddress = [string](Get-PropertyValue $payload "guest_address")
+  if ($subnet -notmatch "^172\.31\.(\d{1,3})\.0/30$") {
+    throw "Managed network addresses are invalid"
+  }
+  $thirdOctet = $Matches[1]
+  if ($hostAddress -ne "172.31.$thirdOctet.1" -or $guestAddress -ne "172.31.$thirdOctet.2") {
+    throw "Managed host and guest addresses do not belong to the selected /30"
+  }
+  $adapter = Get-WslAdapter
+  $hnsNetworkId = Get-WslHnsNetworkId $adapter
+  $manifestPath = Get-NetworkManifestPath $Request
+  $existing = $null
+  if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
+    Assert-NetworkManifestDigest $Request
+    $existing = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    if ($existing.installation_id -ne $Request.installation_id -or $existing.subnet -ne $subnet -or
+        $existing.adapter_ifindex -ne $adapter.ifIndex -or $existing.hns_network_id -ne $hnsNetworkId) {
+      throw "Managed network manifest does not match current WSL facts"
+    }
+  }
+  $existingAddress = @(Get-NetIPAddress -AddressFamily IPv4 -IPAddress $hostAddress -ErrorAction SilentlyContinue)
+  if ($existingAddress.Count -gt 0 -and @($existingAddress | Where-Object { $_.InterfaceIndex -ne $adapter.ifIndex }).Count -gt 0) {
+    throw "The managed host address is owned by another interface"
+  }
+  if ($existingAddress.Count -eq 0) {
+    New-NetIPAddress -InterfaceIndex $adapter.ifIndex -IPAddress $hostAddress -PrefixLength 30 -AddressFamily IPv4 | Out-Null
+  }
+  Invoke-DistroBootstrap $Request "ConfigureGuestNetwork" $hostAddress $guestAddress
+
+  $ports = @($Request.policy.windows.managed_ports | ForEach-Object { [int]$_ })
+  $currentTuples = @(Get-PortProxyTuples)
+  $conflicts = @($currentTuples | Where-Object {
+    $ports -contains $_.listenPort -and -not (
+      $_.listenAddress -eq "127.0.0.1" -and $_.connectAddress -eq $guestAddress -and $_.connectPort -eq $_.listenPort
+    )
+  })
+  if ($conflicts.Count -gt 0) { throw "Unknown or externally changed portproxy rules use RainSkills managed ports" }
+  foreach ($port in $ports) {
+    $present = @($currentTuples | Where-Object {
+      $_.listenAddress -eq "127.0.0.1" -and $_.listenPort -eq $port -and
+      $_.connectAddress -eq $guestAddress -and $_.connectPort -eq $port
+    }).Count -eq 1
+    if (-not $present) {
+      & "$env:SystemRoot\System32\netsh.exe" interface portproxy add v4tov4 `
+        listenaddress=127.0.0.1 listenport=$port connectaddress=$guestAddress connectport=$port
+      if ($LASTEXITCODE -ne 0) { throw "Failed to create managed loopback portproxy for port $port" }
+    }
+  }
+  $tuples = @(Get-PortProxyTuples)
+  if (-not (Test-ExpectedPortProxy $tuples $guestAddress $ports)) { throw "Managed portproxy read-back mismatch" }
+  $maintenanceNonce = if ($existing) { [string](Get-PropertyValue $existing "maintenance_nonce") } else { "" }
+  if ([string]::IsNullOrWhiteSpace($maintenanceNonce)) { $maintenanceNonce = New-SecureNonce }
+  $manifest = [ordered]@{
+    schema = "rainskills.windows-managed-network.v1"
+    operation_id = $Request.operation_id
+    installation_id = $Request.installation_id
+    hns_network_id = $hnsNetworkId
+    adapter_ifindex = [int]$adapter.ifIndex
+    subnet = $subnet
+    host_address = $hostAddress
+    guest_address = $guestAddress
+    portproxy = @($tuples | Where-Object { $ports -contains $_.listenPort })
+    maintenance_nonce = $maintenanceNonce
+    acl_owner = "S-1-5-32-544"
+    writable_sids = @("S-1-5-18", "S-1-5-32-544")
+  }
+  [IO.File]::WriteAllText($manifestPath, (($manifest | ConvertTo-Json -Depth 8) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+  $manifestDigest = (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
+  [IO.File]::WriteAllText((Join-Path (Get-MachineRoot $Request) "managed-network.sha256"), $manifestDigest + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
+  Set-MachineRootAcl (Get-MachineRoot $Request) $Request.user_sid
+  $maintenanceTask = Register-NetworkMaintenance $Request $manifest
+  return [ordered]@{
+    networkManifestVerified = $true
+    portproxyVerified = $true
+    subnet = $subnet
+    hostAddress = $hostAddress
+    guestAddress = $guestAddress
+    hnsNetworkId = $hnsNetworkId
+    adapterIfIndex = [int]$adapter.ifIndex
+    maintenanceTask = $maintenanceTask
+  }
+}
+
+function Invoke-VerifyNetwork($Request) {
+  $manifestPath = Get-NetworkManifestPath $Request
+  Assert-NetworkManifestDigest $Request
+  $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+  $adapter = Get-WslAdapter
+  if ($manifest.operation_id -ne $Request.operation_id -or $manifest.installation_id -ne $Request.installation_id -or
+      $manifest.adapter_ifindex -ne $adapter.ifIndex -or $manifest.hns_network_id -ne (Get-WslHnsNetworkId $adapter)) {
+    throw "Managed network identity changed"
+  }
+  $ports = @($Request.policy.windows.managed_ports | ForEach-Object { [int]$_ })
+  if (-not (Test-ExpectedPortProxy @(Get-PortProxyTuples) $manifest.guest_address $ports)) {
+    throw "Managed portproxy snapshot changed"
+  }
+  $hostAddress = @(Get-NetIPAddress -InterfaceIndex $adapter.ifIndex -IPAddress $manifest.host_address -ErrorAction SilentlyContinue)
+  if ($hostAddress.Count -ne 1) { throw "Managed host address is missing" }
+  if ((Get-DistroIdentity $Request) -ne $Request.installation_id) { throw "Managed distro identity mismatch" }
+  return [ordered]@{
+    networkManifestVerified = $true
+    portproxyVerified = $true
+    subnet = $manifest.subnet
+    hostAddress = $manifest.host_address
+    guestAddress = $manifest.guest_address
+  }
+}
+
 function Get-TaskNames($Request) {
   return [ordered]@{
     machine = "RainSkills-Machine-$($Request.installation_id)"
@@ -523,6 +838,7 @@ function Assert-MachineManifest($Request) {
     throw "Machine manifest identity mismatch"
   }
   [void](Assert-FileDigest (Join-Path $machineRoot "windows-platform.ps1") $manifest.helper_sha256)
+  [void](Assert-FileDigest (Join-Path $machineRoot "wsl-bootstrap.sh") $manifest.bootstrap_sha256)
   [void](Assert-FileDigest (Join-Path $manifest.recovery_root "manifest.json") $manifest.recovery_manifest_sha256)
   return $manifest
 }
@@ -680,7 +996,7 @@ if (Test-Path -LiteralPath $ResultPath) {
   }
 }
 
-$machineActions = @("InstallMachineBundle", "EnableWsl", "UpdateWsl", "VerifyWsl", "RegisterResume", "RegisterFinalize", "RequestReboot", "Finalize")
+$machineActions = @("InstallMachineBundle", "EnableWsl", "UpdateWsl", "VerifyWsl", "RegisterResume", "RegisterFinalize", "RequestReboot", "Finalize", "ImportDistro", "PrepareRuntime", "ConfigureNetwork", "VerifyNetwork")
 if ($machineActions -contains $Action -and -not (Test-IsElevated)) {
   Invoke-ElevatedSelf
   exit 0
@@ -712,6 +1028,10 @@ switch ($Action) {
   "RegisterFinalize" { $facts = Invoke-RegisterFinalize $request }
   "RequestReboot" { $facts = Invoke-RequestReboot $request }
   "Finalize" { $facts = Invoke-Finalize $request }
+  "ImportDistro" { $facts = Invoke-ImportDistro $request }
+  "PrepareRuntime" { $facts = Invoke-PrepareRuntime $request }
+  "ConfigureNetwork" { $facts = Invoke-ConfigureNetwork $request }
+  "VerifyNetwork" { $facts = Invoke-VerifyNetwork $request }
   default { throw "Unsupported fixed action" }
 }
 Write-ActionResult $request $facts $status

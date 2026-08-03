@@ -3,6 +3,7 @@
 
 const crypto = require("node:crypto");
 const fs = require("node:fs");
+const https = require("node:https");
 const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
@@ -21,6 +22,10 @@ const MACHINE_ACTIONS = Object.freeze([
   "RegisterFinalize",
   "RequestReboot",
   "Finalize",
+  "ImportDistro",
+  "PrepareRuntime",
+  "ConfigureNetwork",
+  "VerifyNetwork",
 ]);
 const STATE_ACTIONS = Object.freeze(["InspectState", "ProtectState"]);
 const FIXED_ACTIONS = Object.freeze([...USER_ACTIONS, ...MACHINE_ACTIONS, ...STATE_ACTIONS]);
@@ -298,6 +303,168 @@ function normalizedOrigin(value) {
   }
 }
 
+function validateArtifactRedirect(currentUrl, nextUrl, allowedOrigins) {
+  const allowed = new Set((allowedOrigins || []).map(normalizedOrigin));
+  let current;
+  let next;
+  try {
+    current = new URL(currentUrl);
+    next = new URL(nextUrl, current);
+  } catch {
+    throw new Error("下载地址或跳转地址无效");
+  }
+  if (current.protocol !== "https:" || next.protocol !== "https:") {
+    throw new Error("Windows 安装产物只允许 HTTPS 下载");
+  }
+  if (!allowed.has(current.origin) || !allowed.has(next.origin)) {
+    throw new Error(`下载出现未获准的跳转来源：${next.origin}`);
+  }
+  return true;
+}
+
+function defaultArtifactDownload({ url, partialPath, allowedOrigins, onProgress, maximumRedirects = 5 }) {
+  return new Promise((resolve, reject) => {
+    function requestUrl(currentUrl, redirectsRemaining) {
+      const existingBytes = fs.existsSync(partialPath) ? fs.statSync(partialPath).size : 0;
+      const request = https.get(currentUrl, {
+        headers: existingBytes > 0 ? { Range: `bytes=${existingBytes}-` } : {},
+        timeout: 30000,
+      }, (response) => {
+        if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+          response.resume();
+          if (redirectsRemaining <= 0) return reject(new Error("下载跳转次数过多"));
+          const nextUrl = new URL(response.headers.location, currentUrl).toString();
+          try {
+            validateArtifactRedirect(currentUrl, nextUrl, allowedOrigins);
+          } catch (error) {
+            reject(error);
+            return;
+          }
+          requestUrl(nextUrl, redirectsRemaining - 1);
+          return;
+        }
+        if (![200, 206].includes(response.statusCode)) {
+          response.resume();
+          reject(new Error(`下载失败，HTTP ${response.statusCode}`));
+          return;
+        }
+        const append = response.statusCode === 206 && existingBytes > 0;
+        const startingBytes = append ? existingBytes : 0;
+        const responseBytes = Number.parseInt(response.headers["content-length"] || "0", 10);
+        const total = responseBytes > 0 ? startingBytes + responseBytes : null;
+        const output = fs.createWriteStream(partialPath, { flags: append ? "a" : "w", mode: 0o600 });
+        let current = startingBytes;
+        response.on("data", (chunk) => {
+          current += chunk.length;
+          onProgress?.({ current, total });
+        });
+        response.on("error", reject);
+        output.on("error", reject);
+        output.on("finish", () => resolve({ finalUrl: currentUrl, bytes: current }));
+        response.pipe(output);
+      });
+      request.on("timeout", () => request.destroy(new Error("下载连接超时")));
+      request.on("error", reject);
+    }
+    requestUrl(url, maximumRedirects);
+  });
+}
+
+function quarantineFile(filePath) {
+  if (!fs.existsSync(filePath)) return null;
+  const info = fs.lstatSync(filePath);
+  if (info.isSymbolicLink() || !info.isFile()) throw new Error(`下载缓存不是安全的普通文件：${filePath}`);
+  const quarantine = `${filePath}.invalid-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
+  fs.renameSync(filePath, quarantine);
+  return quarantine;
+}
+
+async function ensurePinnedArtifact({
+  destination,
+  url,
+  sha256,
+  allowedOrigins,
+  download = defaultArtifactDownload,
+  onProgress,
+}) {
+  if (!/^[a-f0-9]{64}$/.test(String(sha256 || ""))) throw new Error("安装产物 SHA-256 无效");
+  validateArtifactRedirect(url, url, allowedOrigins);
+  if (fs.existsSync(destination)) {
+    const info = fs.lstatSync(destination);
+    if (info.isSymbolicLink() || !info.isFile()) throw new Error(`安装产物不是安全的普通文件：${destination}`);
+    if (hashFile(destination) === sha256) return { reused: true, path: destination, bytes: info.size, finalUrl: url };
+    quarantineFile(destination);
+  }
+  fs.mkdirSync(path.dirname(destination), { recursive: true, mode: 0o700 });
+  const partialPath = `${destination}.partial`;
+  if (fs.existsSync(partialPath)) {
+    const partialInfo = fs.lstatSync(partialPath);
+    if (partialInfo.isSymbolicLink() || !partialInfo.isFile()) throw new Error(`下载缓存不是安全的普通文件：${partialPath}`);
+  }
+  const result = await download({ url, partialPath, allowedOrigins, onProgress });
+  if (!fs.existsSync(partialPath) || hashFile(partialPath) !== sha256) {
+    quarantineFile(partialPath);
+    throw new Error("下载完成，但 Ubuntu 根文件系统 SHA-256 校验失败");
+  }
+  fs.chmodSync(partialPath, 0o600);
+  fs.renameSync(partialPath, destination);
+  return { reused: false, path: destination, bytes: fs.statSync(destination).size, finalUrl: result.finalUrl || url };
+}
+
+function ipv4ToInteger(address) {
+  const parts = String(address).split(".").map(Number);
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+    throw new Error(`无效的 IPv4 地址：${address}`);
+  }
+  return (((parts[0] * 256 + parts[1]) * 256 + parts[2]) * 256 + parts[3]) >>> 0;
+}
+
+function integerToIpv4(value) {
+  const normalized = Number(value) >>> 0;
+  return [24, 16, 8, 0].map((shift) => (normalized >>> shift) & 255).join(".");
+}
+
+function cidrRange(cidr) {
+  const [address, rawPrefix] = String(cidr).split("/", 2);
+  const prefix = Number(rawPrefix);
+  if (!Number.isInteger(prefix) || prefix < 0 || prefix > 32) throw new Error(`无效的 IPv4 CIDR：${cidr}`);
+  const size = 2 ** (32 - prefix);
+  const start = Math.floor(ipv4ToInteger(address) / size) * size;
+  return { start, end: start + size - 1 };
+}
+
+function rangesOverlap(left, right) {
+  return left.start <= right.end && right.start <= left.end;
+}
+
+function selectManagedSubnet(routePrefixes) {
+  const occupied = (routePrefixes || [])
+    .filter((prefix) => prefix !== "0.0.0.0/0")
+    .map(cidrRange);
+  for (let third = 255; third >= 1; third -= 1) {
+    const cidr = `172.31.${third}.0/30`;
+    const candidate = cidrRange(cidr);
+    if (!occupied.some((route) => rangesOverlap(candidate, route))) {
+      return {
+        cidr,
+        hostAddress: integerToIpv4(candidate.start + 1),
+        guestAddress: integerToIpv4(candidate.start + 2),
+      };
+    }
+  }
+  throw new Error("没有找到可用的非重叠 /30 子网");
+}
+
+function managedNetworkFromCidr(cidr) {
+  const range = cidrRange(cidr);
+  if (range.end - range.start !== 3) throw new Error(`RainSkills 受管网络必须是 /30：${cidr}`);
+  return {
+    cidr,
+    hostAddress: integerToIpv4(range.start + 1),
+    guestAddress: integerToIpv4(range.start + 2),
+  };
+}
+
 function evaluateWindowsPreflight(facts, policy, expectedUserSid) {
   if (!facts || typeof facts !== "object" || Array.isArray(facts)) {
     throw new Error("Windows 预检事实无效");
@@ -498,6 +665,18 @@ function createWindowsPlatformAdapter({
     finalize(options) {
       return invoke("Finalize", options);
     },
+    importDistro(options) {
+      return invoke("ImportDistro", options);
+    },
+    prepareRuntime(options) {
+      return invoke("PrepareRuntime", options);
+    },
+    configureNetwork(options) {
+      return invoke("ConfigureNetwork", options);
+    },
+    verifyNetwork(options) {
+      return invoke("VerifyNetwork", options);
+    },
   };
 }
 
@@ -513,7 +692,11 @@ module.exports = {
   createWindowsSecureStateStore,
   createWindowsPlatformAdapter,
   evaluateWindowsPreflight,
+  ensurePinnedArtifact,
+  managedNetworkFromCidr,
   resolveWindowsUserSid,
+  selectManagedSubnet,
   validateWindowsStageTransition,
+  validateArtifactRedirect,
   verifyRecoveryBundle,
 };

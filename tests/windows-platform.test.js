@@ -26,6 +26,12 @@ const powershellPath = path.join(
   "scripts",
   "windows-platform.ps1"
 );
+const wslBootstrapPath = path.join(
+  repoRoot,
+  "rainbond-platform-installer",
+  "scripts",
+  "wsl-bootstrap.sh"
+);
 const { createSecureStateStore } = require(path.join(
   repoRoot,
   "rainbond-platform-installer",
@@ -385,6 +391,10 @@ test("machine actions are fixed and reboot requires an interactive explicit conf
     "RegisterFinalize",
     "RequestReboot",
     "Finalize",
+    "ImportDistro",
+    "PrepareRuntime",
+    "ConfigureNetwork",
+    "VerifyNetwork",
   ]);
   assert.deepEqual(USER_ACTIONS, ["Preflight"]);
   assert.equal(new Set(FIXED_ACTIONS).size, FIXED_ACTIONS.length);
@@ -474,4 +484,106 @@ test("recovery bundle is explicit, digest-verified, and independent of the packa
     requiredFiles: ["../escape"],
     requiredDirectories: [],
   }), /相对路径|越界/);
+});
+
+test("pinned rootfs artifacts are reused only after digest verification", async () => {
+  const { ensurePinnedArtifact } = require(windowsPlatformPath);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-rootfs-"));
+  const destination = path.join(root, "ubuntu-rootfs.tar.gz");
+  const expectedBytes = Buffer.from("verified-rootfs");
+  const expectedDigest = crypto.createHash("sha256").update(expectedBytes).digest("hex");
+  let downloads = 0;
+  const download = async ({ partialPath, onProgress }) => {
+    downloads += 1;
+    fs.writeFileSync(partialPath, expectedBytes);
+    onProgress?.({ current: expectedBytes.length, total: expectedBytes.length });
+    return { finalUrl: policy.windows.ubuntu_rootfs.url, bytes: expectedBytes.length };
+  };
+
+  const first = await ensurePinnedArtifact({
+    destination,
+    url: policy.windows.ubuntu_rootfs.url,
+    sha256: expectedDigest,
+    allowedOrigins: policy.windows.preflight_allowed_origins,
+    download,
+  });
+  const second = await ensurePinnedArtifact({
+    destination,
+    url: policy.windows.ubuntu_rootfs.url,
+    sha256: expectedDigest,
+    allowedOrigins: policy.windows.preflight_allowed_origins,
+    download,
+  });
+  assert.equal(first.reused, false);
+  assert.equal(second.reused, true);
+  assert.equal(downloads, 1);
+
+  fs.writeFileSync(destination, "tampered");
+  await ensurePinnedArtifact({
+    destination,
+    url: policy.windows.ubuntu_rootfs.url,
+    sha256: expectedDigest,
+    allowedOrigins: policy.windows.preflight_allowed_origins,
+    download,
+  });
+  assert.equal(downloads, 2);
+  assert(fs.readdirSync(root).some((name) => name.startsWith("ubuntu-rootfs.tar.gz.invalid-")));
+});
+
+test("artifact redirects and managed subnets reject untrusted or overlapping networks", () => {
+  const {
+    selectManagedSubnet,
+    validateArtifactRedirect,
+  } = require(windowsPlatformPath);
+  assert.equal(
+    validateArtifactRedirect(
+      policy.windows.ubuntu_rootfs.url,
+      "https://cloud-images.ubuntu.com/wsl/jammy/rootfs.tar.gz",
+      policy.windows.preflight_allowed_origins
+    ),
+    true
+  );
+  assert.throws(() => validateArtifactRedirect(
+    policy.windows.ubuntu_rootfs.url,
+    "https://downloads.example/rootfs.tar.gz",
+    policy.windows.preflight_allowed_origins
+  ), /跳转来源/);
+
+  const selected = selectManagedSubnet([
+    "172.31.255.0/24",
+    "172.31.254.0/30",
+    "10.0.0.0/8",
+    "192.168.0.0/16",
+  ]);
+  assert.equal(selected.cidr, "172.31.253.0/30");
+  assert.equal(selected.hostAddress, "172.31.253.1");
+  assert.equal(selected.guestAddress, "172.31.253.2");
+  assert.throws(() => selectManagedSubnet(["0.0.0.0/1", "128.0.0.0/1"]), /可用.*\/30/);
+});
+
+test("Windows distro and network actions are fixed to Rainbond ownership and loopback access", () => {
+  const source = fs.readFileSync(powershellPath, "utf8");
+  assert.match(source, /--import[\s\S]*Rainbond[\s\S]*--version[\s\S]*2/);
+  assert.match(source, /rainskills-installation-id/);
+  assert.match(source, /--terminate/);
+  assert.match(source, /PID 1[\s\S]*systemd|systemd[\s\S]*PID 1/i);
+  assert.match(source, /wslpath[\s\S]*-u/);
+  assert.match(source, /networkingMode[\s\S]*nat/i);
+  assert.match(source, /127\.0\.0\.1/);
+  assert.match(source, /portproxy/);
+  assert.match(source, /managed-network\.json/);
+  assert.doesNotMatch(source, /(?:Set-Content|WriteAllText)[^\n]*\.wslconfig/);
+});
+
+test("WSL bootstrap enables systemd and gates runtime startup on the fixed network", () => {
+  const source = fs.readFileSync(wslBootstrapPath, "utf8");
+  assert.match(source, /^#!\/usr\/bin\/env bash/);
+  assert.match(source, /PrepareRuntime/);
+  assert.match(source, /ConfigureGuestNetwork/);
+  assert.match(source, /\[boot\][\s\S]*systemd=true/);
+  assert.match(source, /rainskills-network-ready\.service/);
+  assert.match(source, /Before=docker\.service/);
+  assert.match(source, /ConditionPathExists/);
+  assert.match(source, /rainskills-installation-id/);
+  assert.doesNotMatch(source, /eval\s/);
 });
