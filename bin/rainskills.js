@@ -2,6 +2,9 @@
 
 const path = require("node:path");
 const { spawn } = require("node:child_process");
+const {
+  detectControlEnvironment,
+} = require("../rainbond-platform-installer/scripts/control-environment.js");
 
 function classifyNodeMajor(major) {
   if (major < 18) {
@@ -13,7 +16,10 @@ function classifyNodeMajor(major) {
   return "supported";
 }
 
-function resolveInvocation(args) {
+function resolveInvocation(args, {
+  control = detectControlEnvironment(),
+  execPath = process.execPath,
+} = {}) {
   const installerPath = path.resolve(__dirname, "..", "install.sh");
   const platformInstallerPath = path.resolve(
     __dirname,
@@ -22,17 +28,30 @@ function resolveInvocation(args) {
     "scripts",
     "platform-installer.js"
   );
+  const windowsOnboardingPath = path.resolve(
+    __dirname,
+    "..",
+    "rainbond-platform-installer",
+    "scripts",
+    "windows-onboarding.js"
+  );
 
   if (args[0] === "platform" && args[1] === "install") {
     return {
-      executable: process.execPath,
+      executable: execPath,
       args: [platformInstallerPath, "install", ...args.slice(2)],
     };
   }
   if (args[0] === "resume") {
     return {
-      executable: process.execPath,
+      executable: execPath,
       args: [platformInstallerPath, "resume", ...args.slice(1)],
+    };
+  }
+  if (control.mode === "windows-native") {
+    return {
+      executable: execPath,
+      args: [windowsOnboardingPath, ...args],
     };
   }
   return {

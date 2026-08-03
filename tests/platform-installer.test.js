@@ -16,13 +16,29 @@ const platformInstallerPath = path.join(
 
 test("launcher routes platform and resume commands to the bundled helper", () => {
   const { resolveInvocation } = require(launcherPath);
+  const fakeNode = path.join(repoRoot, "fake-node");
 
-  assert.deepEqual(resolveInvocation(["platform", "install", "--onboarding-id", "abc"]), {
-    executable: process.execPath,
+  assert.deepEqual(resolveInvocation(["platform", "install", "--onboarding-id", "abc"], {
+    control: {
+      mode: "windows-native",
+      hostPlatform: "win32",
+      controlPlatform: "win32",
+    },
+    execPath: fakeNode,
+  }), {
+    executable: fakeNode,
     args: [platformInstallerPath, "install", "--onboarding-id", "abc"],
   });
-  assert.deepEqual(resolveInvocation(["resume", "--onboarding-id", "abc"]), {
-    executable: process.execPath,
+  assert.deepEqual(resolveInvocation(["resume", "--onboarding-id", "abc"], {
+    control: {
+      mode: "wsl",
+      hostPlatform: "win32",
+      controlPlatform: "linux",
+      controlDistro: "Ubuntu",
+    },
+    execPath: fakeNode,
+  }), {
+    executable: fakeNode,
     args: [platformInstallerPath, "resume", "--onboarding-id", "abc"],
   });
 });

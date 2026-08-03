@@ -7,6 +7,73 @@ const test = require("node:test");
 
 const repoRoot = path.resolve(__dirname, "..");
 const launcherPath = path.join(repoRoot, "bin", "rainskills.js");
+const controlEnvironmentPath = path.join(
+  repoRoot,
+  "rainbond-platform-installer",
+  "scripts",
+  "control-environment.js"
+);
+const windowsOnboardingPath = path.join(
+  repoRoot,
+  "rainbond-platform-installer",
+  "scripts",
+  "windows-onboarding.js"
+);
+
+test("control environment distinguishes native Windows, WSL, and POSIX", () => {
+  const { detectControlEnvironment } = require(controlEnvironmentPath);
+
+  assert.deepEqual(detectControlEnvironment({
+    platform: "win32",
+    env: {},
+    kernelRelease: "10.0.26100",
+  }), {
+    mode: "windows-native",
+    hostPlatform: "win32",
+    controlPlatform: "win32",
+  });
+
+  assert.deepEqual(detectControlEnvironment({
+    platform: "linux",
+    env: {
+      WSL_INTEROP: "/run/WSL/1_interop",
+      WSL_DISTRO_NAME: "Ubuntu",
+    },
+    kernelRelease: "6.6.87.2-microsoft-standard-WSL2",
+  }), {
+    mode: "wsl",
+    hostPlatform: "win32",
+    controlPlatform: "linux",
+    controlDistro: "Ubuntu",
+  });
+
+  assert.deepEqual(detectControlEnvironment({
+    platform: "linux",
+    env: { WSL_DISTRO_NAME: "Ubuntu" },
+    kernelRelease: "6.8.0-generic",
+  }), {
+    mode: "posix",
+    hostPlatform: "linux",
+    controlPlatform: "linux",
+  });
+});
+
+test("WSL classification fails closed when the control distro is invalid", () => {
+  const { detectControlEnvironment } = require(controlEnvironmentPath);
+
+  assert.deepEqual(detectControlEnvironment({
+    platform: "linux",
+    env: {
+      WSL_INTEROP: "/run/WSL/1_interop",
+      WSL_DISTRO_NAME: "Ubuntu\nmalicious",
+    },
+    kernelRelease: "5.15.153.1-microsoft-standard-WSL2",
+  }), {
+    mode: "wsl",
+    hostPlatform: "win32",
+    controlPlatform: "linux",
+  });
+});
 
 test("launcher has the Node shebang and classifies supported runtimes", () => {
   const source = fs.readFileSync(launcherPath, "utf8");
@@ -67,4 +134,34 @@ test("launcher preserves arguments and environment and returns the Bash exit cod
     "https://example.com/path with space",
     "marker=preserved",
   ]);
+});
+
+test("launcher routes native Windows onboarding to Node and keeps WSL on Bash", () => {
+  const { resolveInvocation } = require(launcherPath);
+  const fakeNode = path.join(repoRoot, "fake-node");
+
+  assert.deepEqual(resolveInvocation(["codex", "--skip-mcp"], {
+    control: {
+      mode: "windows-native",
+      hostPlatform: "win32",
+      controlPlatform: "win32",
+    },
+    execPath: fakeNode,
+  }), {
+    executable: fakeNode,
+    args: [windowsOnboardingPath, "codex", "--skip-mcp"],
+  });
+
+  assert.deepEqual(resolveInvocation(["codex", "--skip-mcp"], {
+    control: {
+      mode: "wsl",
+      hostPlatform: "win32",
+      controlPlatform: "linux",
+      controlDistro: "Ubuntu",
+    },
+    execPath: fakeNode,
+  }), {
+    executable: "bash",
+    args: [path.join(repoRoot, "install.sh"), "codex", "--skip-mcp"],
+  });
 });
