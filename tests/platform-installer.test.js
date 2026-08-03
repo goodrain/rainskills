@@ -13,6 +13,12 @@ const platformInstallerPath = path.join(
   "scripts",
   "platform-installer.js"
 );
+const secureStatePath = path.join(
+  repoRoot,
+  "rainbond-platform-installer",
+  "scripts",
+  "secure-state.js"
+);
 
 test("launcher routes platform and resume commands to the bundled helper", () => {
   const { resolveInvocation } = require(launcherPath);
@@ -61,6 +67,8 @@ test("platform CLI accepts an explicit Console host without accepting a URL", ()
 test("onboarding state is schema checked and must be a protected regular file", () => {
   const { readOnboardingState } = require(platformInstallerPath);
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-state-"));
+  const { createSecureStateStore } = require(secureStatePath);
+  const stateStore = createSecureStateStore({ platform: "linux", home: tempDir });
   const statePath = path.join(tempDir, "onboarding.json");
   const state = {
     schema: "rainskills.onboarding.v1",
@@ -77,18 +85,18 @@ test("onboarding state is schema checked and must be a protected regular file", 
 
   fs.writeFileSync(statePath, `${JSON.stringify(state)}\n`, { mode: 0o600 });
   assert.deepEqual(
-    readOnboardingState(statePath, state.operation_id),
+    readOnboardingState(statePath, state.operation_id, stateStore),
     state
   );
 
   fs.chmodSync(statePath, 0o644);
-  assert.throws(() => readOnboardingState(statePath, state.operation_id), /0600/);
+  assert.throws(() => readOnboardingState(statePath, state.operation_id, stateStore), /0600/);
   fs.chmodSync(statePath, 0o600);
-  assert.throws(() => readOnboardingState(statePath, "different-id"), /不匹配/);
+  assert.throws(() => readOnboardingState(statePath, "different-id", stateStore), /不匹配/);
 
   const symlinkPath = path.join(tempDir, "onboarding-link.json");
   fs.symlinkSync(statePath, symlinkPath);
-  assert.throws(() => readOnboardingState(symlinkPath, state.operation_id), /符号链接/);
+  assert.throws(() => readOnboardingState(symlinkPath, state.operation_id, stateStore), /符号链接/);
 });
 
 test("preflight enforces the versioned single-node resource baseline", () => {
@@ -889,13 +897,15 @@ test("no download or installer execution appears before the confirmation gate", 
 
 test("atomic state writes reject a symlink directory", () => {
   const { atomicWriteJson } = require(platformInstallerPath);
+  const { createSecureStateStore } = require(secureStatePath);
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-symlink-"));
+  const stateStore = createSecureStateStore({ platform: "linux", home: tempDir });
   const realDir = path.join(tempDir, "real");
   const linkDir = path.join(tempDir, "link");
   fs.mkdirSync(realDir);
   fs.symlinkSync(realDir, linkDir);
   assert.throws(
-    () => atomicWriteJson(path.join(linkDir, "state.json"), { ok: true }),
-    /状态目录不安全/
+    () => atomicWriteJson(path.join(linkDir, "state.json"), { ok: true }, stateStore),
+    /符号链接|状态目录不安全/
   );
 });

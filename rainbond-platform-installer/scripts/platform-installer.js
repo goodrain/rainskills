@@ -9,6 +9,7 @@ const os = require("node:os");
 const path = require("node:path");
 const readline = require("node:readline/promises");
 const { spawn, spawnSync } = require("node:child_process");
+const { createSecureStateStore } = require("./secure-state.js");
 
 const packageManifest = require("../../package.json");
 const POLICY = require("../references/installation-policy.json");
@@ -97,18 +98,14 @@ function assertOperationId(operationId) {
   }
 }
 
+const secureStateStore = createSecureStateStore();
+
 function assertProtectedRegularFile(filePath) {
-  const info = fs.lstatSync(filePath);
-  if (info.isSymbolicLink()) throw new Error(`拒绝读取符号链接状态文件：${filePath}`);
-  if (!info.isFile()) throw new Error(`状态路径不是普通文件：${filePath}`);
-  if ((info.mode & 0o777) !== 0o600) throw new Error(`状态文件权限必须为 0600：${filePath}`);
-  if (typeof process.getuid === "function" && info.uid !== process.getuid()) {
-    throw new Error(`状态文件不属于当前用户：${filePath}`);
-  }
+  secureStateStore.assertProtectedRegularFile(filePath);
 }
 
-function readOnboardingState(filePath, expectedOperationId) {
-  assertProtectedRegularFile(filePath);
+function readOnboardingState(filePath, expectedOperationId, stateStore = secureStateStore) {
+  stateStore.assertProtectedRegularFile(filePath);
   const state = JSON.parse(fs.readFileSync(filePath, "utf8"));
   if (state.schema !== ONBOARDING_SCHEMA || state.version !== 1) {
     throw new Error("不支持的 RainSkills onboarding 状态版本");
@@ -125,11 +122,24 @@ function readOnboardingState(filePath, expectedOperationId) {
   if (state.deployment_mode !== "self-hosted") {
     throw new Error("状态文件不是私有化部署流程");
   }
+  if (state.control_mode !== undefined) {
+    if (!["windows-native", "wsl", "posix"].includes(state.control_mode)) {
+      throw new Error("状态文件中的 control_mode 无效");
+    }
+    const distro = state.control_distro;
+    if (state.control_mode === "wsl") {
+      if (typeof distro !== "string" || !distro.trim() || /[\u0000-\u001f\u007f-\u009f]/u.test(distro)) {
+        throw new Error("状态文件中的 control_distro 无效");
+      }
+    } else if (distro !== null && distro !== undefined) {
+      throw new Error("非 WSL 状态不能包含 control_distro");
+    }
+  }
   return state;
 }
 
-function readPlatformState(filePath, expectedOperationId) {
-  assertProtectedRegularFile(filePath);
+function readPlatformState(filePath, expectedOperationId, stateStore = secureStateStore) {
+  stateStore.assertProtectedRegularFile(filePath);
   const state = JSON.parse(fs.readFileSync(filePath, "utf8"));
   if (state.schema !== PLATFORM_STATE_SCHEMA || state.version !== 1) {
     throw new Error("不支持的 Rainbond 平台安装状态版本");
@@ -140,57 +150,12 @@ function readPlatformState(filePath, expectedOperationId) {
   return state;
 }
 
-function atomicWriteJson(filePath, value) {
-  const directory = path.dirname(filePath);
-  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const directoryInfo = fs.lstatSync(directory);
-  if (directoryInfo.isSymbolicLink() || !directoryInfo.isDirectory()) {
-    throw new Error(`状态目录不安全：${directory}`);
-  }
-  if (typeof process.getuid === "function" && directoryInfo.uid !== process.getuid()) {
-    throw new Error(`状态目录不属于当前用户：${directory}`);
-  }
-  fs.chmodSync(directory, 0o700);
-  const tempPath = path.join(directory, `.${path.basename(filePath)}.${process.pid}.${crypto.randomBytes(6).toString("hex")}`);
-  const fd = fs.openSync(tempPath, "wx", 0o600);
-  try {
-    fs.writeFileSync(fd, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-    fs.fsyncSync(fd);
-  } finally {
-    fs.closeSync(fd);
-  }
-  fs.renameSync(tempPath, filePath);
-  fs.chmodSync(filePath, 0o600);
-  const directoryFd = fs.openSync(directory, "r");
-  try {
-    fs.fsyncSync(directoryFd);
-  } finally {
-    fs.closeSync(directoryFd);
-  }
+function atomicWriteJson(filePath, value, stateStore = secureStateStore) {
+  stateStore.atomicWriteJson(filePath, value);
 }
 
 function ensurePrivateOperationDirectory(directory) {
-  const home = path.resolve(os.homedir());
-  const target = path.resolve(directory);
-  const relative = path.relative(home, target);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error(`平台安装状态必须位于当前用户目录：${target}`);
-  }
-  let current = home;
-  for (const segment of relative.split(path.sep).filter(Boolean)) {
-    current = path.join(current, segment);
-    if (!fs.existsSync(current)) {
-      fs.mkdirSync(current, { mode: 0o700 });
-    }
-    const info = fs.lstatSync(current);
-    if (info.isSymbolicLink() || !info.isDirectory()) {
-      throw new Error(`状态路径包含不安全的目录：${current}`);
-    }
-    if (typeof process.getuid === "function" && info.uid !== process.getuid()) {
-      throw new Error(`状态目录不属于当前用户：${current}`);
-    }
-    fs.chmodSync(current, 0o700);
-  }
+  secureStateStore.ensurePrivateDirectory(directory);
 }
 
 function assertOperationFilesSafe(paths) {
