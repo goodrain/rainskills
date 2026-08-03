@@ -253,7 +253,7 @@ test("native Windows checkpoint is protected and accepted by platform resume", (
   });
 });
 
-test("native main saves private onboarding and emits the fixed next action", async () => {
+test("native main saves private onboarding and shows the fixed continuation command", async () => {
   const { main } = require(windowsOnboardingPath);
   const home = temporaryHome();
   const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-package-main-"));
@@ -289,6 +289,12 @@ test("native main saves private onboarding and emits the fixed next action", asy
   assert.equal(lockAcquisitions, 1);
   assert.equal(result.counts.installed, 1);
   assert.equal(fs.existsSync(path.join(destination, "rainbond-test", "SKILL.md")), true);
+  const continuationCommand = `npx rainskills@0.1.0-test platform install --onboarding-id ${result.nextAction.onboarding_id}`;
+  assert(output.includes("Rainbond 平台安装将在独立步骤中继续，前面的选择已经保存。"));
+  assert(output.includes("支持 Windows 本地安装，也可以安装到 Linux 服务器。"));
+  assert(output.some((line) => line.includes("终端用户可以直接执行：")));
+  assert(output.includes(continuationCommand));
+  assert(output.indexOf(continuationCommand) < output.length - 1);
   assert.deepEqual(JSON.parse(output.at(-1)), result.nextAction);
   assert.equal(
     fs.existsSync(path.join(
