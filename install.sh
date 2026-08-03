@@ -1583,6 +1583,7 @@ browser_login_to_rainbond() {
 
   state="$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"
 
+  printf '正在准备浏览器授权…\n' >&2
   python3 - "$result_file" "$state" "$LOGIN_TIMEOUT" >"${result_file}.port" 2>"${result_file}.err" <<'PY' &
 import json
 import sys
@@ -1702,10 +1703,11 @@ PY
 
   # Server prints chosen port to stdout (file) on first line, then waits
   local waited=0
+  local max_waits=150
   while [[ ! -s "${result_file}.port" ]]; do
     sleep 0.1
     waited=$((waited + 1))
-    if [[ "$waited" -gt 50 ]]; then
+    if [[ "$waited" -gt "$max_waits" ]]; then
       cleanup_browser_login
       die "无法启动本地回调服务（端口准备超时）。"
     fi

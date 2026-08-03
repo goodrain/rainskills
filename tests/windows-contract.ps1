@@ -18,15 +18,15 @@ foreach ($scriptPath in @($platformScript, $browserScript)) {
   }
 }
 
-$script:openedUrl = $null
+$global:rainskillsContractOpenedUrl = $null
 function Start-Process {
   param([Parameter(Mandatory = $true)][string]$FilePath)
-  $script:openedUrl = $FilePath
+  $global:rainskillsContractOpenedUrl = $FilePath
 }
 
 $expectedUrl = "https://run.rainbond.com/#/cli-auth?state=a&callback=http%3A%2F%2F127.0.0.1%3A43210%2Fcli-callback"
 & $browserScript -Url $expectedUrl
-if ($script:openedUrl -ne $expectedUrl) {
+if ($global:rainskillsContractOpenedUrl -ne $expectedUrl) {
   throw "Browser helper changed or parsed the authorization URL"
 }
 

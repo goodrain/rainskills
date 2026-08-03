@@ -9,6 +9,7 @@ import socket
 import stat
 import subprocess
 import tempfile
+import termios
 import time
 from pathlib import Path
 
@@ -48,6 +49,17 @@ def read_until(master_fd: int, pattern: re.Pattern[bytes], timeout: float) -> tu
         "installer did not reach browser authorization callback; output:\n"
         + output.decode("utf-8", errors="replace")
     )
+
+
+def wait_for_terminal_echo(master_fd: int, enabled: bool, timeout: float) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        echo_enabled = bool(termios.tcgetattr(master_fd)[3] & termios.ECHO)
+        if echo_enabled == enabled:
+            return
+        time.sleep(0.01)
+    state = "enabled" if enabled else "disabled"
+    raise AssertionError(f"terminal echo was not {state}")
 
 
 def wait_for_exit(pid: int, master_fd: int, timeout: float, signal_name: str) -> int:
@@ -302,6 +314,7 @@ exit 0
             port_match = AUTH_READY_PATTERN.search(prompt_output)
             assert port_match, prompt_output.decode("utf-8", errors="replace")
 
+            wait_for_terminal_echo(master_fd, enabled=False, timeout=2)
             os.write(master_fd, test_jwt + b"\n")
             deadline = time.monotonic() + 3
             while time.monotonic() < deadline:
