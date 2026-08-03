@@ -9,6 +9,26 @@ permissions:
   contents: read
 
 jobs:
+  windows-contract:
+    name: Windows non-mutating contract
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - name: Parse PowerShell and verify browser data handling
+        shell: powershell
+        run: .\tests\windows-contract.ps1
+
+      - name: Run Windows installer contracts
+        run: node --test tests/windows-onboarding.test.js tests/windows-platform.test.js tests/platform-installer.test.js
+
   test:
     name: ${{ matrix.os }} / Node ${{ matrix.node }}
     runs-on: ${{ matrix.os }}
