@@ -5,7 +5,15 @@
 - **已有 Rainbond**：停止新安装，建议返回 Rainskills 选择“已经有，填写平台地址”。
 - **权限不足**：Linux 需要 root 或已经可用的 `sudo -n`，不得在聊天中索取密码。
 - **远程连接失败**：确认控制端有 `ssh` 和 `scp`。安装器会先尝试已有的 SSH Key；需要密码时会打开一次系统 SSH 认证并自动复用连接。密码必须输入到终端的 OpenSSH 提示中，不要发送到聊天。如果提示主机密钥发生变化，先通过可信渠道核对服务器指纹并修复 `known_hosts`，安装器不会绕过该校验。
-- **Windows 控制端**：Rainbond 不能安装到 Windows 本机；准备一台满足资源要求的 Linux 服务器，并确保 Windows OpenSSH 客户端可用。
+- **Windows 版本**：本地预览要求 Windows 10 build 19041+ 或 Windows 11 x64 工作站；旧版本和 Windows Server 停止安装。
+- **Windows 虚拟化**：在任务管理器或 BIOS/UEFI 中确认 CPU 虚拟化已启用。安装器不会代替用户修改固件设置。
+- **Windows UAC / 管理员权限**：当前用户必须属于 Administrators 且 UAC 开启。拒绝 UAC 后保留断点，重新执行原命令即可。
+- **WSL 网络模式**：只支持默认 NAT。检测到 mirrored 或其他模式时停止，不自动修改 `.wslconfig`。
+- **Windows 端口冲突**：`80`、`443`、`6060`、`7070` 任一端口被现有进程或 portproxy 占用都会停止；先确认占用者，不自动结束进程。
+- **Windows 管理对象冲突**：存在未知 `Rainbond` WSL 发行版、`RainSkills-*` 计划任务或 `%ProgramData%\RainSkills` 内容时停止，避免覆盖用户数据。
+- **Windows 计划任务 / 重启恢复**：登录后未自动继续时，执行安装器打印的原始 `npx rainskills ... --target local-windows` 命令。不要手工改写任务参数。
+- **Windows 下载或摘要失败**：检查代理是否允许策略文件列出的 HTTPS 来源。摘要不匹配时升级 Rainskills；不得跳过 SHA-256 校验。
+- **Windows Console 不可达**：先区分 WSL 内健康检查和 Windows `http://127.0.0.1:7070`。检查固定 NAT、portproxy 和 Windows 防火墙，不要改成暴露到所有网卡。
 - **macOS 环境**：官方脚本需要 OrbStack。安装确认后可由官方脚本下载 OrbStack，但 macOS 权限弹窗仍需用户操作。
 - **官方脚本摘要变化**：停止执行，升级到包含新安装策略的 Rainskills 版本。
 - **启动失败**：保留 `~/.rainbond/platform-installer/<operation-id>/install.log`，不要自动删除容器或数据后重试。

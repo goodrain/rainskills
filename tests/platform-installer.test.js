@@ -940,7 +940,10 @@ test("skill routes platform setup but excludes application delivery", () => {
   assert.match(skill, /Do not use it to deploy an application/i);
   assert.match(skill, /rainbond-app-assistant/);
   assert.match(skill, /explicit confirmation/i);
-  assert.match(skill, /Windows.*remote Linux/is);
+  assert.match(skill, /Windows.*安装到本地.*安装到 Linux 服务器/is);
+  assert.match(skill, /local-windows/);
+  assert.match(skill, /UAC/);
+  assert.doesNotMatch(skill, /推荐/);
   assert.match(skill, /SSH.*system.*ssh/is);
   assert.match(skill, /password.*will not save/is);
   assert.match(skill, /Never ask.*password.*in chat/is);
@@ -967,8 +970,17 @@ test("published guidance describes local and remote target selection", () => {
     path.join(repoRoot, "rainbond-platform-installer", "references", "installation-policy.md"),
     "utf8"
   );
-  assert.match(readme, /Windows.*Linux 服务器/s);
-  assert.match(readme, /Linux.*当前设备.*其他 Linux 服务器/s);
+  assert.match(readme, /Windows.*本地.*Linux 服务器/s);
+  assert.match(readme, /Windows 10.*19041.*Windows 11/s);
+  assert.match(readme, /UAC/);
+  const troubleshooting = fs.readFileSync(
+    path.join(repoRoot, "rainbond-platform-installer", "references", "troubleshooting.md"),
+    "utf8"
+  );
+  for (const blocker of ["19041", "虚拟化", "NAT", "端口", "UAC", "计划任务", "摘要"]) {
+    assert.match(troubleshooting, new RegExp(blocker));
+  }
+  assert.match(readme, /安装到本地.*安装到 Linux 服务器/s);
   assert.match(policy, /远程 Linux/);
   assert.doesNotMatch(policy, /不支持远程 SSH/);
 });

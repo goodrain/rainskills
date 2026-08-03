@@ -56,7 +56,7 @@ bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh)
 - 管理 Rainbond 应用版本中心中的创建快照、发布、本地/云市场发布事件和快照回滚流程
 - 对 Rainbond 全栈应用进行低风险排障
 - 在部署结束后做交付验收
-- 选择私有化但尚无平台时，在当前 Linux、当前 macOS 或远程 Linux 服务器部署 Rainbond 单机版
+- 选择私有化但尚无平台时，在当前 Linux、当前 macOS、当前 Windows（预览）或远程 Linux 服务器部署 Rainbond 单机版
 
 ## 安装方式
 
@@ -66,18 +66,20 @@ bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh)
 - Skill 市场的 `npx skills add` 当前要求 Node.js 22.20.0 或更高版本
 - 直接运行 `npx rainskills` 推荐 Node.js 22 或 24，最低支持 Node.js 18
 - Node.js 18/20 已结束维护，安装器会警告但仍继续；Node.js 低于 18 请使用 CDN 安装方式
-- 本机可执行 `bash`、`curl`、`python3`；CDN 入口还需要 `tar`。远程 Linux 安装还需要系统 `ssh` 和 `scp`
+- macOS/Linux 本机可执行 `bash`、`curl`、`python3`；CDN 入口还需要 `tar`。远程 Linux 安装还需要系统 `ssh` 和 `scp`
 - 使用 Rainbond Cloud 时需要可登录账号；私有化新安装会先创建平台，再在浏览器完成初始化和授权
 
 ### 1. 一行命令安装（推荐）
 
-支持 macOS 和 Linux。Windows 作为控制端时需要可用的 Bash、Python 3 和 OpenSSH，Rainbond 只会安装到远程 Linux 服务器：
+支持 macOS、Linux 和 Windows。Windows 本地安装目前是 preview，也可以改选 Linux 服务器：
 
 ```bash
 npx --yes rainskills
 ```
 
 npm 包已经携带完整安装器和所有 skill，不会再次下载仓库 tarball。`npx` 保留终端交互，因此选择客户端、填写私有化地址和浏览器授权流程与原安装脚本完全一致。
+
+Windows 本地预览要求 Windows 10 build 19041+ 或 Windows 11 x64、4 核 CPU、8 GB 内存、50 GB 可用磁盘、已开启 CPU 虚拟化，并使用 Administrators 用户和 UAC。安装器会创建独立的 Rainbond WSL2 环境，首次下载可能较久且可能重启一次；下载会显示进度，重启后从已保存断点继续。Windows 登录后通过 `http://127.0.0.1:7070` 访问 Console。Windows 10/11 真机验收完成前不视为正式支持。
 
 常用参数可以直接追加：
 
@@ -176,9 +178,9 @@ AI 必须把 `argv` 数组作为参数传回同一个 `rainskills` 命令，不�
 - 独立验证 Rainbond 容器、K3s、`rbd-system` 组件和 Console
 - 自动执行 `npx rainskills resume --onboarding-id <id>`，继续浏览器授权
 
-平台安装器会先识别当前设备：Linux 可选择“当前设备（回车默认）”或“其他 Linux 服务器”；macOS 可选择“Linux 服务器（推荐）”或“当前 Mac”；Windows 不展示本机或 macOS，只要求提供 Linux 服务器。远程连接优先使用已有的 SSH Key；需要密码时由系统 SSH 在终端读取一次并复用连接，Rainskills 不会保存密码或私钥。
+平台安装器会先识别当前设备，并统一提供“安装到本地”和“安装到 Linux 服务器”。回车默认安装到本地；Windows 本地路径由固定安装器自动准备 WSL2，用户不需要输入 WSL 命令。远程连接优先使用已有的 SSH Key；需要密码时由系统 SSH 在终端读取一次并复用连接，Rainskills 不会保存密码或私钥。
 
-当前支持单机版，包括本机和远程 Linux 安装；不支持多节点、高可用、离线安装或自动清理已有容器和端口冲突。
+当前支持单机版，包括本机和远程 Linux 安装，以及 Windows 本地预览；不支持多节点、高可用、离线安装或自动清理已有容器和端口冲突。
 
 远程部署完成后，Rainskills 会从当前设备验证 SSH 地址、Rainbond 上报地址和远端主网卡地址，自动选择实际可访问的 Console。云服务器的内网地址不可达时会优先使用 SSH 公网地址；只有全部候选都失败时才询问公网 IP 或域名。
 
@@ -211,6 +213,8 @@ AI 应先把检测结果和系统变更展示给用户；用户明确同意后�
 - **本地 macOS / Linux 桌面**：在本机启动临时回调
   `http://127.0.0.1:<随机端口>/cli-callback`，自动打开 Rainbond 授权页；
   浏览器授权后直接回调，安装自动继续。
+- **Windows / WSL**：使用固定 PowerShell 浏览器桥接打开 Windows 浏览器；授权
+  结果仍由原安装进程接收，不需要复制 Token。
 - **SSH、容器或无桌面 Linux**：终端输出授权链接。使用能访问 Rainbond
   的电脑或手机打开链接并授权；浏览器最后跳到 `127.0.0.1` 后显示无法访问
   是正常现象。复制地址栏中的**完整回调 URL**，只粘贴到仍在等待的

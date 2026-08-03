@@ -1,6 +1,6 @@
 ---
 name: rainbond-platform-installer
-description: Install a single-node Rainbond platform when Rainskills private onboarding establishes that no reachable Rainbond exists. Use for installing Rainbond itself on the current Linux or macOS machine or on a remote Linux server, not for deploying applications to an existing Rainbond.
+description: Install a single-node Rainbond platform when Rainskills private onboarding establishes that no reachable Rainbond exists. Use for local Linux, macOS, Windows preview, or a remote Linux server, not for deploying applications to an existing Rainbond.
 ---
 
 # Rainbond Platform Installer
@@ -26,13 +26,15 @@ Do not use it to deploy an application to an existing Rainbond. Route those requ
 
 ## Interaction Rules
 
-- On Linux, offer the current device and another Linux server; pressing Enter selects the current device.
-- On macOS, offer remote Linux first and the current Mac second. State that OrbStack preparation can take longer.
-- On Windows, do not offer local Windows or macOS. Explain that Rainbond is not installed on Windows and ask only for a remote Linux SSH target.
+- On Linux and macOS, show `安装到本地` and `安装到 Linux 服务器`; pressing Enter selects local. State that local macOS uses OrbStack and can take longer.
+- On Windows, show `安装到本地` and `安装到 Linux 服务器`; pressing Enter selects local. Local Windows is a preview path backed by a dedicated WSL2 distribution and the fixed `local-windows` helper.
+- Do not ask the user to understand or enter WSL commands. Show the read-only checks first, then explain UAC, downloads, host networking, and a possible Windows reboot before requesting confirmation.
+- Let the fixed helper request UAC. If Windows must reboot, preserve the checkpoint and use only the verified resume task or exact printed resume command.
 - Remote Linux accepts an existing `user@host` value or SSH config alias. Keep the terminal attached while the helper invokes the system `ssh` client; OpenSSH may ask once for host-key confirmation and an SSH password, then Rainskills reuses that connection.
 - The SSH password is read only by the system `ssh` client and Rainskills will not save it. Never ask the user to provide passwords, private keys, JWTs, Tokens, or other credentials in chat.
 - For `--console-host`, accept an IP or DNS name, not a URL, port, path, credentials, or shell text. Pass it as one argv value; never concatenate a shell command.
 - Never stop occupied services, remove an existing Rainbond container, delete data, or bypass artifact verification.
+- Stop on unsupported Windows builds, disabled virtualization, non-NAT WSL networking, occupied managed ports, unknown managed tasks/distributions, or checksum failures. Report the concrete blocker; never work around it silently.
 - If interrupted, preserve the operation and use the exact resume command printed by the helper.
 - Keep successful output concise: deployment location, health, Console URL, and authorization handoff.
 

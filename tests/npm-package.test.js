@@ -61,11 +61,15 @@ test("package metadata defines a public, dependency-free npx command", () => {
   );
   assert.equal(
     manifest.scripts.test,
-    "npm run test:launcher && npm run test:marketplace && npm run test:platform && npm run test:package-upload && npm run test:package && npm run test:installer && npm run test:signal && npm run test:npx-pty"
+    "npm run test:launcher && npm run test:marketplace && npm run test:platform && npm run test:windows && npm run test:package-upload && npm run test:package && npm run test:installer && npm run test:signal && npm run test:npx-pty"
   );
   assert.equal(
     manifest.scripts["test:platform"],
     "node --test tests/platform-installer.test.js"
+  );
+  assert.equal(
+    manifest.scripts["test:windows"],
+    "node --test tests/windows-onboarding.test.js tests/windows-platform.test.js"
   );
 });
 
@@ -83,6 +87,17 @@ test("packed artifact contains the installer and all skills but no development f
   assert(filePaths.has("rainbond-platform-installer/agents/openai.yaml"));
   assert(filePaths.has("rainbond-platform-installer/references/installation-policy.json"));
   assert(filePaths.has("rainbond-platform-installer/references/installation-policy.md"));
+  for (const runtimeFile of [
+    "windows-onboarding.js",
+    "windows-auth.js",
+    "windows-browser.ps1",
+    "windows-client-config.js",
+    "windows-platform.js",
+    "windows-platform.ps1",
+    "wsl-bootstrap.sh",
+  ]) {
+    assert(filePaths.has(`rainbond-platform-installer/scripts/${runtimeFile}`), `${runtimeFile} is missing`);
+  }
   assert(filePaths.has("README.md"));
   assert(filePaths.has("LICENSE"));
   for (const skillName of skillNames) {
