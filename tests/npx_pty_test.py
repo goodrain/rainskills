@@ -66,6 +66,10 @@ printf 'RAINSKILLS_TTY stdin=%s stdout=%s stderr=%s\n' \
 exec /bin/bash "$@"
 """,
         )
+        write_executable(
+            bin_dir / "python3",
+            "#!/bin/sh\nexec /usr/bin/python3 \"$@\"\n",
+        )
         write_executable(bin_dir / "uname", "#!/bin/sh\nprintf 'Linux\\n'\n")
         write_executable(
             bin_dir / "curl",
