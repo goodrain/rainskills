@@ -57,6 +57,16 @@ const RESULT_KEYS = new Set([
   "status",
   "facts",
 ]);
+const HOST_PATH_PAYLOAD_KEYS = new Set([
+  "helper_path",
+  "bootstrap_path",
+  "recovery_root",
+  "recovery_entry",
+  "node_path",
+  "rootfs_path",
+  "distro_root",
+  "installer_path",
+]);
 
 function defaultRunner(command, args) {
   return spawnSync(command, args, {
@@ -79,6 +89,16 @@ function assertSuccessfulExecution(execution, label) {
     throw new Error(`${label}（退出码 ${status}）：${String(execution?.stderr || execution?.stdout || "").trim()}`);
   }
   return execution;
+}
+
+function translateWindowsPayloadPaths(payload, pathTranslator = (value) => value) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return payload;
+  return Object.fromEntries(Object.entries(payload).map(([key, value]) => [
+    key,
+    HOST_PATH_PAYLOAD_KEYS.has(key) && typeof value === "string" && value
+      ? pathTranslator(value)
+      : value,
+  ]));
 }
 
 function resolveWindowsUserSid(runner = defaultRunner, systemRoot = process.env.SystemRoot || "C:\\Windows") {
@@ -497,7 +517,9 @@ function evaluateWindowsDeployment(facts, policy) {
     blockers,
     location: "本地（Windows / WSL2）",
     consoleUrl: "http://127.0.0.1:7070",
-    controlConsoleUrl: "http://127.0.0.1:7070",
+    controlConsoleUrl: facts?.controlMode === "wsl"
+      ? `http://${facts.guestAddress}:7070`
+      : "http://127.0.0.1:7070",
   };
 }
 
@@ -612,6 +634,8 @@ function createWindowsPlatformAdapter({
   home = os.homedir(),
   powershell = "powershell.exe",
   helperPath = path.join(__dirname, "windows-platform.ps1"),
+  pathTranslator = (value) => value,
+  prepareResultForRead = null,
 } = {}) {
   if (!stateStore) throw new Error("Windows platform adapter 需要安全状态存储");
   if (!policy?.windows) throw new Error("Windows platform adapter 缺少版本化策略");
@@ -641,7 +665,7 @@ function createWindowsPlatformAdapter({
         windows: policy.windows,
       },
     };
-    if (action !== "Preflight") request.payload = payload || {};
+    if (action !== "Preflight") request.payload = translateWindowsPayloadPaths(payload || {}, pathTranslator);
     stateStore.atomicWriteJson(requestPath, request);
     const args = [
       "-NoProfile",
@@ -649,13 +673,13 @@ function createWindowsPlatformAdapter({
       "-ExecutionPolicy",
       "Bypass",
       "-File",
-      helperPath,
+      pathTranslator(helperPath),
       "-Action",
       action,
       "-RequestPath",
-      requestPath,
+      pathTranslator(requestPath),
       "-ResultPath",
-      resultPath,
+      pathTranslator(resultPath),
     ];
     const execution = await Promise.resolve(runner(powershell, args));
     if (execution?.error) throw new Error(`无法启动 Windows helper：${execution.error.message}`);
@@ -663,6 +687,7 @@ function createWindowsPlatformAdapter({
     if (status !== 0) {
       throw new Error(`Windows helper 执行失败（退出码 ${status}）：${String(execution?.stderr || "").trim()}`);
     }
+    if (prepareResultForRead) prepareResultForRead(resultPath);
     const result = stateStore.readProtectedJson(resultPath);
     return validateResult(result, { action, operationId, installationId, nonce });
   }
@@ -744,6 +769,7 @@ module.exports = {
   redactSensitiveText,
   resolveWindowsUserSid,
   selectManagedSubnet,
+  translateWindowsPayloadPaths,
   validateWindowsStageTransition,
   validateArtifactRedirect,
   verifyRecoveryBundle,

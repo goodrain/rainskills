@@ -175,6 +175,36 @@ test("Windows adapter sends only a fixed nonce-bound preflight request", async (
   }
 });
 
+test("Windows adapter translates only host filesystem payload paths for a WSL control shell", () => {
+  const { translateWindowsPayloadPaths } = require(windowsPlatformPath);
+  const seen = [];
+  const translated = translateWindowsPayloadPaths({
+    helper_path: "/home/user/package/windows-platform.ps1",
+    recovery_root: "/home/user/.rainbond/recovery-v1",
+    recovery_entry: "/home/user/.rainbond/recovery-v1/bin/rainskills.js",
+    node_path: "/usr/bin/node",
+    installer_path: "/home/user/.rainbond/rainbond-install.sh",
+    control_node_path: "/usr/bin/node",
+    control_recovery_entry: "/home/user/.rainbond/recovery-v1/bin/rainskills.js",
+    control_distro: "Ubuntu",
+  }, (value) => {
+    seen.push(value);
+    return `WIN:${value}`;
+  });
+
+  assert.deepEqual(seen, [
+    "/home/user/package/windows-platform.ps1",
+    "/home/user/.rainbond/recovery-v1",
+    "/home/user/.rainbond/recovery-v1/bin/rainskills.js",
+    "/usr/bin/node",
+    "/home/user/.rainbond/rainbond-install.sh",
+  ]);
+  assert.equal(translated.helper_path, "WIN:/home/user/package/windows-platform.ps1");
+  assert.equal(translated.control_node_path, "/usr/bin/node");
+  assert.equal(translated.control_recovery_entry, "/home/user/.rainbond/recovery-v1/bin/rainskills.js");
+  assert.equal(translated.control_distro, "Ubuntu");
+});
+
 test("Windows adapter rejects invalid identifiers, mismatched results, and command injection fields", async () => {
   const { createWindowsPlatformAdapter } = require(windowsPlatformPath);
   const invalid = createFixture();
@@ -454,6 +484,10 @@ test("PowerShell machine actions enforce UAC, signed WSL setup, protected tasks,
   assert.match(source, /RunLevel[\s\S]*Highest/);
   assert.match(source, /Start-Process[\s\S]*-Verb[\s\S]*RunAs/);
   assert.match(source, /Restart-Computer/);
+  assert.match(source, /control_mode[\s\S]*wsl/);
+  assert.match(source, /wslExecutable[\s\S]*wsl\.exe/);
+  assert.match(source, /New-ScheduledTaskAction[\s\S]*-Execute \$wslExecutable/);
+  assert.match(source, /--exec/);
   assert.doesNotMatch(source, /Invoke-Expression/);
 });
 
@@ -640,6 +674,21 @@ test("Windows delivery requires WSL and Windows-side health evidence", () => {
   assert.equal(passing.location, "本地（Windows / WSL2）");
   assert.equal(passing.consoleUrl, "http://127.0.0.1:7070");
   assert.equal(passing.controlConsoleUrl, "http://127.0.0.1:7070");
+
+  const wslControl = evaluateWindowsDeployment({
+    installationId: INSTALLATION_ID,
+    expectedInstallationId: INSTALLATION_ID,
+    controlMode: "wsl",
+    containerRunning: true,
+    nodeReady: true,
+    componentsReady: true,
+    wslConsoleReachable: true,
+    windowsConsoleReachable: true,
+    portsListening: [80, 443, 6060, 7070],
+    guestAddress: "172.31.253.2",
+  }, policy);
+  assert.equal(wslControl.consoleUrl, "http://127.0.0.1:7070");
+  assert.equal(wslControl.controlConsoleUrl, "http://172.31.253.2:7070");
 
   const failing = evaluateWindowsDeployment({
     installationId: INSTALLATION_ID,

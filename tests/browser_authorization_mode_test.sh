@@ -136,6 +136,80 @@ assert_mode "local Linux Wayland opens its browser" local-browser \
 assert_mode "headless Linux uses manual copy" manual-copy \
   Linux 0 1 0
 
+assert_equal "WSL opens the Windows browser" windows-browser "$(
+  (
+    unset RAINSKILLS_NO_BROWSER SSH_CONNECTION SSH_CLIENT SSH_TTY container DISPLAY WAYLAND_DISPLAY
+    NO_BROWSER=0
+    WSL_INTEROP=/run/WSL/1_interop
+    WSL_DISTRO_NAME=Ubuntu
+    uname() {
+      if [[ "${1:-}" == "-r" ]]; then
+        printf '6.6.87.2-microsoft-standard-WSL2\n'
+      else
+        printf 'Linux\n'
+      fi
+    }
+    command() {
+      if [[ "${1:-}" == "-v" && ( "${2:-}" == "powershell.exe" || "${2:-}" == "wslpath" ) ]]; then
+        return 0
+      fi
+      builtin command "$@"
+    }
+    is_container_environment() { return 1; }
+    browser_authorization_mode
+  )
+)"
+
+WSL_BROWSER_CAPTURE="$TEST_ROOT/wsl-browser-argv"
+(
+  WSL_INTEROP=/run/WSL/1_interop
+  WSL_DISTRO_NAME=Ubuntu
+  uname() {
+    if [[ "${1:-}" == "-r" ]]; then
+      printf '6.6.87.2-microsoft-standard-WSL2\n'
+    else
+      printf 'Linux\n'
+    fi
+  }
+  wslpath() {
+    [[ "${1:-}" == "-w" ]] || return 1
+    printf 'C:\\rainskills\\windows-browser.ps1\n'
+  }
+  powershell.exe() {
+    printf '%s\n' "$@" >"$WSL_BROWSER_CAPTURE"
+  }
+  export WSL_BROWSER_CAPTURE
+  open_browser 'https://run.rainbond.com/#/cli-auth?state=a&callback=b'
+)
+assert_equal "WSL browser executable uses fixed helper" "C:\\rainskills\\windows-browser.ps1" "$(sed -n '6p' "$WSL_BROWSER_CAPTURE")"
+assert_equal "WSL browser URL remains one argument" 'https://run.rainbond.com/#/cli-auth?state=a&callback=b' "$(sed -n '8p' "$WSL_BROWSER_CAPTURE")"
+
+WSL_CHECKPOINT_HOME="$TEST_ROOT/wsl-home"
+mkdir -p "$WSL_CHECKPOINT_HOME"
+(
+  HOME="$WSL_CHECKPOINT_HOME"
+  TARGET=codex
+  WSL_INTEROP=/run/WSL/1_interop
+  WSL_DISTRO_NAME=Ubuntu
+  uname() {
+    if [[ "${1:-}" == "-r" ]]; then
+      printf '6.6.87.2-microsoft-standard-WSL2\n'
+    else
+      printf 'Linux\n'
+    fi
+  }
+  create_rainskills_onboarding_checkpoint >/dev/null
+)
+python3 - "$WSL_CHECKPOINT_HOME/.rainbond/rainskills-onboarding-v1.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as checkpoint_file:
+    checkpoint = json.load(checkpoint_file)
+assert checkpoint["control_mode"] == "wsl"
+assert checkpoint["control_distro"] == "Ubuntu"
+PY
+
 TEST_JWT="header.payload.signature"
 assert_equal "matching callback state" "$TEST_JWT" "$(
   extract_token_from_paste \

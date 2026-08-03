@@ -50,7 +50,10 @@ test("launcher routes platform and resume commands to the bundled helper", () =>
 });
 
 test("platform resume selects native Node or POSIX Bash from onboarding control mode", () => {
-  const { resumeInvocationForOnboarding } = require(platformInstallerPath);
+  const {
+    controlHostPlatform,
+    resumeInvocationForOnboarding,
+  } = require(platformInstallerPath);
   const windowsOnboardingPath = path.join(
     repoRoot,
     "rainbond-platform-installer",
@@ -91,6 +94,45 @@ test("platform resume selects native Node or POSIX Bash from onboarding control 
       "--allow-insecure-http",
     ],
   });
+  assert.equal(controlHostPlatform({ control_mode: "wsl", control_distro: "Ubuntu" }, "linux"), "win32");
+  assert.equal(controlHostPlatform({ control_mode: "posix" }, "linux"), "linux");
+  assert.equal(controlHostPlatform({}, "darwin"), "darwin");
+
+  assert.deepEqual(resumeInvocationForOnboarding({
+    ...base,
+    control_mode: "wsl",
+    control_distro: "Ubuntu",
+    console_url: "http://172.31.253.2:7070",
+    display_console_url: "http://127.0.0.1:7070",
+  }, "/fake/node"), {
+    executable: "bash",
+    args: [
+      installScriptPath,
+      "codex",
+      "--self-hosted",
+      "--rainbond-url",
+      "http://172.31.253.2:7070",
+      "--allow-insecure-http",
+    ],
+  });
+});
+
+test("WSL control paths bridge to Windows without parsing shell text", () => {
+  const {
+    normalizeWindowsExecutableForControl,
+    translateWslPathToWindows,
+  } = require(platformInstallerPath);
+  const calls = [];
+  const translated = translateWslPathToWindows("/home/user/.rainbond/state.json", (command, args) => {
+    calls.push({ command, args });
+    return { status: 0, stdout: "C:\\Users\\user\\state.json\r\n", stderr: "" };
+  });
+
+  assert.equal(translated, "C:\\Users\\user\\state.json");
+  assert.deepEqual(calls, [{ command: "wslpath", args: ["-w", "/home/user/.rainbond/state.json"] }]);
+  assert.equal(normalizeWindowsExecutableForControl("C:\\Windows\\System32\\whoami.exe", "wsl"), "whoami.exe");
+  assert.equal(normalizeWindowsExecutableForControl("powershell.exe", "wsl"), "powershell.exe");
+  assert.equal(normalizeWindowsExecutableForControl("C:\\Windows\\System32\\whoami.exe", "windows-native"), "C:\\Windows\\System32\\whoami.exe");
 });
 
 test("platform CLI accepts an explicit Console host without accepting a URL", () => {

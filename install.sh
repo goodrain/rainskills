@@ -808,7 +808,10 @@ show_self_hosted_install_hint() {
 
 create_rainskills_onboarding_checkpoint() {
   ensure_python3
-  python3 - "$HOME" "$SCRIPT_DIR" "$TARGET" <<'PY'
+  local control_mode control_distro
+  control_mode="$(rainskills_control_mode)"
+  control_distro="$(rainskills_control_distro)"
+  python3 - "$HOME" "$SCRIPT_DIR" "$TARGET" "$control_mode" "$control_distro" <<'PY'
 import json
 import os
 import stat
@@ -817,7 +820,14 @@ import tempfile
 import uuid
 from datetime import datetime, timezone
 
-home, script_dir, target = sys.argv[1:]
+home, script_dir, target, control_mode, control_distro = sys.argv[1:]
+if control_mode not in {"posix", "wsl"}:
+    raise SystemExit("不支持的控制端模式：{}".format(control_mode))
+if control_mode == "wsl":
+    if not control_distro or any(ord(character) < 32 or ord(character) == 127 for character in control_distro):
+        raise SystemExit("WSL 发行版名称无效")
+else:
+    control_distro = None
 state_dir = os.path.join(home, ".rainbond")
 state_path = os.path.join(state_dir, "rainskills-onboarding-v1.json")
 
@@ -855,6 +865,8 @@ state = {
     "stage": "awaiting-platform",
     "target": target,
     "deployment_mode": "self-hosted",
+    "control_mode": control_mode,
+    "control_distro": control_distro,
     "platform_state_path": platform_state_path,
     "console_url": None,
 }
@@ -1035,6 +1047,42 @@ is_container_environment() {
   return 1
 }
 
+is_wsl_environment() {
+  local kernel_release
+  [[ "$(uname -s 2>/dev/null)" == "Linux" ]] || return 1
+  kernel_release="$(uname -r 2>/dev/null || true)"
+  case "$kernel_release" in
+    *[Mm][Ii][Cc][Rr][Oo][Ss][Oo][Ff][Tt]*|*[Ww][Ss][Ll]*) ;;
+    *) return 1 ;;
+  esac
+  [[ -n "${WSL_INTEROP:-}" || -n "${WSL_DISTRO_NAME:-}" ]]
+}
+
+validated_wsl_distro_name() {
+  local distro="${WSL_DISTRO_NAME:-}"
+  [[ -n "$distro" && "$distro" != *'"'* ]] || return 1
+  if printf '%s' "$distro" | LC_ALL=C grep -q '[[:cntrl:]]'; then
+    return 1
+  fi
+  printf '%s\n' "$distro"
+}
+
+rainskills_control_mode() {
+  if is_wsl_environment; then
+    validated_wsl_distro_name >/dev/null \
+      || die "无法识别当前 WSL 发行版，请从原始 Windows 终端重新执行 npx rainskills。"
+    printf 'wsl\n'
+    return 0
+  fi
+  printf 'posix\n'
+}
+
+rainskills_control_distro() {
+  if is_wsl_environment; then
+    validated_wsl_distro_name
+  fi
+}
+
 browser_authorization_mode() {
   if [[ "$NO_BROWSER" -eq 1 || "${RAINSKILLS_NO_BROWSER:-}" == "1" ]]; then
     printf 'manual-copy\n'
@@ -1042,6 +1090,14 @@ browser_authorization_mode() {
   fi
   if is_ssh_session || is_container_environment; then
     printf 'manual-copy\n'
+    return 0
+  fi
+
+  if is_wsl_environment \
+    && command -v powershell.exe >/dev/null 2>&1 \
+    && command -v wslpath >/dev/null 2>&1 \
+    && [[ -f "$SCRIPT_DIR/rainbond-platform-installer/scripts/windows-browser.ps1" ]]; then
+    printf 'windows-browser\n'
     return 0
   fi
 
@@ -1065,11 +1121,19 @@ browser_authorization_mode() {
 }
 
 can_open_browser() {
-  [[ "$(browser_authorization_mode)" == "local-browser" ]]
+  [[ "$(browser_authorization_mode)" != "manual-copy" ]]
 }
 
 open_browser() {
   local url="$1"
+  local mode windows_helper
+  mode="$(browser_authorization_mode)"
+  if [[ "$mode" == "windows-browser" ]]; then
+    windows_helper="$(wslpath -w "$SCRIPT_DIR/rainbond-platform-installer/scripts/windows-browser.ps1" | tr -d '\r')"
+    powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass \
+      -File "$windows_helper" -Url "$url" >/dev/null 2>&1
+    return $?
+  fi
   if [[ "$(uname -s)" == "Darwin" ]] && command -v open >/dev/null 2>&1; then
     open "$url" >/dev/null 2>&1 || true
     return 0

@@ -254,6 +254,7 @@ function Invoke-Preflight($Request) {
     buildNumber = [int]$operatingSystem.BuildNumber
     architecture = $architecture
     currentUserSid = $identity.User.Value
+    localAppData = [Environment]::GetFolderPath("LocalApplicationData")
     isAdministrator = [bool]$isAdministrator
     uacEnabled = [bool]([int]$uacValue -eq 1)
     cpuCores = [int]$computer.NumberOfLogicalProcessors
@@ -364,6 +365,22 @@ function Invoke-InstallMachineBundle($Request) {
   $recoveryEntry = [string](Get-PropertyValue $payload "recovery_entry")
   $bootstrapSource = [string](Get-PropertyValue $payload "bootstrap_path")
   $bootstrapDigest = [string](Get-PropertyValue $payload "bootstrap_sha256")
+  $controlMode = [string](Get-PropertyValue $payload "control_mode" "windows-native")
+  $controlDistro = Get-PropertyValue $payload "control_distro"
+  $controlNodePath = Get-PropertyValue $payload "control_node_path"
+  $controlRecoveryEntry = Get-PropertyValue $payload "control_recovery_entry"
+  if ($controlMode -notin @("windows-native", "wsl")) { throw "Unsupported control_mode" }
+  if ($controlMode -eq "wsl") {
+    foreach ($value in @($controlDistro, $controlNodePath, $controlRecoveryEntry)) {
+      if ([string]::IsNullOrWhiteSpace([string]$value) -or [string]$value -match '[\x00-\x1f\x7f"]') {
+        throw "Invalid WSL control path or distro"
+      }
+    }
+    if (-not ([string]$controlNodePath).StartsWith("/") -or
+        -not ([string]$controlRecoveryEntry).StartsWith("/")) {
+      throw "WSL control paths must be absolute Linux paths"
+    }
+  }
   if (-not (Test-Path -LiteralPath $recoveryRoot -PathType Container) -or
       -not (Test-Path -LiteralPath $nodePath -PathType Leaf) -or
       -not (Test-Path -LiteralPath $recoveryEntry -PathType Leaf)) {
@@ -401,6 +418,10 @@ function Invoke-InstallMachineBundle($Request) {
     recovery_manifest_sha256 = $recoveryManifestDigest
     recovery_entry = $recoveryEntry
     node_path = $nodePath
+    control_mode = $controlMode
+    control_distro = if ($controlMode -eq "wsl") { [string]$controlDistro } else { $null }
+    control_node_path = if ($controlMode -eq "wsl") { [string]$controlNodePath } else { $null }
+    control_recovery_entry = if ($controlMode -eq "wsl") { [string]$controlRecoveryEntry } else { $null }
   }
   [IO.File]::WriteAllText($manifestPath, (($manifest | ConvertTo-Json -Depth 6) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
   $lease = [ordered]@{
@@ -935,9 +956,17 @@ function Invoke-RegisterResume($Request) {
   $machinePrincipal = New-ScheduledTaskPrincipal -UserId $Request.user_sid -LogonType Interactive -RunLevel Highest
   Register-VerifiedTask $names.machine $machineAction $machineTrigger $machinePrincipal
 
-  $userArguments = '"' + $manifest.recovery_entry + '" platform install --onboarding-id ' +
-    $Request.operation_id + ' --target local-windows --yes'
-  $userAction = New-ScheduledTaskAction -Execute $manifest.node_path -Argument $userArguments
+  if ($manifest.control_mode -eq "wsl") {
+    $wslExecutable = "$env:SystemRoot\System32\wsl.exe"
+    $userArguments = '-d "' + $manifest.control_distro + '" --exec "' + $manifest.control_node_path +
+      '" "' + $manifest.control_recovery_entry + '" platform install --onboarding-id ' +
+      $Request.operation_id + ' --target local-windows --yes'
+    $userAction = New-ScheduledTaskAction -Execute $wslExecutable -Argument $userArguments
+  } else {
+    $userArguments = '"' + $manifest.recovery_entry + '" platform install --onboarding-id ' +
+      $Request.operation_id + ' --target local-windows --yes'
+    $userAction = New-ScheduledTaskAction -Execute $manifest.node_path -Argument $userArguments
+  }
   $userTrigger = New-ScheduledTaskTrigger -AtLogOn -User $Request.user_sid
   $userTrigger.Delay = "PT45S"
   $userPrincipal = New-ScheduledTaskPrincipal -UserId $Request.user_sid -LogonType Interactive

@@ -198,6 +198,36 @@ function runCommand(command, args, options = {}) {
   });
 }
 
+function normalizeWindowsExecutableForControl(command, controlMode) {
+  if (controlMode !== "wsl") return command;
+  if (path.win32.basename(String(command)).toLowerCase() === "whoami.exe") return "whoami.exe";
+  return command;
+}
+
+function translateWslPathToWindows(filePath, runner = runCommand) {
+  const value = String(filePath || "");
+  if (/^[A-Za-z]:[\\/]/.test(value) || value.startsWith("\\\\")) return value;
+  if (!path.posix.isAbsolute(value)) throw new Error(`WSL 路径必须是绝对路径：${value}`);
+  const execution = runner("wslpath", ["-w", value]);
+  if (execution?.error || execution?.status !== 0) {
+    throw new Error(`无法把 WSL 路径转换为 Windows 路径：${String(execution?.stderr || execution?.error?.message || "").trim()}`);
+  }
+  const translated = String(execution.stdout || "").trim().replace(/\r/g, "");
+  if (!path.win32.isAbsolute(translated) && !translated.startsWith("\\\\")) {
+    throw new Error(`wslpath 返回了无效的 Windows 路径：${translated}`);
+  }
+  return translated;
+}
+
+function prepareWslHelperResult(filePath) {
+  const info = fs.lstatSync(filePath);
+  if (!info.isFile() || info.isSymbolicLink()) throw new Error(`Windows helper 结果不是安全的普通文件：${filePath}`);
+  if (typeof process.getuid === "function" && info.uid !== process.getuid()) {
+    throw new Error(`Windows helper 结果不属于当前 WSL 用户：${filePath}`);
+  }
+  fs.chmodSync(filePath, 0o600);
+}
+
 function createSshTempDirectory() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-ssh-"));
   fs.chmodSync(directory, 0o700);
@@ -319,6 +349,13 @@ function targetChoicesForPlatform(platform) {
     ];
   }
   return [];
+}
+
+function controlHostPlatform(onboarding, fallbackPlatform = process.platform) {
+  if (onboarding?.control_mode === "windows-native" || onboarding?.control_mode === "wsl") {
+    return "win32";
+  }
+  return fallbackPlatform;
 }
 
 function normalizeRemoteTarget(host, port = 22) {
@@ -1394,6 +1431,10 @@ async function prepareWindowsWsl({ adapter, onboarding, options, paths, state })
       recovery_manifest_sha256: sha256File(recoveryManifestPath),
       recovery_entry: recoveryEntry,
       node_path: process.execPath,
+      control_mode: onboarding.control_mode || "windows-native",
+      control_distro: onboarding.control_mode === "wsl" ? onboarding.control_distro : null,
+      control_recovery_entry: onboarding.control_mode === "wsl" ? recoveryEntry : null,
+      control_node_path: onboarding.control_mode === "wsl" ? process.execPath : null,
     },
   });
   const enabled = await adapter.enableWsl({ ...common, payload: { machine_bundle_verified: true } });
@@ -1502,8 +1543,10 @@ async function provisionWindowsDistroAndNetwork({ adapter, options, paths, state
     appendEvent(paths, state, "importing-distro", "started");
   }
 
-  const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local");
-  const distroRoot = path.join(localAppData, "RainSkills", "Distros", installationId);
+  const localAppData = state.windows_local_app_data
+    || process.env.LOCALAPPDATA
+    || path.win32.join(os.homedir(), "AppData", "Local");
+  const distroRoot = path.win32.join(localAppData, "RainSkills", "Distros", installationId);
   let imported = null;
   if (state.stage === "importing-distro") {
     imported = await adapter.importDistro({
@@ -1645,6 +1688,7 @@ async function installWindowsRainbond({ adapter, onboarding, options, paths, sta
   const delivery = evaluateWindowsDeployment({
     ...verified.facts,
     expectedInstallationId: installationId,
+    controlMode: onboarding.control_mode || "windows-native",
   }, POLICY);
   if (!delivery.ok) throw new Error(`Rainbond 双侧验证未通过：${delivery.blockers.join("；")}`);
   validateWindowsStageTransition({
@@ -1665,6 +1709,7 @@ async function installWindowsRainbond({ adapter, onboarding, options, paths, sta
     componentsReady: true,
     location: delivery.location,
     guestAddress: verified.facts.guestAddress,
+    controlConsoleUrl: delivery.controlConsoleUrl,
   };
   await completePlatform(onboarding, state, paths, verification, options.noResume);
   await adapter.finalize({ ...common, payload: { status: "success" } });
@@ -1719,17 +1764,20 @@ async function runResume(onboardingId) {
 }
 
 async function completePlatform(onboarding, state, paths, verification, noResume) {
+  const controlConsoleUrl = verification.controlConsoleUrl || verification.consoleUrl;
   state = updateState(paths.state, state, {
     stage: "platform-ready",
     status: "completed",
     console_url: verification.consoleUrl,
+    control_console_url: controlConsoleUrl,
     verification,
   });
   appendEvent(paths, state, "platform-ready", "completed");
   onboarding = updateOnboarding(onboarding, {
     stage: "platform-ready",
     platform_state_path: paths.state,
-    console_url: verification.consoleUrl,
+    console_url: controlConsoleUrl,
+    display_console_url: verification.consoleUrl,
   });
   activeOperation = null;
 
@@ -1768,7 +1816,7 @@ async function runInstallOperation(options) {
     sshPort: state.ssh_port,
   } : null;
   const target = await selectInstallTarget({
-    platform: process.platform,
+    platform: controlHostPlatform(onboarding),
     options,
     savedTarget,
   });
@@ -1792,12 +1840,22 @@ async function runInstallOperation(options) {
   activeOperation.state = state;
 
   const isWindowsLocal = target.kind === "local-windows";
+  const controlMode = onboarding.control_mode || (process.platform === "win32" ? "windows-native" : "posix");
+  const windowsRunner = (command, args) => runCommand(
+    normalizeWindowsExecutableForControl(command, controlMode),
+    args,
+    { timeout: 30 * 60 * 1000 }
+  );
   const windowsAdapter = isWindowsLocal
     ? createWindowsPlatformAdapter({
-      runner: (command, args) => runCommand(command, args, { timeout: 30 * 60 * 1000 }),
+      runner: windowsRunner,
       stateStore: secureStateStore,
       policy: POLICY,
-      userSid: resolveWindowsUserSid(runCommand),
+      userSid: resolveWindowsUserSid(windowsRunner),
+      pathTranslator: controlMode === "wsl"
+        ? (filePath) => translateWslPathToWindows(filePath, runCommand)
+        : (filePath) => filePath,
+      prepareResultForRead: controlMode === "wsl" ? prepareWslHelperResult : null,
     })
     : null;
   if (isWindowsLocal && state.stage === "enabling-wsl") {
@@ -1996,6 +2054,7 @@ async function runInstallOperation(options) {
     status: "waiting_user",
     proposed_effects: assessment.effects,
     windows_subnet: isWindowsLocal ? facts.availableSubnet : state.windows_subnet,
+    windows_local_app_data: isWindowsLocal ? facts.localAppData : state.windows_local_app_data,
   });
   appendEvent(paths, state, "awaiting-confirmation", "waiting_user");
   if (!(await confirmInstall(options.yes))) {
@@ -2195,12 +2254,14 @@ module.exports = {
   atomicWriteJson,
   buildRemoteConsoleCandidates,
   closeSshSession,
+  controlHostPlatform,
   establishSshSession,
   evaluatePreflight,
   extractConsoleUrl,
   inspectRemoteSystem,
   normalizeConsoleHost,
   normalizeRemoteTarget,
+  normalizeWindowsExecutableForControl,
   parseArgs,
   prepareRemoteInstaller,
   readOnboardingState,
@@ -2213,6 +2274,7 @@ module.exports = {
   selectReachableConsole,
   selectRemoteInstallationEip,
   targetChoicesForPlatform,
+  translateWslPathToWindows,
   verifyRemoteDeployment,
   verifyRemoteRainbond,
 };
