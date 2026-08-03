@@ -93,6 +93,7 @@ test("packed artifact contains the installer and all skills but no development f
   assert(filePaths.has("rainbond-platform-installer/references/installation-policy.json"));
   assert(filePaths.has("rainbond-platform-installer/references/installation-policy.md"));
   for (const runtimeFile of [
+    "browser-callback.py",
     "windows-onboarding.js",
     "windows-auth.js",
     "windows-browser.ps1",

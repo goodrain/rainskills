@@ -32,8 +32,10 @@ function Assert-PathInsideRoot([string]$Candidate, [string]$Root) {
 }
 
 function Convert-IdentityToSid($IdentityReference) {
-  if ([string]$IdentityReference -match "^S-\d-") { return [string]$IdentityReference }
-  return $IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
+  $value = [string]$IdentityReference
+  if ($value -match "^S-\d-") { return $value }
+  $account = [Security.Principal.NTAccount]::new($value)
+  return $account.Translate([Security.Principal.SecurityIdentifier]).Value
 }
 
 function Get-StateAcl([string]$PathValue, [string]$Kind) {
