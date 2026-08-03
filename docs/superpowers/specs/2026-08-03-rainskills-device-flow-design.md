@@ -168,12 +168,12 @@ When approved, Console atomically loads the approving user, issues a scoped JWT 
 {
   "access_token": "rainbond-jwt",
   "token_type": "Bearer",
-  "expires_in": 2592000,
+  "expires_in": 31536000,
   "scope": "mcp"
 }
 ```
 
-The exact `expires_in` value is derived from a configurable MCP JWT lifetime, defaulting to 30 days, rather than duplicated as a magic constant.
+The exact `expires_in` value is derived from a configurable MCP JWT lifetime, defaulting to 365 days, rather than duplicated as a magic constant. Expiration requires a new interactive Device Flow authorization; it does not fall back to a general Console token.
 
 The issued JWT contains `token_use=mcp`, `scope=mcp`, `aud=rainbond-mcp`, and the approving user's signed `enterprise_id`. General Console authentication rejects `token_use=mcp`; MCP authentication accepts it only when all scoped claims match. Existing unscoped JWTs remain accepted by MCP for backward compatibility. Rainskills reads the signed enterprise claim for installation reporting and only falls back to `/console/users/details` for legacy unscoped tokens.
 
