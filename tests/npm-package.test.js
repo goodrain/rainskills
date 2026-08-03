@@ -36,7 +36,7 @@ function packPackage(destination) {
   };
 }
 
-test("package metadata defines a public, dependency-free npx command", () => {
+test("package metadata defines a public, runtime-dependency-free npx command", () => {
   const manifest = JSON.parse(
     fs.readFileSync(path.join(repoRoot, "package.json"), "utf8")
   );
@@ -53,7 +53,11 @@ test("package metadata defines a public, dependency-free npx command", () => {
   assert.equal(manifest.publishConfig.access, "public");
   assert.deepEqual(manifest.os, ["darwin", "linux", "win32"]);
   assert.equal(manifest.dependencies, undefined);
-  assert.equal(manifest.devDependencies, undefined);
+  assert.equal(manifest.devDependencies.esbuild, "0.25.8");
+  assert.equal(manifest.devDependencies["@modelcontextprotocol/sdk"], "1.30.0");
+  assert.deepEqual(manifest.pi, {
+    skills: ["./marketplace/rainskills/skills"],
+  });
   assert.equal(manifest.scripts.postinstall, undefined);
   assert.equal(
     manifest.scripts["test:package-upload"],
@@ -61,7 +65,7 @@ test("package metadata defines a public, dependency-free npx command", () => {
   );
   assert.equal(
     manifest.scripts.test,
-    "npm run test:launcher && npm run test:marketplace && npm run test:platform && npm run test:windows && npm run test:package-upload && npm run test:package && npm run test:installer && npm run test:signal && npm run test:npx-pty"
+    "npm run test:launcher && npm run test:marketplace && npm run test:pi && npm run test:platform && npm run test:windows && npm run test:package-upload && npm run test:package && npm run test:installer && npm run test:signal && npm run test:npx-pty"
   );
   assert.equal(
     manifest.scripts["test:platform"],
@@ -83,6 +87,7 @@ test("packed artifact contains the installer and all skills but no development f
   assert(filePaths.has("agents/openai.yaml"));
   assert(filePaths.has("bin/rainskills.js"));
   assert(filePaths.has("install.sh"));
+  assert(filePaths.has("pi/rainskills-mcp.ts"));
   assert(filePaths.has("rainbond-platform-installer/scripts/platform-installer.js"));
   assert(filePaths.has("rainbond-platform-installer/agents/openai.yaml"));
   assert(filePaths.has("rainbond-platform-installer/references/installation-policy.json"));

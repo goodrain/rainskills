@@ -1,0 +1,33 @@
+{
+  "name": "goodrain",
+  "owner": {
+    "name": "Goodrain",
+    "url": "https://www.rainbond.com"
+  },
+  "description": "Goodrain AI development tools",
+  "plugins": [
+    {
+      "name": "rainskills",
+      "displayName": "Rainskills",
+      "source": "./marketplace/rainskills",
+      "description": "Install and initialize the complete Rainbond skill suite as one product.",
+      "author": {
+        "name": "Goodrain",
+        "url": "https://www.rainbond.com"
+      },
+      "homepage": "https://github.com/goodrain/rainskills#readme",
+      "repository": "https://github.com/goodrain/rainskills",
+      "license": "Apache-2.0",
+      "keywords": [
+        "rainbond",
+        "codex",
+        "claude-code",
+        "openclaw",
+        "pi-agent",
+        "skills",
+        "installer"
+      ],
+      "category": "development"
+    }
+  ]
+}

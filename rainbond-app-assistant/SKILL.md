@@ -81,9 +81,9 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
     # 或：bash ~/.rainbond/skills/install.sh refresh
     ```
 
-    成功后必须提醒用户**重启 Claude Code 或 Codex**（MCP 客户端在进程启动时一次性
-    读取 `RAINBOND_JWT`，文件刷新不会自动透传到运行中的客户端），用户重启完成后再让其重新
-    触发同一指令。本轮不要自动重试同一个 MCP 工具调用。
+    成功后按安装器输出执行客户端恢复动作：Codex / Claude Code 重启，Pi Agent 执行
+    `/reload`；OpenClaw 当前 CLI 使用安装器触发 MCP 热加载，独立 Gateway / Agent 进程需重新加载配置或重启。恢复完成后再让用户重新触发同一指令，
+    本轮不要自动重试同一个 MCP 工具调用。
 
   - 否则视为首次安装，给完整安装命令：
 
@@ -91,7 +91,7 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
     bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh)
     ```
 
-    安装脚本会配置 MCP server、保存 JWT、并验证 `/console/mcp/query` 可用。
+    安装脚本会配置 MCP server、保存 JWT，并验证当前客户端的 RainSkills 专用 MCP 地址可用。
     配置完成后重新触发同一指令即可。
 
   例外：用户在同一会话里已经成功用过任意 `rainbond_*` 工具，则视为 preflight 已通过，不必每轮重探。
@@ -100,9 +100,9 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
 
   当用户的请求本身是"帮我把 rainskills / Rainbond MCP 装上"或等价表达（含 `github.com/goodrain/rainskills` URL）时，**禁止**走以下旁路：
 
-  - 手工 `git clone` 后复制目录到 `~/.claude/skills` / `~/.codex/skills`
+  - 手工 `git clone` 后只复制部分 `rainbond-*` Skill
   - 手工编写 `~/.rainbond/mcp.env`、JWT、登录回调
-  - 手工修改 `~/.claude.json` / `~/.codex/config.toml` 注册 MCP server
+  - 手工修改任一客户端配置来注册 MCP server
 
   必须给用户一行可直接复制的命令，由仓库内 `install.sh` 接管交互式登录、JWT 获取、MCP 注册和验证：
 
@@ -113,7 +113,7 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
   如果用户当前会话所在仓库就是 `rainbond-skills` 本身，可建议 `./install.sh`。
   如果用户明确要求非默认仓库位置，告诉他用环境变量 `RAINBOND_SKILLS_HOME=<path>` 前置。
 
-  说明给用户：脚本会自动克隆仓库到 `~/.rainbond/skills`、引导浏览器登录、写 `~/.rainbond/mcp.env`、注册 Codex / Claude Code 的 MCP，并验证 `/console/mcp/query`。不需要 AI 代办其中任何一步。
+  说明给用户：脚本会安装全部独立 Skill、引导浏览器登录、写 `~/.rainbond/mcp.env`、为 Codex / Claude Code / OpenClaw / Pi Agent 配置对应 MCP，并验证专用地址。不需要 AI 手工配置其中任何一步。
 
   ## 硬规则
 

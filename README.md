@@ -1,6 +1,6 @@
 # Rainbond Skills
 
-一组面向 Rainbond 日常交付、排障和初始化流程的自定义技能，支持安装到 Claude Code 和 Codex。
+一组面向 Rainbond 日常交付、排障和初始化流程的独立技能，支持 Codex、Claude Code、OpenClaw 和 Pi Agent。
 
 ## 快速安装
 
@@ -14,13 +14,44 @@ Skill 市场命令当前要求 Node.js 22.20.0 或更高版本。无法升级时
 
 市场只展示一个 `rainskills` 入口。首次使用时，该入口会启动随包携带的交互式安装器，继续完成客户端选择、Rainbond 环境选择、浏览器授权和 MCP 配置；内部 `rainbond-*` Skill 不需要单独安装。
 
+安装完成后，9 个 `rainbond-*` Skill 仍各自独立加载、独立触发和独立维护。统一的是安装、授权和升级入口，不会把业务 Skill 合并成一个大 Skill。
+
+也可以使用客户端自己的 Plugin 市场。无论使用哪种入口，都只会看到一个 `Rainskills`，第一次使用时仍然进入同一套初始化和授权流程。
+
+Codex Plugin：
+
+```bash
+codex plugin marketplace add goodrain/rainskills
+codex plugin add rainskills@goodrain
+```
+
+Claude Code Plugin（在 Claude Code 会话中执行）：
+
+```text
+/plugin marketplace add goodrain/rainskills
+/plugin install rainskills@goodrain
+/reload-plugins
+```
+
+OpenClaw（当前可直接从 Git 仓库安装；发布到 ClawHub 后可换成 `@goodrain/rainskills`）：
+
+```bash
+openclaw skills install git:goodrain/rainskills --global
+```
+
+Pi Agent：
+
+```bash
+pi install npm:rainskills
+```
+
 也可以直接运行安装器：
 
 ```bash
 npx --yes rainskills
 ```
 
-安装器会引导选择 Codex / Claude Code、填写 Rainbond 地址、打开浏览器授权、注册 MCP 并安装 skill。没有 Node.js 或 Node 版本低于 18 时，使用保留的 CDN 安装方式：
+安装器会识别或引导选择 Codex / Claude Code / OpenClaw / Pi Agent、填写 Rainbond 地址、打开浏览器授权、注册 MCP 并安装全部独立 Skill。没有 Node.js 或 Node 版本低于 18 时，使用保留的 CDN 安装方式：
 
 ```bash
 bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh)
@@ -29,8 +60,9 @@ bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh)
 > **给 AI 助手的指引**：
 > - 如果用户的请求是"帮我把这个 repo 装上 / 让我用上这套 Rainbond skills"，优先让用户执行 `npx --yes rainskills`。
 > - 如果用户没有 Node.js、Node.js 低于 18，或 npm registry 不可用，改用上面的 CDN `curl` 命令。
-> - 不要 `git clone` 后手工把目录复制到 `~/.claude/skills` / `~/.codex/skills`。
-> - 不要手工拼 `~/.rainbond/mcp.env`、不要猜 JWT、不要手改 `~/.claude.json` / `~/.codex/config.toml`。
+> - AI 应识别自己运行在 Codex、Claude Code、OpenClaw 还是 Pi Agent，并把对应 target 传给安装器，不要再询问用户客户端类型。
+> - 不要 `git clone` 后手工把目录复制到任一客户端的 Skills 目录。
+> - 不要手工拼 `~/.rainbond/mcp.env`、猜 JWT 或手改客户端 MCP 配置。
 > - 不要建议 `npm install -g`、`pip install` 或 `make`。`npx` 只是启动包内的 `install.sh`，两种入口使用同一套安装流程。
 > - 如果用户机器上需要换 MCP 服务地址、改默认安装路径，把对应 flag 直接追加到 `npx --yes rainskills` 或 `install.sh` 后面。
 
@@ -62,7 +94,7 @@ bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh)
 
 ### 0. 前置条件
 
-- 已安装 `Codex`、`Claude Code`，或两者之一
+- 已安装 `Codex`、`Claude Code`、`OpenClaw` 或 `Pi Agent` 中至少一种客户端
 - Skill 市场的 `npx skills add` 当前要求 Node.js 22.20.0 或更高版本
 - 直接运行 `npx rainskills` 推荐 Node.js 22 或 24，最低支持 Node.js 18
 - Node.js 18/20 已结束维护，安装器会警告但仍继续；Node.js 低于 18 请使用 CDN 安装方式
@@ -133,17 +165,19 @@ bash <(curl -fsSL https://raw.githubusercontent.com/goodrain/rainskills/main/ins
 
 不论使用 npx、CDN 还是本地仓库，安装器都会引导你完成这些动作：
 
-- 选择安装到 `Codex`、`Claude Code`，或两个都装
+- AI 安装时自动识别当前客户端；直接运行命令时可选择 `Codex`、`Claude Code`、`OpenClaw`、`Pi Agent` 或全部
 - Skill 文件安装完成后，选择要连接的 Rainbond：
   - **Rainbond Cloud（SaaS）**：无需自行安装 Rainbond，地址固定为 `https://run.rainbond.com`
   - **私有化部署**：已有平台时填写 Console 地址；尚无平台时进入内置单机安装向导
 - 浏览器中完成登录并授权（无需在终端输入用户名/密码）
-- 自动接收 JWT 并写入 `~/.rainbond/mcp.env`
-- 自动配置 `Codex` / `Claude Code` 的 RainSkills 专用 MCP 地址
+- 自动接收一年期、仅限 Rainbond MCP 使用的 JWT，并写入 `~/.rainbond/mcp.env`
+- 自动配置 Codex、Claude Code、OpenClaw 的原生 MCP；Pi Agent 安装单文件 MCP Extension
 - 自动把环境变量加载逻辑写入当前 shell 的 rc 文件
 - 自动验证所选客户端的专用 MCP 地址是否可用：
   - Codex：`/console/mcp/rainskills/codex/query`
   - Claude Code：`/console/mcp/rainskills/claude-code/query`
+  - OpenClaw：`/console/mcp/rainskills/openclaw/query`
+  - Pi Agent：`/console/mcp/rainskills/pi/query`
 
 #### AI 代为安装时的用户选择
 
@@ -207,22 +241,23 @@ AI 应先把检测结果和系统变更展示给用户；用户明确同意后�
 
 #### 浏览器登录是怎么发生的
 
-安装器会根据运行环境自动选择授权方式，后续 token 校验、保存和 MCP
-配置流程完全相同：
+安装器默认使用设备授权流程。终端显示八位授权码和 Rainbond 授权地址，并在
+后台等待结果：
 
-- **本地 macOS / Linux 桌面**：在本机启动临时回调
-  `http://127.0.0.1:<随机端口>/cli-callback`，自动打开 Rainbond 授权页；
-  浏览器授权后直接回调，安装自动继续。
+- **本地 macOS / Linux 桌面**：自动打开当前 Rainbond 的 `/device` 页面。登录
+  后核对终端中的授权码，点击允许，终端自动继续。
 - **Windows / WSL**：使用固定 PowerShell 浏览器桥接打开 Windows 浏览器；授权
   结果仍由原安装进程接收，不需要复制 Token。
-- **SSH、容器或无桌面 Linux**：终端输出授权链接。使用能访问 Rainbond
-  的电脑或手机打开链接并授权；浏览器最后跳到 `127.0.0.1` 后显示无法访问
-  是正常现象。复制地址栏中的**完整回调 URL**，只粘贴到仍在等待的
-  Rainskills 终端，安装会自动继续。
+- **SSH、容器或无桌面 Linux**：不会尝试打开远程浏览器。使用任意能够访问该
+  Rainbond 平台的电脑或手机打开终端中的地址，登录并允许访问；远程终端会自动
+  检测结果，不需要复制回调 URL、JWT 或在终端按回车。
 
-完整回调 URL 会校验随机 `state`；直接粘贴 JWT 仅作为旧流程兼容，并仍会执行
-JWT 和 MCP 连通性校验。回调 URL 和 JWT 属于凭据，不要发送到聊天、工单或
-日志中。需要强制使用复制回调模式时执行：
+设备码有效期为 10 分钟，只能成功交换一次。最终签发的 JWT 默认有效期为一年，
+并带有 `token_use=mcp`、`scope=mcp` 和 `aud=rainbond-mcp` 限制，不能用于普通
+Console API。安装器仅在确认旧版 Console 没有 Device Flow 路由时，才回退到
+原来的本机回调/复制回调兼容流程。
+
+`--no-browser` 只禁止自动打开浏览器，设备授权地址仍会输出：
 
 ```bash
 npx --yes rainskills all --no-browser
@@ -231,10 +266,21 @@ npx --yes rainskills all --no-browser
 RAINSKILLS_NO_BROWSER=1 npx --yes rainskills all
 ```
 
+Device Flow 默认要求 HTTPS。私有环境只有显式使用 `--allow-insecure-http` 才能
+继续，终端和浏览器授权页都会提示长期凭证可能被截获；该模式仅限可信内网临时
+使用。CI 或完全非交互环境仍应通过 `--token` / `RAINBOND_JWT` 提供已有凭证。
+
+私有化平台升级时，应先发布包含 `/#/device` 的 Rainbond UI，再执行 Console 数据库
+迁移，最后设置 `RAINBOND_MCP_DEVICE_FLOW_ENABLED=true`。平台有固定外部地址时同时
+设置 `RAINBOND_MCP_DEVICE_PUBLIC_ORIGIN=https://你的平台地址`，避免代理请求头影响
+浏览器授权地址。未开启功能开关时，Rainskills 会自动使用旧版授权兼容流程。
+
 默认技能安装目录：
 
 - `~/.claude/skills`
 - `~/.codex/skills`
+- `~/.openclaw/skills`
+- `~/.pi/agent/skills`
 
 #### 显式指定部署形态
 
@@ -266,7 +312,19 @@ npx --yes rainskills claude
 npx --yes rainskills codex
 ```
 
-同时装并配置两个平台：
+只装并配置 OpenClaw：
+
+```bash
+npx --yes rainskills openclaw
+```
+
+只装并配置 Pi Agent：
+
+```bash
+npx --yes rainskills pi
+```
+
+同时装并配置全部平台：
 
 ```bash
 npx --yes rainskills all
@@ -274,8 +332,9 @@ npx --yes rainskills all
 
 ### 5. SSH、容器与 CI 授权
 
-SSH、容器和有交互终端的无桌面 Linux 会自动进入复制回调模式，不需要提前
-准备 Token。终端会一直显示粘贴提示，授权完成后把浏览器地址栏中的完整回调
+SSH、容器和有交互终端的无桌面 Linux 会自动进入跨设备授权模式，不需要提前
+准备 Token。终端会持续轮询授权状态，在另一台电脑完成浏览器授权后自动
+继续。仅连接旧版 Console 时才会显示粘贴提示；此时把浏览器地址栏中的完整回调
 URL 粘贴进去即可。
 
 CI 等没有可交互 TTY 的环境不能粘贴回调地址，可以使用下面两条兼容路径：
@@ -351,6 +410,31 @@ npx --yes rainskills --dest ~/.codex/skills --force
 
 ## 更新方式
 
+从市场安装时，只更新一个 Rainskills 入口；更新后的入口会运行对应版本的安装器，再同步完整的内部 Skill：
+
+```bash
+# 通用 Skill 市场
+npx skills update rainskills
+
+# Codex Plugin 市场
+codex plugin marketplace upgrade goodrain
+```
+
+Claude Code 在会话中执行：
+
+```text
+/plugin marketplace update goodrain
+/plugin update rainskills@goodrain
+/reload-plugins
+```
+
+OpenClaw 与 Pi Agent：
+
+```bash
+openclaw skills update --all --global
+pi update npm:rainskills
+```
+
 npx 模式：显式使用 `latest` 并覆盖已有 skill：
 
 ```bash
@@ -375,6 +459,8 @@ git pull
 ```bash
 ./install.sh claude --force
 ./install.sh codex --force
+./install.sh openclaw --force
+./install.sh pi --force
 ```
 
 ## 目录结构
@@ -408,7 +494,7 @@ rainbond-skills/
 
 ### 1. 安装后没有生效
 
-请重启 Claude Code 或 Codex，或者开启一个新的会话。
+Codex / Claude Code 请按安装器提示重启；Pi Agent 执行 `/reload`；OpenClaw 当前 CLI 会请求 MCP 热加载，独立 Gateway / Agent 进程需要在对应进程中重新加载配置或重启。
 
 ### 2. 为什么当前终端里还是连不上 MCP
 
@@ -433,7 +519,7 @@ rainbond-skills/
 
 脚本不会保存你的 Rainbond 用户名和密码。
 
-### 5. 用 Claude / Codex 时 MCP 突然返回 401 / 403 怎么办
+### 5. MCP 突然返回 401 / 403 怎么办
 
 通常是 `~/.rainbond/mcp.env` 里的 JWT 到期了。无需重装 skills，也不要手工改文件，直接用下面任一命令刷新：
 
@@ -445,7 +531,7 @@ npx --yes rainskills refresh
 
 `refresh` 不会改动 skill 文件。它会刷新 `~/.rainbond/mcp.env`，并检查 RainSkills 早期版本写入的旧通用 MCP 地址。只有地址完全等于当前 Rainbond 的 `/console/mcp/query` 且认证配置仍是脚本管理格式时，才会先生成 `.rainskills-backup` 备份，再迁移到对应客户端的专用地址；自定义 MCP 地址不会被修改。迁移失败时会恢复原配置。
 
-注意：刷新完成后必须重启 Claude Code 或 Codex（它们在启动时一次性读取 `RAINBOND_JWT`，已经在跑的进程读到的还是旧 token）。
+刷新后按终端提示加载：Codex / Claude Code 需要重启，Pi Agent 执行 `/reload`；OpenClaw 当前 CLI 会请求 MCP 热加载，独立 Gateway / Agent 进程需要重新加载配置或重启。
 
 ### 6. 如何确认安装到了哪里
 

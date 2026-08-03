@@ -1,0 +1,20 @@
+{
+  "name": "goodrain",
+  "interface": {
+    "displayName": "Goodrain"
+  },
+  "plugins": [
+    {
+      "name": "rainskills",
+      "source": {
+        "source": "local",
+        "path": "./marketplace/rainskills"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_USE"
+      },
+      "category": "Engineering"
+    }
+  ]
+}

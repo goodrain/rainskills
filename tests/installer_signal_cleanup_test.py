@@ -123,7 +123,26 @@ def assert_signal_cleans_browser_authorization_processes(
         bin_dir.mkdir()
 
         write_executable(bin_dir / "uname", "#!/bin/sh\nprintf 'Linux\\n'\n")
-        write_executable(bin_dir / "curl", "#!/bin/sh\nexit 0\n")
+        write_executable(
+            bin_dir / "curl",
+            """#!/bin/sh
+if echo "$*" | grep -q '/console/mcp/device/code'; then
+  output_file=''
+  header_file=''
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --output) output_file="$2"; shift 2 ;;
+      --dump-header) header_file="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  printf 'Not Found' > "$output_file"
+  printf 'HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\n\r\n' > "$header_file"
+  printf '404'
+fi
+exit 0
+""",
+        )
 
         env = os.environ.copy()
         env.update(
@@ -216,6 +235,21 @@ def assert_manual_callback_input_is_not_echoed() -> None:
         write_executable(
             bin_dir / "curl",
             """#!/bin/sh
+if echo "$*" | grep -q '/console/mcp/device/code'; then
+  output_file=''
+  header_file=''
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --output) output_file="$2"; shift 2 ;;
+      --dump-header) header_file="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  printf 'Not Found' > "$output_file"
+  printf 'HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\n\r\n' > "$header_file"
+  printf '404'
+  exit 0
+fi
 case "$*" in
   *http://127.0.0.1:*) exec "$REAL_CURL" "$@" ;;
 esac

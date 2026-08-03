@@ -49,6 +49,21 @@ jobs:
           SHA="$(git rev-parse --short HEAD)"
           echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
 
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - name: Install package build dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Verify Pi extension
+        run: node scripts/build-pi-extension.mjs --check
+
+      - name: Verify marketplace package
+        run: node scripts/build-marketplace-package.mjs --check
+
       - name: Pack release tarball
         run: |
           SHA="${{ steps.meta.outputs.sha }}"

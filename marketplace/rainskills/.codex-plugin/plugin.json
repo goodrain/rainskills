@@ -1,0 +1,39 @@
+{
+  "name": "rainskills",
+  "version": "0.1.0-rc.5",
+  "description": "Install and initialize the complete Rainbond skill suite as one product.",
+  "author": {
+    "name": "Goodrain",
+    "url": "https://www.rainbond.com"
+  },
+  "homepage": "https://github.com/goodrain/rainskills#readme",
+  "repository": "https://github.com/goodrain/rainskills",
+  "license": "Apache-2.0",
+  "keywords": [
+    "rainbond",
+    "codex",
+    "claude-code",
+    "openclaw",
+    "pi-agent",
+    "skills",
+    "installer"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Rainskills",
+    "shortDescription": "Install and connect the complete Rainbond skill suite",
+    "longDescription": "Install every independent Rainskills capability, choose Rainbond Cloud or a private platform, authorize access, configure MCP, and verify the connection.",
+    "developerName": "Goodrain",
+    "category": "Engineering",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "websiteURL": "https://www.rainbond.com",
+    "defaultPrompt": [
+      "Install and initialize Rainskills for me."
+    ],
+    "brandColor": "#2563EB",
+    "screenshots": []
+  }
+}

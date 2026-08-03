@@ -147,7 +147,7 @@ DEPLOYMENT_MODE_INPUT=""
 SELF_HOSTED_PATH_RESOLVED=0
 RAINSKILLS_INSTALL_DEFERRED=0
 SAAS_DEFAULT_URL="https://run.rainbond.com"
-LOGIN_TIMEOUT="${RAINBOND_LOGIN_TIMEOUT:-300}"
+LOGIN_TIMEOUT="${RAINBOND_LOGIN_TIMEOUT:-600}"
 JWT_MIN_TTL_SECONDS="${RAINBOND_JWT_MIN_TTL_SECONDS:-600}"
 ACTIVE_SHELL_RC=""
 VALIDATED_TOKEN=""
@@ -163,6 +163,15 @@ RAINSKILLS_INSTALL_TERMINAL_REPORTED=0
 RAINSKILLS_BROWSER_LOGIN_SERVER_PID=""
 RAINSKILLS_BROWSER_LOGIN_READER_PID=""
 RAINSKILLS_BROWSER_LOGIN_RESULT_FILE=""
+RAINSKILLS_DEVICE_FLOW_TEMP_DIR=""
+RAINSKILLS_MCP_VALIDATION_TEMP_DIR=""
+DEVICE_FLOW_ERROR=""
+DEVICE_FLOW_DEVICE_CODE=""
+DEVICE_FLOW_USER_CODE=""
+DEVICE_FLOW_VERIFICATION_URI=""
+DEVICE_FLOW_VERIFICATION_URI_COMPLETE=""
+DEVICE_FLOW_EXPIRES_IN=""
+DEVICE_FLOW_INTERVAL=""
 
 usage() {
   cat <<'EOF'
@@ -171,6 +180,8 @@ Usage:
   ./install.sh
   ./install.sh claude
   ./install.sh codex
+  ./install.sh openclaw
+  ./install.sh pi
   ./install.sh all
   ./install.sh --dest <path>
   ./install.sh all --saas
@@ -181,7 +192,9 @@ Usage:
 Options:
   claude                 Install and configure Claude Code
   codex                  Install and configure Codex
-  all                    Install and configure both platforms
+  openclaw               Install and configure OpenClaw
+  pi                     Install and configure Pi Agent
+  all                    Install and configure every supported client
   refresh                Re-run browser login and rewrite ~/.rainbond/mcp.env only
                          (skips skill copy and Codex/Claude MCP re-registration;
                           use when MCP returns 401/403 because the JWT expired —
@@ -194,7 +207,7 @@ Options:
   --non-interactive      Require all installer inputs through flags or env vars
   --rainbond-url URL     Rainbond base URL, for example http://example.com:7070
   --token JWT            Use an existing Rainbond JWT, skip browser login
-  --no-browser           Do not open a local browser; paste the callback URL
+  --no-browser           Do not open a local browser; print the authorization URL
   --no-cached-token      Ignore RAINBOND_JWT inherited from the shell and re-login
   --username NAME        Legacy: Rainbond login username (self-hosted only)
   --allow-insecure-http  Allow plain HTTP for internal trial environments
@@ -205,8 +218,8 @@ Environment:
   RAINBOND_JWT           Same as --token (preferred for CI)
   RAINBOND_USERNAME      Legacy: same as --username
   RAINBOND_PASSWORD      Legacy: Rainbond login password for non-interactive runs
-  RAINBOND_LOGIN_TIMEOUT Browser login timeout in seconds (default 300)
-  RAINSKILLS_NO_BROWSER  Set to 1 to force callback URL copy mode
+  RAINBOND_LOGIN_TIMEOUT Browser login timeout in seconds (default 600)
+  RAINSKILLS_NO_BROWSER  Set to 1 to print the authorization URL without opening it
 EOF
 }
 
@@ -238,8 +251,14 @@ rainskills_install_client_for_target() {
     claude)
       printf 'claude_code\n'
       ;;
+    openclaw)
+      printf 'openclaw\n'
+      ;;
+    pi)
+      printf 'pi\n'
+      ;;
     all)
-      printf 'both\n'
+      printf 'all\n'
       ;;
     *)
       printf 'unknown\n'
@@ -310,7 +329,7 @@ initialize_rainskills_installation_reporting() {
       refresh)
         RAINSKILLS_INSTALL_ACTION="refresh"
         ;;
-      codex|claude|all)
+      codex|claude|openclaw|pi|all)
         target="$arg"
         ;;
     esac
@@ -319,11 +338,41 @@ initialize_rainskills_installation_reporting() {
   report_rainskills_installation "started" "started"
 }
 
+enterprise_id_from_jwt() {
+  python3 -c '
+import base64
+import json
+import sys
+
+raw = sys.stdin.read().strip()
+try:
+    payload_segment = raw.split(".")[1]
+    payload_segment += "=" * (-len(payload_segment) % 4)
+    payload = json.loads(base64.urlsafe_b64decode(payload_segment.encode("ascii")))
+except Exception:
+    raise SystemExit(1)
+
+enterprise_id = payload.get("enterprise_id")
+if not isinstance(enterprise_id, str) or not enterprise_id.strip():
+    raise SystemExit(1)
+print(enterprise_id.strip())
+'
+}
+
 resolve_rainskills_enterprise_id() {
   local base_url="$1"
   local token="$2"
-  local response_file http_code eid
+  local response_file config_file http_code eid
+  eid="$(printf '%s' "$token" | enterprise_id_from_jwt 2>/dev/null || true)"
+  if [[ -n "$eid" ]]; then
+    printf '%s\n' "$eid"
+    return 0
+  fi
+
   response_file="$(mktemp)"
+  config_file="$(mktemp)"
+  chmod 600 "$config_file"
+  printf 'header = "Authorization: GRJWT %s"\n' "$token" >"$config_file"
   http_code="$({
     curl \
       --silent \
@@ -332,9 +381,10 @@ resolve_rainskills_enterprise_id() {
       --max-time 5 \
       --output "$response_file" \
       --write-out '%{http_code}' \
-      "${base_url}/console/users/details" \
-      -H "Authorization: GRJWT ${token}"
+      --config "$config_file" \
+      "${base_url}/console/users/details"
   } 2>/dev/null || true)"
+  rm -f "$config_file"
 
   if [[ ! "$http_code" =~ ^2 ]]; then
     rm -f "$response_file"
@@ -423,16 +473,35 @@ cleanup_browser_login() {
   RAINSKILLS_BROWSER_LOGIN_RESULT_FILE=""
 }
 
+cleanup_device_flow() {
+  if [[ -n "$RAINSKILLS_DEVICE_FLOW_TEMP_DIR" && -d "$RAINSKILLS_DEVICE_FLOW_TEMP_DIR" ]]; then
+    rm -rf "$RAINSKILLS_DEVICE_FLOW_TEMP_DIR"
+  fi
+  RAINSKILLS_DEVICE_FLOW_TEMP_DIR=""
+  DEVICE_FLOW_DEVICE_CODE=""
+}
+
+cleanup_mcp_validation() {
+  if [[ -n "$RAINSKILLS_MCP_VALIDATION_TEMP_DIR" && -d "$RAINSKILLS_MCP_VALIDATION_TEMP_DIR" ]]; then
+    rm -rf "$RAINSKILLS_MCP_VALIDATION_TEMP_DIR"
+  fi
+  RAINSKILLS_MCP_VALIDATION_TEMP_DIR=""
+}
+
 handle_installer_signal() {
   local exit_code="$1"
   trap - INT TERM
   cleanup_browser_login
+  cleanup_device_flow
+  cleanup_mcp_validation
   exit "$exit_code"
 }
 
 handle_installer_exit() {
   local exit_code="$1"
   cleanup_browser_login
+  cleanup_device_flow
+  cleanup_mcp_validation
   report_unhandled_rainskills_installation_failure "$exit_code"
 }
 
@@ -537,7 +606,7 @@ parse_args() {
         ACTION="refresh"
         shift
         ;;
-      claude|codex|all)
+      claude|codex|openclaw|pi|all)
         TARGET="$1"
         shift
         ;;
@@ -624,10 +693,12 @@ resolve_target() {
   log "请选择要安装和配置的平台："
   log "  1) Codex"
   log "  2) Claude Code"
-  log "  3) 两者都要"
+  log "  3) OpenClaw"
+  log "  4) Pi Agent"
+  log "  5) 全部"
 
   while true; do
-    printf '请输入选项 [1-3]: '
+    printf '请输入选项 [1-5]: '
     read -r choice
     case "$choice" in
       1)
@@ -638,12 +709,20 @@ resolve_target() {
         TARGET="claude"
         return 0
         ;;
-      3|"")
+      3)
+        TARGET="openclaw"
+        return 0
+        ;;
+      4)
+        TARGET="pi"
+        return 0
+        ;;
+      5|"")
         TARGET="all"
         return 0
         ;;
       *)
-        log "请输入 1、2 或 3。"
+        log "请输入 1、2、3、4 或 5。"
         ;;
     esac
   done
@@ -662,9 +741,17 @@ collect_destinations() {
       codex)
         destinations+=("$HOME/.codex/skills")
         ;;
+      openclaw)
+        destinations+=("$HOME/.openclaw/skills")
+        ;;
+      pi)
+        destinations+=("$HOME/.pi/agent/skills")
+        ;;
       all)
         destinations+=("$HOME/.claude/skills")
         destinations+=("$HOME/.codex/skills")
+        destinations+=("$HOME/.openclaw/skills")
+        destinations+=("$HOME/.pi/agent/skills")
         ;;
       *)
         die "未知安装目标：$TARGET"
@@ -687,6 +774,8 @@ normalize_rainbond_url() {
   raw="${raw%/}"
   raw="${raw%/console/mcp/rainskills/codex/query}"
   raw="${raw%/console/mcp/rainskills/claude-code/query}"
+  raw="${raw%/console/mcp/rainskills/openclaw/query}"
+  raw="${raw%/console/mcp/rainskills/pi/query}"
   raw="${raw%/console/mcp/query}"
   raw="${raw%/console/users/login}"
   raw="${raw%/console/}"
@@ -774,7 +863,7 @@ confirm_insecure_http_if_needed() {
   fi
 
   if [[ "$ALLOW_INSECURE_HTTP" -eq 1 ]]; then
-    warn "当前使用明文 HTTP 连接，凭证以明文传输。"
+    warn "高风险：当前使用明文 HTTP，设备码和一年期 MCP 凭证可能被同网段设备截获。仅限可信内网临时使用。"
     return 0
   fi
 
@@ -1199,6 +1288,291 @@ manual_paste_reader() {
       return 0
     fi
   done
+}
+
+device_flow_now() {
+  python3 - <<'PY'
+import time
+print(int(time.monotonic()))
+PY
+}
+
+device_flow_sleep() {
+  sleep "$1"
+}
+
+device_flow_http_post() {
+  local endpoint="$1"
+  local body_file="$2"
+  local response_file="$3"
+  local header_file="$4"
+  local status_file="$5"
+
+  curl \
+    --silent \
+    --show-error \
+    --connect-timeout 10 \
+    --max-time 30 \
+    --output "$response_file" \
+    --dump-header "$header_file" \
+    --write-out '%{http_code}' \
+    -X POST \
+    "$endpoint" \
+    -H 'Accept: application/json' \
+    -H 'Content-Type: application/x-www-form-urlencoded' \
+    --data-binary "@${body_file}" \
+    >"$status_file"
+}
+
+device_flow_json_field() {
+  local response_file="$1"
+  local field="$2"
+  python3 - "$response_file" "$field" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], "r", encoding="utf-8") as fh:
+        payload = json.load(fh)
+except Exception:
+    raise SystemExit(1)
+
+value = payload.get(sys.argv[2])
+if isinstance(value, bool) or value is None or not isinstance(value, (str, int)):
+    raise SystemExit(1)
+print(value)
+PY
+}
+
+device_flow_retry_after() {
+  local header_file="$1"
+  awk 'BEGIN {IGNORECASE=1} /^Retry-After:[[:space:]]*[0-9]+/ {gsub("\\r", "", $2); print $2; exit}' "$header_file"
+}
+
+is_verified_legacy_device_route() {
+  local http_code="$1"
+  local response_file="$2"
+  local header_file="$3"
+  [[ "$http_code" == "404" ]] || return 1
+
+  python3 - "$response_file" "$header_file" <<'PY'
+import sys
+
+body_path, header_path = sys.argv[1:]
+with open(body_path, "r", encoding="utf-8", errors="replace") as fh:
+    body = fh.read().strip()
+with open(header_path, "r", encoding="utf-8", errors="replace") as fh:
+    headers = fh.read().lower()
+
+plain_not_found = body == "Not Found" and "content-type: text/plain" in headers
+django_not_found = (
+    "content-type: text/html" in headers
+    and "<title>page not found" in body.lower()
+    and "device" in body.lower()
+)
+raise SystemExit(0 if plain_not_found or django_not_found else 1)
+PY
+}
+
+prepare_device_flow_temp_dir() {
+  cleanup_device_flow
+  RAINSKILLS_DEVICE_FLOW_TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/rainskills-device.XXXXXX")"
+  chmod 700 "$RAINSKILLS_DEVICE_FLOW_TEMP_DIR"
+}
+
+request_device_authorization() {
+  local base_url="$1"
+  local body_file response_file header_file status_file http_code parsed_file
+  DEVICE_FLOW_ERROR=""
+  prepare_device_flow_temp_dir
+  body_file="$RAINSKILLS_DEVICE_FLOW_TEMP_DIR/request.body"
+  response_file="$RAINSKILLS_DEVICE_FLOW_TEMP_DIR/response.json"
+  header_file="$RAINSKILLS_DEVICE_FLOW_TEMP_DIR/response.headers"
+  status_file="$RAINSKILLS_DEVICE_FLOW_TEMP_DIR/response.status"
+  parsed_file="$RAINSKILLS_DEVICE_FLOW_TEMP_DIR/response.fields"
+  umask 077
+  printf 'client_id=rainskills&scope=mcp' >"$body_file"
+
+  if ! device_flow_http_post \
+      "${base_url}/console/mcp/device/code" \
+      "$body_file" "$response_file" "$header_file" "$status_file"; then
+    DEVICE_FLOW_ERROR="无法连接 Rainbond Device Flow 接口，请检查网络后重试。"
+    cleanup_device_flow
+    return 1
+  fi
+  http_code="$(cat "$status_file" 2>/dev/null || true)"
+  if is_verified_legacy_device_route "$http_code" "$response_file" "$header_file"; then
+    cleanup_device_flow
+    return 2
+  fi
+  if [[ ! "$http_code" =~ ^2 ]]; then
+    local protocol_error=""
+    protocol_error="$(device_flow_json_field "$response_file" error 2>/dev/null || true)"
+    DEVICE_FLOW_ERROR="Rainbond Device Flow 初始化失败（HTTP ${http_code:-unknown}${protocol_error:+，${protocol_error}}）。"
+    cleanup_device_flow
+    return 1
+  fi
+
+  if ! python3 - "$response_file" >"$parsed_file" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as fh:
+    payload = json.load(fh)
+
+fields = (
+    ("device_code", str),
+    ("user_code", str),
+    ("verification_uri", str),
+    ("verification_uri_complete", str),
+    ("expires_in", int),
+    ("interval", int),
+)
+for name, expected_type in fields:
+    value = payload.get(name)
+    if isinstance(value, bool) or not isinstance(value, expected_type) or not value:
+        raise SystemExit(1)
+    print(value)
+PY
+  then
+    DEVICE_FLOW_ERROR="Rainbond Device Flow 返回了无效响应。"
+    cleanup_device_flow
+    return 1
+  fi
+
+  DEVICE_FLOW_DEVICE_CODE="$(sed -n '1p' "$parsed_file")"
+  DEVICE_FLOW_USER_CODE="$(sed -n '2p' "$parsed_file")"
+  DEVICE_FLOW_EXPIRES_IN="$(sed -n '5p' "$parsed_file")"
+  DEVICE_FLOW_INTERVAL="$(sed -n '6p' "$parsed_file")"
+  if [[ ! "$DEVICE_FLOW_USER_CODE" =~ ^[23456789BCDFGHJKMNPQRTVWXY]{4}-[23456789BCDFGHJKMNPQRTVWXY]{4}$ \
+        || ! "$DEVICE_FLOW_EXPIRES_IN" =~ ^[0-9]+$ \
+        || ! "$DEVICE_FLOW_INTERVAL" =~ ^[0-9]+$ ]]; then
+    DEVICE_FLOW_ERROR="Rainbond Device Flow 返回的授权码或时间参数无效。"
+    cleanup_device_flow
+    return 1
+  fi
+
+  # Never trust the response host. The selected and validated Console origin is
+  # the only origin allowed to receive the browser authorization request.
+  DEVICE_FLOW_VERIFICATION_URI="${base_url}/#/device"
+  DEVICE_FLOW_VERIFICATION_URI_COMPLETE="${DEVICE_FLOW_VERIFICATION_URI}?user_code=${DEVICE_FLOW_USER_CODE}"
+  return 0
+}
+
+write_device_token_request_body() {
+  local body_file="$1"
+  # Device codes use the URL-safe base64 alphabet. printf is a shell builtin,
+  # so the secret never enters a child process argument list.
+  printf '%s' \
+    "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code&client_id=rainskills&device_code=${DEVICE_FLOW_DEVICE_CODE}" \
+    >"$body_file"
+  chmod 600 "$body_file"
+}
+
+poll_device_authorization() {
+  local base_url="$1"
+  local interval="$DEVICE_FLOW_INTERVAL"
+  local started_at deadline now
+  local body_file response_file header_file status_file http_code protocol_error retry_after token token_type
+  started_at="$(device_flow_now)"
+  deadline=$((started_at + DEVICE_FLOW_EXPIRES_IN))
+  if [[ "$LOGIN_TIMEOUT" =~ ^[0-9]+$ && "$LOGIN_TIMEOUT" -lt "$DEVICE_FLOW_EXPIRES_IN" ]]; then
+    deadline=$((started_at + LOGIN_TIMEOUT))
+  fi
+  body_file="$RAINSKILLS_DEVICE_FLOW_TEMP_DIR/token.body"
+  response_file="$RAINSKILLS_DEVICE_FLOW_TEMP_DIR/token.json"
+  header_file="$RAINSKILLS_DEVICE_FLOW_TEMP_DIR/token.headers"
+  status_file="$RAINSKILLS_DEVICE_FLOW_TEMP_DIR/token.status"
+  write_device_token_request_body "$body_file"
+
+  while true; do
+    device_flow_sleep "$interval"
+    now="$(device_flow_now)"
+    if [[ "$now" -ge "$deadline" ]]; then
+      DEVICE_FLOW_ERROR="Rainbond 设备授权超时，请重新运行安装。"
+      return 1
+    fi
+
+    : >"$response_file"
+    : >"$header_file"
+    : >"$status_file"
+    if ! device_flow_http_post \
+        "${base_url}/console/mcp/device/token" \
+        "$body_file" "$response_file" "$header_file" "$status_file"; then
+      interval=$((interval < 15 ? interval * 2 : 30))
+      continue
+    fi
+    http_code="$(cat "$status_file" 2>/dev/null || true)"
+    if [[ "$http_code" =~ ^2 ]]; then
+      token="$(device_flow_json_field "$response_file" access_token 2>/dev/null || true)"
+      token_type="$(device_flow_json_field "$response_file" token_type 2>/dev/null || true)"
+      if [[ "$token_type" != "Bearer" ]] || ! looks_like_jwt "$token"; then
+        DEVICE_FLOW_ERROR="Rainbond Device Flow 返回的访问凭证无效。"
+        return 1
+      fi
+      OBTAINED_RAINBOND_TOKEN="$token"
+      return 0
+    fi
+
+    protocol_error="$(device_flow_json_field "$response_file" error 2>/dev/null || true)"
+    if [[ "$http_code" == "429" ]]; then
+      retry_after="$(device_flow_retry_after "$header_file" 2>/dev/null || true)"
+      if [[ "$retry_after" =~ ^[0-9]+$ && "$retry_after" -gt "$interval" ]]; then
+        interval="$retry_after"
+      else
+        interval=$((interval + 5))
+      fi
+      continue
+    fi
+    case "$protocol_error" in
+      authorization_pending)
+        ;;
+      slow_down)
+        interval=$((interval + 5))
+        ;;
+      access_denied)
+        DEVICE_FLOW_ERROR="你已在浏览器中拒绝 Rainbond MCP 授权。"
+        return 1
+        ;;
+      expired_token)
+        DEVICE_FLOW_ERROR="Rainbond 设备授权码已过期，请重新运行安装。"
+        return 1
+        ;;
+      *)
+        DEVICE_FLOW_ERROR="Rainbond Device Flow 轮询失败（HTTP ${http_code:-unknown}${protocol_error:+，${protocol_error}}）。"
+        return 1
+        ;;
+    esac
+  done
+}
+
+device_flow_login_to_rainbond() {
+  local base_url="$1"
+  local request_status
+  if request_device_authorization "$base_url"; then
+    request_status=0
+  else
+    request_status=$?
+  fi
+  [[ "$request_status" -eq 0 ]] || return "$request_status"
+
+  printf '\nRainbond 设备授权\n' >&2
+  printf '授权码：%s\n' "$DEVICE_FLOW_USER_CODE" >&2
+  printf '授权地址：%s\n' "$DEVICE_FLOW_VERIFICATION_URI_COMPLETE" >&2
+  printf '终端正在等待授权结果，完成后会自动继续，Ctrl+C 可取消。\n' >&2
+  if can_open_browser; then
+    printf '正在浏览器中打开授权页面…\n' >&2
+    open_browser "$DEVICE_FLOW_VERIFICATION_URI_COMPLETE"
+  else
+    printf '请在任意能够访问该 Rainbond 平台的电脑上打开上面的地址并完成登录授权。\n' >&2
+  fi
+
+  if ! poll_device_authorization "$base_url"; then
+    cleanup_device_flow
+    return 1
+  fi
+  cleanup_device_flow
+  return 0
 }
 
 browser_login_to_rainbond() {
@@ -1631,33 +2005,137 @@ configure_claude_mcp() {
   log "[configure] 已配置 Claude MCP"
 }
 
+write_openclaw_env() {
+  local token="$1"
+  local base_url="$2"
+  local env_file="$HOME/.openclaw/.env"
+  local begin_marker="# >>> rainbond skills mcp >>>"
+  local end_marker="# <<< rainbond skills mcp <<<"
+  local escaped_token escaped_url block
+  escaped_token="$(shell_quote_single "$token")"
+  escaped_url="$(shell_quote_single "$base_url")"
+  block="RAINBOND_JWT='${escaped_token}'
+RAINBOND_URL='${escaped_url}'"
+
+  mkdir -p "$HOME/.openclaw"
+  chmod 700 "$HOME/.openclaw"
+  backup_file "$env_file"
+  update_managed_block "$env_file" "$begin_marker" "$end_marker" "$block"
+  chmod 600 "$env_file"
+  log "[write] 已更新 $env_file"
+}
+
+configure_openclaw_mcp() {
+  local mcp_url="$1"
+  local token="$2"
+  local base_url="$3"
+
+  if ! command -v openclaw >/dev/null 2>&1; then
+    warn "未找到 OpenClaw CLI，跳过 OpenClaw MCP 配置。"
+    return 1
+  fi
+
+  local config_json
+  config_json="$(python3 - "$mcp_url" <<'PY'
+import json
+import sys
+
+print(json.dumps({
+    "url": sys.argv[1],
+    "transport": "streamable-http",
+    "headers": {"Authorization": "GRJWT ${RAINBOND_JWT}"},
+}, separators=(",", ":")))
+PY
+)"
+
+  write_openclaw_env "$token" "$base_url"
+  backup_file "$HOME/.openclaw/openclaw.json"
+  if ! openclaw mcp set rainbond "$config_json" >/dev/null; then
+    return 1
+  fi
+  if ! openclaw mcp doctor rainbond --probe >/dev/null; then
+    return 1
+  fi
+  openclaw mcp reload >/dev/null 2>&1 || true
+  log "[configure] 已配置 OpenClaw MCP"
+}
+
+configure_pi_mcp() {
+  local source_file="$SCRIPT_DIR/pi/rainskills-mcp.ts"
+  local destination_dir="$HOME/.pi/agent/extensions"
+  local destination_file="$destination_dir/rainskills-mcp.ts"
+
+  if ! command -v pi >/dev/null 2>&1; then
+    warn "未找到 Pi Agent CLI，跳过 Pi MCP Extension 配置。"
+    return 1
+  fi
+  if [[ ! -f "$source_file" ]]; then
+    warn "安装包中缺少 Pi MCP Extension：$source_file"
+    return 1
+  fi
+
+  mkdir -p "$destination_dir"
+  if [[ -f "$destination_file" ]] && cmp -s "$source_file" "$destination_file"; then
+    log "[skip] Pi MCP Extension 已是最新"
+    return 0
+  fi
+
+  backup_file "$destination_file"
+  local temporary_file
+  temporary_file="$(mktemp "${destination_file}.tmp.XXXXXX")"
+  cp "$source_file" "$temporary_file"
+  chmod 644 "$temporary_file"
+  mv "$temporary_file" "$destination_file"
+  log "[configure] 已配置 Pi MCP Extension"
+}
+
+openclaw_install_is_managed() {
+  local env_file="$HOME/.openclaw/.env"
+  [[ -f "$env_file" ]] || return 1
+  grep -Fqx '# >>> rainbond skills mcp >>>' "$env_file" && \
+    grep -Fqx '# <<< rainbond skills mcp <<<' "$env_file"
+}
+
+pi_extension_is_installed() {
+  [[ -f "$HOME/.pi/agent/extensions/rainskills-mcp.ts" ]]
+}
+
 validate_mcp_connectivity() {
   local mcp_url="$1"
   local token="$2"
-  local response_file header_file
-  response_file="$(mktemp)"
-  header_file="$(mktemp)"
+  local response_file header_file auth_config
+  cleanup_mcp_validation
+  RAINSKILLS_MCP_VALIDATION_TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/rainskills-mcp-validation.XXXXXX")"
+  chmod 700 "$RAINSKILLS_MCP_VALIDATION_TEMP_DIR"
+  response_file="$RAINSKILLS_MCP_VALIDATION_TEMP_DIR/response.json"
+  header_file="$RAINSKILLS_MCP_VALIDATION_TEMP_DIR/response.headers"
+  auth_config="$RAINSKILLS_MCP_VALIDATION_TEMP_DIR/curl.conf"
+  printf 'header = "Authorization: GRJWT %s"\n' "$token" > "$auth_config"
+  chmod 600 "$auth_config"
   VALIDATED_TOKEN="$token"
 
   local http_code
-  http_code="$(
+  if ! http_code="$(
     curl \
       --silent \
       --show-error \
       --output "$response_file" \
       --dump-header "$header_file" \
       --write-out '%{http_code}' \
+      --config "$auth_config" \
       -X POST \
       "$mcp_url" \
       -H 'Accept: application/json' \
       -H 'Content-Type: application/json' \
-      -H "Authorization: GRJWT ${token}" \
       -H 'MCP-Protocol-Version: 2025-03-26' \
       --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
-  )"
+  )"; then
+    cleanup_mcp_validation
+    die "Rainbond MCP 校验请求失败"
+  fi
 
   if [[ ! "$http_code" =~ ^2 ]]; then
-    rm -f "$response_file" "$header_file"
+    cleanup_mcp_validation
     if [[ "$http_code" == "404" ]]; then
       local mcp_path
       mcp_path="${mcp_url#*://}"
@@ -1679,7 +2157,7 @@ name = ((((payload.get("result") or {}).get("serverInfo") or {}).get("name")))
 if name != "rainbond-console-mcp":
     raise SystemExit(1)
 PY
-    rm -f "$response_file" "$header_file"
+    cleanup_mcp_validation
     die "Rainbond MCP 校验返回了无法识别的响应"
   fi
 
@@ -1727,7 +2205,7 @@ PY
     fi
   fi
 
-  rm -f "$response_file" "$header_file"
+  cleanup_mcp_validation
   log "[verify] Rainbond MCP 可访问"
 }
 
@@ -1927,7 +2405,18 @@ obtain_rainbond_token() {
     die "非交互模式下浏览器登录不可用，请改用 --token <jwt> 或设置 RAINBOND_JWT。"
   fi
 
-  browser_login_to_rainbond "$base_url"
+  local device_flow_status
+  if device_flow_login_to_rainbond "$base_url"; then
+    return 0
+  else
+    device_flow_status=$?
+  fi
+  if [[ "$device_flow_status" -eq 2 ]]; then
+    printf '当前 Rainbond Console 暂不支持设备授权，改用兼容授权流程。\n' >&2
+    browser_login_to_rainbond "$base_url"
+    return 0
+  fi
+  die "${DEVICE_FLOW_ERROR:-Rainbond 设备授权失败。}"
 }
 
 read_cached_rainbond_url() {
@@ -1984,13 +2473,16 @@ do_refresh() {
   base_url="$(normalize_rainbond_url "$base_url_input")"
   confirm_insecure_http_if_needed "$base_url"
 
-  local token generic_mcp_url codex_mcp_url claude_mcp_url
-  local migrate_codex=0 migrate_claude=0 validate_codex=0 validate_claude=0
+  local token generic_mcp_url codex_mcp_url claude_mcp_url openclaw_mcp_url pi_mcp_url
+  local migrate_codex=0 migrate_claude=0
+  local validate_codex=0 validate_claude=0 validate_openclaw=0 validate_pi=0
   obtain_rainbond_token "$base_url" "$DEPLOYMENT_MODE_INPUT"
   token="$OBTAINED_RAINBOND_TOKEN"
   generic_mcp_url="${base_url}/console/mcp/query"
   codex_mcp_url="${base_url}/console/mcp/rainskills/codex/query"
   claude_mcp_url="${base_url}/console/mcp/rainskills/claude-code/query"
+  openclaw_mcp_url="${base_url}/console/mcp/rainskills/openclaw/query"
+  pi_mcp_url="${base_url}/console/mcp/rainskills/pi/query"
 
   if codex_config_matches "$generic_mcp_url"; then
     migrate_codex=1
@@ -2004,14 +2496,25 @@ do_refresh() {
   elif claude_config_matches "$claude_mcp_url"; then
     validate_claude=1
   fi
-  if (( validate_codex == 0 && validate_claude == 0 )); then
+  if openclaw_install_is_managed; then
+    validate_openclaw=1
+  fi
+  if pi_extension_is_installed; then
+    validate_pi=1
+  fi
+  if (( validate_codex == 0 && validate_claude == 0 && validate_openclaw == 0 && validate_pi == 0 )); then
     validate_codex=1
   fi
 
-  if (( validate_codex == 1 && validate_claude == 1 )); then
-    RAINSKILLS_INSTALL_CLIENT="both"
+  local client_count=$((validate_codex + validate_claude + validate_openclaw + validate_pi))
+  if (( client_count > 1 )); then
+    RAINSKILLS_INSTALL_CLIENT="all"
   elif (( validate_claude == 1 )); then
     RAINSKILLS_INSTALL_CLIENT="claude_code"
+  elif (( validate_openclaw == 1 )); then
+    RAINSKILLS_INSTALL_CLIENT="openclaw"
+  elif (( validate_pi == 1 )); then
+    RAINSKILLS_INSTALL_CLIENT="pi"
   else
     RAINSKILLS_INSTALL_CLIENT="codex"
   fi
@@ -2024,6 +2527,14 @@ do_refresh() {
   fi
   if (( validate_claude == 1 )); then
     validate_mcp_connectivity "$claude_mcp_url" "$token"
+    token="$VALIDATED_TOKEN"
+  fi
+  if (( validate_openclaw == 1 )); then
+    validate_mcp_connectivity "$openclaw_mcp_url" "$token"
+    token="$VALIDATED_TOKEN"
+  fi
+  if (( validate_pi == 1 )); then
+    validate_mcp_connectivity "$pi_mcp_url" "$token"
     token="$VALIDATED_TOKEN"
   fi
 
@@ -2040,10 +2551,24 @@ do_refresh() {
     migrate_claude_mcp_if_generic "$generic_mcp_url" "$claude_mcp_url" \
       || die "Claude MCP 专用地址迁移失败"
   fi
+  if (( validate_openclaw == 1 )); then
+    write_openclaw_env "$token" "$base_url"
+    if command -v openclaw >/dev/null 2>&1; then
+      openclaw mcp reload >/dev/null 2>&1 || true
+    fi
+  fi
 
   log ""
   log "JWT 刷新完成。脚本管理的旧通用 MCP 地址已按需迁移到 RainSkills 专用地址。"
-  log "请重启 Claude Code 或 Codex 让新 JWT 生效（它们在启动时一次性读取 RAINBOND_JWT）。"
+  if (( validate_codex == 1 || validate_claude == 1 )); then
+    log "请重启 Claude Code 或 Codex 让新 JWT 生效（它们在启动时一次性读取 RAINBOND_JWT）。"
+  fi
+  if (( validate_openclaw == 1 )); then
+    log "OpenClaw 当前 CLI 已请求 MCP 热加载；独立 Gateway / Agent 进程需在对应进程中重新加载配置或重启。"
+  fi
+  if (( validate_pi == 1 )); then
+    log "请在 Pi Agent 中执行 /reload 读取新凭据。"
+  fi
   if [[ -n "$ACTIVE_SHELL_RC" ]]; then
     log "如果想立刻在当前终端使用，请执行：source ${ACTIVE_SHELL_RC}"
   fi
@@ -2100,13 +2625,15 @@ configure_mcp() {
   base_url="$(normalize_rainbond_url "$base_url_input")"
   confirm_insecure_http_if_needed "$base_url"
 
-  local token codex_mcp_url claude_mcp_url
+  local token codex_mcp_url claude_mcp_url openclaw_mcp_url pi_mcp_url
   obtain_rainbond_token "$base_url" "$DEPLOYMENT_MODE_INPUT"
   token="$OBTAINED_RAINBOND_TOKEN"
   RAINSKILLS_INSTALL_CLIENT="$(rainskills_install_client_for_target "$TARGET")"
   record_rainskills_authorization "$base_url" "$token"
   codex_mcp_url="${base_url}/console/mcp/rainskills/codex/query"
   claude_mcp_url="${base_url}/console/mcp/rainskills/claude-code/query"
+  openclaw_mcp_url="${base_url}/console/mcp/rainskills/openclaw/query"
+  pi_mcp_url="${base_url}/console/mcp/rainskills/pi/query"
 
   set_rainskills_failure_context "verification" "mcp_verification_failed"
   case "$TARGET" in
@@ -2118,10 +2645,22 @@ configure_mcp() {
       validate_mcp_connectivity "$claude_mcp_url" "$token"
       token="$VALIDATED_TOKEN"
       ;;
+    openclaw)
+      validate_mcp_connectivity "$openclaw_mcp_url" "$token"
+      token="$VALIDATED_TOKEN"
+      ;;
+    pi)
+      validate_mcp_connectivity "$pi_mcp_url" "$token"
+      token="$VALIDATED_TOKEN"
+      ;;
     all)
       validate_mcp_connectivity "$codex_mcp_url" "$token"
       token="$VALIDATED_TOKEN"
       validate_mcp_connectivity "$claude_mcp_url" "$token"
+      token="$VALIDATED_TOKEN"
+      validate_mcp_connectivity "$openclaw_mcp_url" "$token"
+      token="$VALIDATED_TOKEN"
+      validate_mcp_connectivity "$pi_mcp_url" "$token"
       token="$VALIDATED_TOKEN"
       ;;
   esac
@@ -2140,9 +2679,17 @@ configure_mcp() {
     claude)
       configure_claude_mcp "$claude_mcp_url" && configured=1 || true
       ;;
+    openclaw)
+      configure_openclaw_mcp "$openclaw_mcp_url" "$token" "$base_url" && configured=1 || true
+      ;;
+    pi)
+      configure_pi_mcp && configured=1 || true
+      ;;
     all)
       configure_codex_mcp "$codex_mcp_url" && configured=$((configured + 1)) || true
       configure_claude_mcp "$claude_mcp_url" && configured=$((configured + 1)) || true
+      configure_openclaw_mcp "$openclaw_mcp_url" "$token" "$base_url" && configured=$((configured + 1)) || true
+      configure_pi_mcp && configured=$((configured + 1)) || true
       ;;
   esac
 
@@ -2152,7 +2699,7 @@ configure_mcp() {
 
   if [[ -n "$ACTIVE_SHELL_RC" ]]; then
     log "当前 shell 提示：新开的终端会自动从 ${ACTIVE_SHELL_RC} 加载 RAINBOND_JWT。"
-    log "如果你想立刻在当前终端使用 Codex 或 Claude，请执行：source ${ACTIVE_SHELL_RC}"
+    log "如果你想立刻在当前终端使用客户端，请执行：source ${ACTIVE_SHELL_RC}"
   fi
 }
 
@@ -2200,11 +2747,23 @@ main() {
 
   log ""
   log "安装完成。本次：${INSTALL_COUNT_NEW} 项新装 / ${INSTALL_COUNT_UPDATED} 项已更新 / ${INSTALL_COUNT_UNCHANGED} 项已是最新 / ${INSTALL_COUNT_FORCED} 项强制覆盖"
-  if [[ -n "$CUSTOM_DEST" || "$SKIP_MCP" -eq 1 ]]; then
-    log "请重启 Claude Code 或 Codex 以加载新技能。"
-  else
-    log "请在重新加载 shell 环境后重启 Claude Code 或 Codex。"
-  fi
+  case "$TARGET" in
+    codex)
+      log "请重新加载 shell 环境并重启 Codex 以加载新技能和 MCP。"
+      ;;
+    claude)
+      log "请重新加载 shell 环境并重启 Claude Code 以加载新技能和 MCP。"
+      ;;
+    openclaw)
+      log "OpenClaw 当前 CLI 已请求 MCP 热加载；如使用独立 Gateway / Agent 进程，请在对应进程中重新加载配置或重启。"
+      ;;
+    pi)
+      log "请在 Pi Agent 中执行 /reload，新 Skill 和 Rainbond MCP 会立即加载。"
+      ;;
+    all)
+      log "请重启 Codex / Claude Code；在 Pi Agent 中执行 /reload。OpenClaw 当前 CLI 已请求 MCP 热加载；独立 Gateway / Agent 进程需重新加载配置或重启。"
+      ;;
+  esac
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

@@ -15,9 +15,8 @@ bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh) refresh
 # 或：bash ~/.rainbond/skills/install.sh refresh
 ```
 
-刷新成功后必须提醒用户**重启 Claude Code 或 Codex**（MCP 客户端在进程启动时一次性读取
-`RAINBOND_JWT`，刷新后的新 token 不会自动透传到正在运行的客户端）。在用户确认重启之前不要自动
-重试同一个 MCP 工具调用。
+刷新成功后按安装器输出执行客户端恢复动作：Codex / Claude Code 重启，Pi Agent 执行
+`/reload`；OpenClaw 当前 CLI 使用安装器触发 MCP 热加载，独立 Gateway / Agent 进程需重新加载配置或重启。在恢复完成前不要自动重试同一个 MCP 工具调用。
 
 ## Overview
 
