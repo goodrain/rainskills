@@ -81,7 +81,7 @@ function createFixture({ mutateResult } = {}) {
     requests.push({ request, requestPath, resultPath });
     const result = {
       schema: "rainskills.windows-result.v1",
-      action: "Preflight",
+      action: request.action,
       operation_id: request.operation_id,
       installation_id: request.installation_id,
       nonce: request.nonce,
@@ -123,7 +123,7 @@ test("Windows policy pins supported hosts and trusted artifacts", () => {
 
 test("Windows adapter sends only a fixed nonce-bound preflight request", async () => {
   const { createWindowsPlatformAdapter, FIXED_ACTIONS } = require(windowsPlatformPath);
-  assert.deepEqual(FIXED_ACTIONS, ["Preflight"]);
+  assert(FIXED_ACTIONS.includes("Preflight"));
   assert.equal(Object.isFrozen(FIXED_ACTIONS), true);
   const fixture = createFixture();
   const adapter = createWindowsPlatformAdapter({
@@ -276,7 +276,7 @@ test("passing Windows preflight lists the exact user-visible effects", () => {
 
 test("PowerShell preflight is a fixed read-only action with structured output", () => {
   const source = fs.readFileSync(powershellPath, "utf8");
-  assert.match(source, /ValidateSet\("Preflight"\)/);
+  assert.match(source, /ValidateSet\("Preflight",/);
   assert.match(source, /rainskills\.windows-request\.v1/);
   assert.match(source, /rainskills\.windows-result\.v1/);
   assert.match(source, /Get-CimInstance/);
@@ -285,4 +285,193 @@ test("PowerShell preflight is a fixed read-only action with structured output", 
   assert.match(source, /Get-NetRoute/);
   assert.doesNotMatch(source, /Invoke-Expression/);
   assert.doesNotMatch(source, /ScriptBlock/);
+});
+
+test("native Windows state storage hardens and inspects every path without command strings", () => {
+  const { createWindowsSecureStateStore } = require(windowsPlatformPath);
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-windows-acl-"));
+  const aclByPath = new Map();
+  const calls = [];
+  const runner = (command, args) => {
+    calls.push({ command, args: [...args] });
+    if (path.win32.basename(command).toLowerCase() === "whoami.exe") {
+      return { status: 0, stdout: `"DESKTOP\\user","${USER_SID}"\r\n`, stderr: "" };
+    }
+    const valueAfter = (name) => args[args.indexOf(name) + 1];
+    const action = valueAfter("-Action");
+    const targetPath = valueAfter("-TargetPath");
+    if (action === "ProtectState") {
+      aclByPath.set(path.resolve(targetPath), {
+        ownerSid: USER_SID,
+        writableSids: [USER_SID, "S-1-5-18", "S-1-5-32-544"],
+        reparsePoint: false,
+      });
+      return { status: 0, stdout: "", stderr: "" };
+    }
+    if (action === "InspectState") {
+      return { status: 0, stdout: JSON.stringify(aclByPath.get(path.resolve(targetPath))), stderr: "" };
+    }
+    assert.fail(`unexpected action ${action}`);
+  };
+  const stateStore = createWindowsSecureStateStore({ home, runner });
+  const statePath = path.join(home, ".rainbond", "state.json");
+  stateStore.atomicWriteJson(statePath, { ok: true });
+  assert.deepEqual(stateStore.readProtectedJson(statePath), { ok: true });
+  assert(calls.some((call) => call.args.includes("ProtectState")));
+  assert(calls.some((call) => call.args.includes("InspectState")));
+  for (const call of calls) assert(!call.args.includes("-Command"));
+});
+
+test("Windows stages advance only in order with fresh matching evidence", () => {
+  const { validateWindowsStageTransition } = require(windowsPlatformPath);
+  const observedAt = new Date().toISOString();
+  const base = { installationId: INSTALLATION_ID, observedAt };
+  const transitions = [
+    ["target-selection", "preflight", { ...base, targetKind: "local-windows" }],
+    ["preflight", "awaiting-confirmation", { ...base, preflightPassed: true }],
+    ["awaiting-confirmation", "enabling-wsl", { ...base, confirmed: true, refreshedPreflightPassed: true }],
+    ["enabling-wsl", "reboot-required", { ...base, rebootPending: true, recoveryTasksVerified: true }],
+    ["reboot-required", "downloading-rootfs", { ...base, rebootPending: false, wslVerified: true, wslDefaultVersion: 2 }],
+    ["downloading-rootfs", "importing-distro", { ...base, rootfsDigestVerified: true }],
+    ["importing-distro", "preparing-runtime", { ...base, distroIdentityVerified: true }],
+    ["preparing-runtime", "installing-rainbond", { ...base, systemdReady: true, networkGateReady: true, dockerReady: true }],
+    ["installing-rainbond", "configuring-windows-access", { ...base, rainbondRuntimeVerified: true }],
+    ["configuring-windows-access", "verifying", { ...base, networkManifestVerified: true, portproxyVerified: true }],
+    ["verifying", "platform-ready", { ...base, wslHealthVerified: true, windowsHealthVerified: true }],
+    ["platform-ready", "authorizing", { ...base, consoleReachable: true }],
+    ["authorizing", "configured", { ...base, clientsConfigured: true, mcpVerified: true }],
+  ];
+  for (const [from, to, facts] of transitions) {
+    assert.doesNotThrow(() => validateWindowsStageTransition({
+      from,
+      to,
+      facts,
+      expectedInstallationId: INSTALLATION_ID,
+    }), `${from} -> ${to}`);
+  }
+  assert.throws(() => validateWindowsStageTransition({
+    from: "preflight",
+    to: "enabling-wsl",
+    facts: { ...base, confirmed: true },
+    expectedInstallationId: INSTALLATION_ID,
+  }), /阶段/);
+  assert.throws(() => validateWindowsStageTransition({
+    from: "preflight",
+    to: "awaiting-confirmation",
+    facts: { ...base, installationId: crypto.randomUUID(), preflightPassed: true },
+    expectedInstallationId: INSTALLATION_ID,
+  }), /installation_id/);
+  assert.throws(() => validateWindowsStageTransition({
+    from: "preflight",
+    to: "awaiting-confirmation",
+    facts: { ...base, observedAt: "2020-01-01T00:00:00.000Z", preflightPassed: true },
+    expectedInstallationId: INSTALLATION_ID,
+  }), /过期/);
+});
+
+test("machine actions are fixed and reboot requires an interactive explicit confirmation", async () => {
+  const {
+    FIXED_ACTIONS,
+    MACHINE_ACTIONS,
+    USER_ACTIONS,
+    createWindowsPlatformAdapter,
+  } = require(windowsPlatformPath);
+  assert.deepEqual(MACHINE_ACTIONS, [
+    "InstallMachineBundle",
+    "EnableWsl",
+    "UpdateWsl",
+    "VerifyWsl",
+    "RegisterResume",
+    "RegisterFinalize",
+    "RequestReboot",
+    "Finalize",
+  ]);
+  assert.deepEqual(USER_ACTIONS, ["Preflight"]);
+  assert.equal(new Set(FIXED_ACTIONS).size, FIXED_ACTIONS.length);
+  assert(Object.isFrozen(MACHINE_ACTIONS));
+  assert(Object.isFrozen(USER_ACTIONS));
+
+  const fixture = createFixture();
+  const adapter = createWindowsPlatformAdapter({
+    runner: fixture.runner,
+    stateStore: fixture.stateStore,
+    policy,
+    userSid: USER_SID,
+    home: fixture.home,
+  });
+  const before = fixture.calls.length;
+  await assert.rejects(adapter.requestReboot({
+    operationId: OPERATION_ID,
+    installationId: INSTALLATION_ID,
+    interactive: false,
+    confirmed: true,
+  }), /交互终端/);
+  await assert.rejects(adapter.requestReboot({
+    operationId: OPERATION_ID,
+    installationId: INSTALLATION_ID,
+    interactive: true,
+    confirmed: false,
+  }), /明确确认/);
+  assert.equal(fixture.calls.length, before);
+
+  await adapter.enableWsl({
+    operationId: OPERATION_ID,
+    installationId: INSTALLATION_ID,
+    payload: { machine_bundle_verified: true },
+  });
+  const machineCall = fixture.calls.at(-1);
+  const machineRequest = fixture.requests.at(-1).request;
+  assert.equal(machineCall.args[machineCall.args.indexOf("-Action") + 1], "EnableWsl");
+  assert.equal(machineRequest.action, "EnableWsl");
+  assert.deepEqual(machineRequest.payload, { machine_bundle_verified: true });
+  assert(!JSON.stringify(machineRequest).includes('"command"'));
+  assert(!JSON.stringify(machineRequest).includes('"script"'));
+});
+
+test("PowerShell machine actions enforce UAC, signed WSL setup, protected tasks, and fixed reboot", () => {
+  const source = fs.readFileSync(powershellPath, "utf8");
+  assert.match(source, /InstallMachineBundle/);
+  assert.match(source, /Enable-WindowsOptionalFeature[\s\S]*-NoRestart/);
+  assert.match(source, /--update[\s\S]*--web-download/);
+  assert.match(source, /Get-AuthenticodeSignature/);
+  assert.match(source, /Microsoft/);
+  assert.match(source, /ProgramData/);
+  assert.match(source, /New-ScheduledTaskPrincipal/);
+  assert.match(source, /Interactive/);
+  assert.match(source, /RunLevel[\s\S]*Highest/);
+  assert.match(source, /Start-Process[\s\S]*-Verb[\s\S]*RunAs/);
+  assert.match(source, /Restart-Computer/);
+  assert.doesNotMatch(source, /Invoke-Expression/);
+});
+
+test("recovery bundle is explicit, digest-verified, and independent of the package cache", () => {
+  const { createRecoveryBundle, verifyRecoveryBundle } = require(windowsPlatformPath);
+  const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-package-"));
+  const bundleRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-recovery-parent-"));
+  fs.mkdirSync(path.join(packageRoot, "bin"), { recursive: true });
+  fs.mkdirSync(path.join(packageRoot, "rainbond-demo", "scripts"), { recursive: true });
+  fs.writeFileSync(path.join(packageRoot, "package.json"), "{}\n");
+  fs.writeFileSync(path.join(packageRoot, "install.sh"), "#!/bin/sh\n");
+  fs.writeFileSync(path.join(packageRoot, "bin", "rainskills.js"), "#!/usr/bin/env node\n");
+  fs.writeFileSync(path.join(packageRoot, "rainbond-demo", "SKILL.md"), "---\nname: demo\ndescription: demo\n---\n");
+  fs.writeFileSync(path.join(packageRoot, "rainbond-demo", "scripts", "resume.js"), "module.exports = true;\n");
+
+  const destination = path.join(bundleRoot, "recovery");
+  const manifest = createRecoveryBundle({
+    packageRoot,
+    bundleRoot: destination,
+    requiredFiles: ["package.json", "install.sh", "bin/rainskills.js"],
+    requiredDirectories: ["rainbond-demo"],
+  });
+  fs.rmSync(packageRoot, { recursive: true });
+  assert.equal(verifyRecoveryBundle(destination, manifest).ok, true);
+  assert(manifest.files.every((entry) => /^[a-f0-9]{64}$/.test(entry.sha256)));
+  assert.deepEqual(manifest.files.map((entry) => entry.path), [...manifest.files.map((entry) => entry.path)].sort());
+  const badBundleParent = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-bad-recovery-"));
+  assert.throws(() => createRecoveryBundle({
+    packageRoot: bundleRoot,
+    bundleRoot: path.join(badBundleParent, "bad"),
+    requiredFiles: ["../escape"],
+    requiredDirectories: [],
+  }), /相对路径|越界/);
 });

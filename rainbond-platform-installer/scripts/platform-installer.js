@@ -10,6 +10,14 @@ const path = require("node:path");
 const readline = require("node:readline/promises");
 const { spawn, spawnSync } = require("node:child_process");
 const { createSecureStateStore } = require("./secure-state.js");
+const {
+  createRecoveryBundle,
+  createWindowsPlatformAdapter,
+  createWindowsSecureStateStore,
+  resolveWindowsUserSid,
+  validateWindowsStageTransition,
+  verifyRecoveryBundle,
+} = require("./windows-platform.js");
 
 const packageManifest = require("../../package.json");
 const POLICY = require("../references/installation-policy.json");
@@ -98,7 +106,9 @@ function assertOperationId(operationId) {
   }
 }
 
-const secureStateStore = createSecureStateStore();
+const secureStateStore = process.platform === "win32"
+  ? createWindowsSecureStateStore()
+  : createSecureStateStore();
 
 function assertProtectedRegularFile(filePath) {
   secureStateStore.assertProtectedRegularFile(filePath);
@@ -1015,6 +1025,7 @@ function createPlatformState(operationId, paths) {
     schema: PLATFORM_STATE_SCHEMA,
     version: 1,
     operation_id: operationId,
+    installation_id: crypto.randomUUID(),
     package_version: packageManifest.version,
     updated_at: now(),
     stage: "target-selection",
@@ -1295,6 +1306,18 @@ function printPreflight(facts, assessment, target) {
   for (const effect of assessment.effects) process.stdout.write(`- ${effect}\n`);
 }
 
+function printWindowsPreflight(facts, assessment) {
+  process.stdout.write(`\n本地（Windows / WSL2）环境检查${assessment.ok ? "已通过" : "未通过"}：\n\n`);
+  process.stdout.write(`${facts.cpuCores} 核 CPU / ${gibibytes(facts.memoryBytes).toFixed(1)} GB 内存 / ${gibibytes(facts.diskBytes).toFixed(1)} GB 可用磁盘\n`);
+  if (!assessment.ok) {
+    process.stdout.write("\n需要先处理：\n");
+    for (const blocker of assessment.blockers) process.stdout.write(`- ${blocker}\n`);
+    return;
+  }
+  process.stdout.write("\n确认后将执行：\n");
+  for (const effect of assessment.effects) process.stdout.write(`- ${effect}\n`);
+}
+
 async function confirmInstall(assumeYes) {
   if (assumeYes) return true;
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
@@ -1309,6 +1332,110 @@ async function confirmInstall(assumeYes) {
   } finally {
     prompt.close();
   }
+}
+
+async function confirmWindowsRestart() {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    process.stdout.write("\n[RAINSKILLS_USER_INPUT_REQUIRED:windows_restart]\n");
+    process.stdout.write("Windows 组件已准备完成。请在交互终端重新执行相同命令，并确认一次系统重启。\n");
+    return false;
+  }
+  const prompt = readline.createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answer = await prompt.question("\n需要重启 Windows 才能继续，是否现在重启？[y/N]: ");
+    return /^(y|yes)$/i.test(answer.trim());
+  } finally {
+    prompt.close();
+  }
+}
+
+function windowsRecoveryBundle(paths) {
+  const packageRoot = path.resolve(__dirname, "..", "..");
+  const bundleRoot = path.join(paths.root, "recovery-v1");
+  if (fs.existsSync(path.join(bundleRoot, "manifest.json"))) {
+    const verification = verifyRecoveryBundle(bundleRoot);
+    return { packageRoot, bundleRoot, manifest: verification.manifest };
+  }
+  const skillDirectories = fs.readdirSync(packageRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && entry.name.startsWith("rainbond-"))
+    .map((entry) => entry.name)
+    .sort();
+  const manifest = createRecoveryBundle({
+    packageRoot,
+    bundleRoot,
+    requiredFiles: ["package.json", "install.sh", "bin/rainskills.js"],
+    requiredDirectories: skillDirectories,
+  });
+  return { packageRoot, bundleRoot, manifest };
+}
+
+async function prepareWindowsWsl({ adapter, onboarding, options, paths, state }) {
+  const installationId = state.installation_id;
+  const recovery = windowsRecoveryBundle(paths);
+  const recoveryManifestPath = path.join(recovery.bundleRoot, "manifest.json");
+  const helperPath = path.join(recovery.packageRoot, "rainbond-platform-installer", "scripts", "windows-platform.ps1");
+  const recoveryEntry = path.join(recovery.bundleRoot, "bin", "rainskills.js");
+  const common = { operationId: options.onboardingId, installationId };
+
+  state = updateState(paths.state, state, { stage: "enabling-wsl", status: "running" });
+  appendEvent(paths, state, "enabling-wsl", "started");
+  await adapter.installMachineBundle({
+    ...common,
+    payload: {
+      helper_path: helperPath,
+      helper_sha256: sha256File(helperPath),
+      recovery_root: recovery.bundleRoot,
+      recovery_manifest_sha256: sha256File(recoveryManifestPath),
+      recovery_entry: recoveryEntry,
+      node_path: process.execPath,
+    },
+  });
+  const enabled = await adapter.enableWsl({ ...common, payload: { machine_bundle_verified: true } });
+  if (enabled.facts.rebootPending) {
+    const resume = await adapter.registerResume({ ...common, payload: { reboot_pending: true } });
+    const finalizer = await adapter.registerFinalize({ ...common, payload: { reboot_pending: true } });
+    validateWindowsStageTransition({
+      from: "enabling-wsl",
+      to: "reboot-required",
+      facts: {
+        installationId,
+        observedAt: now(),
+        rebootPending: true,
+        recoveryTasksVerified: Boolean(resume.facts.recoveryTasksVerified && finalizer.facts.finalizerTaskVerified),
+      },
+      expectedInstallationId: installationId,
+    });
+    state = updateState(paths.state, state, {
+      stage: "reboot-required",
+      status: "waiting_user",
+      finalizer_nonce: finalizer.facts.finalizerNonce,
+    });
+    appendEvent(paths, state, "reboot-required", "waiting_user");
+    if (!(await confirmWindowsRestart())) {
+      process.stdout.write(`\n安装进度已经保存。继续时执行：\n  npx rainskills@${packageManifest.version} platform install --onboarding-id ${options.onboardingId} --target local-windows\n`);
+      return { state, waiting: true };
+    }
+    await adapter.requestReboot({ ...common, payload: { recovery_tasks_verified: true }, interactive: true, confirmed: true });
+    return { state, waiting: true };
+  }
+
+  const verified = await adapter.verifyWsl({ ...common, payload: { after_enable: true } });
+  if (!verified.facts.wslVerified) throw new Error("WSL 2 尚未通过完整验证");
+  validateWindowsStageTransition({
+    from: "enabling-wsl",
+    to: "downloading-rootfs",
+    facts: {
+      installationId,
+      observedAt: now(),
+      rebootPending: false,
+      wslVerified: true,
+      wslDefaultVersion: verified.facts.wslDefaultVersion,
+    },
+    expectedInstallationId: installationId,
+  });
+  state = updateState(paths.state, state, { stage: "downloading-rootfs", status: "running" });
+  appendEvent(paths, state, "downloading-rootfs", "started");
+  return { state, waiting: false, adapter, onboarding };
 }
 
 function resumeInvocationForOnboarding(onboarding, execPath = process.execPath) {
@@ -1395,6 +1522,9 @@ async function runInstallOperation(options) {
   let state = fs.existsSync(paths.state)
     ? readPlatformState(paths.state, options.onboardingId)
     : createPlatformState(options.onboardingId, paths);
+  if (!UUID_PATTERN.test(state.installation_id || "")) {
+    state = { ...state, installation_id: crypto.randomUUID() };
+  }
   atomicWriteJson(paths.state, state);
   activeOperation = { paths, state, onboardingId: options.onboardingId };
 
@@ -1427,6 +1557,45 @@ async function runInstallOperation(options) {
   });
   activeOperation.state = state;
 
+  const isWindowsLocal = target.kind === "local-windows";
+  const windowsAdapter = isWindowsLocal
+    ? createWindowsPlatformAdapter({
+      runner: (command, args) => runCommand(command, args, { timeout: 30 * 60 * 1000 }),
+      stateStore: secureStateStore,
+      policy: POLICY,
+      userSid: resolveWindowsUserSid(runCommand),
+    })
+    : null;
+  if (isWindowsLocal && state.stage === "reboot-required") {
+    const verified = await windowsAdapter.verifyWsl({
+      operationId: options.onboardingId,
+      installationId: state.installation_id,
+      payload: { after_reboot: true },
+    });
+    if (!verified.facts.wslVerified) {
+      state = updateState(paths.state, state, { status: "waiting_user" });
+      process.stdout.write("Windows 重启后 WSL 2 尚未就绪，请完成系统更新或再次重启后继续。\n");
+      return;
+    }
+    validateWindowsStageTransition({
+      from: "reboot-required",
+      to: "downloading-rootfs",
+      facts: {
+        installationId: state.installation_id,
+        observedAt: now(),
+        rebootPending: false,
+        wslVerified: true,
+        wslDefaultVersion: verified.facts.wslDefaultVersion,
+      },
+      expectedInstallationId: state.installation_id,
+    });
+    state = updateState(paths.state, state, { stage: "downloading-rootfs", status: "running" });
+    appendEvent(paths, state, "downloading-rootfs", "started");
+    activeOperation.state = state;
+    process.stdout.write("WSL 2 已在重启后通过验证，正在继续准备 Rainbond 专用环境。\n");
+    return;
+  }
+
   state = updateState(paths.state, state, { stage: "preflight", status: "running" });
   appendEvent(paths, state, "preflight", "started");
   let sshSession = null;
@@ -1458,8 +1627,14 @@ async function runInstallOperation(options) {
     activeOperation.state = state;
     process.stdout.write(`正在通过 SSH 检查 Linux 服务器 ${remoteTarget.host}...\n`);
   }
-  const facts = remoteTarget ? inspectRemoteSystem(remoteTarget, runCommand, sshSession) : inspectSystem();
-  if (!remoteTarget) facts.networkReachable = await probeInstallerEndpoint(POLICY.installer.url);
+  let windowsPreflight = null;
+  const facts = isWindowsLocal
+    ? (windowsPreflight = await windowsAdapter.preflight({
+      operationId: options.onboardingId,
+      installationId: state.installation_id,
+    })).facts
+    : remoteTarget ? inspectRemoteSystem(remoteTarget, runCommand, sshSession) : inspectSystem();
+  if (!remoteTarget && !isWindowsLocal) facts.networkReachable = await probeInstallerEndpoint(POLICY.installer.url);
 
   if (facts.hasRainbond && state.status !== "pending") {
     try {
@@ -1505,8 +1680,9 @@ async function runInstallOperation(options) {
     }
   }
 
-  const assessment = evaluatePreflight(facts);
-  printPreflight(facts, assessment, target);
+  const assessment = isWindowsLocal ? windowsPreflight.assessment : evaluatePreflight(facts);
+  if (isWindowsLocal) printWindowsPreflight(facts, assessment);
+  else printPreflight(facts, assessment, target);
   if (!assessment.ok) {
     state = updateState(paths.state, state, { status: "failed", blockers: assessment.blockers });
     appendEvent(paths, state, "preflight", "failed");
@@ -1528,6 +1704,21 @@ async function runInstallOperation(options) {
     approved_effects: assessment.effects,
     status: "running",
   });
+
+  if (isWindowsLocal) {
+    const prepared = await prepareWindowsWsl({
+      adapter: windowsAdapter,
+      onboarding,
+      options,
+      paths,
+      state,
+    });
+    activeOperation.state = prepared.state;
+    if (!prepared.waiting) {
+      process.stdout.write("WSL 2 已准备完成，正在继续安装 Rainbond。\n");
+    }
+    return;
+  }
 
   try {
     state = updateState(paths.state, state, { stage: "downloading", status: "running" });

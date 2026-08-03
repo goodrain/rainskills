@@ -2,14 +2,44 @@
 "use strict";
 
 const crypto = require("node:crypto");
+const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
+const { createSecureStateStore } = require("./secure-state.js");
 
 const REQUEST_SCHEMA = "rainskills.windows-request.v1";
 const RESULT_SCHEMA = "rainskills.windows-result.v1";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const FIXED_ACTIONS = Object.freeze(["Preflight"]);
+const USER_ACTIONS = Object.freeze(["Preflight"]);
+const MACHINE_ACTIONS = Object.freeze([
+  "InstallMachineBundle",
+  "EnableWsl",
+  "UpdateWsl",
+  "VerifyWsl",
+  "RegisterResume",
+  "RegisterFinalize",
+  "RequestReboot",
+  "Finalize",
+]);
+const STATE_ACTIONS = Object.freeze(["InspectState", "ProtectState"]);
+const FIXED_ACTIONS = Object.freeze([...USER_ACTIONS, ...MACHINE_ACTIONS, ...STATE_ACTIONS]);
+const WINDOWS_STAGES = Object.freeze([
+  "target-selection",
+  "preflight",
+  "awaiting-confirmation",
+  "enabling-wsl",
+  "reboot-required",
+  "downloading-rootfs",
+  "importing-distro",
+  "preparing-runtime",
+  "installing-rainbond",
+  "configuring-windows-access",
+  "verifying",
+  "platform-ready",
+  "authorizing",
+  "configured",
+]);
 const RESULT_KEYS = new Set([
   "schema",
   "action",
@@ -32,6 +62,228 @@ function assertUuid(value, label) {
   if (!UUID_PATTERN.test(String(value || ""))) {
     throw new Error(`${label} 不是有效的 UUID`);
   }
+}
+
+function assertSuccessfulExecution(execution, label) {
+  if (execution?.error) throw new Error(`${label}：${execution.error.message}`);
+  const status = execution?.status ?? execution?.code ?? 0;
+  if (status !== 0) {
+    throw new Error(`${label}（退出码 ${status}）：${String(execution?.stderr || execution?.stdout || "").trim()}`);
+  }
+  return execution;
+}
+
+function resolveWindowsUserSid(runner = defaultRunner, systemRoot = process.env.SystemRoot || "C:\\Windows") {
+  const executable = path.win32.join(systemRoot, "System32", "whoami.exe");
+  const execution = assertSuccessfulExecution(
+    runner(executable, ["/user", "/fo", "csv", "/nh"]),
+    "无法读取当前 Windows 用户 SID"
+  );
+  const match = String(execution.stdout || "").match(/S-\d-(?:\d+-)+\d+/i);
+  if (!match) throw new Error("whoami 未返回有效的当前 Windows 用户 SID");
+  return match[0].toUpperCase();
+}
+
+function createWindowsSecureStateStore({
+  home = os.homedir(),
+  runner = defaultRunner,
+  powershell = "powershell.exe",
+  helperPath = path.join(__dirname, "windows-platform.ps1"),
+  currentSid = resolveWindowsUserSid(runner),
+  ...options
+} = {}) {
+  function invokeStateAction(action, targetPath, expectedKind) {
+    if (!STATE_ACTIONS.includes(action)) throw new Error(`不允许的 Windows 状态 action：${action}`);
+    const args = [
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      helperPath,
+      "-Action",
+      action,
+      "-TargetPath",
+      targetPath,
+      "-ExpectedKind",
+      expectedKind,
+      "-UserSid",
+      currentSid,
+      "-UserHome",
+      home,
+    ];
+    return assertSuccessfulExecution(
+      runner(powershell, args),
+      `Windows 状态 ACL ${action} 失败`
+    );
+  }
+
+  return createSecureStateStore({
+    ...options,
+    platform: "win32",
+    home,
+    currentSid,
+    inspectWindowsAcl(targetPath, expectedKind) {
+      const execution = invokeStateAction("InspectState", targetPath, expectedKind);
+      try {
+        return JSON.parse(String(execution.stdout || "").trim());
+      } catch {
+        throw new Error(`Windows 状态 ACL 检查未返回有效 JSON：${targetPath}`);
+      }
+    },
+    hardenWindowsAcl(targetPath, expectedKind) {
+      invokeStateAction("ProtectState", targetPath, expectedKind);
+    },
+  });
+}
+
+const TRANSITION_REQUIREMENTS = new Map([
+  ["target-selection:preflight", [(facts) => facts.targetKind === "local-windows"]],
+  ["preflight:awaiting-confirmation", ["preflightPassed"]],
+  ["awaiting-confirmation:enabling-wsl", ["confirmed", "refreshedPreflightPassed"]],
+  ["enabling-wsl:reboot-required", ["rebootPending", "recoveryTasksVerified"]],
+  ["enabling-wsl:downloading-rootfs", ["wslVerified", (facts) => facts.wslDefaultVersion === 2, (facts) => !facts.rebootPending]],
+  ["reboot-required:downloading-rootfs", ["wslVerified", (facts) => facts.wslDefaultVersion === 2, (facts) => !facts.rebootPending]],
+  ["downloading-rootfs:importing-distro", ["rootfsDigestVerified"]],
+  ["importing-distro:preparing-runtime", ["distroIdentityVerified"]],
+  ["preparing-runtime:installing-rainbond", ["systemdReady", "networkGateReady", "dockerReady"]],
+  ["installing-rainbond:configuring-windows-access", ["rainbondRuntimeVerified"]],
+  ["configuring-windows-access:verifying", ["networkManifestVerified", "portproxyVerified"]],
+  ["verifying:platform-ready", ["wslHealthVerified", "windowsHealthVerified"]],
+  ["platform-ready:authorizing", ["consoleReachable"]],
+  ["authorizing:configured", ["clientsConfigured", "mcpVerified"]],
+]);
+
+function validateWindowsStageTransition({
+  from,
+  to,
+  facts,
+  expectedInstallationId,
+  now = Date.now(),
+  maximumFactAgeMs = 5 * 60 * 1000,
+}) {
+  assertUuid(expectedInstallationId, "installation id");
+  if (!facts || facts.installationId !== expectedInstallationId) {
+    throw new Error("阶段事实中的 installation_id 与当前安装不匹配");
+  }
+  const observedAt = Date.parse(facts.observedAt || "");
+  if (!Number.isFinite(observedAt) || observedAt > now + 30000 || now - observedAt > maximumFactAgeMs) {
+    throw new Error("阶段事实已经过期，必须重新检查系统状态");
+  }
+  const requirements = TRANSITION_REQUIREMENTS.get(`${from}:${to}`);
+  if (!requirements) throw new Error(`不允许的 Windows 安装阶段跳转：${from} -> ${to}`);
+  const missing = requirements.find((requirement) => (
+    typeof requirement === "function" ? !requirement(facts) : facts[requirement] !== true
+  ));
+  if (missing) throw new Error(`Windows 安装阶段 ${from} -> ${to} 缺少最新系统事实`);
+  return true;
+}
+
+function assertSafeRelativePath(relativePath) {
+  if (typeof relativePath !== "string" || !relativePath || path.isAbsolute(relativePath)) {
+    throw new Error(`恢复包路径必须是安全的相对路径：${relativePath}`);
+  }
+  const normalized = path.normalize(relativePath);
+  if (normalized === ".." || normalized.startsWith(`..${path.sep}`)) {
+    throw new Error(`恢复包路径越界：${relativePath}`);
+  }
+  return normalized;
+}
+
+function hashFile(filePath) {
+  return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+}
+
+function collectRecoveryFiles(packageRoot, requiredFiles, requiredDirectories) {
+  const files = new Set(requiredFiles.map(assertSafeRelativePath));
+  function visit(relativeDirectory) {
+    const safeDirectory = assertSafeRelativePath(relativeDirectory);
+    const absoluteDirectory = path.join(packageRoot, safeDirectory);
+    const info = fs.lstatSync(absoluteDirectory);
+    if (info.isSymbolicLink() || !info.isDirectory()) {
+      throw new Error(`恢复包目录必须是普通目录，不能是 reparse point：${safeDirectory}`);
+    }
+    for (const entry of fs.readdirSync(absoluteDirectory, { withFileTypes: true })) {
+      const relative = path.join(safeDirectory, entry.name);
+      const absolute = path.join(packageRoot, relative);
+      const childInfo = fs.lstatSync(absolute);
+      if (childInfo.isSymbolicLink()) throw new Error(`恢复包拒绝符号链接或 reparse point：${relative}`);
+      if (childInfo.isDirectory()) visit(relative);
+      else if (childInfo.isFile()) files.add(relative);
+      else throw new Error(`恢复包包含不支持的文件类型：${relative}`);
+    }
+  }
+  for (const directory of requiredDirectories) visit(directory);
+  return [...files].sort();
+}
+
+function createRecoveryBundle({ packageRoot, bundleRoot, requiredFiles, requiredDirectories }) {
+  const sourceRoot = path.resolve(packageRoot);
+  const destinationRoot = path.resolve(bundleRoot);
+  if (destinationRoot === sourceRoot || destinationRoot.startsWith(`${sourceRoot}${path.sep}`)) {
+    throw new Error("恢复包目标不能位于 npm 包目录内部");
+  }
+  if (fs.existsSync(destinationRoot) && fs.readdirSync(destinationRoot).length > 0) {
+    throw new Error(`恢复包目标目录必须为空：${destinationRoot}`);
+  }
+  fs.mkdirSync(destinationRoot, { recursive: true, mode: 0o700 });
+  fs.chmodSync(destinationRoot, 0o700);
+  const relativeFiles = collectRecoveryFiles(sourceRoot, requiredFiles, requiredDirectories);
+  const entries = [];
+  for (const relative of relativeFiles) {
+    const source = path.join(sourceRoot, relative);
+    const info = fs.lstatSync(source);
+    if (info.isSymbolicLink() || !info.isFile()) throw new Error(`恢复包文件必须是普通文件：${relative}`);
+    const destination = path.join(destinationRoot, relative);
+    fs.mkdirSync(path.dirname(destination), { recursive: true, mode: 0o700 });
+    fs.copyFileSync(source, destination, fs.constants.COPYFILE_EXCL);
+    fs.chmodSync(destination, 0o600);
+    entries.push({ path: relative.split(path.sep).join("/"), sha256: hashFile(destination), size: info.size });
+  }
+  const manifest = {
+    schema: "rainskills.windows-recovery-bundle.v1",
+    version: 1,
+    files: entries,
+  };
+  fs.writeFileSync(path.join(destinationRoot, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600, flag: "wx" });
+  return manifest;
+}
+
+function verifyRecoveryBundle(bundleRoot, suppliedManifest = null) {
+  const root = path.resolve(bundleRoot);
+  const manifestPath = path.join(root, "manifest.json");
+  const manifest = suppliedManifest || JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  if (manifest.schema !== "rainskills.windows-recovery-bundle.v1" || manifest.version !== 1 || !Array.isArray(manifest.files)) {
+    throw new Error("恢复包 manifest 版本无效");
+  }
+  const expected = new Set(["manifest.json"]);
+  for (const entry of manifest.files) {
+    const relative = assertSafeRelativePath(entry.path);
+    const target = path.join(root, relative);
+    const info = fs.lstatSync(target);
+    if (info.isSymbolicLink() || !info.isFile()) throw new Error(`恢复包文件无效：${entry.path}`);
+    if (info.size !== entry.size || hashFile(target) !== entry.sha256) {
+      throw new Error(`恢复包摘要不匹配：${entry.path}`);
+    }
+    expected.add(relative.split(path.sep).join("/"));
+  }
+  const actual = new Set();
+  function visit(directory, relativeDirectory = "") {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const relative = path.join(relativeDirectory, entry.name);
+      const target = path.join(directory, entry.name);
+      const info = fs.lstatSync(target);
+      if (info.isSymbolicLink()) throw new Error(`恢复包拒绝符号链接或 reparse point：${relative}`);
+      if (info.isDirectory()) visit(target, relative);
+      else if (info.isFile()) actual.add(relative.split(path.sep).join("/"));
+      else throw new Error(`恢复包包含不支持的文件类型：${relative}`);
+    }
+  }
+  visit(root);
+  const extra = [...actual].filter((relative) => !expected.has(relative));
+  const missing = [...expected].filter((relative) => !actual.has(relative));
+  if (extra.length || missing.length) throw new Error(`恢复包文件清单不匹配：extra=${extra.join(",")} missing=${missing.join(",")}`);
+  return { ok: true, manifest };
 }
 
 function gibibytes(bytes) {
@@ -164,7 +416,7 @@ function createWindowsPlatformAdapter({
     throw new Error("Windows platform adapter 需要有效的当前用户 SID");
   }
 
-  async function invoke(action, { operationId, installationId }) {
+  async function invoke(action, { operationId, installationId, payload = null }) {
     if (!FIXED_ACTIONS.includes(action)) throw new Error(`不允许的 Windows helper action：${action}`);
     assertUuid(operationId, "operation id");
     assertUuid(installationId, "installation id");
@@ -185,6 +437,7 @@ function createWindowsPlatformAdapter({
         windows: policy.windows,
       },
     };
+    if (action !== "Preflight") request.payload = payload || {};
     stateStore.atomicWriteJson(requestPath, request);
     const args = [
       "-NoProfile",
@@ -219,13 +472,48 @@ function createWindowsPlatformAdapter({
         assessment: evaluateWindowsPreflight(result.facts, policy, userSid),
       };
     },
+    installMachineBundle(options) {
+      return invoke("InstallMachineBundle", options);
+    },
+    enableWsl(options) {
+      return invoke("EnableWsl", options);
+    },
+    updateWsl(options) {
+      return invoke("UpdateWsl", options);
+    },
+    verifyWsl(options) {
+      return invoke("VerifyWsl", options);
+    },
+    registerResume(options) {
+      return invoke("RegisterResume", options);
+    },
+    registerFinalize(options) {
+      return invoke("RegisterFinalize", options);
+    },
+    async requestReboot({ interactive, confirmed, ...options }) {
+      if (!interactive) throw new Error("Windows 重启只能在交互终端中由用户确认");
+      if (!confirmed) throw new Error("Windows 重启需要用户明确确认");
+      return invoke("RequestReboot", options);
+    },
+    finalize(options) {
+      return invoke("Finalize", options);
+    },
   };
 }
 
 module.exports = {
   FIXED_ACTIONS,
+  MACHINE_ACTIONS,
   REQUEST_SCHEMA,
   RESULT_SCHEMA,
+  STATE_ACTIONS,
+  USER_ACTIONS,
+  WINDOWS_STAGES,
+  createRecoveryBundle,
+  createWindowsSecureStateStore,
   createWindowsPlatformAdapter,
   evaluateWindowsPreflight,
+  resolveWindowsUserSid,
+  validateWindowsStageTransition,
+  verifyRecoveryBundle,
 };

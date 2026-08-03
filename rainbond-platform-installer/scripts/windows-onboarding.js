@@ -9,6 +9,7 @@ const readline = require("node:readline/promises");
 const { stdin, stdout } = require("node:process");
 const { detectControlEnvironment } = require("./control-environment.js");
 const { createSecureStateStore } = require("./secure-state.js");
+const { createWindowsSecureStateStore } = require("./windows-platform.js");
 const {
   authorizeWithDeviceFlow,
   authorizeWithLoopback,
@@ -248,7 +249,11 @@ function createOnboardingCheckpoint({
   if (!UUID_PATTERN.test(operationId)) throw new Error("operation id 不是有效的 UUID");
   if (!["codex", "claude", "all"].includes(target)) throw new Error("安装目标无效");
   const controlDistro = validateControl(control);
-  const store = stateStore || createSecureStateStore({ platform: process.platform, home });
+  const store = stateStore || (
+    process.platform === "win32"
+      ? createWindowsSecureStateStore({ home })
+      : createSecureStateStore({ platform: process.platform, home })
+  );
   const stateDirectory = path.join(home, ".rainbond");
   const checkpointPath = path.join(stateDirectory, "rainskills-onboarding-v1.json");
   const state = {
@@ -463,10 +468,12 @@ async function main(argv, dependencies = {}) {
 
   if (deployment.needsPlatform) {
     const packageManifest = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"));
-    const stateStore = dependencies.stateStore || createSecureStateStore({
-      platform: process.platform,
-      home,
-    });
+    const runtimePlatform = dependencies.platform || process.platform;
+    const stateStore = dependencies.stateStore || (
+      runtimePlatform === "win32"
+        ? createWindowsSecureStateStore({ home, runner: dependencies.runner })
+        : createSecureStateStore({ platform: runtimePlatform, home })
+    );
     const operationId = dependencies.operationId || crypto.randomUUID();
     const operationLock = stateStore.acquireOperationLock({ operationId });
     try {
