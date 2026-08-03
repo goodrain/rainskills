@@ -189,16 +189,20 @@ test("target choices follow the detected control machine", () => {
   const { targetChoicesForPlatform } = require(platformInstallerPath);
 
   assert.deepEqual(targetChoicesForPlatform("linux"), [
-    { value: "local-linux", label: "当前设备（推荐）" },
-    { value: "remote-linux", label: "其他 Linux 服务器" },
+    { value: "local-linux", label: "安装到本地" },
+    { value: "remote-linux", label: "安装到 Linux 服务器" },
   ]);
   assert.deepEqual(targetChoicesForPlatform("darwin"), [
-    { value: "remote-linux", label: "Linux 服务器（推荐）" },
-    { value: "local-macos", label: "当前 Mac（需要 OrbStack，准备时间较长）" },
+    { value: "local-macos", label: "安装到本地" },
+    { value: "remote-linux", label: "安装到 Linux 服务器" },
   ]);
   assert.deepEqual(targetChoicesForPlatform("win32"), [
-    { value: "remote-linux", label: "Linux 服务器" },
+    { value: "local-windows", label: "安装到本地" },
+    { value: "remote-linux", label: "安装到 Linux 服务器" },
   ]);
+  for (const platform of ["linux", "darwin", "win32"]) {
+    assert.doesNotMatch(JSON.stringify(targetChoicesForPlatform(platform)), /推荐/);
+  }
 });
 
 test("remote Linux targets accept SSH aliases but reject shell input", () => {
@@ -632,10 +636,10 @@ test("interactive target selection defaults Linux to local but supports another 
   });
 });
 
-test("macOS offers Linux first while Windows asks only for a Linux server", async () => {
+test("macOS and Windows default to local while still offering a Linux server", async () => {
   const { selectInstallTarget } = require(platformInstallerPath);
   const macOutput = [];
-  const macAnswers = ["2"];
+  const macAnswers = [""];
   const mac = await selectInstallTarget({
     platform: "darwin",
     options: {},
@@ -644,28 +648,27 @@ test("macOS offers Linux first while Windows asks only for a Linux server", asyn
     write: (value) => macOutput.push(value),
   });
   assert.equal(mac.kind, "local-macos");
-  assert.match(macOutput.join(""), /Linux 服务器（推荐）/);
-  assert.match(macOutput.join(""), /当前 Mac/);
+  assert.match(macOutput.join(""), /安装到本地/);
+  assert.match(macOutput.join(""), /安装到 Linux 服务器/);
+  assert.doesNotMatch(macOutput.join(""), /推荐/);
 
   const windowsOutput = [];
-  const windowsAnswers = ["rainbond-prod", ""];
+  const windowsAnswers = [""];
   const windows = await selectInstallTarget({
     platform: "win32",
     options: {},
     interactive: true,
-    ask: async (question) => {
-      assert.doesNotMatch(question, /选项/);
-      return windowsAnswers.shift();
-    },
+    ask: async () => windowsAnswers.shift(),
     write: (value) => windowsOutput.push(value),
   });
   assert.deepEqual(windows, {
-    kind: "remote-linux",
-    host: "rainbond-prod",
-    sshPort: 22,
+    kind: "local-windows",
+    host: os.hostname(),
+    sshPort: null,
   });
-  assert.match(windowsOutput.join(""), /Windows.*不支持.*本机安装/s);
-  assert.doesNotMatch(windowsOutput.join(""), /当前 Mac/);
+  assert.match(windowsOutput.join(""), /安装到本地/);
+  assert.match(windowsOutput.join(""), /安装到 Linux 服务器/);
+  assert.doesNotMatch(windowsOutput.join(""), /推荐/);
 });
 
 test("non-interactive target selection pauses for the AI instead of choosing for the user", async () => {

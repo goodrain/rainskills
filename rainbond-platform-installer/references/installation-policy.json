@@ -15,5 +15,33 @@
     "sha256": "5b82d0b0fdfe8f049bf0b5495b7565da769bf8e21874052b39c39493b0c7d071",
     "tested_rainbond_version": "v6.9.6-release",
     "verified_at": "2026-08-02"
+  },
+  "windows": {
+    "minimum_build": 19041,
+    "supported_architectures": ["x64"],
+    "supported_product_types": ["workstation"],
+    "distro_name": "Rainbond",
+    "networking_modes": ["nat"],
+    "managed_ports": [80, 443, 6060, 7070],
+    "preflight_allowed_origins": [
+      "https://wslstorestorage.blob.core.windows.net",
+      "https://cloud-images.ubuntu.com",
+      "https://get.rainbond.com",
+      "https://registry-1.docker.io",
+      "https://auth.docker.io"
+    ],
+    "ubuntu_rootfs": {
+      "url": "https://cloud-images.ubuntu.com/wsl/jammy/20250318/ubuntu-jammy-wsl-amd64-ubuntu22.04lts.rootfs.tar.gz",
+      "sha256": "1483cc5c1dce13064f774834cbffdff226559fd522a67a381a8ea77d63fb4109",
+      "trust": "sha256-pinned"
+    },
+    "legacy_wsl_kernel": {
+      "url": "https://wslstorestorage.blob.core.windows.net/wslblob/wsl_update_x64.msi",
+      "sha256": "4d09c776c8d45f70a202281d18e19be1118f53159b0c217a5274a31ce18525fe",
+      "trust": "sha256-pinned+authenticode"
+    },
+    "wsl_web_update": {
+      "trust": "os-signed-update"
+    }
   }
 }

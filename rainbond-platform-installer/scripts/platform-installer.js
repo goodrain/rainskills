@@ -36,7 +36,7 @@ Commands:
 
 Options:
   --onboarding-id ID  Resume the protected RainSkills onboarding checkpoint
-  --target KIND       Use local-linux, local-macos, or remote-linux
+  --target KIND       Use local-linux, local-macos, local-windows, or remote-linux
   --ssh TARGET        Existing SSH alias or user@host for remote-linux
   --ssh-port PORT     SSH port (default: 22)
   --console-host HOST Public IP or DNS name used to reach Console on port 7070
@@ -289,18 +289,21 @@ async function establishSshSession(target, {
 function targetChoicesForPlatform(platform) {
   if (platform === "linux") {
     return [
-      { value: "local-linux", label: "当前设备（推荐）" },
-      { value: "remote-linux", label: "其他 Linux 服务器" },
+      { value: "local-linux", label: "安装到本地" },
+      { value: "remote-linux", label: "安装到 Linux 服务器" },
     ];
   }
   if (platform === "darwin") {
     return [
-      { value: "remote-linux", label: "Linux 服务器（推荐）" },
-      { value: "local-macos", label: "当前 Mac（需要 OrbStack，准备时间较长）" },
+      { value: "local-macos", label: "安装到本地" },
+      { value: "remote-linux", label: "安装到 Linux 服务器" },
     ];
   }
   if (platform === "win32") {
-    return [{ value: "remote-linux", label: "Linux 服务器" }];
+    return [
+      { value: "local-windows", label: "安装到本地" },
+      { value: "remote-linux", label: "安装到 Linux 服务器" },
+    ];
   }
   return [];
 }
@@ -513,16 +516,12 @@ async function selectInstallTarget({
     }
 
     write(`\n检测到当前设备为 ${platform === "darwin" ? "macOS" : platform === "win32" ? "Windows" : "Linux"}。\n`);
-    if (platform === "win32") {
-      write("Rainbond 暂不支持在 Windows 本机安装，将安装到 Linux 服务器。\n");
-      requestedKind = "remote-linux";
-    }
-
     if (!requestedKind && !interactive) {
       write("\n[RAINSKILLS_USER_INPUT_REQUIRED:platform_install_target]\n");
       for (const choice of choices) write(`- ${choice.label}\n`);
       if (platform === "linux") write("选择当前设备：--target local-linux\n");
       if (platform === "darwin") write("选择当前 Mac：--target local-macos\n");
+      if (platform === "win32") write("选择当前 Windows 设备：--target local-windows\n");
       write("选择 Linux 服务器：--target remote-linux --ssh <user@host> [--ssh-port 22]\n");
       return null;
     }

@@ -1,0 +1,288 @@
+"use strict";
+
+const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const test = require("node:test");
+
+const repoRoot = path.resolve(__dirname, "..");
+const policy = require(path.join(
+  repoRoot,
+  "rainbond-platform-installer",
+  "references",
+  "installation-policy.json"
+));
+const windowsPlatformPath = path.join(
+  repoRoot,
+  "rainbond-platform-installer",
+  "scripts",
+  "windows-platform.js"
+);
+const powershellPath = path.join(
+  repoRoot,
+  "rainbond-platform-installer",
+  "scripts",
+  "windows-platform.ps1"
+);
+const { createSecureStateStore } = require(path.join(
+  repoRoot,
+  "rainbond-platform-installer",
+  "scripts",
+  "secure-state.js"
+));
+
+const OPERATION_ID = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+const INSTALLATION_ID = "a72d3cf0-3f8f-4c24-99de-7bd76c65c3a1";
+const USER_SID = "S-1-5-21-111-222-333-1001";
+
+function passingFacts(overrides = {}) {
+  return {
+    productType: "workstation",
+    buildNumber: 22631,
+    architecture: "x64",
+    currentUserSid: USER_SID,
+    isAdministrator: true,
+    uacEnabled: true,
+    cpuCores: 8,
+    memoryBytes: 16 * 1024 ** 3,
+    diskBytes: 120 * 1024 ** 3,
+    virtualizationEnabled: true,
+    wslFeatureState: "Disabled",
+    virtualMachinePlatformFeatureState: "Disabled",
+    rebootPending: false,
+    wslInstalled: false,
+    wslDefaultVersion: null,
+    wslNetworkingMode: "nat",
+    occupiedPorts: [],
+    unknownManagedObjects: [],
+    availableSubnet: "172.31.255.0/30",
+    originChecks: policy.windows.preflight_allowed_origins.map((origin) => ({
+      origin,
+      reachable: true,
+      redirectOrigins: [],
+    })),
+    ...overrides,
+  };
+}
+
+function createFixture({ mutateResult } = {}) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-windows-platform-"));
+  const stateStore = createSecureStateStore({ platform: "linux", home });
+  const calls = [];
+  const requests = [];
+  const runner = async (command, args) => {
+    calls.push({ command, args: [...args] });
+    const valueAfter = (name) => args[args.indexOf(name) + 1];
+    const requestPath = valueAfter("-RequestPath");
+    const resultPath = valueAfter("-ResultPath");
+    const request = stateStore.readProtectedJson(requestPath);
+    requests.push({ request, requestPath, resultPath });
+    const result = {
+      schema: "rainskills.windows-result.v1",
+      action: "Preflight",
+      operation_id: request.operation_id,
+      installation_id: request.installation_id,
+      nonce: request.nonce,
+      status: "ok",
+      facts: passingFacts(),
+    };
+    stateStore.atomicWriteJson(resultPath, mutateResult ? mutateResult(result) : result);
+    return { status: 0, stdout: "", stderr: "" };
+  };
+  return { calls, home, requests, runner, stateStore };
+}
+
+test("Windows policy pins supported hosts and trusted artifacts", () => {
+  assert.equal(policy.windows.minimum_build, 19041);
+  assert.deepEqual(policy.windows.supported_architectures, ["x64"]);
+  assert.deepEqual(policy.windows.supported_product_types, ["workstation"]);
+  assert.equal(policy.windows.distro_name, "Rainbond");
+  assert.deepEqual(policy.windows.networking_modes, ["nat"]);
+  assert.deepEqual(policy.windows.managed_ports, [80, 443, 6060, 7070]);
+  assert.deepEqual(policy.windows.ubuntu_rootfs, {
+    url: "https://cloud-images.ubuntu.com/wsl/jammy/20250318/ubuntu-jammy-wsl-amd64-ubuntu22.04lts.rootfs.tar.gz",
+    sha256: "1483cc5c1dce13064f774834cbffdff226559fd522a67a381a8ea77d63fb4109",
+    trust: "sha256-pinned",
+  });
+  assert.deepEqual(policy.windows.legacy_wsl_kernel, {
+    url: "https://wslstorestorage.blob.core.windows.net/wslblob/wsl_update_x64.msi",
+    sha256: "4d09c776c8d45f70a202281d18e19be1118f53159b0c217a5274a31ce18525fe",
+    trust: "sha256-pinned+authenticode",
+  });
+  assert.deepEqual(policy.windows.wsl_web_update, { trust: "os-signed-update" });
+  assert.deepEqual(policy.windows.preflight_allowed_origins, [
+    "https://wslstorestorage.blob.core.windows.net",
+    "https://cloud-images.ubuntu.com",
+    "https://get.rainbond.com",
+    "https://registry-1.docker.io",
+    "https://auth.docker.io",
+  ]);
+});
+
+test("Windows adapter sends only a fixed nonce-bound preflight request", async () => {
+  const { createWindowsPlatformAdapter, FIXED_ACTIONS } = require(windowsPlatformPath);
+  assert.deepEqual(FIXED_ACTIONS, ["Preflight"]);
+  assert.equal(Object.isFrozen(FIXED_ACTIONS), true);
+  const fixture = createFixture();
+  const adapter = createWindowsPlatformAdapter({
+    runner: fixture.runner,
+    stateStore: fixture.stateStore,
+    policy,
+    userSid: USER_SID,
+    home: fixture.home,
+  });
+
+  const first = await adapter.preflight({ operationId: OPERATION_ID, installationId: INSTALLATION_ID });
+  const second = await adapter.preflight({ operationId: OPERATION_ID, installationId: INSTALLATION_ID });
+
+  assert.equal(first.facts.productType, "workstation");
+  assert.equal(fixture.calls.length, 2);
+  for (const call of fixture.calls) {
+    assert.equal(call.command, "powershell.exe");
+    assert.deepEqual(call.args.slice(0, 4), ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass"]);
+    assert.equal(call.args[call.args.indexOf("-Action") + 1], "Preflight");
+    assert.equal(call.args[call.args.indexOf("-File") + 1], powershellPath);
+    assert(!call.args.includes("-Command"));
+  }
+  assert.notEqual(fixture.requests[0].request.nonce, fixture.requests[1].request.nonce);
+  for (const { request, requestPath, resultPath } of fixture.requests) {
+    assert.deepEqual(Object.keys(request).sort(), [
+      "action",
+      "installation_id",
+      "nonce",
+      "operation_id",
+      "policy",
+      "schema",
+      "user_sid",
+    ]);
+    assert.equal(request.action, "Preflight");
+    assert.equal(request.operation_id, OPERATION_ID);
+    assert.equal(request.installation_id, INSTALLATION_ID);
+    assert.equal(request.user_sid, USER_SID);
+    assert(!Object.hasOwn(request, "command"));
+    assert(!Object.hasOwn(request, "script"));
+    const operationRoot = path.join(fixture.home, ".rainbond", "platform-installer", OPERATION_ID, "windows");
+    assert.equal(path.relative(operationRoot, requestPath).startsWith(".."), false);
+    assert.equal(path.relative(operationRoot, resultPath).startsWith(".."), false);
+  }
+});
+
+test("Windows adapter rejects invalid identifiers, mismatched results, and command injection fields", async () => {
+  const { createWindowsPlatformAdapter } = require(windowsPlatformPath);
+  const invalid = createFixture();
+  const invalidAdapter = createWindowsPlatformAdapter({
+    runner: invalid.runner,
+    stateStore: invalid.stateStore,
+    policy,
+    userSid: USER_SID,
+    home: invalid.home,
+  });
+  await assert.rejects(
+    invalidAdapter.preflight({ operationId: "../escape", installationId: INSTALLATION_ID }),
+    /operation id/i
+  );
+  await assert.rejects(
+    invalidAdapter.preflight({ operationId: OPERATION_ID, installationId: "not-a-uuid" }),
+    /installation id/i
+  );
+
+  for (const mutateResult of [
+    (result) => ({ ...result, nonce: "wrong" }),
+    (result) => ({ ...result, operation_id: crypto.randomUUID() }),
+    (result) => ({ ...result, command: "Remove-Item C:\\" }),
+    (result) => ({ ...result, script: "arbitrary" }),
+    (result) => ({ ...result, facts: { ...result.facts, command: "whoami" } }),
+  ]) {
+    const fixture = createFixture({ mutateResult });
+    const adapter = createWindowsPlatformAdapter({
+      runner: fixture.runner,
+      stateStore: fixture.stateStore,
+      policy,
+      userSid: USER_SID,
+      home: fixture.home,
+    });
+    await assert.rejects(
+      adapter.preflight({ operationId: OPERATION_ID, installationId: INSTALLATION_ID }),
+      /结果|nonce|字段|匹配/i
+    );
+  }
+});
+
+test("Windows preflight assessment explains every unsupported condition", () => {
+  const { evaluateWindowsPreflight } = require(windowsPlatformPath);
+  const facts = passingFacts({
+    productType: "server",
+    buildNumber: 18363,
+    architecture: "arm64",
+    currentUserSid: "S-1-5-21-other",
+    isAdministrator: false,
+    uacEnabled: false,
+    cpuCores: 2,
+    memoryBytes: 4 * 1024 ** 3,
+    diskBytes: 20 * 1024 ** 3,
+    virtualizationEnabled: false,
+    wslInstalled: true,
+    wslNetworkingMode: "mirrored",
+    occupiedPorts: [80, 7070],
+    unknownManagedObjects: ["distro:Rainbond"],
+    availableSubnet: null,
+    originChecks: [
+      { origin: policy.windows.preflight_allowed_origins[0], reachable: false, redirectOrigins: [] },
+      {
+        origin: policy.windows.preflight_allowed_origins[1],
+        reachable: true,
+        redirectOrigins: ["https://untrusted.example"],
+      },
+    ],
+  });
+  const assessment = evaluateWindowsPreflight(facts, policy, USER_SID);
+  const blockers = assessment.blockers.join("\n");
+
+  assert.equal(assessment.ok, false);
+  assert.match(blockers, /Windows 工作站/);
+  assert.match(blockers, /19041/);
+  assert.match(blockers, /x64/);
+  assert.match(blockers, /当前用户 SID/);
+  assert.match(blockers, /Administrators/);
+  assert.match(blockers, /UAC/);
+  assert.match(blockers, /4 核/);
+  assert.match(blockers, /8 GB/);
+  assert.match(blockers, /50 GB/);
+  assert.match(blockers, /虚拟化/);
+  assert.match(blockers, /NAT/);
+  assert.match(blockers, /80.*7070/);
+  assert.match(blockers, /未知的 RainSkills 管理对象/);
+  assert.match(blockers, /可用.*\/30/);
+  assert.match(blockers, /无法访问/);
+  assert.match(blockers, /未获准的跳转来源/);
+});
+
+test("passing Windows preflight lists the exact user-visible effects", () => {
+  const { evaluateWindowsPreflight } = require(windowsPlatformPath);
+  const assessment = evaluateWindowsPreflight(passingFacts(), policy, USER_SID);
+
+  assert.equal(assessment.ok, true);
+  assert.deepEqual(assessment.effects, [
+    "启用 WSL 2 和虚拟机平台组件（可能需要重启 Windows）",
+    "安装或更新经过验证的 WSL 运行时",
+    "下载并校验 Ubuntu 22.04 根文件系统",
+    "创建专用的 Rainbond WSL 发行版",
+    "配置本机 NAT 网络和 127.0.0.1 端口转发",
+    "在专用 WSL 环境中安装并验证 Rainbond",
+  ]);
+});
+
+test("PowerShell preflight is a fixed read-only action with structured output", () => {
+  const source = fs.readFileSync(powershellPath, "utf8");
+  assert.match(source, /ValidateSet\("Preflight"\)/);
+  assert.match(source, /rainskills\.windows-request\.v1/);
+  assert.match(source, /rainskills\.windows-result\.v1/);
+  assert.match(source, /Get-CimInstance/);
+  assert.match(source, /Get-WindowsOptionalFeature/);
+  assert.match(source, /Get-NetTCPConnection/);
+  assert.match(source, /Get-NetRoute/);
+  assert.doesNotMatch(source, /Invoke-Expression/);
+  assert.doesNotMatch(source, /ScriptBlock/);
+});
