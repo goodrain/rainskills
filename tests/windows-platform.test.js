@@ -724,6 +724,7 @@ test("PowerShell machine actions enforce UAC, signed WSL setup, protected tasks,
   assert.match(source, /New-ScheduledTaskAction[\s\S]*-Execute \$wslExecutable/);
   assert.match(source, /--exec/);
   assert.doesNotMatch(source, /Assert-FileDigest \$rootfsPath/);
+  assert.doesNotMatch(source, /\$gzipFirst|\$gzipSecond|Ubuntu rootfs is not a gzip file/);
   assert.doesNotMatch(source, /Invoke-Expression/);
 });
 
@@ -759,12 +760,12 @@ test("recovery bundle is explicit, digest-verified, and independent of the packa
   }), /相对路径|越界/);
 });
 
-test("Windows rootfs accepts a non-empty gzip from an allowed HTTPS source without digest pinning", async () => {
+test("Windows rootfs delegates archive validation to WSL import without inspecting the file header", async () => {
   const { ensureRootfsArtifact } = require(windowsPlatformPath);
   assert.equal(typeof ensureRootfsArtifact, "function");
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-rootfs-unpinned-"));
   const destination = path.join(root, "ubuntu-rootfs.tar.gz");
-  const downloaded = Buffer.from([0x1f, 0x8b, 0x08, 0x00, 0xde, 0xad, 0xbe, 0xef]);
+  const downloaded = Buffer.from("downloaded-rootfs-is-validated-by-wsl-import");
 
   const result = await ensureRootfsArtifact({
     destination,

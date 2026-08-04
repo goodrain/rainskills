@@ -520,18 +520,6 @@ function defaultArtifactDownload({ url, partialPath, allowedOrigins, expectedByt
   });
 }
 
-function isGzipFile(filePath) {
-  const file = fs.openSync(filePath, "r");
-  const header = Buffer.alloc(2);
-  try {
-    return fs.readSync(file, header, 0, header.length, 0) === header.length
-      && header[0] === 0x1f
-      && header[1] === 0x8b;
-  } finally {
-    fs.closeSync(file);
-  }
-}
-
 async function ensureRootfsArtifact({
   destination,
   urls,
@@ -547,7 +535,7 @@ async function ensureRootfsArtifact({
   if (fs.existsSync(destination)) {
     const info = fs.lstatSync(destination);
     if (info.isSymbolicLink() || !info.isFile()) throw new Error(`Ubuntu 根文件系统不是安全的普通文件：${destination}`);
-    if (info.size > 0 && info.size <= maximumBytes && isGzipFile(destination)) {
+    if (info.size > 0 && info.size <= maximumBytes) {
       return { reused: true, path: destination, bytes: info.size, finalUrl: urls[0] };
     }
     quarantineFile(destination);
@@ -567,8 +555,8 @@ async function ensureRootfsArtifact({
         onProgress,
       });
       const info = fs.lstatSync(partialPath);
-      if (info.isSymbolicLink() || !info.isFile() || info.size <= 0 || info.size > maximumBytes || !isGzipFile(partialPath)) {
-        throw new Error("下载结果不是有效的非空 gzip 文件");
+      if (info.isSymbolicLink() || !info.isFile() || info.size <= 0 || info.size > maximumBytes) {
+        throw new Error("下载结果不是有效的非空文件");
       }
       fs.chmodSync(partialPath, 0o600);
       fs.renameSync(partialPath, destination);
