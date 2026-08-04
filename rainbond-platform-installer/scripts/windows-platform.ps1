@@ -702,7 +702,7 @@ function Get-ManagedDistroNames {
 
 function Convert-WindowsPathForDistro([string]$WindowsPath) {
   $wslPath = Get-TrustedWslPath
-  $converted = (& $wslPath -d Rainbond -u root -- wslpath -u $WindowsPath 2>&1 | Out-String).Trim()
+  $converted = (& $wslPath -d Rainbond -u root --exec wslpath -u $WindowsPath 2>&1 | Out-String).Trim()
   if ($LASTEXITCODE -ne 0 -or $converted -notmatch "^/mnt/[a-zA-Z]/") {
     throw "wslpath -u failed for the managed helper path"
   }
@@ -769,9 +769,18 @@ function Invoke-ImportDistro($Request) {
       }
       throw "wsl --import Rainbond failed"
     }
-    Invoke-DistroBootstrap $Request "PrepareRuntime"
-    & $wslPath --terminate Rainbond | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "Failed to terminate the managed Rainbond distro after enabling systemd" }
+    try {
+      Invoke-DistroBootstrap $Request "PrepareRuntime"
+      & $wslPath --terminate Rainbond | Out-Null
+      if ($LASTEXITCODE -ne 0) { throw "Failed to terminate the managed Rainbond distro after enabling systemd" }
+    } catch {
+      $setupFailure = $_
+      & $wslPath --unregister Rainbond 2>$null | Out-Null
+      if ((Get-ManagedDistroNames) -notcontains "Rainbond" -and (Test-Path -LiteralPath $distroRoot)) {
+        Remove-Item -LiteralPath $distroRoot -Recurse -Force
+      }
+      throw $setupFailure
+    }
   }
   [void](Assert-SystemdPidOne $Request)
   return [ordered]@{

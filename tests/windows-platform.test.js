@@ -1102,6 +1102,22 @@ test("Windows distro and network actions are fixed to Rainbond ownership and loo
   assert.doesNotMatch(source, /(?:Set-Content|WriteAllText)[^\n]*\.wslconfig/);
 });
 
+test("PowerShell passes Windows paths to wslpath without a Linux shell", () => {
+  const source = readNormalizedSource(powershellPath);
+  const convertPath = source.match(/function Convert-WindowsPathForDistro\(\[string\]\$WindowsPath\) \{[\s\S]*?\n\}\n\nfunction Invoke-DistroBootstrap/)?.[0];
+  assert(convertPath, "Convert-WindowsPathForDistro must remain a standalone fixed helper");
+  assert.match(convertPath, /--exec\s+wslpath\s+-u\s+\$WindowsPath/);
+  assert.doesNotMatch(convertPath, /-u\s+root\s+--\s+wslpath/);
+});
+
+test("PowerShell rolls back a distro when first-run bootstrap fails", () => {
+  const source = readNormalizedSource(powershellPath);
+  const importDistro = source.match(/function Invoke-ImportDistro\(\$Request\) \{[\s\S]*?\n\}\n\nfunction Invoke-PrepareRuntime/)?.[0];
+  assert(importDistro, "Invoke-ImportDistro must remain a standalone fixed action");
+  assert.match(importDistro, /Invoke-DistroBootstrap[\s\S]*catch[\s\S]*--unregister[\s\S]*Rainbond/);
+  assert.match(importDistro, /--unregister[\s\S]*Remove-Item -LiteralPath \$distroRoot/);
+});
+
 test("WSL bootstrap enables systemd and gates runtime startup on the fixed network", () => {
   const source = fs.readFileSync(wslBootstrapPath, "utf8");
   assert.match(source, /^#!\/usr\/bin\/env bash/);
