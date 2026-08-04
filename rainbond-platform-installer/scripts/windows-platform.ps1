@@ -816,9 +816,29 @@ function Get-WslNetworkingMode {
 }
 
 function Get-WslAdapter {
-  $adapters = @(Get-NetAdapter -IncludeHidden -ErrorAction SilentlyContinue |
-    Where-Object { $_.Status -eq "Up" -and ($_.Name -like "*WSL*" -or $_.InterfaceDescription -like "*Hyper-V Virtual Ethernet*") })
-  if ($adapters.Count -ne 1) { throw "Unable to identify exactly one active WSL NAT adapter" }
+  $wslPath = Get-TrustedWslPath
+  $routeProbe = Invoke-NativeCapture $wslPath @("-d", "Rainbond", "-u", "root", "--exec", "ip", "-4", "route", "show", "default")
+  $gateways = @($routeProbe.output -split "`r?`n" | ForEach-Object {
+    if ($_.Trim() -match "^default\s+via\s+((?:\d{1,3}\.){3}\d{1,3})(?:\s|$)") { $Matches[1] }
+  } | Sort-Object -Unique)
+  $parsedGateway = $null
+  if ($routeProbe.exitCode -ne 0 -or $gateways.Count -ne 1 -or
+      -not [Net.IPAddress]::TryParse([string]$gateways[0], [ref]$parsedGateway) -or
+      $parsedGateway.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork) {
+    throw "Unable to identify the managed Rainbond WSL default gateway"
+  }
+  $gateway = [string]$gateways[0]
+  $interfaceIndexes = @(Get-NetIPAddress -AddressFamily IPv4 -IPAddress $gateway -ErrorAction SilentlyContinue |
+    ForEach-Object { [int]$_.InterfaceIndex } | Sort-Object -Unique)
+  if ($interfaceIndexes.Count -ne 1) {
+    throw "Unable to map the managed Rainbond WSL default gateway to one Windows interface"
+  }
+  $adapters = @(Get-NetAdapter -InterfaceIndex $interfaceIndexes[0] -IncludeHidden -ErrorAction SilentlyContinue |
+    Where-Object { $_.Status -eq "Up" })
+  if ($adapters.Count -ne 1 -or
+      ($adapters[0].Name -notlike "*WSL*" -and $adapters[0].InterfaceDescription -notlike "*Hyper-V Virtual Ethernet*")) {
+    throw "The managed Rainbond WSL default gateway is not backed by an active WSL adapter"
+  }
   return $adapters[0]
 }
 

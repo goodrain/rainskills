@@ -1102,6 +1102,18 @@ test("Windows distro and network actions are fixed to Rainbond ownership and loo
   assert.doesNotMatch(source, /(?:Set-Content|WriteAllText)[^\n]*\.wslconfig/);
 });
 
+test("PowerShell resolves the WSL adapter from the managed distro default gateway", () => {
+  const source = readNormalizedSource(powershellPath);
+  const getAdapter = source.match(/function Get-WslAdapter \{[\s\S]*?\n\}\n\nfunction Get-WslHnsNetworkId/)?.[0];
+  assert(getAdapter, "Get-WslAdapter must remain a standalone fixed probe");
+  assert.match(getAdapter, /Invoke-NativeCapture \$wslPath/);
+  assert.match(getAdapter, /--exec[\s\S]*ip[\s\S]*-4[\s\S]*route[\s\S]*show[\s\S]*default/);
+  assert.match(getAdapter, /Get-NetIPAddress[\s\S]*-IPAddress \$gateway/);
+  assert.match(getAdapter, /Get-NetAdapter[\s\S]*-InterfaceIndex/);
+  assert.doesNotMatch(getAdapter, /Get-NetAdapter\s+-IncludeHidden/);
+  assert.doesNotMatch(getAdapter, /Unable to identify exactly one active WSL NAT adapter/);
+});
+
 test("PowerShell passes Windows paths to wslpath without a Linux shell", () => {
   const source = readNormalizedSource(powershellPath);
   const convertPath = source.match(/function Convert-WindowsPathForDistro\(\[string\]\$WindowsPath\) \{[\s\S]*?\n\}\n\nfunction Invoke-DistroBootstrap/)?.[0];
