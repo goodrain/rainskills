@@ -751,7 +751,16 @@ function Invoke-ImportDistro($Request) {
   if (-not $distroRoot.Equals($expectedDistroRoot, [StringComparison]::OrdinalIgnoreCase)) {
     throw "Managed distro root is outside the installation-specific LocalAppData path"
   }
-  [void](Assert-FileDigest $rootfsPath $Request.policy.windows.ubuntu_rootfs.sha256)
+  $rootfsItem = Get-Item -LiteralPath $rootfsPath -Force
+  if ($rootfsItem.PSIsContainer -or $rootfsItem.Length -lt 2) { throw "Ubuntu rootfs is not a non-empty file" }
+  $rootfsStream = [IO.File]::OpenRead($rootfsPath)
+  try {
+    $gzipFirst = $rootfsStream.ReadByte()
+    $gzipSecond = $rootfsStream.ReadByte()
+  } finally {
+    $rootfsStream.Dispose()
+  }
+  if ($gzipFirst -ne 0x1f -or $gzipSecond -ne 0x8b) { throw "Ubuntu rootfs is not a gzip file" }
   $distroNames = Get-ManagedDistroNames
   if ($distroNames -contains "Rainbond") {
     if ((Get-DistroIdentity $Request) -ne $Request.installation_id) {

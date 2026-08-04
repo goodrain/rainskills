@@ -20,7 +20,7 @@
 - 当前用户必须属于 Administrators，UAC 必须开启，CPU 虚拟化必须可用；普通预检不查询需要提权的 Windows 可选功能，安装器只在用户确认后请求提权并检查、启用 WSL。
 - WSL 必须使用 NAT 网络模式。安装器不会改写用户的 `.wslconfig`，检测到 mirrored 或其他模式时直接停止。
 - Rainbond 安装到独立的 Ubuntu 22.04 `Rainbond` WSL2 发行版，不修改用户已有发行版。发现同名未知发行版、未知计划任务或未知机器目录时停止。
-- Ubuntu rootfs 使用版本策略中的不可变 HTTPS 镜像列表、固定文件大小和固定 SHA-256；优先使用国内同步镜像，失败时逐源切换并以 Ubuntu 官方源兜底。每个响应流不得超过固定大小，最终内容必须匹配同一摘要。旧版 WSL 内核包同样固定来源与摘要。Rainbond 安装脚本使用固定 HTTPS 官方来源，限制同源跳转和文件大小，并在 WSL 内执行前再次检查 Bash 语法与本次下载摘要。
+- Ubuntu rootfs 使用版本策略中的 HTTPS 镜像列表；优先使用国内同步镜像，下载失败时逐源切换并以 Ubuntu 官方源兜底。下载限制为 512 MB，只接受非空 gzip 文件，最终可用性由 `wsl --import` 和发行版启动检查验证，不再固定文件大小或 SHA-256。旧版 WSL 内核包仍固定来源与摘要。Rainbond 安装脚本仍使用固定 HTTPS 官方来源，限制同源跳转和文件大小，并在 WSL 内执行前再次检查 Bash 语法与本次下载摘要。
 - 网络预检检查 Rainbond 官方安装脚本实际使用的 `registry.cn-hangzhou.aliyuncs.com` 镜像仓库，不把无关的 Docker Hub 地址作为安装前置条件。
 - Windows 侧只管理 `80`、`443`、`6060`、`7070` 的 loopback portproxy 和一个不冲突的 `/30` NAT 网段。任一端口已占用时停止，不关闭现有服务。
 - 首次安装可能启用 WSL/VirtualMachinePlatform 并需要重启。恢复入口固定到受保护的机器包；WSL 控制端通过原发行版和固定参数恢复。

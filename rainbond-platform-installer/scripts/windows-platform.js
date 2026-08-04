@@ -175,7 +175,7 @@ const TRANSITION_REQUIREMENTS = new Map([
   ["enabling-wsl:reboot-required", ["rebootPending", "recoveryTasksVerified"]],
   ["enabling-wsl:downloading-rootfs", ["wslVerified", (facts) => facts.wslDefaultVersion === 2, (facts) => !facts.rebootPending]],
   ["reboot-required:downloading-rootfs", ["wslVerified", (facts) => facts.wslDefaultVersion === 2, (facts) => !facts.rebootPending]],
-  ["downloading-rootfs:importing-distro", ["rootfsDigestVerified"]],
+  ["downloading-rootfs:importing-distro", ["rootfsArtifactReady"]],
   ["importing-distro:preparing-runtime", ["distroIdentityVerified"]],
   ["preparing-runtime:installing-rainbond", ["systemdReady", "networkGateReady", "dockerReady"]],
   ["installing-rainbond:configuring-windows-access", ["rainbondRuntimeVerified"]],
@@ -425,21 +425,25 @@ function resolveArtifactDownloadResponse({ statusCode, headers = {}, existingByt
   return { append: true, startingBytes: existingBytes, total };
 }
 
-function createArtifactByteLimiter({ startingBytes = 0, expectedBytes, onProgress }) {
+function createArtifactByteLimiter({ startingBytes = 0, expectedBytes, maximumBytes = expectedBytes, totalBytes = expectedBytes, onProgress }) {
   let current = startingBytes;
+  const exactSizeRequired = Number.isSafeInteger(expectedBytes) && expectedBytes > 0;
+  if (!Number.isSafeInteger(maximumBytes) || maximumBytes <= 0) throw new Error("下载文件大小上限无效");
   return new Transform({
     transform(chunk, encoding, callback) {
       const next = current + chunk.length;
-      if (next > expectedBytes) {
-        callback(new Error(`下载源发送的数据超过固定版本大小（超过 ${expectedBytes} bytes）`));
+      if (next > maximumBytes) {
+        callback(new Error(exactSizeRequired
+          ? `下载源发送的数据超过固定版本大小（超过 ${expectedBytes} bytes）`
+          : `下载文件超过大小上限（超过 ${maximumBytes} bytes）`));
         return;
       }
       current = next;
-      onProgress?.({ current, total: expectedBytes });
+      onProgress?.({ current, total: totalBytes });
       callback(null, chunk);
     },
     flush(callback) {
-      if (current !== expectedBytes) {
+      if (exactSizeRequired && current !== expectedBytes) {
         callback(new Error(`下载源提前结束（实际 ${current} bytes，期望 ${expectedBytes} bytes）`));
         return;
       }
@@ -448,7 +452,7 @@ function createArtifactByteLimiter({ startingBytes = 0, expectedBytes, onProgres
   });
 }
 
-function defaultArtifactDownload({ url, partialPath, allowedOrigins, expectedBytes, onProgress, maximumRedirects = 5 }) {
+function defaultArtifactDownload({ url, partialPath, allowedOrigins, expectedBytes, maximumBytes = expectedBytes, onProgress, maximumRedirects = 5 }) {
   return new Promise((resolve, reject) => {
     function requestUrl(currentUrl, redirectsRemaining) {
       const existingBytes = fs.existsSync(partialPath) ? fs.statSync(partialPath).size : 0;
@@ -488,14 +492,25 @@ function defaultArtifactDownload({ url, partialPath, allowedOrigins, expectedByt
           return;
         }
         const { append, startingBytes, total } = responseMode;
+        if (Number.isSafeInteger(maximumBytes) && total && total > maximumBytes) {
+          response.resume();
+          reject(new Error(`下载文件超过大小上限（实际 ${total} bytes，上限 ${maximumBytes} bytes）`));
+          return;
+        }
         const output = fs.createWriteStream(partialPath, { flags: append ? "a" : "w", mode: 0o600 });
-        const limiter = createArtifactByteLimiter({ startingBytes, expectedBytes: total || expectedBytes, onProgress });
+        const limiter = createArtifactByteLimiter({
+          startingBytes,
+          expectedBytes,
+          maximumBytes,
+          totalBytes: total || null,
+          onProgress,
+        });
         pipeline(response, limiter, output, (error) => {
           if (error) {
             reject(error);
             return;
           }
-          resolve({ finalUrl: currentUrl, bytes: expectedBytes });
+          resolve({ finalUrl: currentUrl, bytes: fs.statSync(partialPath).size });
         });
       });
       request.on("timeout", () => request.destroy(new Error("下载连接超时")));
@@ -503,6 +518,72 @@ function defaultArtifactDownload({ url, partialPath, allowedOrigins, expectedByt
     }
     requestUrl(url, maximumRedirects);
   });
+}
+
+function isGzipFile(filePath) {
+  const file = fs.openSync(filePath, "r");
+  const header = Buffer.alloc(2);
+  try {
+    return fs.readSync(file, header, 0, header.length, 0) === header.length
+      && header[0] === 0x1f
+      && header[1] === 0x8b;
+  } finally {
+    fs.closeSync(file);
+  }
+}
+
+async function ensureRootfsArtifact({
+  destination,
+  urls,
+  maximumBytes,
+  allowedOrigins,
+  download = defaultArtifactDownload,
+  onProgress,
+  onRetry,
+}) {
+  if (!Number.isSafeInteger(maximumBytes) || maximumBytes <= 0) throw new Error("Ubuntu 根文件系统大小上限无效");
+  if (!Array.isArray(urls) || urls.length === 0) throw new Error("Ubuntu 根文件系统下载源无效");
+  for (const sourceUrl of urls) validateArtifactRedirect(sourceUrl, sourceUrl, allowedOrigins);
+  if (fs.existsSync(destination)) {
+    const info = fs.lstatSync(destination);
+    if (info.isSymbolicLink() || !info.isFile()) throw new Error(`Ubuntu 根文件系统不是安全的普通文件：${destination}`);
+    if (info.size > 0 && info.size <= maximumBytes && isGzipFile(destination)) {
+      return { reused: true, path: destination, bytes: info.size, finalUrl: urls[0] };
+    }
+    quarantineFile(destination);
+  }
+  fs.mkdirSync(path.dirname(destination), { recursive: true, mode: 0o700 });
+  let lastFailure = null;
+  for (let attempt = 0; attempt < urls.length; attempt += 1) {
+    const sourceUrl = urls[attempt];
+    const partialPath = `${destination}.partial.${process.pid}.${crypto.randomBytes(8).toString("hex")}`;
+    let result;
+    try {
+      result = await download({
+        url: sourceUrl,
+        partialPath,
+        allowedOrigins,
+        maximumBytes,
+        onProgress,
+      });
+      const info = fs.lstatSync(partialPath);
+      if (info.isSymbolicLink() || !info.isFile() || info.size <= 0 || info.size > maximumBytes || !isGzipFile(partialPath)) {
+        throw new Error("下载结果不是有效的非空 gzip 文件");
+      }
+      fs.chmodSync(partialPath, 0o600);
+      fs.renameSync(partialPath, destination);
+      return { reused: false, path: destination, bytes: info.size, finalUrl: result.finalUrl || sourceUrl };
+    } catch (error) {
+      const actualBytes = fs.existsSync(partialPath) ? fs.statSync(partialPath).size : 0;
+      if (fs.existsSync(partialPath)) quarantineFile(partialPath);
+      lastFailure = { actualBytes, reason: error.message, sourceUrl };
+      if (attempt + 1 < urls.length) {
+        onRetry?.({ ...lastFailure, nextUrl: urls[attempt + 1] });
+        continue;
+      }
+    }
+  }
+  throw new Error(`Ubuntu 根文件系统下载失败${lastFailure ? `：${lastFailure.reason}` : ""}`);
 }
 
 function quarantineFile(filePath) {
@@ -754,7 +835,7 @@ function evaluateWindowsPreflight(facts, policy, expectedUserSid) {
     effects: [
       "启用 WSL 2 和虚拟机平台组件（可能需要重启 Windows）",
       "安装或更新经过验证的 WSL 运行时",
-      "下载并校验 Ubuntu 22.04 根文件系统",
+      "下载 Ubuntu 22.04 根文件系统",
       "创建专用的 Rainbond WSL 发行版",
       "配置本机 NAT 网络和 127.0.0.1 端口转发",
       "在专用 WSL 环境中安装并验证 Rainbond",
@@ -970,6 +1051,7 @@ module.exports = {
   evaluateWindowsPreflight,
   evaluateWindowsDeployment,
   ensurePinnedArtifact,
+  ensureRootfsArtifact,
   managedNetworkFromCidr,
   redactSensitiveText,
   resolveWindowsUserSid,

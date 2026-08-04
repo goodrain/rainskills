@@ -14,7 +14,7 @@ const {
   createRecoveryBundle,
   createWindowsPlatformAdapter,
   createWindowsSecureStateStore,
-  ensurePinnedArtifact,
+  ensureRootfsArtifact,
   evaluateWindowsDeployment,
   managedNetworkFromCidr,
   resolveWindowsUserSid,
@@ -1584,11 +1584,10 @@ async function provisionWindowsDistroAndNetwork({ adapter, options, paths, state
   const rootfsPath = path.join(paths.root, "ubuntu-jammy-rootfs.tar.gz");
   let lastProgressAt = 0;
   let lastProgressEventAt = 0;
-  const rootfs = await ensurePinnedArtifact({
+  const rootfs = await ensureRootfsArtifact({
     destination: rootfsPath,
     urls: POLICY.windows.ubuntu_rootfs.urls,
-    expectedBytes: POLICY.windows.ubuntu_rootfs.size_bytes,
-    sha256: POLICY.windows.ubuntu_rootfs.sha256,
+    maximumBytes: POLICY.windows.ubuntu_rootfs.max_bytes,
     allowedOrigins: POLICY.windows.preflight_allowed_origins,
     onProgress(progress) {
       const currentTime = Date.now();
@@ -1609,23 +1608,24 @@ async function provisionWindowsDistroAndNetwork({ adapter, options, paths, state
       lastProgressAt = 0;
       lastProgressEventAt = 0;
       process.stdout.write(
-        `\n当前下载源异常，已隔离缓存并切换备用镜像（${details.actualBytes} bytes${details.actualSha256 ? `，SHA-256 ${details.actualSha256}` : ""}）。\n`
+        `\n当前下载源异常，已隔离缓存并切换备用镜像（${details.actualBytes} bytes）。\n`
       );
     },
   });
-  process.stdout.write(rootfs.reused ? "已复用校验通过的 Ubuntu 根文件系统。\n" : "\nUbuntu 根文件系统下载并校验完成。\n");
+  process.stdout.write(rootfs.reused ? "已复用已下载的 Ubuntu 根文件系统。\n" : "\nUbuntu 根文件系统下载完成。\n");
   if (state.stage === "downloading-rootfs") {
     validateWindowsStageTransition({
       from: "downloading-rootfs",
       to: "importing-distro",
-      facts: { installationId, observedAt: now(), rootfsDigestVerified: true },
+      facts: { installationId, observedAt: now(), rootfsArtifactReady: true },
       expectedInstallationId: installationId,
     });
     state = updateState(paths.state, state, {
       stage: "importing-distro",
       status: "running",
       rootfs_path: rootfsPath,
-      rootfs_sha256: POLICY.windows.ubuntu_rootfs.sha256,
+      rootfs_trust: POLICY.windows.ubuntu_rootfs.trust,
+      rootfs_sha256: null,
     });
     appendEvent(paths, state, "importing-distro", "started");
   }
@@ -1642,7 +1642,8 @@ async function provisionWindowsDistroAndNetwork({ adapter, options, paths, state
     artifact_url: installer.finalUrl,
     artifact_sha256: installer.sha256,
     rootfs_path: rootfsPath,
-    rootfs_sha256: POLICY.windows.ubuntu_rootfs.sha256,
+    rootfs_trust: POLICY.windows.ubuntu_rootfs.trust,
+    rootfs_sha256: null,
     distro_root: distroRoot,
   });
 

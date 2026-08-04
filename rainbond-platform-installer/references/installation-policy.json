@@ -38,9 +38,8 @@
         "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-cloud-images/wsl/jammy/20250318/ubuntu-jammy-wsl-amd64-ubuntu22.04lts.rootfs.tar.gz",
         "https://cloud-images.ubuntu.com/wsl/jammy/20250318/ubuntu-jammy-wsl-amd64-ubuntu22.04lts.rootfs.tar.gz"
       ],
-      "size_bytes": 341130963,
-      "sha256": "1483cc5c1dce13064f774834cbffdff226559fd522a67a381a8ea77d63fb4109",
-      "trust": "sha256-pinned"
+      "max_bytes": 536870912,
+      "trust": "https-origin+wsl-import-validation"
     },
     "legacy_wsl_kernel": {
       "url": "https://wslstorestorage.blob.core.windows.net/wslblob/wsl_update_x64.msi",

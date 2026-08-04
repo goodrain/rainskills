@@ -128,9 +128,8 @@ test("Windows policy pins supported hosts and trusted artifacts", () => {
       "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-cloud-images/wsl/jammy/20250318/ubuntu-jammy-wsl-amd64-ubuntu22.04lts.rootfs.tar.gz",
       "https://cloud-images.ubuntu.com/wsl/jammy/20250318/ubuntu-jammy-wsl-amd64-ubuntu22.04lts.rootfs.tar.gz",
     ],
-    size_bytes: 341130963,
-    sha256: "1483cc5c1dce13064f774834cbffdff226559fd522a67a381a8ea77d63fb4109",
-    trust: "sha256-pinned",
+    max_bytes: 536870912,
+    trust: "https-origin+wsl-import-validation",
   });
   assert.deepEqual(policy.windows.legacy_wsl_kernel, {
     url: "https://wslstorestorage.blob.core.windows.net/wslblob/wsl_update_x64.msi",
@@ -367,14 +366,14 @@ test("passing Windows preflight lists the exact user-visible effects", () => {
   assert.deepEqual(assessment.effects, [
     "启用 WSL 2 和虚拟机平台组件（可能需要重启 Windows）",
     "安装或更新经过验证的 WSL 运行时",
-    "下载并校验 Ubuntu 22.04 根文件系统",
+    "下载 Ubuntu 22.04 根文件系统",
     "创建专用的 Rainbond WSL 发行版",
     "配置本机 NAT 网络和 127.0.0.1 端口转发",
     "在专用 WSL 环境中安装并验证 Rainbond",
   ]);
 });
 
-test("Windows preflight requires only one reachable pinned rootfs source", () => {
+test("Windows preflight requires only one reachable configured rootfs source", () => {
   const { evaluateWindowsPreflight } = require(windowsPlatformPath);
   const rootfsOrigins = new Set(policy.windows.ubuntu_rootfs.urls.map((url) => new URL(url).origin));
   const facts = passingFacts({
@@ -550,7 +549,7 @@ test("Windows stages advance only in order with fresh matching evidence", () => 
     ["awaiting-confirmation", "enabling-wsl", { ...base, confirmed: true, refreshedPreflightPassed: true }],
     ["enabling-wsl", "reboot-required", { ...base, rebootPending: true, recoveryTasksVerified: true }],
     ["reboot-required", "downloading-rootfs", { ...base, rebootPending: false, wslVerified: true, wslDefaultVersion: 2 }],
-    ["downloading-rootfs", "importing-distro", { ...base, rootfsDigestVerified: true }],
+    ["downloading-rootfs", "importing-distro", { ...base, rootfsArtifactReady: true }],
     ["importing-distro", "preparing-runtime", { ...base, distroIdentityVerified: true }],
     ["preparing-runtime", "installing-rainbond", { ...base, systemdReady: true, networkGateReady: true, dockerReady: true }],
     ["installing-rainbond", "configuring-windows-access", { ...base, rainbondRuntimeVerified: true }],
@@ -724,6 +723,7 @@ test("PowerShell machine actions enforce UAC, signed WSL setup, protected tasks,
   assert.match(source, /wslExecutable[\s\S]*wsl\.exe/);
   assert.match(source, /New-ScheduledTaskAction[\s\S]*-Execute \$wslExecutable/);
   assert.match(source, /--exec/);
+  assert.doesNotMatch(source, /Assert-FileDigest \$rootfsPath/);
   assert.doesNotMatch(source, /Invoke-Expression/);
 });
 
@@ -757,6 +757,29 @@ test("recovery bundle is explicit, digest-verified, and independent of the packa
     requiredFiles: ["../escape"],
     requiredDirectories: [],
   }), /相对路径|越界/);
+});
+
+test("Windows rootfs accepts a non-empty gzip from an allowed HTTPS source without digest pinning", async () => {
+  const { ensureRootfsArtifact } = require(windowsPlatformPath);
+  assert.equal(typeof ensureRootfsArtifact, "function");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-rootfs-unpinned-"));
+  const destination = path.join(root, "ubuntu-rootfs.tar.gz");
+  const downloaded = Buffer.from([0x1f, 0x8b, 0x08, 0x00, 0xde, 0xad, 0xbe, 0xef]);
+
+  const result = await ensureRootfsArtifact({
+    destination,
+    urls: policy.windows.ubuntu_rootfs.urls.slice(0, 1),
+    maximumBytes: policy.windows.ubuntu_rootfs.max_bytes,
+    allowedOrigins: policy.windows.preflight_allowed_origins,
+    download: async ({ partialPath, url }) => {
+      fs.writeFileSync(partialPath, downloaded);
+      return { finalUrl: url, bytes: downloaded.length };
+    },
+  });
+
+  assert.equal(result.reused, false);
+  assert.equal(result.bytes, downloaded.length);
+  assert.deepEqual(fs.readFileSync(destination), downloaded);
 });
 
 test("pinned rootfs artifacts are reused only after digest verification", async () => {
