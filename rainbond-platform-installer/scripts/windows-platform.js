@@ -942,6 +942,9 @@ function createWindowsPlatformAdapter({
       pathTranslator(resultPath),
     ];
     const execution = await Promise.resolve(runner(powershell, args));
+    if (execution?.error?.code === "ETIMEDOUT") {
+      throw new Error(`Windows ${action} 等待超时`);
+    }
     if (execution?.error) throw new Error(`无法启动 Windows helper：${execution.error.message}`);
     const status = execution?.status ?? execution?.code ?? 0;
     let result = null;

@@ -118,6 +118,25 @@ test("platform resume selects native Node or POSIX Bash from onboarding control 
   });
 });
 
+test("combined Windows provisioning has no parent timeout", () => {
+  const {
+    runCommand,
+    windowsHelperRunOptions,
+  } = require(platformInstallerPath);
+  assert.equal(typeof runCommand, "function");
+  assert.equal(typeof windowsHelperRunOptions, "function");
+  assert.deepEqual(windowsHelperRunOptions(["-Action", "ProvisionRainbond"]), { timeout: null });
+  assert.deepEqual(windowsHelperRunOptions(["-Action", "Preflight"]), { timeout: 30 * 60 * 1000 });
+
+  let spawnOptions = null;
+  const execution = runCommand("powershell.exe", [], { timeout: null }, (command, args, options) => {
+    spawnOptions = options;
+    return { status: 0, stdout: "", stderr: "" };
+  });
+  assert.equal(execution.status, 0);
+  assert.equal(Object.hasOwn(spawnOptions, "timeout"), false);
+});
+
 test("WSL control paths bridge to Windows without parsing shell text", () => {
   const {
     normalizeWindowsExecutableForControl,

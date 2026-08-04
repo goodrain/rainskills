@@ -189,13 +189,21 @@ function assertOperationFilesSafe(paths) {
   }
 }
 
-function runCommand(command, args, options = {}) {
-  return spawnSync(command, args, {
+function runCommand(command, args, options = {}, syncRunner = spawnSync) {
+  const spawnOptions = {
     encoding: "utf8",
-    timeout: options.timeout || 10000,
     env: options.env || process.env,
     input: options.input,
-  });
+  };
+  const timeout = options.timeout === undefined ? 10000 : options.timeout;
+  if (timeout !== null) spawnOptions.timeout = timeout;
+  return syncRunner(command, args, spawnOptions);
+}
+
+function windowsHelperRunOptions(args) {
+  const actionIndex = args.indexOf("-Action");
+  const action = actionIndex >= 0 ? args[actionIndex + 1] : null;
+  return { timeout: action === "ProvisionRainbond" ? null : 30 * 60 * 1000 };
 }
 
 function normalizeWindowsExecutableForControl(command, controlMode) {
@@ -1889,7 +1897,7 @@ async function runInstallOperation(options) {
   const windowsRunner = (command, args) => runCommand(
     normalizeWindowsExecutableForControl(command, controlMode),
     args,
-    { timeout: 30 * 60 * 1000 }
+    windowsHelperRunOptions(args)
   );
   const windowsAdapter = isWindowsLocal
     ? createWindowsPlatformAdapter({
@@ -2307,6 +2315,7 @@ module.exports = {
   readOnboardingState,
   readPlatformState,
   remoteInstallerInvocation,
+  runCommand,
   runInstall,
   resolveRemoteConsole,
   resumeInvocationForOnboarding,
@@ -2319,6 +2328,7 @@ module.exports = {
   validateInstaller,
   verifyRemoteDeployment,
   verifyRemoteRainbond,
+  windowsHelperRunOptions,
 };
 
 if (require.main === module) {

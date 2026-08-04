@@ -704,6 +704,24 @@ test("Windows adapter reports the elevated action's structured failure", async (
   }), /PrepareWsl.*WSL --version is unavailable/);
 });
 
+test("Windows adapter reports a helper timeout as a timeout", async () => {
+  const { createWindowsPlatformAdapter } = require(windowsPlatformPath);
+  const fixture = createFixture();
+  const timeout = Object.assign(new Error("spawnSync powershell.exe ETIMEDOUT"), { code: "ETIMEDOUT" });
+  const adapter = createWindowsPlatformAdapter({
+    runner: () => ({ status: null, stdout: "", stderr: "", error: timeout }),
+    stateStore: fixture.stateStore,
+    policy,
+    userSid: USER_SID,
+    home: fixture.home,
+  });
+
+  await assert.rejects(adapter.preflight({
+    operationId: OPERATION_ID,
+    installationId: INSTALLATION_ID,
+  }), /Windows Preflight 等待超时/);
+});
+
 test("PowerShell machine actions enforce UAC, signed WSL setup, protected tasks, and fixed reboot", () => {
   const source = readNormalizedSource(powershellPath);
   assert.match(source, /InstallMachineBundle/);
