@@ -9,6 +9,7 @@
 - **Windows 虚拟化**：在任务管理器或 BIOS/UEFI 中确认 CPU 虚拟化已启用。安装器不会代替用户修改固件设置。
 - **Windows UAC / 管理员权限**：当前用户必须属于 Administrators 且 UAC 开启。普通预检不需要以管理员身份启动终端；确认安装后固定 helper 才会请求 UAC。拒绝 UAC 后保留断点，重新执行原命令即可。
 - **Windows 管理员步骤失败**：主终端会显示失败的固定 action 和管理员子进程返回的具体原因，不再只显示退出码。升级 Rainskills 后可使用原 `onboarding-id` 继续；安装器只会替换身份一致且旧摘要校验通过的机器恢复包。
+- **Windows 恢复包访问被拒绝**：继续原 `onboarding-id` 时，安装器会先确认 `%ProgramData%\RainSkills\<installation-id>` 是固定的非 reparse 目录，再恢复 Administrators owner 和固定 ACL；不要手工删除该目录或放宽权限。PowerShell 持久化 JSON 始终按 UTF-8 读取，中文系统错误应保持可解析。
 - **WSL 网络模式**：只支持默认 NAT。检测到 mirrored 或其他模式时停止，不自动修改 `.wslconfig`。
 - **Windows 端口冲突**：`80`、`443`、`6060`、`7070` 任一端口被现有进程或 portproxy 占用都会停止；先确认占用者，不自动结束进程。
 - **Windows 管理对象冲突**：存在未知 `Rainbond` WSL 发行版、`RainSkills-*` 计划任务或 `%ProgramData%\RainSkills` 内容时停止，避免覆盖用户数据。

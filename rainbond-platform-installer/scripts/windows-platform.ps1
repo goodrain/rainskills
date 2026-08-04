@@ -379,7 +379,7 @@ function Read-ActionResult($Request) {
   if ($resultInfo.PSIsContainer -or ($resultInfo.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
     throw "Elevated Windows helper result must be a regular non-reparse file"
   }
-  $result = Get-Content -LiteralPath $ResultPath -Raw | ConvertFrom-Json
+  $result = Get-Content -LiteralPath $ResultPath -Raw -Encoding UTF8 | ConvertFrom-Json
   if ($result.schema -ne "rainskills.windows-result.v1" -or $result.action -ne $Action -or
       $result.operation_id -ne $Request.operation_id -or
       $result.installation_id -ne $Request.installation_id -or
@@ -408,10 +408,26 @@ function Get-MachineRoot($Request) {
   return Join-Path (Join-Path $env:ProgramData "RainSkills") ([string]$Request.installation_id)
 }
 
+function Assert-ManagedMachineRoot([string]$MachineRoot, [string]$InstallationId) {
+  $expectedRoot = [IO.Path]::GetFullPath((Join-Path (Join-Path $env:ProgramData "RainSkills") $InstallationId)).TrimEnd("\")
+  $actualRoot = [IO.Path]::GetFullPath($MachineRoot).TrimEnd("\")
+  if (-not $actualRoot.Equals($expectedRoot, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "Machine root is outside the installation-specific ProgramData path"
+  }
+  $item = Get-Item -LiteralPath $actualRoot -Force
+  if (-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+    throw "Machine root must be a regular non-reparse directory"
+  }
+}
+
 function Set-MachineRootAcl([string]$MachineRoot, [string]$OriginalSid) {
-  $result = & "$env:SystemRoot\System32\icacls.exe" $MachineRoot /inheritance:r `
-    /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "*$OriginalSid`:(OI)(CI)RX" /t /c 2>&1
-  if ($LASTEXITCODE -ne 0) { throw "Failed to protect ProgramData machine bundle: $($result -join ' ')" }
+  $ownerResult = & "$env:SystemRoot\System32\icacls.exe" $MachineRoot /setowner "*S-1-5-32-544" /t 2>&1
+  if ($LASTEXITCODE -ne 0) { throw "Failed to restore ProgramData machine bundle ownership: $($ownerResult -join ' ')" }
+  $aclResult = & "$env:SystemRoot\System32\icacls.exe" $MachineRoot /inheritance:r `
+    /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "*$OriginalSid`:(OI)(CI)RX" /t 2>&1
+  if ($LASTEXITCODE -ne 0) { throw "Failed to protect ProgramData machine bundle: $($aclResult -join ' ')" }
+  $verifyResult = & "$env:SystemRoot\System32\icacls.exe" $MachineRoot /verify /t 2>&1
+  if ($LASTEXITCODE -ne 0) { throw "ProgramData machine bundle ACL verification failed: $($verifyResult -join ' ')" }
 }
 
 function Assert-FileDigest([string]$FilePath, [string]$ExpectedDigest) {
@@ -421,6 +437,20 @@ function Assert-FileDigest([string]$FilePath, [string]$ExpectedDigest) {
   }
   $actual = (Get-FileHash -LiteralPath $FilePath -Algorithm SHA256).Hash.ToLowerInvariant()
   if ($actual -ne ([string]$ExpectedDigest).ToLowerInvariant()) { throw "SHA-256 mismatch for $FilePath" }
+  return $actual
+}
+
+function Assert-FileDigestOneOf([string]$FilePath, [string[]]$ExpectedDigests) {
+  if ($ExpectedDigests.Count -lt 1 -or @($ExpectedDigests | Where-Object { [string]$_ -notmatch "^[a-fA-F0-9]{64}$" }).Count -gt 0) {
+    throw "Machine bundle contains an invalid SHA-256 value"
+  }
+  $item = Get-Item -LiteralPath $FilePath -Force
+  if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+    throw "Digest source must be a regular non-reparse file"
+  }
+  $actual = (Get-FileHash -LiteralPath $FilePath -Algorithm SHA256).Hash.ToLowerInvariant()
+  $allowed = @($ExpectedDigests | ForEach-Object { ([string]$_).ToLowerInvariant() })
+  if ($allowed -notcontains $actual) { throw "SHA-256 mismatch for $FilePath" }
   return $actual
 }
 
@@ -463,12 +493,14 @@ function Invoke-InstallMachineBundle($Request) {
   $machineHelper = Join-Path $machineRoot "windows-platform.ps1"
   $manifestPath = Join-Path $machineRoot "machine-manifest.json"
   if (Test-Path -LiteralPath $machineRoot) {
+    Assert-ManagedMachineRoot $machineRoot $Request.installation_id
+    Set-MachineRootAcl $machineRoot $Request.user_sid
     if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { throw "Unknown existing RainSkills machine directory" }
-    # Verify the prior bundle against its own signed state before replacing it
-    # with files from a newer RainSkills package for the same installation.
-    [void](Assert-MachineManifest $Request)
+    $existing = Assert-MachineManifestIdentity $Request
+    Assert-UpgradableMachineBundle $Request $existing $expectedHelperDigest $bootstrapDigest
   } else {
     New-Item -ItemType Directory -Path $machineRoot | Out-Null
+    Assert-ManagedMachineRoot $machineRoot $Request.installation_id
   }
   Copy-Item -LiteralPath $sourceHelper -Destination $machineHelper -Force
   $machineBootstrap = Join-Path $machineRoot "wsl-bootstrap.sh"
@@ -502,7 +534,7 @@ function Invoke-InstallMachineBundle($Request) {
   }
   [IO.File]::WriteAllText((Join-Path $machineRoot "lease.json"), (($lease | ConvertTo-Json -Depth 4) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
   Set-MachineRootAcl $machineRoot $Request.user_sid
-  [void](Assert-FileDigest $machineHelper $expectedHelperDigest)
+  [void](Assert-MachineManifest $Request)
   return [ordered]@{ machineBundleVerified = $true; machineRoot = $machineRoot; helperPath = $machineHelper }
 }
 
@@ -818,7 +850,7 @@ function Invoke-ConfigureNetwork($Request) {
   $existing = $null
   if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
     Assert-NetworkManifestDigest $Request
-    $existing = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    $existing = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($existing.installation_id -ne $Request.installation_id -or $existing.subnet -ne $subnet -or
         $existing.adapter_ifindex -ne $adapter.ifIndex -or $existing.hns_network_id -ne $hnsNetworkId) {
       throw "Managed network manifest does not match current WSL facts"
@@ -890,7 +922,7 @@ function Invoke-ConfigureNetwork($Request) {
 function Invoke-VerifyNetwork($Request) {
   $manifestPath = Get-NetworkManifestPath $Request
   Assert-NetworkManifestDigest $Request
-  $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+  $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
   $adapter = Get-WslAdapter
   if ($manifest.operation_id -ne $Request.operation_id -or $manifest.installation_id -ne $Request.installation_id -or
       $manifest.adapter_ifindex -ne $adapter.ifIndex -or $manifest.hns_network_id -ne (Get-WslHnsNetworkId $adapter)) {
@@ -914,7 +946,7 @@ function Invoke-VerifyNetwork($Request) {
 
 function Get-VerifiedManagedNetwork($Request) {
   [void](Invoke-VerifyNetwork $Request)
-  $manifest = Get-Content -LiteralPath (Get-NetworkManifestPath $Request) -Raw | ConvertFrom-Json
+  $manifest = Get-Content -LiteralPath (Get-NetworkManifestPath $Request) -Raw -Encoding UTF8 | ConvertFrom-Json
   return $manifest
 }
 
@@ -977,16 +1009,36 @@ function Get-TaskNames($Request) {
   }
 }
 
-function Assert-MachineManifest($Request) {
+function Assert-MachineManifestIdentity($Request) {
   $machineRoot = Get-MachineRoot $Request
   $manifestPath = Join-Path $machineRoot "machine-manifest.json"
   if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { throw "Machine manifest is missing" }
-  $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-  if ($manifest.operation_id -ne $Request.operation_id -or
+  $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+  if ($manifest.schema -ne "rainskills.windows-machine-bundle.v1" -or
+      $manifest.operation_id -ne $Request.operation_id -or
       $manifest.installation_id -ne $Request.installation_id -or
       $manifest.original_user_sid -ne $Request.user_sid) {
     throw "Machine manifest identity mismatch"
   }
+  return $manifest
+}
+
+function Assert-UpgradableMachineBundle($Request, $Manifest, [string]$NewHelperDigest, [string]$NewBootstrapDigest) {
+  $machineRoot = Get-MachineRoot $Request
+  # rc.13 could replace the helper before its manifest write was denied.
+  $interruptedRc13HelperDigest = "b2315dcec815187f3f48144981487bf2646dad5ed0de12a1125b99c45ecf18fd"
+  [void](Assert-FileDigestOneOf (Join-Path $machineRoot "windows-platform.ps1") @(
+    $Manifest.helper_sha256,
+    $NewHelperDigest,
+    $interruptedRc13HelperDigest
+  ))
+  [void](Assert-FileDigestOneOf (Join-Path $machineRoot "wsl-bootstrap.sh") @($Manifest.bootstrap_sha256, $NewBootstrapDigest))
+  [void](Assert-FileDigest (Join-Path $Manifest.recovery_root "manifest.json") $Manifest.recovery_manifest_sha256)
+}
+
+function Assert-MachineManifest($Request) {
+  $machineRoot = Get-MachineRoot $Request
+  $manifest = Assert-MachineManifestIdentity $Request
   [void](Assert-FileDigest (Join-Path $machineRoot "windows-platform.ps1") $manifest.helper_sha256)
   [void](Assert-FileDigest (Join-Path $machineRoot "wsl-bootstrap.sh") $manifest.bootstrap_sha256)
   [void](Assert-FileDigest (Join-Path $manifest.recovery_root "manifest.json") $manifest.recovery_manifest_sha256)
@@ -1110,7 +1162,7 @@ function Invoke-Finalize($Request) {
   if (-not (Test-Path -LiteralPath $terminalMarker -PathType Leaf)) {
     return [ordered]@{ finalized = $false; waitingForTerminalMarker = $true }
   }
-  $terminal = Get-Content -LiteralPath $terminalMarker -Raw | ConvertFrom-Json
+  $terminal = Get-Content -LiteralPath $terminalMarker -Raw -Encoding UTF8 | ConvertFrom-Json
   if ($terminal.operation_id -ne $Request.operation_id -or $terminal.installation_id -ne $Request.installation_id -or
       $terminal.nonce -ne $Request.nonce -or $terminal.status -notin @("success", "cancelled", "failed")) {
     throw "Terminal marker identity mismatch"
@@ -1125,9 +1177,17 @@ function Invoke-Finalize($Request) {
 
 function Invoke-PrepareWsl($Request) {
   Write-Host "[1/2] Preparing the protected RainSkills recovery bundle..."
-  $bundle = Invoke-InstallMachineBundle $Request
+  try {
+    $bundle = Invoke-InstallMachineBundle $Request
+  } catch {
+    throw "InstallMachineBundle failed: $($_.Exception.Message)"
+  }
   Write-Host "[2/2] Enabling and verifying WSL 2..."
-  $wsl = Invoke-EnableWsl $Request
+  try {
+    $wsl = Invoke-EnableWsl $Request
+  } catch {
+    throw "EnableWsl failed: $($_.Exception.Message)"
+  }
   $facts = [ordered]@{
     machineBundleVerified = [bool]$bundle.machineBundleVerified
     machineRoot = [string]$bundle.machineRoot
@@ -1218,7 +1278,7 @@ try {
   if ($requestInfo.PSIsContainer -or ($requestInfo.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
     throw "RequestPath must be a regular non-reparse file"
   }
-  $request = Get-Content -LiteralPath $RequestPath -Raw | ConvertFrom-Json
+  $request = Get-Content -LiteralPath $RequestPath -Raw -Encoding UTF8 | ConvertFrom-Json
   $requiredRequestKeys = @("schema", "action", "operation_id", "installation_id", "nonce", "user_sid", "policy")
   if ($Action -ne "Preflight") { $requiredRequestKeys += "payload" }
   $actualRequestKeys = @($request.PSObject.Properties.Name)

@@ -396,13 +396,38 @@ test("PowerShell returns a nonce-bound structured result when an elevated action
   assert.match(source, /if \(\$resultIdentityValidated -and \$null -ne \$request\)/);
 });
 
+test("PowerShell reads every persisted JSON document as UTF-8", () => {
+  const source = fs.readFileSync(powershellPath, "utf8");
+  const jsonReads = source.match(/Get-Content -LiteralPath[^\n]*ConvertFrom-Json/g) || [];
+  assert(jsonReads.length >= 6, "expected all persisted Windows JSON read sites");
+  for (const read of jsonReads) assert.match(read, /-Encoding UTF8/);
+});
+
 test("PowerShell upgrades only a verified machine bundle from the same installation", () => {
   const source = fs.readFileSync(powershellPath, "utf8");
   const installBundle = source.match(/function Invoke-InstallMachineBundle\(\$Request\) \{[\s\S]*?\n\}\n\nfunction Get-TrustedWslPath/)?.[0];
   assert(installBundle, "Invoke-InstallMachineBundle must remain a standalone fixed action");
-  assert.match(installBundle, /Assert-MachineManifest \$Request/);
+  assert.match(installBundle, /Assert-ManagedMachineRoot \$machineRoot \$Request\.installation_id/);
+  assert.match(installBundle, /Set-MachineRootAcl \$machineRoot \$Request\.user_sid[\s\S]*Assert-MachineManifestIdentity \$Request/);
+  assert.match(installBundle, /Assert-UpgradableMachineBundle/);
   assert.doesNotMatch(installBundle, /existing\.helper_sha256 -ne \$expectedHelperDigest/);
   assert.match(installBundle, /Copy-Item[\s\S]*Assert-FileDigest \$machineHelper \$expectedHelperDigest/);
+  assert.match(source, /function Assert-UpgradableMachineBundle[\s\S]*Assert-FileDigestOneOf/);
+  assert.match(source, /b2315dcec815187f3f48144981487bf2646dad5ed0de12a1125b99c45ecf18fd/);
+  assert.match(source, /function Assert-ManagedMachineRoot[\s\S]*ReparsePoint/);
+  const aclFunction = source.match(/function Set-MachineRootAcl[\s\S]*?\n\}/)?.[0];
+  assert(aclFunction, "Set-MachineRootAcl must remain a standalone fixed action");
+  assert.match(aclFunction, /\/setowner[\s\S]*S-1-5-32-544/);
+  assert.match(aclFunction, /\/verify/);
+  assert.doesNotMatch(aclFunction, /\s\/c(?:\s|$)/);
+});
+
+test("PowerShell identifies the failing PrepareWsl substep", () => {
+  const source = fs.readFileSync(powershellPath, "utf8");
+  const prepareWsl = source.match(/function Invoke-PrepareWsl\(\$Request\) \{[\s\S]*?\n\}\n\nfunction Invoke-ProvisionRainbond/)?.[0];
+  assert(prepareWsl, "Invoke-PrepareWsl must remain a standalone fixed action");
+  assert.match(prepareWsl, /InstallMachineBundle failed/);
+  assert.match(prepareWsl, /EnableWsl failed/);
 });
 
 test("native Windows state storage hardens and inspects every path without command strings", () => {
