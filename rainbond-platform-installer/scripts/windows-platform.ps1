@@ -20,6 +20,13 @@ param(
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+try {
+  $utf8Encoding = [Text.UTF8Encoding]::new($false)
+  [Console]::OutputEncoding = $utf8Encoding
+  $OutputEncoding = $utf8Encoding
+} catch {
+  # Keep the current Windows code page if this host does not expose a console.
+}
 
 function Assert-PathInsideRoot([string]$Candidate, [string]$Root) {
   $candidateFull = [IO.Path]::GetFullPath($Candidate).TrimEnd("\")
@@ -228,8 +235,6 @@ function Invoke-Preflight($Request) {
   $groupOutput = (& "$env:SystemRoot\System32\whoami.exe" /groups /fo csv /nh 2>$null | Out-String)
   $isAdministrator = $groupOutput -match "S-1-5-32-544"
   $uacValue = Get-ItemPropertyValue -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name EnableLUA -ErrorAction SilentlyContinue
-  $wslFeature = Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Windows-Subsystem-Linux
-  $vmpFeature = Get-WindowsOptionalFeature -Online -FeatureName VirtualMachinePlatform
   $wslCommand = Get-Command "$env:SystemRoot\System32\wsl.exe" -ErrorAction SilentlyContinue
   $wslInstalled = $null -ne $wslCommand
   $wslStatus = ""
@@ -277,8 +282,6 @@ function Invoke-Preflight($Request) {
     diskBytes = [long]$systemDrive.FreeSpace
     virtualizationEnabled = [bool]($computer.HypervisorPresent -or @($processors | Where-Object { $_.VirtualizationFirmwareEnabled }).Count -gt 0)
     tokenElevated = [bool]$tokenElevated
-    wslFeatureState = [string]$wslFeature.State
-    virtualMachinePlatformFeatureState = [string]$vmpFeature.State
     rebootPending = [bool]$rebootPending
     wslInstalled = [bool]$wslInstalled
     wslDefaultVersion = if ($wslStatus -match "(?im)default version:\s*(\d+)") { [int]$Matches[1] } else { $null }

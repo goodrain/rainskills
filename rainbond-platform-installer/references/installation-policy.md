@@ -17,7 +17,7 @@
 
 ## Windows 本地预览策略
 
-- 当前用户必须属于 Administrators，UAC 必须开启，CPU 虚拟化必须可用；安装器只在用户确认后请求提权。
+- 当前用户必须属于 Administrators，UAC 必须开启，CPU 虚拟化必须可用；普通预检不查询需要提权的 Windows 可选功能，安装器只在用户确认后请求提权并检查、启用 WSL。
 - WSL 必须使用 NAT 网络模式。安装器不会改写用户的 `.wslconfig`，检测到 mirrored 或其他模式时直接停止。
 - Rainbond 安装到独立的 Ubuntu 22.04 `Rainbond` WSL2 发行版，不修改用户已有发行版。发现同名未知发行版、未知计划任务或未知机器目录时停止。
 - Ubuntu rootfs 和旧版 WSL 内核包使用版本策略中的不可变 HTTPS 来源与固定 SHA-256。Rainbond 安装脚本使用固定 HTTPS 官方来源，限制同源跳转和文件大小，并在 WSL 内执行前再次检查 Bash 语法与本次下载摘要。

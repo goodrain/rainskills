@@ -345,15 +345,24 @@ test("passing Windows preflight lists the exact user-visible effects", () => {
 
 test("PowerShell preflight is a fixed read-only action with structured output", () => {
   const source = fs.readFileSync(powershellPath, "utf8");
+  const preflight = source.match(/function Invoke-Preflight\(\$Request\) \{[\s\S]*?\n\}/)?.[0];
+  assert(preflight, "Invoke-Preflight must remain a standalone fixed action");
   assert.match(source, /ValidateSet\("Preflight",/);
   assert.match(source, /rainskills\.windows-request\.v1/);
   assert.match(source, /rainskills\.windows-result\.v1/);
-  assert.match(source, /Get-CimInstance/);
-  assert.match(source, /Get-WindowsOptionalFeature/);
-  assert.match(source, /Get-NetTCPConnection/);
+  assert.match(preflight, /Get-CimInstance/);
+  assert.match(preflight, /Get-NetTCPConnection/);
   assert.match(source, /Get-NetRoute/);
+  assert.doesNotMatch(preflight, /Get-WindowsOptionalFeature/);
+  assert.match(source, /function Get-WslRuntimeFacts[\s\S]*Get-WindowsOptionalFeature/);
   assert.doesNotMatch(source, /Invoke-Expression/);
   assert.doesNotMatch(source, /ScriptBlock/);
+});
+
+test("PowerShell helper emits UTF-8 diagnostics for the Node launcher", () => {
+  const source = fs.readFileSync(powershellPath, "utf8");
+  assert.match(source, /\[Console\]::OutputEncoding = \$utf8Encoding/);
+  assert.match(source, /\$OutputEncoding = \$utf8Encoding/);
 });
 
 test("native Windows state storage hardens and inspects every path without command strings", () => {

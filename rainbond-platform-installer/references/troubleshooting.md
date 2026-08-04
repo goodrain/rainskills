@@ -7,7 +7,7 @@
 - **远程连接失败**：确认控制端有 `ssh` 和 `scp`。安装器会先尝试已有的 SSH Key；需要密码时会打开一次系统 SSH 认证并自动复用连接。密码必须输入到终端的 OpenSSH 提示中，不要发送到聊天。如果提示主机密钥发生变化，先通过可信渠道核对服务器指纹并修复 `known_hosts`，安装器不会绕过该校验。
 - **Windows 版本**：本地预览要求 Windows 10 build 19041+ 或 Windows 11 x64 工作站；旧版本和 Windows Server 停止安装。
 - **Windows 虚拟化**：在任务管理器或 BIOS/UEFI 中确认 CPU 虚拟化已启用。安装器不会代替用户修改固件设置。
-- **Windows UAC / 管理员权限**：当前用户必须属于 Administrators 且 UAC 开启。拒绝 UAC 后保留断点，重新执行原命令即可。
+- **Windows UAC / 管理员权限**：当前用户必须属于 Administrators 且 UAC 开启。普通预检不需要以管理员身份启动终端；确认安装后固定 helper 才会请求 UAC。拒绝 UAC 后保留断点，重新执行原命令即可。
 - **WSL 网络模式**：只支持默认 NAT。检测到 mirrored 或其他模式时停止，不自动修改 `.wslconfig`。
 - **Windows 端口冲突**：`80`、`443`、`6060`、`7070` 任一端口被现有进程或 portproxy 占用都会停止；先确认占用者，不自动结束进程。
 - **Windows 管理对象冲突**：存在未知 `Rainbond` WSL 发行版、`RainSkills-*` 计划任务或 `%ProgramData%\RainSkills` 内容时停止，避免覆盖用户数据。
