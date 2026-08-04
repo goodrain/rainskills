@@ -492,14 +492,10 @@ async function ensurePinnedArtifact({
     quarantineFile(destination);
   }
   fs.mkdirSync(path.dirname(destination), { recursive: true, mode: 0o700 });
-  const partialPath = `${destination}.partial`;
-  if (fs.existsSync(partialPath)) {
-    const partialInfo = fs.lstatSync(partialPath);
-    if (partialInfo.isSymbolicLink() || !partialInfo.isFile()) throw new Error(`下载缓存不是安全的普通文件：${partialPath}`);
-  }
   let lastMismatch = null;
   for (let attempt = 0; attempt < urls.length; attempt += 1) {
     const sourceUrl = urls[attempt];
+    const partialPath = `${destination}.partial.${process.pid}.${crypto.randomBytes(8).toString("hex")}`;
     let result;
     try {
       result = await download({ url: sourceUrl, partialPath, allowedOrigins, expectedBytes, onProgress });
@@ -527,7 +523,7 @@ async function ensurePinnedArtifact({
       if (info.size === expectedBytes && actualSha256 === sha256) {
         fs.chmodSync(partialPath, 0o600);
         fs.renameSync(partialPath, destination);
-        return { reused: false, path: destination, bytes: info.size, finalUrl: result.finalUrl || url };
+        return { reused: false, path: destination, bytes: info.size, finalUrl: result.finalUrl || sourceUrl };
       }
       lastMismatch = { actualBytes: info.size, expectedBytes, actualSha256, expectedSha256: sha256 };
       quarantineFile(partialPath);

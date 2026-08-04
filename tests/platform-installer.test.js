@@ -1052,6 +1052,36 @@ test("Windows preflight reports progress before invoking the blocking helper", (
   assert(preflight > progress);
 });
 
+test("platform install holds the onboarding lock until the operation finishes", async () => {
+  const { runInstall } = require(platformInstallerPath);
+  assert.equal(typeof runInstall, "function");
+  const events = [];
+  const options = { onboardingId: "1d6754d6-6fb3-4bda-9a04-15c2d261d178" };
+  const stateStore = {
+    acquireOperationLock({ operationId }) {
+      events.push(`acquire:${operationId}`);
+      return {
+        release() {
+          events.push(`release:${operationId}`);
+        },
+      };
+    },
+  };
+
+  await runInstall(options, {
+    stateStore,
+    installOperation: async () => {
+      events.push("operation");
+    },
+  });
+
+  assert.deepEqual(events, [
+    `acquire:${options.onboardingId}`,
+    "operation",
+    `release:${options.onboardingId}`,
+  ]);
+});
+
 test("atomic state writes reject a symlink directory", {
   skip: process.platform === "win32",
 }, () => {

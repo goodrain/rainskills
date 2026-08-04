@@ -2235,12 +2235,17 @@ async function runInstallOperation(options) {
   }
 }
 
-async function runInstall(options) {
+async function runInstall(options, {
+  stateStore = secureStateStore,
+  installOperation = runInstallOperation,
+} = {}) {
+  const operationLock = stateStore.acquireOperationLock({ operationId: options.onboardingId });
   try {
-    await runInstallOperation(options);
+    await installOperation(options);
   } finally {
     closeSshSession(activeSshSession);
     activeSshSession = null;
+    operationLock.release();
   }
 }
 
@@ -2306,6 +2311,7 @@ module.exports = {
   readOnboardingState,
   readPlatformState,
   remoteInstallerInvocation,
+  runInstall,
   resolveRemoteConsole,
   resumeInvocationForOnboarding,
   resolveSshHostname,

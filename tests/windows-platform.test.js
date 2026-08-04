@@ -830,6 +830,37 @@ test("pinned rootfs artifacts must match the published byte size", async () => {
   assert.equal(downloads, 2);
 });
 
+test("pinned rootfs gives every source an isolated partial file", async () => {
+  const { ensurePinnedArtifact } = require(windowsPlatformPath);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-rootfs-isolated-"));
+  const destination = path.join(root, "ubuntu-rootfs.tar.gz");
+  const legacyPartial = `${destination}.partial`;
+  const artifact = Buffer.from("verified-rootfs");
+  const expectedDigest = crypto.createHash("sha256").update(artifact).digest("hex");
+  const partialPaths = [];
+  fs.writeFileSync(legacyPartial, "legacy-concurrent-writer");
+
+  const result = await ensurePinnedArtifact({
+    destination,
+    urls: policy.windows.ubuntu_rootfs.urls.slice(0, 2),
+    expectedBytes: artifact.length,
+    sha256: expectedDigest,
+    allowedOrigins: policy.windows.preflight_allowed_origins,
+    download: async ({ partialPath, url }) => {
+      partialPaths.push(partialPath);
+      fs.writeFileSync(partialPath, partialPaths.length === 1 ? Buffer.alloc(artifact.length, 0x78) : artifact);
+      return { finalUrl: url, bytes: artifact.length };
+    },
+  });
+
+  assert.equal(result.reused, false);
+  assert.equal(partialPaths.length, 2);
+  assert.notEqual(partialPaths[0], legacyPartial);
+  assert.notEqual(partialPaths[1], legacyPartial);
+  assert.notEqual(partialPaths[0], partialPaths[1]);
+  assert.equal(fs.readFileSync(destination, "utf8"), artifact.toString("utf8"));
+});
+
 test("rootfs resume accepts only a matching Content-Range", () => {
   const { resolveArtifactDownloadResponse } = require(windowsPlatformPath);
   assert.equal(typeof resolveArtifactDownloadResponse, "function");
@@ -881,22 +912,22 @@ test("rootfs byte limiter stops a source that sends more than the pinned size", 
   assert.equal(Buffer.concat(output).toString("utf8"), "abc");
 });
 
-test("pinned rootfs switches sources after a checksum failure without the stale partial", async () => {
+test("pinned rootfs switches sources after a checksum failure with a fresh partial", async () => {
   const { ensurePinnedArtifact } = require(windowsPlatformPath);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-rootfs-retry-"));
   const destination = path.join(root, "ubuntu-rootfs.tar.gz");
-  const partialPath = `${destination}.partial`;
   const expectedBytes = Buffer.from("verified-rootfs");
   const expectedDigest = crypto.createHash("sha256").update(expectedBytes).digest("hex");
-  fs.writeFileSync(partialPath, "stale-prefix");
   let downloads = 0;
   const retries = [];
   const requestedUrls = [];
+  const partialPaths = [];
   const download = async ({ partialPath: currentPartial, url }) => {
     downloads += 1;
     requestedUrls.push(url);
+    partialPaths.push(currentPartial);
     if (downloads === 1) {
-      fs.appendFileSync(currentPartial, expectedBytes);
+      fs.writeFileSync(currentPartial, Buffer.alloc(expectedBytes.length, 0x78));
     } else {
       assert.equal(fs.existsSync(currentPartial), false);
       fs.writeFileSync(currentPartial, expectedBytes);
@@ -917,12 +948,13 @@ test("pinned rootfs switches sources after a checksum failure without the stale 
   assert.equal(result.reused, false);
   assert.equal(downloads, 2);
   assert.deepEqual(requestedUrls, policy.windows.ubuntu_rootfs.urls.slice(0, 2));
+  assert.notEqual(partialPaths[0], partialPaths[1]);
   assert.equal(retries.length, 1);
   assert.equal(retries[0].expectedSha256, expectedDigest);
-  assert.equal(retries[0].actualBytes, "stale-prefix".length + expectedBytes.length);
+  assert.equal(retries[0].actualBytes, expectedBytes.length);
   assert.match(retries[0].actualSha256, /^[a-f0-9]{64}$/);
   assert.equal(fs.readFileSync(destination, "utf8"), expectedBytes.toString("utf8"));
-  assert(fs.readdirSync(root).some((name) => name.startsWith("ubuntu-rootfs.tar.gz.partial.invalid-")));
+  assert(fs.readdirSync(root).some((name) => name.includes(".partial.") && name.includes(".invalid-")));
 });
 
 test("artifact redirects and managed subnets reject untrusted or overlapping networks", () => {
