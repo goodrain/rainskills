@@ -39,6 +39,13 @@ $machineItemAclAst = $platformAst.Find({
 }, $true)
 if ($null -eq $machineItemAclAst) { throw "Set-MachineItemAcl function is missing" }
 . ([ScriptBlock]::Create($machineItemAclAst.Extent.Text))
+$machineRootAclAst = $platformAst.Find({
+  param($node)
+  $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+    $node.Name -eq "Set-MachineRootAcl"
+}, $true)
+if ($null -eq $machineRootAclAst) { throw "Set-MachineRootAcl function is missing" }
+. ([ScriptBlock]::Create($machineRootAclAst.Extent.Text))
 
 $global:rainskillsContractOpenedUrl = $null
 function Start-Process {
@@ -87,7 +94,7 @@ try {
   $leasePath = Join-Path $leaseRoot "lease.json"
   [IO.File]::WriteAllText($leasePath, "stale", [Text.UTF8Encoding]::new($false))
   $leaseAcl = [Security.AccessControl.FileSecurity]::new()
-  $leaseAcl.SetOwner([Security.Principal.SecurityIdentifier]::new($currentSid))
+  $leaseAcl.SetOwner([Security.Principal.SecurityIdentifier]::new("S-1-5-32-544"))
   $leaseAcl.SetAccessRuleProtection($true, $false)
   [IO.File]::SetAccessControl($leasePath, $leaseAcl)
   $inPlaceWriteDenied = $false
@@ -97,7 +104,7 @@ try {
     $inPlaceWriteDenied = $true
   }
   if (-not $inPlaceWriteDenied) { throw "Lease contract did not reproduce an access denied overwrite" }
-  Set-MachineItemAcl $leasePath $false $currentSid
+  Set-MachineRootAcl $leaseRoot $currentSid
   $leaseRequest = [pscustomobject]@{
     operation_id = "11111111-1111-4111-8111-111111111111"
     installation_id = "22222222-2222-4222-8222-222222222222"

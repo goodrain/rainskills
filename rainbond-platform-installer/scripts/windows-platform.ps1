@@ -455,16 +455,20 @@ function Set-MachineItemAcl([string]$PathValue, [bool]$IsDirectory, [string]$Ori
 }
 
 function Set-MachineRootAcl([string]$MachineRoot, [string]$OriginalSid) {
-  $ownerResult = & "$env:SystemRoot\System32\icacls.exe" $MachineRoot /setowner "*S-1-5-32-544" /t 2>&1
-  if ($LASTEXITCODE -ne 0) { throw "Failed to restore ProgramData machine bundle ownership: $($ownerResult -join ' ')" }
   $items = @((Get-Item -LiteralPath $MachineRoot -Force)) +
     @(Get-ChildItem -LiteralPath $MachineRoot -Force -Recurse)
   foreach ($item in $items) {
     if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
       throw "ProgramData machine bundle may not contain reparse points"
     }
+    $takeOwnershipResult = & "$env:SystemRoot\System32\takeown.exe" /f $item.FullName 2>&1
+    if ($LASTEXITCODE -ne 0) {
+      throw "Failed to take temporary ownership of $($item.FullName): $($takeOwnershipResult -join ' ')"
+    }
     Set-MachineItemAcl $item.FullName $item.PSIsContainer $OriginalSid
   }
+  $ownerResult = & "$env:SystemRoot\System32\icacls.exe" $MachineRoot /setowner "*S-1-5-32-544" /t 2>&1
+  if ($LASTEXITCODE -ne 0) { throw "Failed to restore ProgramData machine bundle ownership: $($ownerResult -join ' ')" }
   $verifyResult = & "$env:SystemRoot\System32\icacls.exe" $MachineRoot /verify /t 2>&1
   if ($LASTEXITCODE -ne 0) { throw "ProgramData machine bundle ACL verification failed: $($verifyResult -join ' ')" }
 }

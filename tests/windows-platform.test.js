@@ -446,8 +446,17 @@ test("PowerShell rebuilds an effective ACL on every existing machine item", () =
   assert.match(itemAcl, /ReadAndExecute/);
   assert.match(itemAcl, /FullControl/);
   const aclFunction = source.match(/function Set-MachineRootAcl[\s\S]*?\n\}/)?.[0];
+  assert.match(aclFunction, /takeown\.exe/);
   assert.match(aclFunction, /Get-ChildItem[^\n]*-Recurse/);
   assert.match(aclFunction, /Set-MachineItemAcl/);
+  assert(
+    aclFunction.indexOf("takeown.exe") < aclFunction.indexOf("Set-MachineItemAcl"),
+    "each inaccessible item must be owned by the elevated user before its ACL is rebuilt"
+  );
+  assert(
+    aclFunction.indexOf("Set-MachineItemAcl") < aclFunction.indexOf("/setowner"),
+    "the Administrators owner must be restored only after the ACL is usable"
+  );
   assert.doesNotMatch(aclFunction, /\/grant:r/);
 });
 
