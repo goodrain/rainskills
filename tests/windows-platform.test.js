@@ -1118,6 +1118,15 @@ test("PowerShell rolls back a distro when first-run bootstrap fails", () => {
   assert.match(importDistro, /--unregister[\s\S]*Remove-Item -LiteralPath \$distroRoot/);
 });
 
+test("PowerShell checks systemd without terminal-dependent ps output", () => {
+  const source = readNormalizedSource(powershellPath);
+  const assertSystemd = source.match(/function Assert-SystemdPidOne\(\$Request\) \{[\s\S]*?\n\}\n\nfunction Invoke-ImportDistro/)?.[0];
+  assert(assertSystemd, "Assert-SystemdPidOne must remain a standalone fixed probe");
+  assert.match(assertSystemd, /Invoke-NativeCapture \$wslPath/);
+  assert.match(assertSystemd, /--exec[\s\S]*cat[\s\S]*\/proc\/1\/comm/);
+  assert.doesNotMatch(assertSystemd, /\bps\s+-p\s+1\b/);
+});
+
 test("WSL bootstrap enables systemd and gates runtime startup on the fixed network", () => {
   const source = fs.readFileSync(wslBootstrapPath, "utf8");
   assert.match(source, /^#!\/usr\/bin\/env bash/);

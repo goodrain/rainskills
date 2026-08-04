@@ -734,10 +734,12 @@ function Get-DistroIdentity($Request) {
 
 function Assert-SystemdPidOne($Request) {
   $wslPath = Get-TrustedWslPath
-  & $wslPath -d Rainbond -u root -- /bin/true | Out-Null
-  if ($LASTEXITCODE -ne 0) { throw "Failed to start the managed Rainbond distro" }
-  $pidOne = (& $wslPath -d Rainbond -u root -- ps -p 1 -o comm= 2>&1 | Out-String).Trim()
-  if ($LASTEXITCODE -ne 0 -or $pidOne -ne "systemd") { throw "PID 1 in the managed Rainbond distro is not systemd" }
+  $startProbe = Invoke-NativeCapture $wslPath @("-d", "Rainbond", "-u", "root", "--exec", "/bin/true")
+  if ($startProbe.exitCode -ne 0) { throw "Failed to start the managed Rainbond distro" }
+  $pidOneProbe = Invoke-NativeCapture $wslPath @("-d", "Rainbond", "-u", "root", "--exec", "cat", "/proc/1/comm")
+  $pidOneLines = @($pidOneProbe.output -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+  $pidOne = $pidOneLines | Select-Object -Last 1
+  if ($pidOneProbe.exitCode -ne 0 -or $pidOne -ne "systemd") { throw "PID 1 in the managed Rainbond distro is not systemd" }
   if ((Get-DistroIdentity $Request) -ne $Request.installation_id) { throw "Managed distro identity mismatch" }
   return $true
 }
