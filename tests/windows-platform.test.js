@@ -263,6 +263,16 @@ test("Windows adapter rejects invalid identifiers, mismatched results, and comma
     (result) => ({ ...result, command: "Remove-Item C:\\" }),
     (result) => ({ ...result, script: "arbitrary" }),
     (result) => ({ ...result, facts: { ...result.facts, command: "whoami" } }),
+    (result) => ({
+      ...result,
+      status: "error",
+      facts: { failedAction: "PrepareWsl", failureMessage: "wrong action" },
+    }),
+    (result) => ({
+      ...result,
+      status: "error",
+      facts: { failedAction: "Preflight", failureMessage: "unsafe\u0000message" },
+    }),
   ]) {
     const fixture = createFixture({ mutateResult });
     const adapter = createWindowsPlatformAdapter({
@@ -363,6 +373,36 @@ test("PowerShell helper emits UTF-8 diagnostics for the Node launcher", () => {
   const source = fs.readFileSync(powershellPath, "utf8");
   assert.match(source, /\[Console\]::OutputEncoding = \$utf8Encoding/);
   assert.match(source, /\$OutputEncoding = \$utf8Encoding/);
+});
+
+test("PowerShell treats unsupported WSL probe commands as facts instead of terminating errors", () => {
+  const source = fs.readFileSync(powershellPath, "utf8");
+  const runtimeFacts = source.match(/function Get-WslRuntimeFacts \{[\s\S]*?\n\}\n\nfunction Install-LegacyWslKernel/)?.[0];
+  assert(runtimeFacts, "Get-WslRuntimeFacts must remain a standalone fixed probe");
+  assert.match(source, /function Invoke-NativeCapture/);
+  assert.match(runtimeFacts, /Invoke-NativeCapture \$wslPath @\("--version"\)/);
+  assert.match(runtimeFacts, /Invoke-NativeCapture \$wslPath @\("--status"\)/);
+  assert.doesNotMatch(runtimeFacts, /& \$wslPath --(?:version|status) 2>&1/);
+});
+
+test("PowerShell returns a nonce-bound structured result when an elevated action fails", () => {
+  const source = fs.readFileSync(powershellPath, "utf8");
+  assert.match(source, /function Write-ActionErrorResult/);
+  assert.match(source, /Write-ActionResult[\s\S]*"error"/);
+  assert.match(source, /failedAction/);
+  assert.match(source, /failureMessage/);
+  assert.match(source, /Invoke-ElevatedSelf[\s\S]*Read-ActionResult/);
+  assert.match(source, /\$resultIdentityValidated = \$true/);
+  assert.match(source, /if \(\$resultIdentityValidated -and \$null -ne \$request\)/);
+});
+
+test("PowerShell upgrades only a verified machine bundle from the same installation", () => {
+  const source = fs.readFileSync(powershellPath, "utf8");
+  const installBundle = source.match(/function Invoke-InstallMachineBundle\(\$Request\) \{[\s\S]*?\n\}\n\nfunction Get-TrustedWslPath/)?.[0];
+  assert(installBundle, "Invoke-InstallMachineBundle must remain a standalone fixed action");
+  assert.match(installBundle, /Assert-MachineManifest \$Request/);
+  assert.doesNotMatch(installBundle, /existing\.helper_sha256 -ne \$expectedHelperDigest/);
+  assert.match(installBundle, /Copy-Item[\s\S]*Assert-FileDigest \$machineHelper \$expectedHelperDigest/);
 });
 
 test("native Windows state storage hardens and inspects every path without command strings", () => {
@@ -526,6 +566,43 @@ test("machine actions are fixed and reboot requires an interactive explicit conf
     payload: { rootfs_path: "/tmp/rootfs.tar.gz" },
   });
   assert.equal(fixture.requests.at(-1).request.action, "ProvisionRainbond");
+});
+
+test("Windows adapter reports the elevated action's structured failure", async () => {
+  const { createWindowsPlatformAdapter } = require(windowsPlatformPath);
+  const fixture = createFixture();
+  const runner = async (command, args) => {
+    const valueAfter = (name) => args[args.indexOf(name) + 1];
+    const requestPath = valueAfter("-RequestPath");
+    const resultPath = valueAfter("-ResultPath");
+    const request = fixture.stateStore.readProtectedJson(requestPath);
+    fixture.stateStore.atomicWriteJson(resultPath, {
+      schema: "rainskills.windows-result.v1",
+      action: request.action,
+      operation_id: request.operation_id,
+      installation_id: request.installation_id,
+      nonce: request.nonce,
+      status: "error",
+      facts: {
+        failedAction: "PrepareWsl",
+        failureMessage: "WSL --version is unavailable before the runtime update",
+      },
+    });
+    return { status: 1, stdout: "", stderr: "Elevated Windows helper failed with exit code 1" };
+  };
+  const adapter = createWindowsPlatformAdapter({
+    runner,
+    stateStore: fixture.stateStore,
+    policy,
+    userSid: USER_SID,
+    home: fixture.home,
+  });
+
+  await assert.rejects(adapter.prepareWsl({
+    operationId: OPERATION_ID,
+    installationId: INSTALLATION_ID,
+    payload: {},
+  }), /PrepareWsl.*WSL --version is unavailable/);
 });
 
 test("PowerShell machine actions enforce UAC, signed WSL setup, protected tasks, and fixed reboot", () => {

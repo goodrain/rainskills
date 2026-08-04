@@ -625,6 +625,17 @@ function validateResult(result, expected) {
   if (!result.facts || typeof result.facts !== "object" || Array.isArray(result.facts)) {
     throw new Error("Windows helper 结果缺少结构化 facts");
   }
+  if (result.status === "error") {
+    const factKeys = Object.keys(result.facts).sort();
+    if (factKeys.join(",") !== "failedAction,failureMessage" ||
+        result.facts.failedAction !== expected.action ||
+        typeof result.facts.failureMessage !== "string" ||
+        !result.facts.failureMessage.trim() ||
+        result.facts.failureMessage.length > 2000 ||
+        /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(result.facts.failureMessage)) {
+      throw new Error("Windows helper 错误结果无效");
+    }
+  }
   return result;
 }
 
@@ -686,13 +697,31 @@ function createWindowsPlatformAdapter({
     const execution = await Promise.resolve(runner(powershell, args));
     if (execution?.error) throw new Error(`无法启动 Windows helper：${execution.error.message}`);
     const status = execution?.status ?? execution?.code ?? 0;
-    if (status !== 0) {
-      throw new Error(`Windows helper 执行失败（退出码 ${status}）：${String(execution?.stderr || "").trim()}`);
+    let result = null;
+    if (fs.existsSync(resultPath)) {
+      if (prepareResultForRead) prepareResultForRead(resultPath);
+      else stateStore.protectRegularFile(resultPath);
+      result = validateResult(
+        stateStore.readProtectedJson(resultPath),
+        { action, operationId, installationId, nonce }
+      );
     }
-    if (prepareResultForRead) prepareResultForRead(resultPath);
-    else stateStore.protectRegularFile(resultPath);
-    const result = stateStore.readProtectedJson(resultPath);
-    return validateResult(result, { action, operationId, installationId, nonce });
+    if (result?.status === "error") {
+      throw new Error(`Windows ${result.facts.failedAction} 失败：${result.facts.failureMessage}`);
+    }
+    if (status !== 0) {
+      const detail = String(execution?.stderr || execution?.stdout || "").trim();
+      throw new Error(`Windows helper 执行失败（退出码 ${status}）${detail ? `：${detail}` : ""}`);
+    }
+    if (!result) {
+      if (prepareResultForRead) prepareResultForRead(resultPath);
+      else stateStore.protectRegularFile(resultPath);
+      result = validateResult(
+        stateStore.readProtectedJson(resultPath),
+        { action, operationId, installationId, nonce }
+      );
+    }
+    return result;
   }
 
   return {

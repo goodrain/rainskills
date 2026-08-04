@@ -240,8 +240,12 @@ function Invoke-Preflight($Request) {
   $wslStatus = ""
   $distroNames = @()
   if ($wslInstalled) {
-    $wslStatus = (& $wslCommand.Source --status 2>&1 | Out-String)
-    $distroNames = @(& $wslCommand.Source --list --quiet 2>$null | ForEach-Object { [string]$_ -replace "\u0000", "" } | Where-Object { $_ })
+    $statusProbe = Invoke-NativeCapture $wslCommand.Source @("--status")
+    $wslStatus = $statusProbe.output
+    $listProbe = Invoke-NativeCapture $wslCommand.Source @("--list", "--quiet")
+    if ($listProbe.exitCode -eq 0) {
+      $distroNames = @($listProbe.output -split "`r?`n" | ForEach-Object { [string]$_ -replace "\u0000", "" } | Where-Object { $_ })
+    }
   }
   $networkingMode = "nat"
   $wslConfig = Join-Path ([Environment]::GetFolderPath("UserProfile")) ".wslconfig"
@@ -308,6 +312,24 @@ function Get-PropertyValue($Object, [string]$Name, $DefaultValue = $null) {
   return $DefaultValue
 }
 
+function Invoke-NativeCapture([string]$FilePath, [string[]]$Arguments) {
+  $previousPreference = $ErrorActionPreference
+  $output = ""
+  $exitCode = 1
+  try {
+    # Some inbox WSL probes write expected compatibility errors to stderr.
+    $ErrorActionPreference = "Continue"
+    $output = (& $FilePath @Arguments 2>&1 | Out-String)
+    $exitCode = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $previousPreference
+  }
+  return [ordered]@{
+    output = [string]$output
+    exitCode = [int]$exitCode
+  }
+}
+
 function Assert-NoExecutableFields($Value) {
   if ($null -eq $Value -or $Value -is [string] -or $Value.GetType().IsPrimitive) { return }
   if ($Value -is [Collections.IDictionary]) {
@@ -341,6 +363,32 @@ function Write-ActionResult($Request, $Facts, [string]$Status = "ok") {
   [IO.File]::WriteAllText($ResultPath, $json + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
 }
 
+function Write-ActionErrorResult($Request, $ErrorRecord) {
+  $message = ([string]$ErrorRecord.Exception.Message -replace '[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', ' ').Trim()
+  if ([string]::IsNullOrWhiteSpace($message)) { $message = "Unknown Windows helper failure" }
+  if ($message.Length -gt 2000) { $message = $message.Substring(0, 2000) }
+  Write-ActionResult $Request ([ordered]@{
+    failedAction = $Action
+    failureMessage = $message
+  }) "error"
+}
+
+function Read-ActionResult($Request) {
+  if (-not (Test-Path -LiteralPath $ResultPath -PathType Leaf)) { return $null }
+  $resultInfo = Get-Item -LiteralPath $ResultPath -Force
+  if ($resultInfo.PSIsContainer -or ($resultInfo.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+    throw "Elevated Windows helper result must be a regular non-reparse file"
+  }
+  $result = Get-Content -LiteralPath $ResultPath -Raw | ConvertFrom-Json
+  if ($result.schema -ne "rainskills.windows-result.v1" -or $result.action -ne $Action -or
+      $result.operation_id -ne $Request.operation_id -or
+      $result.installation_id -ne $Request.installation_id -or
+      $result.nonce -ne $Request.nonce) {
+    throw "Elevated Windows helper result identity mismatch"
+  }
+  return $result
+}
+
 function Invoke-ElevatedSelf {
   foreach ($value in @($PSCommandPath, $RequestPath, $ResultPath)) {
     if ([string]$value -match '"') { throw "Elevated helper paths may not contain quotes" }
@@ -349,8 +397,11 @@ function Invoke-ElevatedSelf {
     '" -Action ' + $Action + ' -RequestPath "' + $RequestPath + '" -ResultPath "' + $ResultPath + '"'
   $process = Start-Process -FilePath "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" `
     -ArgumentList $arguments -Verb RunAs -Wait -PassThru
-  if ($process.ExitCode -ne 0) { throw "Elevated Windows helper failed with exit code $($process.ExitCode)" }
-  if (-not (Test-Path -LiteralPath $ResultPath -PathType Leaf)) { throw "Elevated Windows helper did not write a result" }
+  $result = Read-ActionResult $request
+  if ($process.ExitCode -ne 0 -and ($null -eq $result -or $result.status -ne "error")) {
+    throw "Elevated Windows helper failed with exit code $($process.ExitCode)"
+  }
+  if ($null -eq $result) { throw "Elevated Windows helper did not write a result" }
 }
 
 function Get-MachineRoot($Request) {
@@ -413,10 +464,9 @@ function Invoke-InstallMachineBundle($Request) {
   $manifestPath = Join-Path $machineRoot "machine-manifest.json"
   if (Test-Path -LiteralPath $machineRoot) {
     if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { throw "Unknown existing RainSkills machine directory" }
-    $existing = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-    if ($existing.installation_id -ne $Request.installation_id -or $existing.helper_sha256 -ne $expectedHelperDigest) {
-      throw "Existing RainSkills machine bundle belongs to another installation"
-    }
+    # Verify the prior bundle against its own signed state before replacing it
+    # with files from a newer RainSkills package for the same installation.
+    [void](Assert-MachineManifest $Request)
   } else {
     New-Item -ItemType Directory -Path $machineRoot | Out-Null
   }
@@ -474,9 +524,11 @@ function Get-WslRuntimeFacts {
   $versionOutput = ""
   $statusOutput = ""
   if ($wslPath) {
-    $versionOutput = (& $wslPath --version 2>&1 | Out-String)
-    $versionExitCode = $LASTEXITCODE
-    $statusOutput = (& $wslPath --status 2>&1 | Out-String)
+    $versionProbe = Invoke-NativeCapture $wslPath @("--version")
+    $versionOutput = $versionProbe.output
+    $versionExitCode = $versionProbe.exitCode
+    $statusProbe = Invoke-NativeCapture $wslPath @("--status")
+    $statusOutput = $statusProbe.output
   } else {
     $versionExitCode = 1
   }
@@ -529,10 +581,11 @@ function Invoke-EnableWsl($Request) {
   }
   $wslPath = "$env:SystemRoot\System32\wsl.exe"
   if (Test-Path -LiteralPath $wslPath -PathType Leaf) {
-    & $wslPath --version *> $null
-    if ($LASTEXITCODE -ne 0) {
-      & $wslPath --update --web-download | ForEach-Object { Write-Host $_ }
-      if ($LASTEXITCODE -ne 0) { Install-LegacyWslKernel $Request }
+    $versionProbe = Invoke-NativeCapture $wslPath @("--version")
+    if ($versionProbe.exitCode -ne 0) {
+      $updateProbe = Invoke-NativeCapture $wslPath @("--update", "--web-download")
+      if ($updateProbe.output) { Write-Host ($updateProbe.output.TrimEnd()) }
+      if ($updateProbe.exitCode -ne 0) { Install-LegacyWslKernel $Request }
     }
   } else {
     throw "wsl.exe is unavailable after enabling Windows features; reboot and resume are required"
@@ -545,8 +598,9 @@ function Invoke-EnableWsl($Request) {
 function Invoke-UpdateWsl($Request) {
   $wslPath = Get-TrustedWslPath
   if (-not $wslPath) { throw "wsl.exe is not installed" }
-  & $wslPath --update --web-download | ForEach-Object { Write-Host $_ }
-  if ($LASTEXITCODE -ne 0) { Install-LegacyWslKernel $Request }
+  $updateProbe = Invoke-NativeCapture $wslPath @("--update", "--web-download")
+  if ($updateProbe.output) { Write-Host ($updateProbe.output.TrimEnd()) }
+  if ($updateProbe.exitCode -ne 0) { Install-LegacyWslKernel $Request }
   return Get-WslRuntimeFacts
 }
 
@@ -1154,90 +1208,102 @@ function Invoke-ProvisionRainbond($Request) {
   }
 }
 
-if ([string]::IsNullOrWhiteSpace($RequestPath) -or [string]::IsNullOrWhiteSpace($ResultPath)) {
-  throw "RequestPath and ResultPath are required for this action"
-}
-$requestInfo = Get-Item -LiteralPath $RequestPath
-if ($requestInfo.PSIsContainer -or ($requestInfo.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
-  throw "RequestPath must be a regular non-reparse file"
-}
-$request = Get-Content -LiteralPath $RequestPath -Raw | ConvertFrom-Json
-$requiredRequestKeys = @("schema", "action", "operation_id", "installation_id", "nonce", "user_sid", "policy")
-if ($Action -ne "Preflight") { $requiredRequestKeys += "payload" }
-$actualRequestKeys = @($request.PSObject.Properties.Name)
-if ($request.schema -ne "rainskills.windows-request.v1" -or $request.action -ne $Action) {
-  throw "Request schema or action mismatch"
-}
-if (@($actualRequestKeys | Where-Object { $requiredRequestKeys -notcontains $_ }).Count -gt 0 -or
-    @($requiredRequestKeys | Where-Object { $actualRequestKeys -notcontains $_ }).Count -gt 0) {
-  throw "Request contains unsupported or missing fields"
-}
-if ($actualRequestKeys -contains "command" -or $actualRequestKeys -contains "script") {
-  throw "Request may not contain command or script"
-}
-Assert-NoExecutableFields $request
-$uuidPattern = "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
-if ([string]$request.operation_id -notmatch $uuidPattern -or
-    [string]$request.installation_id -notmatch $uuidPattern -or
-    [string]$request.nonce -notmatch "^[0-9a-f]{64}$") {
-  throw "Request identifiers are invalid"
-}
-$requestFullPath = [IO.Path]::GetFullPath($RequestPath)
-$resultFullPath = [IO.Path]::GetFullPath($ResultPath)
-if ([IO.Path]::GetDirectoryName($requestFullPath) -ne [IO.Path]::GetDirectoryName($resultFullPath) -or
-    [IO.Path]::GetFileName($requestFullPath) -ne "request-$($request.nonce).json" -or
-    [IO.Path]::GetFileName($resultFullPath) -ne "result-$($request.nonce).json") {
-  throw "RequestPath and ResultPath are outside the nonce-bound operation directory"
-}
-if (Test-Path -LiteralPath $ResultPath) {
-  $resultInfo = Get-Item -LiteralPath $ResultPath
-  if ($resultInfo.PSIsContainer -or ($resultInfo.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
-    throw "ResultPath must be a regular non-reparse file"
+$request = $null
+$resultIdentityValidated = $false
+try {
+  if ([string]::IsNullOrWhiteSpace($RequestPath) -or [string]::IsNullOrWhiteSpace($ResultPath)) {
+    throw "RequestPath and ResultPath are required for this action"
   }
-}
-
-$machineActions = @("PrepareWsl", "ProvisionRainbond", "InstallMachineBundle", "EnableWsl", "UpdateWsl", "VerifyWsl", "RegisterResume", "RegisterFinalize", "RequestReboot", "Finalize", "ImportDistro", "PrepareRuntime", "ConfigureNetwork", "VerifyNetwork", "PrepareDocker", "InstallRainbond", "VerifyDeployment")
-if ($machineActions -contains $Action -and -not (Test-IsElevated)) {
-  Invoke-ElevatedSelf
-  exit 0
-}
-if ($machineActions -contains $Action -and
-    [Security.Principal.WindowsIdentity]::GetCurrent().User.Value -ne [string]$request.user_sid) {
-  throw "Post-UAC SID does not match the original user"
-}
-
-$status = "ok"
-switch ($Action) {
-  "Preflight" { $facts = Invoke-Preflight $request }
-  "PrepareWsl" { $facts = Invoke-PrepareWsl $request }
-  "ProvisionRainbond" { $facts = Invoke-ProvisionRainbond $request }
-  "InstallMachineBundle" { $facts = Invoke-InstallMachineBundle $request }
-  "EnableWsl" { $facts = Invoke-EnableWsl $request }
-  "UpdateWsl" { $facts = Invoke-UpdateWsl $request }
-  "VerifyWsl" {
-    $facts = Get-WslRuntimeFacts
-    $facts["wslVerified"] = [bool](
-      $facts.wslFeatureState -eq "Enabled" -and
-      $facts.virtualMachinePlatformFeatureState -eq "Enabled" -and
-      $facts.wslPath -and
-      $facts.wslVersionCommandSucceeded -and
-      $facts.wslDefaultVersion -eq 2 -and
-      -not $facts.rebootPending
-    )
-    if (-not $facts.wslVerified) { $status = "blocked" }
+  $requestInfo = Get-Item -LiteralPath $RequestPath
+  if ($requestInfo.PSIsContainer -or ($requestInfo.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+    throw "RequestPath must be a regular non-reparse file"
   }
-  "RegisterResume" { $facts = Invoke-RegisterResume $request }
-  "RegisterFinalize" { $facts = Invoke-RegisterFinalize $request }
-  "RequestReboot" { $facts = Invoke-RequestReboot $request }
-  "Finalize" { $facts = Invoke-Finalize $request }
-  "ImportDistro" { $facts = Invoke-ImportDistro $request }
-  "PrepareRuntime" { $facts = Invoke-PrepareRuntime $request }
-  "ConfigureNetwork" { $facts = Invoke-ConfigureNetwork $request }
-  "VerifyNetwork" { $facts = Invoke-VerifyNetwork $request }
-  "PrepareDocker" { $facts = Invoke-PrepareDocker $request }
-  "InstallRainbond" { $facts = Invoke-InstallRainbond $request }
-  "VerifyDeployment" { $facts = Invoke-VerifyDeployment $request }
-  default { throw "Unsupported fixed action" }
+  $request = Get-Content -LiteralPath $RequestPath -Raw | ConvertFrom-Json
+  $requiredRequestKeys = @("schema", "action", "operation_id", "installation_id", "nonce", "user_sid", "policy")
+  if ($Action -ne "Preflight") { $requiredRequestKeys += "payload" }
+  $actualRequestKeys = @($request.PSObject.Properties.Name)
+  if ($request.schema -ne "rainskills.windows-request.v1" -or $request.action -ne $Action) {
+    throw "Request schema or action mismatch"
+  }
+  if (@($actualRequestKeys | Where-Object { $requiredRequestKeys -notcontains $_ }).Count -gt 0 -or
+      @($requiredRequestKeys | Where-Object { $actualRequestKeys -notcontains $_ }).Count -gt 0) {
+    throw "Request contains unsupported or missing fields"
+  }
+  if ($actualRequestKeys -contains "command" -or $actualRequestKeys -contains "script") {
+    throw "Request may not contain command or script"
+  }
+  Assert-NoExecutableFields $request
+  $uuidPattern = "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+  if ([string]$request.operation_id -notmatch $uuidPattern -or
+      [string]$request.installation_id -notmatch $uuidPattern -or
+      [string]$request.nonce -notmatch "^[0-9a-f]{64}$") {
+    throw "Request identifiers are invalid"
+  }
+  $requestFullPath = [IO.Path]::GetFullPath($RequestPath)
+  $resultFullPath = [IO.Path]::GetFullPath($ResultPath)
+  if ([IO.Path]::GetDirectoryName($requestFullPath) -ne [IO.Path]::GetDirectoryName($resultFullPath) -or
+      [IO.Path]::GetFileName($requestFullPath) -ne "request-$($request.nonce).json" -or
+      [IO.Path]::GetFileName($resultFullPath) -ne "result-$($request.nonce).json") {
+    throw "RequestPath and ResultPath are outside the nonce-bound operation directory"
+  }
+  if (Test-Path -LiteralPath $ResultPath) {
+    $resultInfo = Get-Item -LiteralPath $ResultPath
+    if ($resultInfo.PSIsContainer -or ($resultInfo.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+      throw "ResultPath must be a regular non-reparse file"
+    }
+  }
+  $resultIdentityValidated = $true
+
+  $machineActions = @("PrepareWsl", "ProvisionRainbond", "InstallMachineBundle", "EnableWsl", "UpdateWsl", "VerifyWsl", "RegisterResume", "RegisterFinalize", "RequestReboot", "Finalize", "ImportDistro", "PrepareRuntime", "ConfigureNetwork", "VerifyNetwork", "PrepareDocker", "InstallRainbond", "VerifyDeployment")
+  if ($machineActions -contains $Action -and -not (Test-IsElevated)) {
+    Invoke-ElevatedSelf
+    exit 0
+  }
+  if ($machineActions -contains $Action -and
+      [Security.Principal.WindowsIdentity]::GetCurrent().User.Value -ne [string]$request.user_sid) {
+    throw "Post-UAC SID does not match the original user"
+  }
+
+  $status = "ok"
+  switch ($Action) {
+    "Preflight" { $facts = Invoke-Preflight $request }
+    "PrepareWsl" { $facts = Invoke-PrepareWsl $request }
+    "ProvisionRainbond" { $facts = Invoke-ProvisionRainbond $request }
+    "InstallMachineBundle" { $facts = Invoke-InstallMachineBundle $request }
+    "EnableWsl" { $facts = Invoke-EnableWsl $request }
+    "UpdateWsl" { $facts = Invoke-UpdateWsl $request }
+    "VerifyWsl" {
+      $facts = Get-WslRuntimeFacts
+      $facts["wslVerified"] = [bool](
+        $facts.wslFeatureState -eq "Enabled" -and
+        $facts.virtualMachinePlatformFeatureState -eq "Enabled" -and
+        $facts.wslPath -and
+        $facts.wslVersionCommandSucceeded -and
+        $facts.wslDefaultVersion -eq 2 -and
+        -not $facts.rebootPending
+      )
+      if (-not $facts.wslVerified) { $status = "blocked" }
+    }
+    "RegisterResume" { $facts = Invoke-RegisterResume $request }
+    "RegisterFinalize" { $facts = Invoke-RegisterFinalize $request }
+    "RequestReboot" { $facts = Invoke-RequestReboot $request }
+    "Finalize" { $facts = Invoke-Finalize $request }
+    "ImportDistro" { $facts = Invoke-ImportDistro $request }
+    "PrepareRuntime" { $facts = Invoke-PrepareRuntime $request }
+    "ConfigureNetwork" { $facts = Invoke-ConfigureNetwork $request }
+    "VerifyNetwork" { $facts = Invoke-VerifyNetwork $request }
+    "PrepareDocker" { $facts = Invoke-PrepareDocker $request }
+    "InstallRainbond" { $facts = Invoke-InstallRainbond $request }
+    "VerifyDeployment" { $facts = Invoke-VerifyDeployment $request }
+    default { throw "Unsupported fixed action" }
+  }
+  Write-ActionResult $request $facts $status
+  if ($Action -eq "RequestReboot") { Restart-Computer -Force }
+} catch {
+  $failure = $_
+  if ($resultIdentityValidated -and $null -ne $request) {
+    try { Write-ActionErrorResult $request $failure } catch { }
+  }
+  Write-Error "$Action failed: $($failure.Exception.Message)"
+  exit 1
 }
-Write-ActionResult $request $facts $status
-if ($Action -eq "RequestReboot") { Restart-Computer -Force }
