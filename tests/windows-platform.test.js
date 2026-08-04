@@ -122,6 +122,7 @@ test("Windows policy pins supported hosts and trusted artifacts", () => {
   assert.deepEqual(policy.windows.managed_ports, [80, 443, 6060, 7070]);
   assert.deepEqual(policy.windows.ubuntu_rootfs, {
     url: "https://cloud-images.ubuntu.com/wsl/jammy/20250318/ubuntu-jammy-wsl-amd64-ubuntu22.04lts.rootfs.tar.gz",
+    size_bytes: 341130963,
     sha256: "1483cc5c1dce13064f774834cbffdff226559fd522a67a381a8ea77d63fb4109",
     trust: "sha256-pinned",
   });
@@ -753,6 +754,7 @@ test("pinned rootfs artifacts are reused only after digest verification", async 
   const first = await ensurePinnedArtifact({
     destination,
     url: policy.windows.ubuntu_rootfs.url,
+    expectedBytes: expectedBytes.length,
     sha256: expectedDigest,
     allowedOrigins: policy.windows.preflight_allowed_origins,
     download,
@@ -760,6 +762,7 @@ test("pinned rootfs artifacts are reused only after digest verification", async 
   const second = await ensurePinnedArtifact({
     destination,
     url: policy.windows.ubuntu_rootfs.url,
+    expectedBytes: expectedBytes.length,
     sha256: expectedDigest,
     allowedOrigins: policy.windows.preflight_allowed_origins,
     download,
@@ -772,12 +775,37 @@ test("pinned rootfs artifacts are reused only after digest verification", async 
   await ensurePinnedArtifact({
     destination,
     url: policy.windows.ubuntu_rootfs.url,
+    expectedBytes: expectedBytes.length,
     sha256: expectedDigest,
     allowedOrigins: policy.windows.preflight_allowed_origins,
     download,
   });
   assert.equal(downloads, 2);
   assert(fs.readdirSync(root).some((name) => name.startsWith("ubuntu-rootfs.tar.gz.invalid-")));
+});
+
+test("pinned rootfs artifacts must match the published byte size", async () => {
+  const { ensurePinnedArtifact } = require(windowsPlatformPath);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-rootfs-size-"));
+  const destination = path.join(root, "ubuntu-rootfs.tar.gz");
+  const artifact = Buffer.from("verified-rootfs");
+  const expectedDigest = crypto.createHash("sha256").update(artifact).digest("hex");
+  let downloads = 0;
+
+  await assert.rejects(ensurePinnedArtifact({
+    destination,
+    url: policy.windows.ubuntu_rootfs.url,
+    expectedBytes: artifact.length + 1,
+    sha256: expectedDigest,
+    allowedOrigins: policy.windows.preflight_allowed_origins,
+    download: async ({ partialPath }) => {
+      downloads += 1;
+      fs.writeFileSync(partialPath, artifact);
+      return { finalUrl: policy.windows.ubuntu_rootfs.url, bytes: artifact.length };
+    },
+  }), /实际 15 bytes.*期望 16 bytes/);
+
+  assert.equal(downloads, 2);
 });
 
 test("rootfs resume accepts only a matching Content-Range", () => {
@@ -803,6 +831,12 @@ test("rootfs resume accepts only a matching Content-Range", () => {
     },
     existingBytes: 11156,
   }), /断点续传响应与本地缓存不匹配/);
+  assert.throws(() => resolveArtifactDownloadResponse({
+    statusCode: 200,
+    headers: { "content-length": "341130962" },
+    existingBytes: 0,
+    expectedBytes: 341130963,
+  }), /文件大小与固定版本不匹配/);
 });
 
 test("pinned rootfs retries one checksum failure without the stale partial", async () => {
@@ -829,6 +863,7 @@ test("pinned rootfs retries one checksum failure without the stale partial", asy
   const result = await ensurePinnedArtifact({
     destination,
     url: policy.windows.ubuntu_rootfs.url,
+    expectedBytes: expectedBytes.length,
     sha256: expectedDigest,
     allowedOrigins: policy.windows.preflight_allowed_origins,
     download,

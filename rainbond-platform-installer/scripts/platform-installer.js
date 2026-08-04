@@ -1587,6 +1587,7 @@ async function provisionWindowsDistroAndNetwork({ adapter, options, paths, state
   const rootfs = await ensurePinnedArtifact({
     destination: rootfsPath,
     url: POLICY.windows.ubuntu_rootfs.url,
+    expectedBytes: POLICY.windows.ubuntu_rootfs.size_bytes,
     sha256: POLICY.windows.ubuntu_rootfs.sha256,
     allowedOrigins: POLICY.windows.preflight_allowed_origins,
     onProgress(progress) {

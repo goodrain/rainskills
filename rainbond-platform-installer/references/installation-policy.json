@@ -32,6 +32,7 @@
     ],
     "ubuntu_rootfs": {
       "url": "https://cloud-images.ubuntu.com/wsl/jammy/20250318/ubuntu-jammy-wsl-amd64-ubuntu22.04lts.rootfs.tar.gz",
+      "size_bytes": 341130963,
       "sha256": "1483cc5c1dce13064f774834cbffdff226559fd522a67a381a8ea77d63fb4109",
       "trust": "sha256-pinned"
     },

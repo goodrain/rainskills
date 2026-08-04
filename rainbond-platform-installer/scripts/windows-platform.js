@@ -347,9 +347,12 @@ function validateArtifactRedirect(currentUrl, nextUrl, allowedOrigins) {
   return true;
 }
 
-function resolveArtifactDownloadResponse({ statusCode, headers = {}, existingBytes = 0 }) {
+function resolveArtifactDownloadResponse({ statusCode, headers = {}, existingBytes = 0, expectedBytes }) {
   const responseBytes = Number.parseInt(headers["content-length"] || "0", 10);
   if (statusCode === 200) {
+    if (expectedBytes && responseBytes > 0 && responseBytes !== expectedBytes) {
+      throw new Error(`下载服务器返回的文件大小与固定版本不匹配（实际 ${responseBytes} bytes，期望 ${expectedBytes} bytes）`);
+    }
     return {
       append: false,
       startingBytes: 0,
@@ -370,10 +373,13 @@ function resolveArtifactDownloadResponse({ statusCode, headers = {}, existingByt
       (responseBytes > 0 && responseBytes !== rangeBytes)) {
     throw new Error("下载服务器的断点续传响应与本地缓存不匹配");
   }
+  if (expectedBytes && total !== expectedBytes) {
+    throw new Error(`下载服务器返回的文件大小与固定版本不匹配（实际 ${total} bytes，期望 ${expectedBytes} bytes）`);
+  }
   return { append: true, startingBytes: existingBytes, total };
 }
 
-function defaultArtifactDownload({ url, partialPath, allowedOrigins, onProgress, maximumRedirects = 5 }) {
+function defaultArtifactDownload({ url, partialPath, allowedOrigins, expectedBytes, onProgress, maximumRedirects = 5 }) {
   return new Promise((resolve, reject) => {
     function requestUrl(currentUrl, redirectsRemaining) {
       const existingBytes = fs.existsSync(partialPath) ? fs.statSync(partialPath).size : 0;
@@ -405,6 +411,7 @@ function defaultArtifactDownload({ url, partialPath, allowedOrigins, onProgress,
             statusCode: response.statusCode,
             headers: response.headers,
             existingBytes,
+            expectedBytes,
           });
         } catch (error) {
           response.resume();
@@ -442,18 +449,22 @@ function quarantineFile(filePath) {
 async function ensurePinnedArtifact({
   destination,
   url,
+  expectedBytes,
   sha256,
   allowedOrigins,
   download = defaultArtifactDownload,
   onProgress,
   onRetry,
 }) {
+  if (!Number.isSafeInteger(expectedBytes) || expectedBytes <= 0) throw new Error("安装产物固定大小无效");
   if (!/^[a-f0-9]{64}$/.test(String(sha256 || ""))) throw new Error("安装产物 SHA-256 无效");
   validateArtifactRedirect(url, url, allowedOrigins);
   if (fs.existsSync(destination)) {
     const info = fs.lstatSync(destination);
     if (info.isSymbolicLink() || !info.isFile()) throw new Error(`安装产物不是安全的普通文件：${destination}`);
-    if (hashFile(destination) === sha256) return { reused: true, path: destination, bytes: info.size, finalUrl: url };
+    if (info.size === expectedBytes && hashFile(destination) === sha256) {
+      return { reused: true, path: destination, bytes: info.size, finalUrl: url };
+    }
     quarantineFile(destination);
   }
   fs.mkdirSync(path.dirname(destination), { recursive: true, mode: 0o700 });
@@ -466,11 +477,11 @@ async function ensurePinnedArtifact({
   for (let attempt = 0; attempt < 2; attempt += 1) {
     let result;
     try {
-      result = await download({ url, partialPath, allowedOrigins, onProgress });
+      result = await download({ url, partialPath, allowedOrigins, expectedBytes, onProgress });
     } catch (error) {
-      if (attempt > 0 || !fs.existsSync(partialPath) || !/断点续传|Content-Range/.test(error.message)) throw error;
+      if (attempt > 0 || !fs.existsSync(partialPath) || !/断点续传|Content-Range|文件大小与固定版本不匹配/.test(error.message)) throw error;
       const info = fs.statSync(partialPath);
-      lastMismatch = { actualBytes: info.size, actualSha256: hashFile(partialPath), expectedSha256: sha256 };
+      lastMismatch = { actualBytes: info.size, expectedBytes, actualSha256: hashFile(partialPath), expectedSha256: sha256 };
       quarantineFile(partialPath);
       onRetry?.(lastMismatch);
       continue;
@@ -478,12 +489,12 @@ async function ensurePinnedArtifact({
     if (fs.existsSync(partialPath)) {
       const info = fs.statSync(partialPath);
       const actualSha256 = hashFile(partialPath);
-      if (actualSha256 === sha256) {
+      if (info.size === expectedBytes && actualSha256 === sha256) {
         fs.chmodSync(partialPath, 0o600);
         fs.renameSync(partialPath, destination);
         return { reused: false, path: destination, bytes: info.size, finalUrl: result.finalUrl || url };
       }
-      lastMismatch = { actualBytes: info.size, actualSha256, expectedSha256: sha256 };
+      lastMismatch = { actualBytes: info.size, expectedBytes, actualSha256, expectedSha256: sha256 };
       quarantineFile(partialPath);
       if (attempt === 0) {
         onRetry?.(lastMismatch);
@@ -493,7 +504,7 @@ async function ensurePinnedArtifact({
     break;
   }
   const detail = lastMismatch
-    ? `（实际 ${lastMismatch.actualBytes} bytes，SHA-256 ${lastMismatch.actualSha256}；期望 ${lastMismatch.expectedSha256}）`
+    ? `（实际 ${lastMismatch.actualBytes} bytes，SHA-256 ${lastMismatch.actualSha256}；期望 ${lastMismatch.expectedBytes} bytes，SHA-256 ${lastMismatch.expectedSha256}）`
     : "";
   throw new Error(`下载完成，但 Ubuntu 根文件系统 SHA-256 校验失败${detail}`);
 }
