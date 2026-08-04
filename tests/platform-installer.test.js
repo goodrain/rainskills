@@ -21,6 +21,10 @@ const secureStatePath = path.join(
   "secure-state.js"
 );
 
+function readNormalizedSource(filePath) {
+  return fs.readFileSync(filePath, "utf8").replace(/\r\n?/g, "\n");
+}
+
 test("launcher routes platform and resume commands to the bundled helper", () => {
   const { resolveInvocation } = require(launcherPath);
   const fakeNode = path.join(repoRoot, "fake-node");
@@ -169,7 +173,7 @@ test("Windows machine bundle payload pins the current helper and bootstrap", () 
 });
 
 test("resumed Windows provisioning refreshes the protected machine bundle", () => {
-  const source = fs.readFileSync(platformInstallerPath, "utf8");
+  const source = readNormalizedSource(platformInstallerPath);
   const provision = source.match(/async function provisionWindowsDistroAndNetwork[\s\S]*?\n\}\n\nasync function installWindowsRainbond/)?.[0];
   assert(provision, "provisionWindowsDistroAndNetwork must remain a standalone operation");
   assert.match(provision, /windowsRecoveryBundle\(paths\)/);
@@ -1084,7 +1088,7 @@ test("published guidance describes local and remote target selection", () => {
 });
 
 test("no download or installer execution appears before the confirmation gate", () => {
-  const source = fs.readFileSync(platformInstallerPath, "utf8");
+  const source = readNormalizedSource(platformInstallerPath);
   const runInstall = source.slice(source.indexOf("async function runInstall"));
   const confirmation = runInstall.indexOf("await confirmInstall(options.yes)");
   const download = runInstall.indexOf("ensureTrustedInstaller(paths.installer");
@@ -1095,7 +1099,7 @@ test("no download or installer execution appears before the confirmation gate", 
 });
 
 test("Windows installation batches privileged work and explains the elevated progress window", () => {
-  const source = fs.readFileSync(platformInstallerPath, "utf8");
+  const source = readNormalizedSource(platformInstallerPath);
   assert.match(source, /adapter\.prepareWsl\(/);
   assert.match(source, /adapter\.provisionRainbond\(/);
   assert.match(source, /管理员窗口.*进度/s);
@@ -1103,13 +1107,13 @@ test("Windows installation batches privileged work and explains the elevated pro
 });
 
 test("platform progress never writes to an unreserved file descriptor", () => {
-  const source = fs.readFileSync(platformInstallerPath, "utf8");
+  const source = readNormalizedSource(platformInstallerPath);
   assert.match(source, /appendFileSync\(paths\.events/);
   assert.doesNotMatch(source, /writeSync\(3\s*,/);
 });
 
 test("Windows preflight reports progress before invoking the blocking helper", () => {
-  const source = fs.readFileSync(platformInstallerPath, "utf8");
+  const source = readNormalizedSource(platformInstallerPath);
   const runInstall = source.slice(source.indexOf("async function runInstall"));
   const progress = runInstall.indexOf("正在检查 Windows 环境");
   const preflight = runInstall.indexOf("windowsAdapter.preflight");

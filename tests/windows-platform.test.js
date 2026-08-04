@@ -1169,7 +1169,7 @@ test("PowerShell checks systemd without terminal-dependent ps output", () => {
 });
 
 test("WSL bootstrap enables systemd and gates runtime startup on the fixed network", () => {
-  const source = fs.readFileSync(wslBootstrapPath, "utf8");
+  const source = readNormalizedSource(wslBootstrapPath);
   assert.match(source, /^#!\/usr\/bin\/env bash/);
   assert.match(source, /PrepareRuntime/);
   assert.match(source, /ConfigureGuestNetwork/);
@@ -1182,7 +1182,7 @@ test("WSL bootstrap enables systemd and gates runtime startup on the fixed netwo
 });
 
 test("Rainbond WSL bootstrap verifies artifacts, prepares Docker, emits heartbeats, and redacts logs", () => {
-  const source = fs.readFileSync(wslBootstrapPath, "utf8");
+  const source = readNormalizedSource(wslBootstrapPath);
   assert.match(source, /PrepareDocker/);
   assert.match(source, /InstallRainbond/);
   assert.match(source, /VerifyRainbond/);
@@ -1200,7 +1200,7 @@ test("Rainbond WSL bootstrap verifies artifacts, prepares Docker, emits heartbea
 });
 
 test("Rainbond WSL installation forces CPU mode and rebuilds its owned stopped container", () => {
-  const source = fs.readFileSync(wslBootstrapPath, "utf8");
+  const source = readNormalizedSource(wslBootstrapPath);
   const installRainbond = source.match(/install_rainbond\(\) \{[\s\S]*?\n\}\n\nverify_rainbond\(\)/)?.[0];
   assert(installRainbond, "install_rainbond must remain a standalone fixed action");
   assert.match(installRainbond, /rainbond-installation-id[\s\S]*State\.Status[\s\S]*return[\s\S]*docker rm rainbond/);
@@ -1211,7 +1211,7 @@ test("Rainbond WSL installation forces CPU mode and rebuilds its owned stopped c
 
 test("Windows executes the dynamically hashed installer instead of a package-pinned digest", () => {
   const powershell = readNormalizedSource(powershellPath);
-  const platformInstaller = fs.readFileSync(platformInstallerPath, "utf8");
+  const platformInstaller = readNormalizedSource(platformInstallerPath);
   assert.match(powershell, /installer_sha256/);
   assert.doesNotMatch(powershell, /policy\.installer\.sha256/);
   assert.doesNotMatch(platformInstaller, /POLICY\.installer\.sha256/);
