@@ -14,7 +14,7 @@
 - **Windows 端口冲突**：`80`、`443`、`6060`、`7070` 任一端口被现有进程或 portproxy 占用都会停止；先确认占用者，不自动结束进程。
 - **Windows 管理对象冲突**：存在未知 `Rainbond` WSL 发行版、`RainSkills-*` 计划任务或 `%ProgramData%\RainSkills` 内容时停止，避免覆盖用户数据。
 - **Windows 计划任务 / 重启恢复**：登录后未自动继续时，执行安装器打印的原始 `npx rainskills ... --target local-windows` 命令。不要手工改写任务参数。
-- **Windows 下载、镜像仓库或摘要失败**：检查代理是否允许策略文件列出的 HTTPS 来源，包括 Rainbond 官方安装使用的 `registry.cn-hangzhou.aliyuncs.com`。摘要不匹配表示控制端与 WSL 执行端的文件不一致，应重新下载或检查磁盘/安全软件；不得跳过校验。
+- **Windows 下载、镜像仓库或摘要失败**：检查代理是否允许策略文件列出的 HTTPS 来源，包括 Rainbond 官方安装使用的 `registry.cn-hangzhou.aliyuncs.com`。Ubuntu 日期镜像继续使用固定摘要；断点续传只接受与本地 partial 大小严格匹配的 `Content-Range`。首次摘要异常会隔离缓存并自动从零重试一次，第二次仍不匹配时会输出实际长度和摘要；不得跳过校验。
 - **Windows Console 不可达**：先区分 WSL 内健康检查和 Windows `http://127.0.0.1:7070`。检查固定 NAT、portproxy 和 Windows 防火墙，不要改成暴露到所有网卡。
 - **macOS 环境**：官方脚本需要 OrbStack。安装确认后可由官方脚本下载 OrbStack，但 macOS 权限弹窗仍需用户操作。
 - **官方脚本检查失败**：确认下载地址仍为 `https://get.rainbond.com/`，并检查代理是否返回了登录页、拦截页或超大响应。非 Bash 内容、Bash 语法错误和跨域跳转都会停止执行。

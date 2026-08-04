@@ -1604,6 +1604,13 @@ async function provisionWindowsDistroAndNetwork({ adapter, options, paths, state
         });
       }
     },
+    onRetry(details) {
+      lastProgressAt = 0;
+      lastProgressEventAt = 0;
+      process.stdout.write(
+        `\n首次下载校验异常，已隔离缓存并从头重试一次（${details.actualBytes} bytes，SHA-256 ${details.actualSha256}）。\n`
+      );
+    },
   });
   process.stdout.write(rootfs.reused ? "已复用校验通过的 Ubuntu 根文件系统。\n" : "\nUbuntu 根文件系统下载并校验完成。\n");
   if (state.stage === "downloading-rootfs") {

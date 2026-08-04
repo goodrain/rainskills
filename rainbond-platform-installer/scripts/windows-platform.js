@@ -347,6 +347,32 @@ function validateArtifactRedirect(currentUrl, nextUrl, allowedOrigins) {
   return true;
 }
 
+function resolveArtifactDownloadResponse({ statusCode, headers = {}, existingBytes = 0 }) {
+  const responseBytes = Number.parseInt(headers["content-length"] || "0", 10);
+  if (statusCode === 200) {
+    return {
+      append: false,
+      startingBytes: 0,
+      total: responseBytes > 0 ? responseBytes : null,
+    };
+  }
+  if (statusCode !== 206 || existingBytes <= 0) {
+    throw new Error("下载服务器返回了无效的断点续传响应");
+  }
+  const match = String(headers["content-range"] || "").match(/^bytes (\d+)-(\d+)\/(\d+)$/i);
+  if (!match) throw new Error("下载服务器缺少有效的 Content-Range");
+  const start = Number(match[1]);
+  const end = Number(match[2]);
+  const total = Number(match[3]);
+  const rangeBytes = end - start + 1;
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || !Number.isSafeInteger(total) ||
+      start !== existingBytes || end < start || end !== total - 1 ||
+      (responseBytes > 0 && responseBytes !== rangeBytes)) {
+    throw new Error("下载服务器的断点续传响应与本地缓存不匹配");
+  }
+  return { append: true, startingBytes: existingBytes, total };
+}
+
 function defaultArtifactDownload({ url, partialPath, allowedOrigins, onProgress, maximumRedirects = 5 }) {
   return new Promise((resolve, reject) => {
     function requestUrl(currentUrl, redirectsRemaining) {
@@ -373,10 +399,19 @@ function defaultArtifactDownload({ url, partialPath, allowedOrigins, onProgress,
           reject(new Error(`下载失败，HTTP ${response.statusCode}`));
           return;
         }
-        const append = response.statusCode === 206 && existingBytes > 0;
-        const startingBytes = append ? existingBytes : 0;
-        const responseBytes = Number.parseInt(response.headers["content-length"] || "0", 10);
-        const total = responseBytes > 0 ? startingBytes + responseBytes : null;
+        let responseMode;
+        try {
+          responseMode = resolveArtifactDownloadResponse({
+            statusCode: response.statusCode,
+            headers: response.headers,
+            existingBytes,
+          });
+        } catch (error) {
+          response.resume();
+          reject(error);
+          return;
+        }
+        const { append, startingBytes, total } = responseMode;
         const output = fs.createWriteStream(partialPath, { flags: append ? "a" : "w", mode: 0o600 });
         let current = startingBytes;
         response.on("data", (chunk) => {
@@ -411,6 +446,7 @@ async function ensurePinnedArtifact({
   allowedOrigins,
   download = defaultArtifactDownload,
   onProgress,
+  onRetry,
 }) {
   if (!/^[a-f0-9]{64}$/.test(String(sha256 || ""))) throw new Error("安装产物 SHA-256 无效");
   validateArtifactRedirect(url, url, allowedOrigins);
@@ -426,14 +462,40 @@ async function ensurePinnedArtifact({
     const partialInfo = fs.lstatSync(partialPath);
     if (partialInfo.isSymbolicLink() || !partialInfo.isFile()) throw new Error(`下载缓存不是安全的普通文件：${partialPath}`);
   }
-  const result = await download({ url, partialPath, allowedOrigins, onProgress });
-  if (!fs.existsSync(partialPath) || hashFile(partialPath) !== sha256) {
-    quarantineFile(partialPath);
-    throw new Error("下载完成，但 Ubuntu 根文件系统 SHA-256 校验失败");
+  let lastMismatch = null;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let result;
+    try {
+      result = await download({ url, partialPath, allowedOrigins, onProgress });
+    } catch (error) {
+      if (attempt > 0 || !fs.existsSync(partialPath) || !/断点续传|Content-Range/.test(error.message)) throw error;
+      const info = fs.statSync(partialPath);
+      lastMismatch = { actualBytes: info.size, actualSha256: hashFile(partialPath), expectedSha256: sha256 };
+      quarantineFile(partialPath);
+      onRetry?.(lastMismatch);
+      continue;
+    }
+    if (fs.existsSync(partialPath)) {
+      const info = fs.statSync(partialPath);
+      const actualSha256 = hashFile(partialPath);
+      if (actualSha256 === sha256) {
+        fs.chmodSync(partialPath, 0o600);
+        fs.renameSync(partialPath, destination);
+        return { reused: false, path: destination, bytes: info.size, finalUrl: result.finalUrl || url };
+      }
+      lastMismatch = { actualBytes: info.size, actualSha256, expectedSha256: sha256 };
+      quarantineFile(partialPath);
+      if (attempt === 0) {
+        onRetry?.(lastMismatch);
+        continue;
+      }
+    }
+    break;
   }
-  fs.chmodSync(partialPath, 0o600);
-  fs.renameSync(partialPath, destination);
-  return { reused: false, path: destination, bytes: fs.statSync(destination).size, finalUrl: result.finalUrl || url };
+  const detail = lastMismatch
+    ? `（实际 ${lastMismatch.actualBytes} bytes，SHA-256 ${lastMismatch.actualSha256}；期望 ${lastMismatch.expectedSha256}）`
+    : "";
+  throw new Error(`下载完成，但 Ubuntu 根文件系统 SHA-256 校验失败${detail}`);
 }
 
 function ipv4ToInteger(address) {
@@ -806,6 +868,7 @@ module.exports = {
   managedNetworkFromCidr,
   redactSensitiveText,
   resolveWindowsUserSid,
+  resolveArtifactDownloadResponse,
   selectManagedSubnet,
   translateWindowsPayloadPaths,
   validateWindowsStageTransition,

@@ -780,6 +780,71 @@ test("pinned rootfs artifacts are reused only after digest verification", async 
   assert(fs.readdirSync(root).some((name) => name.startsWith("ubuntu-rootfs.tar.gz.invalid-")));
 });
 
+test("rootfs resume accepts only a matching Content-Range", () => {
+  const { resolveArtifactDownloadResponse } = require(windowsPlatformPath);
+  assert.equal(typeof resolveArtifactDownloadResponse, "function");
+  assert.deepEqual(resolveArtifactDownloadResponse({
+    statusCode: 206,
+    headers: {
+      "content-length": "341119807",
+      "content-range": "bytes 11156-341130962/341130963",
+    },
+    existingBytes: 11156,
+  }), {
+    append: true,
+    startingBytes: 11156,
+    total: 341130963,
+  });
+  assert.throws(() => resolveArtifactDownloadResponse({
+    statusCode: 206,
+    headers: {
+      "content-length": "341130963",
+      "content-range": "bytes 0-341130962/341130963",
+    },
+    existingBytes: 11156,
+  }), /断点续传响应与本地缓存不匹配/);
+});
+
+test("pinned rootfs retries one checksum failure without the stale partial", async () => {
+  const { ensurePinnedArtifact } = require(windowsPlatformPath);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-rootfs-retry-"));
+  const destination = path.join(root, "ubuntu-rootfs.tar.gz");
+  const partialPath = `${destination}.partial`;
+  const expectedBytes = Buffer.from("verified-rootfs");
+  const expectedDigest = crypto.createHash("sha256").update(expectedBytes).digest("hex");
+  fs.writeFileSync(partialPath, "stale-prefix");
+  let downloads = 0;
+  const retries = [];
+  const download = async ({ partialPath: currentPartial }) => {
+    downloads += 1;
+    if (downloads === 1) {
+      fs.appendFileSync(currentPartial, expectedBytes);
+    } else {
+      assert.equal(fs.existsSync(currentPartial), false);
+      fs.writeFileSync(currentPartial, expectedBytes);
+    }
+    return { finalUrl: policy.windows.ubuntu_rootfs.url, bytes: fs.statSync(currentPartial).size };
+  };
+
+  const result = await ensurePinnedArtifact({
+    destination,
+    url: policy.windows.ubuntu_rootfs.url,
+    sha256: expectedDigest,
+    allowedOrigins: policy.windows.preflight_allowed_origins,
+    download,
+    onRetry: (details) => retries.push(details),
+  });
+
+  assert.equal(result.reused, false);
+  assert.equal(downloads, 2);
+  assert.equal(retries.length, 1);
+  assert.equal(retries[0].expectedSha256, expectedDigest);
+  assert.equal(retries[0].actualBytes, "stale-prefix".length + expectedBytes.length);
+  assert.match(retries[0].actualSha256, /^[a-f0-9]{64}$/);
+  assert.equal(fs.readFileSync(destination, "utf8"), expectedBytes.toString("utf8"));
+  assert(fs.readdirSync(root).some((name) => name.startsWith("ubuntu-rootfs.tar.gz.partial.invalid-")));
+});
+
 test("artifact redirects and managed subnets reject untrusted or overlapping networks", () => {
   const {
     selectManagedSubnet,
