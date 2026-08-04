@@ -830,6 +830,54 @@ test("pinned rootfs artifacts must match the published byte size", async () => {
   assert.equal(downloads, 2);
 });
 
+test("pinned rootfs removes appended bytes only when the fixed prefix digest matches", async () => {
+  const { ensurePinnedArtifact } = require(windowsPlatformPath);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-rootfs-appended-"));
+  const destination = path.join(root, "ubuntu-rootfs.tar.gz");
+  const artifact = Buffer.from("verified-rootfs");
+  const appended = Buffer.from("unexpected-trailer");
+  const expectedDigest = crypto.createHash("sha256").update(artifact).digest("hex");
+
+  const result = await ensurePinnedArtifact({
+    destination,
+    urls: policy.windows.ubuntu_rootfs.urls.slice(0, 1),
+    expectedBytes: artifact.length,
+    sha256: expectedDigest,
+    allowedOrigins: policy.windows.preflight_allowed_origins,
+    download: async ({ partialPath }) => {
+      fs.writeFileSync(partialPath, Buffer.concat([artifact, appended]));
+      throw new Error("下载源发送的数据超过固定版本大小");
+    },
+  });
+
+  assert.equal(result.reused, false);
+  assert.equal(result.trimmedBytes, appended.length);
+  assert.equal(fs.readFileSync(destination, "utf8"), artifact.toString("utf8"));
+  assert.equal(fs.statSync(destination).size, artifact.length);
+});
+
+test("pinned rootfs rejects an oversized file whose fixed prefix digest differs", async () => {
+  const { ensurePinnedArtifact } = require(windowsPlatformPath);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-rootfs-bad-prefix-"));
+  const destination = path.join(root, "ubuntu-rootfs.tar.gz");
+  const artifact = Buffer.from("verified-rootfs");
+  const expectedDigest = crypto.createHash("sha256").update(artifact).digest("hex");
+
+  await assert.rejects(ensurePinnedArtifact({
+    destination,
+    urls: policy.windows.ubuntu_rootfs.urls.slice(0, 1),
+    expectedBytes: artifact.length,
+    sha256: expectedDigest,
+    allowedOrigins: policy.windows.preflight_allowed_origins,
+    download: async ({ partialPath }) => {
+      fs.writeFileSync(partialPath, Buffer.concat([Buffer.alloc(artifact.length, 0x78), Buffer.from("trailer")]));
+      throw new Error("下载源发送的数据超过固定版本大小");
+    },
+  }), /SHA-256 校验失败/);
+
+  assert.equal(fs.existsSync(destination), false);
+});
+
 test("pinned rootfs gives every source an isolated partial file", async () => {
   const { ensurePinnedArtifact } = require(windowsPlatformPath);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-rootfs-isolated-"));

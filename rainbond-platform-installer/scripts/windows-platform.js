@@ -225,6 +225,51 @@ function hashFile(filePath) {
   return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
 }
 
+function hashFilePrefix(filePath, expectedBytes) {
+  const hash = crypto.createHash("sha256");
+  const file = fs.openSync(filePath, "r");
+  const buffer = Buffer.allocUnsafe(Math.min(expectedBytes, 1024 * 1024));
+  let offset = 0;
+  try {
+    while (offset < expectedBytes) {
+      const bytesRead = fs.readSync(file, buffer, 0, Math.min(buffer.length, expectedBytes - offset), offset);
+      if (bytesRead === 0) break;
+      hash.update(buffer.subarray(0, bytesRead));
+      offset += bytesRead;
+    }
+  } finally {
+    fs.closeSync(file);
+  }
+  if (offset !== expectedBytes) throw new Error(`下载文件提前结束（实际 ${offset} bytes，期望 ${expectedBytes} bytes）`);
+  return hash.digest("hex");
+}
+
+function verifyPinnedArtifact(filePath, expectedBytes, expectedSha256) {
+  const info = fs.statSync(filePath);
+  const prefixSha256 = info.size >= expectedBytes
+    ? hashFilePrefix(filePath, expectedBytes)
+    : hashFile(filePath);
+  if (info.size >= expectedBytes && prefixSha256 === expectedSha256) {
+    const trimmedBytes = info.size - expectedBytes;
+    if (trimmedBytes > 0) {
+      const file = fs.openSync(filePath, "r+");
+      try {
+        fs.ftruncateSync(file, expectedBytes);
+        fs.fsyncSync(file);
+      } finally {
+        fs.closeSync(file);
+      }
+    }
+    return { verified: true, actualBytes: info.size, actualSha256: prefixSha256, trimmedBytes };
+  }
+  return {
+    verified: false,
+    actualBytes: info.size,
+    actualSha256: info.size === expectedBytes ? prefixSha256 : hashFile(filePath),
+    trimmedBytes: 0,
+  };
+}
+
 function collectRecoveryFiles(packageRoot, requiredFiles, requiredDirectories) {
   const files = new Set(requiredFiles.map(assertSafeRelativePath));
   function visit(relativeDirectory) {
@@ -487,7 +532,7 @@ async function ensurePinnedArtifact({
     const info = fs.lstatSync(destination);
     if (info.isSymbolicLink() || !info.isFile()) throw new Error(`安装产物不是安全的普通文件：${destination}`);
     if (info.size === expectedBytes && hashFile(destination) === sha256) {
-      return { reused: true, path: destination, bytes: info.size, finalUrl: urls[0] };
+      return { reused: true, path: destination, bytes: info.size, finalUrl: urls[0], trimmedBytes: 0 };
     }
     quarantineFile(destination);
   }
@@ -501,14 +546,19 @@ async function ensurePinnedArtifact({
       result = await download({ url: sourceUrl, partialPath, allowedOrigins, expectedBytes, onProgress });
     } catch (error) {
       if (fs.existsSync(partialPath)) {
-        const info = fs.statSync(partialPath);
-        const actualSha256 = hashFile(partialPath);
-        if (info.size === expectedBytes && actualSha256 === sha256) {
+        const verification = verifyPinnedArtifact(partialPath, expectedBytes, sha256);
+        if (verification.verified) {
           fs.chmodSync(partialPath, 0o600);
           fs.renameSync(partialPath, destination);
-          return { reused: false, path: destination, bytes: info.size, finalUrl: sourceUrl };
+          return {
+            reused: false,
+            path: destination,
+            bytes: expectedBytes,
+            finalUrl: sourceUrl,
+            trimmedBytes: verification.trimmedBytes,
+          };
         }
-        lastMismatch = { actualBytes: info.size, expectedBytes, actualSha256, expectedSha256: sha256 };
+        lastMismatch = { ...verification, expectedBytes, expectedSha256: sha256 };
         quarantineFile(partialPath);
       } else {
         lastMismatch = { actualBytes: 0, expectedBytes, actualSha256: null, expectedSha256: sha256 };
@@ -518,14 +568,19 @@ async function ensurePinnedArtifact({
       continue;
     }
     if (fs.existsSync(partialPath)) {
-      const info = fs.statSync(partialPath);
-      const actualSha256 = hashFile(partialPath);
-      if (info.size === expectedBytes && actualSha256 === sha256) {
+      const verification = verifyPinnedArtifact(partialPath, expectedBytes, sha256);
+      if (verification.verified) {
         fs.chmodSync(partialPath, 0o600);
         fs.renameSync(partialPath, destination);
-        return { reused: false, path: destination, bytes: info.size, finalUrl: result.finalUrl || sourceUrl };
+        return {
+          reused: false,
+          path: destination,
+          bytes: expectedBytes,
+          finalUrl: result.finalUrl || sourceUrl,
+          trimmedBytes: verification.trimmedBytes,
+        };
       }
-      lastMismatch = { actualBytes: info.size, expectedBytes, actualSha256, expectedSha256: sha256 };
+      lastMismatch = { ...verification, expectedBytes, expectedSha256: sha256 };
       quarantineFile(partialPath);
       if (attempt + 1 < urls.length) {
         onRetry?.({ ...lastMismatch, reason: "文件完整性校验失败", sourceUrl, nextUrl: urls[attempt + 1] });
