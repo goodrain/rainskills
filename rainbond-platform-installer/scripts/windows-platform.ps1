@@ -1321,20 +1321,27 @@ function Invoke-PrepareWsl($Request) {
 }
 
 function Invoke-ProvisionRainbond($Request) {
-  Write-Host "[1/6] Importing the dedicated Rainbond WSL environment..."
+  Write-Host "[1/7] Updating the protected RainSkills helper..."
+  try {
+    $bundle = Invoke-InstallMachineBundle $Request
+  } catch {
+    throw "InstallMachineBundle failed: $($_.Exception.Message)"
+  }
+  Write-Host "[2/7] Importing the dedicated Rainbond WSL environment..."
   $imported = Invoke-ImportDistro $Request
-  Write-Host "[2/6] Configuring fixed local networking..."
+  Write-Host "[3/7] Configuring fixed local networking..."
   $configured = Invoke-ConfigureNetwork $Request
   $network = Invoke-VerifyNetwork $Request
-  Write-Host "[3/6] Preparing Docker inside the Rainbond environment..."
+  Write-Host "[4/7] Preparing Docker inside the Rainbond environment..."
   $docker = Invoke-PrepareDocker $Request
-  Write-Host "[4/6] Installing Rainbond (the first image pull can take some time)..."
+  Write-Host "[5/7] Installing Rainbond (the first image pull can take some time)..."
   $installed = Invoke-InstallRainbond $Request
-  Write-Host "[5/6] Verifying Rainbond inside WSL..."
-  Write-Host "[6/6] Verifying Windows loopback access..."
+  Write-Host "[6/7] Verifying Rainbond inside WSL..."
+  Write-Host "[7/7] Verifying Windows loopback access..."
   $verified = Invoke-VerifyDeployment $Request
   return [ordered]@{
     installationId = [string]$Request.installation_id
+    machineBundleVerified = [bool]$bundle.machineBundleVerified
     distroIdentityVerified = [bool]$imported.distroIdentityVerified
     systemdReady = [bool]$imported.systemdReady
     networkGateReady = [bool]$docker.networkGateReady

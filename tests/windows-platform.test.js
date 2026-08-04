@@ -490,6 +490,17 @@ test("PowerShell identifies the failing PrepareWsl substep", () => {
   assert.match(prepareWsl, /EnableWsl failed/);
 });
 
+test("combined provisioning upgrades the machine bundle before invoking WSL", () => {
+  const source = readNormalizedSource(powershellPath);
+  const provision = source.match(/function Invoke-ProvisionRainbond\(\$Request\) \{[\s\S]*?\n\}\n\n\$request =/)?.[0];
+  assert(provision, "Invoke-ProvisionRainbond must remain a standalone fixed action");
+  const bundleUpgrade = provision.indexOf("Invoke-InstallMachineBundle $Request");
+  const importDistro = provision.indexOf("Invoke-ImportDistro $Request");
+  assert(bundleUpgrade >= 0, "ProvisionRainbond must refresh the persisted helper and bootstrap");
+  assert(importDistro > bundleUpgrade, "the machine bundle must be refreshed before any WSL action");
+  assert.match(provision, /InstallMachineBundle failed/);
+});
+
 test("PowerShell replaces a stale regular machine lease instead of overwriting it in place", () => {
   const source = readNormalizedSource(powershellPath);
   const leaseWriter = source.match(/function Write-MachineLease[\s\S]*?\n\}/)?.[0];

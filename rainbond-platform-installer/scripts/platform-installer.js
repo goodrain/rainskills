@@ -1494,13 +1494,32 @@ function windowsRecoveryBundle(paths) {
   return { packageRoot, bundleRoot, manifest };
 }
 
+function buildWindowsMachineBundlePayload({ recovery, onboarding, nodePath = process.execPath }) {
+  const helperPath = path.join(recovery.packageRoot, "rainbond-platform-installer", "scripts", "windows-platform.ps1");
+  const bootstrapPath = path.join(recovery.packageRoot, "rainbond-platform-installer", "scripts", "wsl-bootstrap.sh");
+  const recoveryManifestPath = path.join(recovery.bundleRoot, "manifest.json");
+  const recoveryEntry = path.join(recovery.bundleRoot, "bin", "rainskills.js");
+  const controlMode = onboarding.control_mode || "windows-native";
+  return {
+    helper_path: helperPath,
+    helper_sha256: sha256File(helperPath),
+    bootstrap_path: bootstrapPath,
+    bootstrap_sha256: sha256File(bootstrapPath),
+    recovery_root: recovery.bundleRoot,
+    recovery_manifest_sha256: sha256File(recoveryManifestPath),
+    recovery_entry: recoveryEntry,
+    node_path: nodePath,
+    control_mode: controlMode,
+    control_distro: controlMode === "wsl" ? onboarding.control_distro : null,
+    control_recovery_entry: controlMode === "wsl" ? recoveryEntry : null,
+    control_node_path: controlMode === "wsl" ? nodePath : null,
+  };
+}
+
 async function prepareWindowsWsl({ adapter, onboarding, options, paths, state }) {
   const installationId = state.installation_id;
   const recovery = windowsRecoveryBundle(paths);
-  const recoveryManifestPath = path.join(recovery.bundleRoot, "manifest.json");
-  const helperPath = path.join(recovery.packageRoot, "rainbond-platform-installer", "scripts", "windows-platform.ps1");
-  const bootstrapPath = path.join(recovery.packageRoot, "rainbond-platform-installer", "scripts", "wsl-bootstrap.sh");
-  const recoveryEntry = path.join(recovery.bundleRoot, "bin", "rainskills.js");
+  const machineBundlePayload = buildWindowsMachineBundlePayload({ recovery, onboarding });
   const common = { operationId: options.onboardingId, installationId };
 
   state = updateState(paths.state, state, { stage: "enabling-wsl", status: "running" });
@@ -1508,20 +1527,7 @@ async function prepareWindowsWsl({ adapter, onboarding, options, paths, state })
   process.stdout.write("\n接下来会弹出一次 Windows 管理员确认；WSL 准备进度会显示在管理员窗口。\n");
   const prepared = await adapter.prepareWsl({
     ...common,
-    payload: {
-      helper_path: helperPath,
-      helper_sha256: sha256File(helperPath),
-      bootstrap_path: bootstrapPath,
-      bootstrap_sha256: sha256File(bootstrapPath),
-      recovery_root: recovery.bundleRoot,
-      recovery_manifest_sha256: sha256File(recoveryManifestPath),
-      recovery_entry: recoveryEntry,
-      node_path: process.execPath,
-      control_mode: onboarding.control_mode || "windows-native",
-      control_distro: onboarding.control_mode === "wsl" ? onboarding.control_distro : null,
-      control_recovery_entry: onboarding.control_mode === "wsl" ? recoveryEntry : null,
-      control_node_path: onboarding.control_mode === "wsl" ? process.execPath : null,
-    },
+    payload: machineBundlePayload,
   });
   if (prepared.facts.rebootPending) {
     validateWindowsStageTransition({
@@ -1578,12 +1584,14 @@ function printWindowsDownloadProgress({ current, total }) {
   }
 }
 
-async function provisionWindowsDistroAndNetwork({ adapter, options, paths, state }) {
+async function provisionWindowsDistroAndNetwork({ adapter, onboarding, options, paths, state }) {
   const installationId = state.installation_id;
   if (!["downloading-rootfs", "importing-distro", "preparing-runtime", "installing-rainbond", "configuring-windows-access", "verifying"].includes(state.stage)) {
     throw new Error(`当前 Windows 安装阶段不能准备发行版：${state.stage}`);
   }
   const common = { operationId: options.onboardingId, installationId };
+  const recovery = windowsRecoveryBundle(paths);
+  const machineBundlePayload = buildWindowsMachineBundlePayload({ recovery, onboarding });
   const rootfsPath = path.join(paths.root, "ubuntu-jammy-rootfs.tar.gz");
   let lastProgressAt = 0;
   let lastProgressEventAt = 0;
@@ -1655,6 +1663,7 @@ async function provisionWindowsDistroAndNetwork({ adapter, options, paths, state
   const provisioned = await adapter.provisionRainbond({
     ...common,
     payload: {
+      ...machineBundlePayload,
       rootfs_path: rootfsPath,
       distro_root: distroRoot,
       subnet: network.cidr,
@@ -1923,6 +1932,7 @@ async function runInstallOperation(options) {
     if (!prepared.waiting) {
       const provisioned = await provisionWindowsDistroAndNetwork({
         adapter: windowsAdapter,
+        onboarding,
         options,
         paths,
         state: prepared.state,
@@ -1968,6 +1978,7 @@ async function runInstallOperation(options) {
     process.stdout.write("WSL 2 已在重启后通过验证，正在继续准备 Rainbond 专用环境。\n");
     const provisioned = await provisionWindowsDistroAndNetwork({
       adapter: windowsAdapter,
+      onboarding,
       options,
       paths,
       state,
@@ -1986,6 +1997,7 @@ async function runInstallOperation(options) {
   if (isWindowsLocal && ["downloading-rootfs", "importing-distro", "preparing-runtime", "installing-rainbond", "configuring-windows-access", "verifying"].includes(state.stage)) {
     const provisioned = await provisionWindowsDistroAndNetwork({
       adapter: windowsAdapter,
+      onboarding,
       options,
       paths,
       state,
@@ -2129,6 +2141,7 @@ async function runInstallOperation(options) {
       process.stdout.write("WSL 2 已准备完成，正在继续安装 Rainbond。\n");
       const provisioned = await provisionWindowsDistroAndNetwork({
         adapter: windowsAdapter,
+        onboarding,
         options,
         paths,
         state: prepared.state,
@@ -2300,6 +2313,7 @@ module.exports = {
   REMOTE_INSTALL_SCRIPT,
   REMOTE_VERIFICATION_SCRIPT,
   atomicWriteJson,
+  buildWindowsMachineBundlePayload,
   buildRemoteConsoleCandidates,
   closeSshSession,
   controlHostPlatform,

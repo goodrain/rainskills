@@ -137,6 +137,46 @@ test("combined Windows provisioning has no parent timeout", () => {
   assert.equal(Object.hasOwn(spawnOptions, "timeout"), false);
 });
 
+test("Windows machine bundle payload pins the current helper and bootstrap", () => {
+  const { buildWindowsMachineBundlePayload } = require(platformInstallerPath);
+  assert.equal(typeof buildWindowsMachineBundlePayload, "function");
+  const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-current-package-"));
+  const bundleRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-recovery-bundle-"));
+  const scriptsRoot = path.join(packageRoot, "rainbond-platform-installer", "scripts");
+  const recoveryEntry = path.join(bundleRoot, "bin", "rainskills.js");
+  const recoveryManifest = path.join(bundleRoot, "manifest.json");
+  fs.mkdirSync(scriptsRoot, { recursive: true });
+  fs.mkdirSync(path.dirname(recoveryEntry), { recursive: true });
+  fs.writeFileSync(path.join(scriptsRoot, "windows-platform.ps1"), "# current helper\n");
+  fs.writeFileSync(path.join(scriptsRoot, "wsl-bootstrap.sh"), "#!/bin/bash\n# current bootstrap\n");
+  fs.writeFileSync(recoveryEntry, "#!/usr/bin/env node\n");
+  fs.writeFileSync(recoveryManifest, "{}\n");
+
+  const payload = buildWindowsMachineBundlePayload({
+    recovery: { packageRoot, bundleRoot },
+    onboarding: { control_mode: "windows-native" },
+    nodePath: "C:\\Program Files\\nodejs\\node.exe",
+  });
+
+  assert.equal(payload.helper_path, path.join(scriptsRoot, "windows-platform.ps1"));
+  assert.equal(payload.bootstrap_path, path.join(scriptsRoot, "wsl-bootstrap.sh"));
+  assert.equal(payload.helper_sha256, crypto.createHash("sha256").update("# current helper\n").digest("hex"));
+  assert.equal(payload.bootstrap_sha256, crypto.createHash("sha256").update("#!/bin/bash\n# current bootstrap\n").digest("hex"));
+  assert.equal(payload.recovery_manifest_sha256, crypto.createHash("sha256").update("{}\n").digest("hex"));
+  assert.equal(payload.recovery_entry, recoveryEntry);
+  assert.equal(payload.node_path, "C:\\Program Files\\nodejs\\node.exe");
+  assert.equal(payload.control_mode, "windows-native");
+});
+
+test("resumed Windows provisioning refreshes the protected machine bundle", () => {
+  const source = fs.readFileSync(platformInstallerPath, "utf8");
+  const provision = source.match(/async function provisionWindowsDistroAndNetwork[\s\S]*?\n\}\n\nasync function installWindowsRainbond/)?.[0];
+  assert(provision, "provisionWindowsDistroAndNetwork must remain a standalone operation");
+  assert.match(provision, /windowsRecoveryBundle\(paths\)/);
+  assert.match(provision, /buildWindowsMachineBundlePayload/);
+  assert.match(provision, /adapter\.provisionRainbond\([\s\S]*\.\.\.machineBundlePayload/);
+});
+
 test("WSL control paths bridge to Windows without parsing shell text", () => {
   const {
     normalizeWindowsExecutableForControl,
