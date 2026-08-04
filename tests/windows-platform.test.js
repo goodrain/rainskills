@@ -123,8 +123,7 @@ test("Windows policy pins supported hosts and trusted artifacts", () => {
     "https://wslstorestorage.blob.core.windows.net",
     "https://cloud-images.ubuntu.com",
     "https://get.rainbond.com",
-    "https://registry-1.docker.io",
-    "https://auth.docker.io",
+    "https://registry.cn-hangzhou.aliyuncs.com",
   ]);
 });
 
