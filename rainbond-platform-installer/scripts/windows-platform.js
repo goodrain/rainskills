@@ -6,6 +6,7 @@ const fs = require("node:fs");
 const https = require("node:https");
 const os = require("node:os");
 const path = require("node:path");
+const { Transform, pipeline } = require("node:stream");
 const { spawnSync } = require("node:child_process");
 const { createSecureStateStore } = require("./secure-state.js");
 
@@ -379,6 +380,29 @@ function resolveArtifactDownloadResponse({ statusCode, headers = {}, existingByt
   return { append: true, startingBytes: existingBytes, total };
 }
 
+function createArtifactByteLimiter({ startingBytes = 0, expectedBytes, onProgress }) {
+  let current = startingBytes;
+  return new Transform({
+    transform(chunk, encoding, callback) {
+      const next = current + chunk.length;
+      if (next > expectedBytes) {
+        callback(new Error(`下载源发送的数据超过固定版本大小（超过 ${expectedBytes} bytes）`));
+        return;
+      }
+      current = next;
+      onProgress?.({ current, total: expectedBytes });
+      callback(null, chunk);
+    },
+    flush(callback) {
+      if (current !== expectedBytes) {
+        callback(new Error(`下载源提前结束（实际 ${current} bytes，期望 ${expectedBytes} bytes）`));
+        return;
+      }
+      callback();
+    },
+  });
+}
+
 function defaultArtifactDownload({ url, partialPath, allowedOrigins, expectedBytes, onProgress, maximumRedirects = 5 }) {
   return new Promise((resolve, reject) => {
     function requestUrl(currentUrl, redirectsRemaining) {
@@ -420,15 +444,14 @@ function defaultArtifactDownload({ url, partialPath, allowedOrigins, expectedByt
         }
         const { append, startingBytes, total } = responseMode;
         const output = fs.createWriteStream(partialPath, { flags: append ? "a" : "w", mode: 0o600 });
-        let current = startingBytes;
-        response.on("data", (chunk) => {
-          current += chunk.length;
-          onProgress?.({ current, total });
+        const limiter = createArtifactByteLimiter({ startingBytes, expectedBytes: total || expectedBytes, onProgress });
+        pipeline(response, limiter, output, (error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+          resolve({ finalUrl: currentUrl, bytes: expectedBytes });
         });
-        response.on("error", reject);
-        output.on("error", reject);
-        output.on("finish", () => resolve({ finalUrl: currentUrl, bytes: current }));
-        response.pipe(output);
       });
       request.on("timeout", () => request.destroy(new Error("下载连接超时")));
       request.on("error", reject);
@@ -448,7 +471,7 @@ function quarantineFile(filePath) {
 
 async function ensurePinnedArtifact({
   destination,
-  url,
+  urls,
   expectedBytes,
   sha256,
   allowedOrigins,
@@ -458,12 +481,13 @@ async function ensurePinnedArtifact({
 }) {
   if (!Number.isSafeInteger(expectedBytes) || expectedBytes <= 0) throw new Error("安装产物固定大小无效");
   if (!/^[a-f0-9]{64}$/.test(String(sha256 || ""))) throw new Error("安装产物 SHA-256 无效");
-  validateArtifactRedirect(url, url, allowedOrigins);
+  if (!Array.isArray(urls) || urls.length === 0) throw new Error("安装产物下载源无效");
+  for (const sourceUrl of urls) validateArtifactRedirect(sourceUrl, sourceUrl, allowedOrigins);
   if (fs.existsSync(destination)) {
     const info = fs.lstatSync(destination);
     if (info.isSymbolicLink() || !info.isFile()) throw new Error(`安装产物不是安全的普通文件：${destination}`);
     if (info.size === expectedBytes && hashFile(destination) === sha256) {
-      return { reused: true, path: destination, bytes: info.size, finalUrl: url };
+      return { reused: true, path: destination, bytes: info.size, finalUrl: urls[0] };
     }
     quarantineFile(destination);
   }
@@ -474,16 +498,27 @@ async function ensurePinnedArtifact({
     if (partialInfo.isSymbolicLink() || !partialInfo.isFile()) throw new Error(`下载缓存不是安全的普通文件：${partialPath}`);
   }
   let lastMismatch = null;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  for (let attempt = 0; attempt < urls.length; attempt += 1) {
+    const sourceUrl = urls[attempt];
     let result;
     try {
-      result = await download({ url, partialPath, allowedOrigins, expectedBytes, onProgress });
+      result = await download({ url: sourceUrl, partialPath, allowedOrigins, expectedBytes, onProgress });
     } catch (error) {
-      if (attempt > 0 || !fs.existsSync(partialPath) || !/断点续传|Content-Range|文件大小与固定版本不匹配/.test(error.message)) throw error;
-      const info = fs.statSync(partialPath);
-      lastMismatch = { actualBytes: info.size, expectedBytes, actualSha256: hashFile(partialPath), expectedSha256: sha256 };
-      quarantineFile(partialPath);
-      onRetry?.(lastMismatch);
+      if (fs.existsSync(partialPath)) {
+        const info = fs.statSync(partialPath);
+        const actualSha256 = hashFile(partialPath);
+        if (info.size === expectedBytes && actualSha256 === sha256) {
+          fs.chmodSync(partialPath, 0o600);
+          fs.renameSync(partialPath, destination);
+          return { reused: false, path: destination, bytes: info.size, finalUrl: sourceUrl };
+        }
+        lastMismatch = { actualBytes: info.size, expectedBytes, actualSha256, expectedSha256: sha256 };
+        quarantineFile(partialPath);
+      } else {
+        lastMismatch = { actualBytes: 0, expectedBytes, actualSha256: null, expectedSha256: sha256 };
+      }
+      if (attempt + 1 >= urls.length) break;
+      onRetry?.({ ...lastMismatch, reason: error.message, sourceUrl, nextUrl: urls[attempt + 1] });
       continue;
     }
     if (fs.existsSync(partialPath)) {
@@ -496,8 +531,8 @@ async function ensurePinnedArtifact({
       }
       lastMismatch = { actualBytes: info.size, expectedBytes, actualSha256, expectedSha256: sha256 };
       quarantineFile(partialPath);
-      if (attempt === 0) {
-        onRetry?.(lastMismatch);
+      if (attempt + 1 < urls.length) {
+        onRetry?.({ ...lastMismatch, reason: "文件完整性校验失败", sourceUrl, nextUrl: urls[attempt + 1] });
         continue;
       }
     }
@@ -645,15 +680,22 @@ function evaluateWindowsPreflight(facts, policy, expectedUserSid) {
   }
 
   const allowedOrigins = new Set(windowsPolicy.preflight_allowed_origins.map(normalizedOrigin));
+  const rootfsOrigins = new Set(windowsPolicy.ubuntu_rootfs.urls.map(normalizedOrigin));
   const checks = new Map((facts.originChecks || []).map((check) => [normalizedOrigin(check.origin), check]));
+  let rootfsReachable = false;
   for (const origin of allowedOrigins) {
     const check = checks.get(origin);
-    if (!check || check.reachable !== true) blockers.push(`无法访问安装所需地址 ${origin}`);
+    if (rootfsOrigins.has(origin)) {
+      if (check?.reachable === true) rootfsReachable = true;
+    } else if (!check || check.reachable !== true) {
+      blockers.push(`无法访问安装所需地址 ${origin}`);
+    }
     for (const redirect of check?.redirectOrigins || []) {
       const redirectOrigin = normalizedOrigin(redirect);
       if (!allowedOrigins.has(redirectOrigin)) blockers.push(`检测到未获准的跳转来源 ${redirectOrigin || redirect}`);
     }
   }
+  if (!rootfsReachable) blockers.push("无法访问任何经过校验的 Ubuntu 根文件系统镜像");
 
   return {
     ok: blockers.length === 0,
@@ -871,6 +913,7 @@ module.exports = {
   USER_ACTIONS,
   WINDOWS_STAGES,
   createRecoveryBundle,
+  createArtifactByteLimiter,
   createWindowsSecureStateStore,
   createWindowsPlatformAdapter,
   evaluateWindowsPreflight,

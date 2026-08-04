@@ -5,6 +5,8 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { Readable, Writable } = require("node:stream");
+const { pipeline } = require("node:stream/promises");
 const test = require("node:test");
 
 const repoRoot = path.resolve(__dirname, "..");
@@ -121,7 +123,11 @@ test("Windows policy pins supported hosts and trusted artifacts", () => {
   assert.deepEqual(policy.windows.networking_modes, ["nat"]);
   assert.deepEqual(policy.windows.managed_ports, [80, 443, 6060, 7070]);
   assert.deepEqual(policy.windows.ubuntu_rootfs, {
-    url: "https://cloud-images.ubuntu.com/wsl/jammy/20250318/ubuntu-jammy-wsl-amd64-ubuntu22.04lts.rootfs.tar.gz",
+    urls: [
+      "https://mirror.nju.edu.cn/ubuntu-cloud-images/wsl/jammy/20250318/ubuntu-jammy-wsl-amd64-ubuntu22.04lts.rootfs.tar.gz",
+      "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-cloud-images/wsl/jammy/20250318/ubuntu-jammy-wsl-amd64-ubuntu22.04lts.rootfs.tar.gz",
+      "https://cloud-images.ubuntu.com/wsl/jammy/20250318/ubuntu-jammy-wsl-amd64-ubuntu22.04lts.rootfs.tar.gz",
+    ],
     size_bytes: 341130963,
     sha256: "1483cc5c1dce13064f774834cbffdff226559fd522a67a381a8ea77d63fb4109",
     trust: "sha256-pinned",
@@ -134,6 +140,8 @@ test("Windows policy pins supported hosts and trusted artifacts", () => {
   assert.deepEqual(policy.windows.wsl_web_update, { trust: "os-signed-update" });
   assert.deepEqual(policy.windows.preflight_allowed_origins, [
     "https://wslstorestorage.blob.core.windows.net",
+    "https://mirror.nju.edu.cn",
+    "https://mirrors.tuna.tsinghua.edu.cn",
     "https://cloud-images.ubuntu.com",
     "https://get.rainbond.com",
     "https://registry.cn-hangzhou.aliyuncs.com",
@@ -364,6 +372,20 @@ test("passing Windows preflight lists the exact user-visible effects", () => {
     "配置本机 NAT 网络和 127.0.0.1 端口转发",
     "在专用 WSL 环境中安装并验证 Rainbond",
   ]);
+});
+
+test("Windows preflight requires only one reachable pinned rootfs source", () => {
+  const { evaluateWindowsPreflight } = require(windowsPlatformPath);
+  const rootfsOrigins = new Set(policy.windows.ubuntu_rootfs.urls.map((url) => new URL(url).origin));
+  const facts = passingFacts({
+    originChecks: policy.windows.preflight_allowed_origins.map((origin) => ({
+      origin,
+      reachable: !rootfsOrigins.has(origin) || origin === new URL(policy.windows.ubuntu_rootfs.urls[0]).origin,
+      redirectOrigins: [],
+    })),
+  });
+
+  assert.equal(evaluateWindowsPreflight(facts, policy, USER_SID).ok, true);
 });
 
 test("PowerShell preflight is a fixed read-only action with structured output", () => {
@@ -748,12 +770,12 @@ test("pinned rootfs artifacts are reused only after digest verification", async 
     downloads += 1;
     fs.writeFileSync(partialPath, expectedBytes);
     onProgress?.({ current: expectedBytes.length, total: expectedBytes.length });
-    return { finalUrl: policy.windows.ubuntu_rootfs.url, bytes: expectedBytes.length };
+    return { finalUrl: policy.windows.ubuntu_rootfs.urls[0], bytes: expectedBytes.length };
   };
 
   const first = await ensurePinnedArtifact({
     destination,
-    url: policy.windows.ubuntu_rootfs.url,
+    urls: policy.windows.ubuntu_rootfs.urls,
     expectedBytes: expectedBytes.length,
     sha256: expectedDigest,
     allowedOrigins: policy.windows.preflight_allowed_origins,
@@ -761,7 +783,7 @@ test("pinned rootfs artifacts are reused only after digest verification", async 
   });
   const second = await ensurePinnedArtifact({
     destination,
-    url: policy.windows.ubuntu_rootfs.url,
+    urls: policy.windows.ubuntu_rootfs.urls,
     expectedBytes: expectedBytes.length,
     sha256: expectedDigest,
     allowedOrigins: policy.windows.preflight_allowed_origins,
@@ -774,7 +796,7 @@ test("pinned rootfs artifacts are reused only after digest verification", async 
   fs.writeFileSync(destination, "tampered");
   await ensurePinnedArtifact({
     destination,
-    url: policy.windows.ubuntu_rootfs.url,
+    urls: policy.windows.ubuntu_rootfs.urls,
     expectedBytes: expectedBytes.length,
     sha256: expectedDigest,
     allowedOrigins: policy.windows.preflight_allowed_origins,
@@ -794,14 +816,14 @@ test("pinned rootfs artifacts must match the published byte size", async () => {
 
   await assert.rejects(ensurePinnedArtifact({
     destination,
-    url: policy.windows.ubuntu_rootfs.url,
+    urls: policy.windows.ubuntu_rootfs.urls.slice(0, 2),
     expectedBytes: artifact.length + 1,
     sha256: expectedDigest,
     allowedOrigins: policy.windows.preflight_allowed_origins,
     download: async ({ partialPath }) => {
       downloads += 1;
       fs.writeFileSync(partialPath, artifact);
-      return { finalUrl: policy.windows.ubuntu_rootfs.url, bytes: artifact.length };
+      return { finalUrl: policy.windows.ubuntu_rootfs.urls[downloads - 1], bytes: artifact.length };
     },
   }), /实际 15 bytes.*期望 16 bytes/);
 
@@ -839,7 +861,27 @@ test("rootfs resume accepts only a matching Content-Range", () => {
   }), /文件大小与固定版本不匹配/);
 });
 
-test("pinned rootfs retries one checksum failure without the stale partial", async () => {
+test("rootfs byte limiter stops a source that sends more than the pinned size", async () => {
+  const { createArtifactByteLimiter } = require(windowsPlatformPath);
+  assert.equal(typeof createArtifactByteLimiter, "function");
+  const limiter = createArtifactByteLimiter({ startingBytes: 2, expectedBytes: 5 });
+  const output = [];
+  const sink = new Writable({
+    write(chunk, encoding, callback) {
+      output.push(chunk);
+      callback();
+    },
+  });
+
+  await assert.rejects(pipeline(
+    Readable.from([Buffer.from("abc"), Buffer.from("x")]),
+    limiter,
+    sink
+  ), /超过固定版本大小/);
+  assert.equal(Buffer.concat(output).toString("utf8"), "abc");
+});
+
+test("pinned rootfs switches sources after a checksum failure without the stale partial", async () => {
   const { ensurePinnedArtifact } = require(windowsPlatformPath);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-rootfs-retry-"));
   const destination = path.join(root, "ubuntu-rootfs.tar.gz");
@@ -849,20 +891,22 @@ test("pinned rootfs retries one checksum failure without the stale partial", asy
   fs.writeFileSync(partialPath, "stale-prefix");
   let downloads = 0;
   const retries = [];
-  const download = async ({ partialPath: currentPartial }) => {
+  const requestedUrls = [];
+  const download = async ({ partialPath: currentPartial, url }) => {
     downloads += 1;
+    requestedUrls.push(url);
     if (downloads === 1) {
       fs.appendFileSync(currentPartial, expectedBytes);
     } else {
       assert.equal(fs.existsSync(currentPartial), false);
       fs.writeFileSync(currentPartial, expectedBytes);
     }
-    return { finalUrl: policy.windows.ubuntu_rootfs.url, bytes: fs.statSync(currentPartial).size };
+    return { finalUrl: url, bytes: fs.statSync(currentPartial).size };
   };
 
   const result = await ensurePinnedArtifact({
     destination,
-    url: policy.windows.ubuntu_rootfs.url,
+    urls: policy.windows.ubuntu_rootfs.urls.slice(0, 2),
     expectedBytes: expectedBytes.length,
     sha256: expectedDigest,
     allowedOrigins: policy.windows.preflight_allowed_origins,
@@ -872,6 +916,7 @@ test("pinned rootfs retries one checksum failure without the stale partial", asy
 
   assert.equal(result.reused, false);
   assert.equal(downloads, 2);
+  assert.deepEqual(requestedUrls, policy.windows.ubuntu_rootfs.urls.slice(0, 2));
   assert.equal(retries.length, 1);
   assert.equal(retries[0].expectedSha256, expectedDigest);
   assert.equal(retries[0].actualBytes, "stale-prefix".length + expectedBytes.length);
@@ -887,14 +932,14 @@ test("artifact redirects and managed subnets reject untrusted or overlapping net
   } = require(windowsPlatformPath);
   assert.equal(
     validateArtifactRedirect(
-      policy.windows.ubuntu_rootfs.url,
+      policy.windows.ubuntu_rootfs.urls[0],
       "https://cloud-images.ubuntu.com/wsl/jammy/rootfs.tar.gz",
       policy.windows.preflight_allowed_origins
     ),
     true
   );
   assert.throws(() => validateArtifactRedirect(
-    policy.windows.ubuntu_rootfs.url,
+    policy.windows.ubuntu_rootfs.urls[0],
     "https://downloads.example/rootfs.tar.gz",
     policy.windows.preflight_allowed_origins
   ), /跳转来源/);

@@ -26,12 +26,18 @@
     "managed_ports": [80, 443, 6060, 7070],
     "preflight_allowed_origins": [
       "https://wslstorestorage.blob.core.windows.net",
+      "https://mirror.nju.edu.cn",
+      "https://mirrors.tuna.tsinghua.edu.cn",
       "https://cloud-images.ubuntu.com",
       "https://get.rainbond.com",
       "https://registry.cn-hangzhou.aliyuncs.com"
     ],
     "ubuntu_rootfs": {
-      "url": "https://cloud-images.ubuntu.com/wsl/jammy/20250318/ubuntu-jammy-wsl-amd64-ubuntu22.04lts.rootfs.tar.gz",
+      "urls": [
+        "https://mirror.nju.edu.cn/ubuntu-cloud-images/wsl/jammy/20250318/ubuntu-jammy-wsl-amd64-ubuntu22.04lts.rootfs.tar.gz",
+        "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-cloud-images/wsl/jammy/20250318/ubuntu-jammy-wsl-amd64-ubuntu22.04lts.rootfs.tar.gz",
+        "https://cloud-images.ubuntu.com/wsl/jammy/20250318/ubuntu-jammy-wsl-amd64-ubuntu22.04lts.rootfs.tar.gz"
+      ],
       "size_bytes": 341130963,
       "sha256": "1483cc5c1dce13064f774834cbffdff226559fd522a67a381a8ea77d63fb4109",
       "trust": "sha256-pinned"

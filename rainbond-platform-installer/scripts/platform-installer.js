@@ -1586,7 +1586,7 @@ async function provisionWindowsDistroAndNetwork({ adapter, options, paths, state
   let lastProgressEventAt = 0;
   const rootfs = await ensurePinnedArtifact({
     destination: rootfsPath,
-    url: POLICY.windows.ubuntu_rootfs.url,
+    urls: POLICY.windows.ubuntu_rootfs.urls,
     expectedBytes: POLICY.windows.ubuntu_rootfs.size_bytes,
     sha256: POLICY.windows.ubuntu_rootfs.sha256,
     allowedOrigins: POLICY.windows.preflight_allowed_origins,
@@ -1609,7 +1609,7 @@ async function provisionWindowsDistroAndNetwork({ adapter, options, paths, state
       lastProgressAt = 0;
       lastProgressEventAt = 0;
       process.stdout.write(
-        `\n首次下载校验异常，已隔离缓存并从头重试一次（${details.actualBytes} bytes，SHA-256 ${details.actualSha256}）。\n`
+        `\n当前下载源异常，已隔离缓存并切换备用镜像（${details.actualBytes} bytes${details.actualSha256 ? `，SHA-256 ${details.actualSha256}` : ""}）。\n`
       );
     },
   });
