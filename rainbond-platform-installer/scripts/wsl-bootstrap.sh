@@ -182,6 +182,7 @@ install_rainbond() {
   [[ -f "$NETWORK_READY_FILE" ]] || { printf 'Managed network is not ready\n' >&2; exit 1; }
   docker info >/dev/null
   local ownership_file="$STATE_DIR/rainbond-installation-id"
+  local existing_gpu_mode=""
   if docker inspect rainbond >/dev/null 2>&1; then
     [[ -f "$ownership_file" && "$(tr -d '\r\n' < "$ownership_file")" == "$INSTALLATION_ID" ]] || {
       printf 'Existing rainbond container is not owned by this installation\n' >&2
@@ -190,6 +191,12 @@ install_rainbond() {
     if [[ "$(docker inspect rainbond --format '{{.State.Status}}')" == "running" ]]; then
       emit_progress installing-rainbond completed
       return
+    fi
+    existing_gpu_mode="$(docker inspect rainbond --format '{{range .Config.Env}}{{println .}}{{end}}' \
+      | grep -Fx 'ENABLE_GPU=true' || true)"
+    if [[ -n "$existing_gpu_mode" ]]; then
+      printf 'Replacing the stopped GPU-configured Rainbond container with CPU mode\n'
+      docker rm rainbond >/dev/null
     fi
   elif [[ -f "$ownership_file" && "$(tr -d '\r\n' < "$ownership_file")" != "$INSTALLATION_ID" ]]; then
     printf 'Rainbond ownership marker mismatch\n' >&2
@@ -202,7 +209,7 @@ install_rainbond() {
   chmod 600 "$INSTALL_LOG"
   emit_progress installing-rainbond started
   set +e
-  setsid env EIP="$GUEST_ADDRESS" RAINBOND_INSTALL_LANG=zh bash "$INSTALLER_PATH" 2>&1 \
+  setsid env EIP="$GUEST_ADDRESS" ENABLE_GPU=false RAINBOND_INSTALL_LANG=zh bash "$INSTALLER_PATH" 2>&1 \
     | redact_stream | tee -a "$INSTALL_LOG" &
   local install_pid=$!
   while kill -0 "$install_pid" >/dev/null 2>&1; do
