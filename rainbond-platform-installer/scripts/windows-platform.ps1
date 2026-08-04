@@ -454,6 +454,27 @@ function Assert-FileDigestOneOf([string]$FilePath, [string[]]$ExpectedDigests) {
   return $actual
 }
 
+function Write-MachineLease([string]$MachineRoot, $Request) {
+  $leasePath = Join-Path $MachineRoot "lease.json"
+  if (Test-Path -LiteralPath $leasePath) {
+    $leaseInfo = Get-Item -LiteralPath $leasePath -Force
+    if ($leaseInfo.PSIsContainer -or ($leaseInfo.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+      throw "Existing machine lease must be a regular non-reparse file"
+    }
+    $leaseInfo.IsReadOnly = $false
+    Remove-Item -LiteralPath $leasePath -Force
+  }
+  $lease = [ordered]@{
+    schema = "rainskills.windows-machine-lease.v1"
+    operation_id = $Request.operation_id
+    installation_id = $Request.installation_id
+    original_user_sid = $Request.user_sid
+    nonce = $Request.nonce
+    updated_at = [DateTime]::UtcNow.ToString("o")
+  }
+  [IO.File]::WriteAllText($leasePath, (($lease | ConvertTo-Json -Depth 4) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+}
+
 function Invoke-InstallMachineBundle($Request) {
   $payload = $Request.payload
   $sourceHelper = [string](Get-PropertyValue $payload "helper_path")
@@ -524,15 +545,7 @@ function Invoke-InstallMachineBundle($Request) {
     control_recovery_entry = if ($controlMode -eq "wsl") { [string]$controlRecoveryEntry } else { $null }
   }
   [IO.File]::WriteAllText($manifestPath, (($manifest | ConvertTo-Json -Depth 6) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
-  $lease = [ordered]@{
-    schema = "rainskills.windows-machine-lease.v1"
-    operation_id = $Request.operation_id
-    installation_id = $Request.installation_id
-    original_user_sid = $Request.user_sid
-    nonce = $Request.nonce
-    updated_at = [DateTime]::UtcNow.ToString("o")
-  }
-  [IO.File]::WriteAllText((Join-Path $machineRoot "lease.json"), (($lease | ConvertTo-Json -Depth 4) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+  Write-MachineLease $machineRoot $Request
   Set-MachineRootAcl $machineRoot $Request.user_sid
   [void](Assert-MachineManifest $Request)
   return [ordered]@{ machineBundleVerified = $true; machineRoot = $machineRoot; helperPath = $machineHelper }

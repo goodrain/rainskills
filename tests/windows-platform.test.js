@@ -430,6 +430,20 @@ test("PowerShell identifies the failing PrepareWsl substep", () => {
   assert.match(prepareWsl, /EnableWsl failed/);
 });
 
+test("PowerShell replaces a stale regular machine lease instead of overwriting it in place", () => {
+  const source = fs.readFileSync(powershellPath, "utf8");
+  const leaseWriter = source.match(/function Write-MachineLease[\s\S]*?\n\}/)?.[0];
+  assert(leaseWriter, "Write-MachineLease must remain a standalone fixed operation");
+  assert.match(leaseWriter, /ReparsePoint/);
+  assert.match(leaseWriter, /PSIsContainer/);
+  assert.match(leaseWriter, /IsReadOnly = \$false/);
+  assert.match(leaseWriter, /Remove-Item[^\n]*-Force/);
+  assert.match(leaseWriter, /WriteAllText/);
+  const installBundle = source.match(/function Invoke-InstallMachineBundle\(\$Request\) \{[\s\S]*?\n\}\n\nfunction Get-TrustedWslPath/)?.[0];
+  assert.match(installBundle, /Write-MachineLease \$machineRoot \$Request/);
+  assert.doesNotMatch(installBundle, /WriteAllText\(\(Join-Path \$machineRoot "lease\.json"\)/);
+});
+
 test("native Windows state storage hardens and inspects every path without command strings", () => {
   const { createWindowsSecureStateStore } = require(windowsPlatformPath);
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-windows-acl-"));

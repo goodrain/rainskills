@@ -18,6 +18,21 @@ foreach ($scriptPath in @($platformScript, $browserScript)) {
   }
 }
 
+$platformTokens = $null
+$platformErrors = $null
+$platformAst = [System.Management.Automation.Language.Parser]::ParseFile(
+  $platformScript,
+  [ref]$platformTokens,
+  [ref]$platformErrors
+)
+$leaseWriterAst = $platformAst.Find({
+  param($node)
+  $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+    $node.Name -eq "Write-MachineLease"
+}, $true)
+if ($null -eq $leaseWriterAst) { throw "Write-MachineLease function is missing" }
+. ([ScriptBlock]::Create($leaseWriterAst.Extent.Text))
+
 $global:rainskillsContractOpenedUrl = $null
 function Start-Process {
   param([Parameter(Mandatory = $true)][string]$FilePath)
@@ -57,6 +72,49 @@ try {
   }
 } finally {
   Remove-Item -LiteralPath $stateRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+$leaseRoot = Join-Path ([IO.Path]::GetTempPath()) ("rainskills-lease-contract-" + [Guid]::NewGuid().ToString("N"))
+try {
+  [void](New-Item -ItemType Directory -Path $leaseRoot)
+  $leasePath = Join-Path $leaseRoot "lease.json"
+  [IO.File]::WriteAllText($leasePath, "stale", [Text.UTF8Encoding]::new($false))
+  (Get-Item -LiteralPath $leasePath).IsReadOnly = $true
+  $leaseAcl = [IO.File]::GetAccessControl($leasePath)
+  $denyWrite = [Security.AccessControl.FileSystemAccessRule]::new(
+    [Security.Principal.SecurityIdentifier]::new($currentSid),
+    [Security.AccessControl.FileSystemRights]::WriteData,
+    [Security.AccessControl.AccessControlType]::Deny
+  )
+  [void]$leaseAcl.AddAccessRule($denyWrite)
+  [IO.File]::SetAccessControl($leasePath, $leaseAcl)
+  $inPlaceWriteDenied = $false
+  try {
+    [IO.File]::WriteAllText($leasePath, "must fail", [Text.UTF8Encoding]::new($false))
+  } catch [UnauthorizedAccessException] {
+    $inPlaceWriteDenied = $true
+  }
+  if (-not $inPlaceWriteDenied) { throw "Lease contract did not reproduce an access denied overwrite" }
+  $leaseRequest = [pscustomobject]@{
+    operation_id = "11111111-1111-4111-8111-111111111111"
+    installation_id = "22222222-2222-4222-8222-222222222222"
+    user_sid = $currentSid
+    nonce = ("a" * 64)
+  }
+  Write-MachineLease $leaseRoot $leaseRequest
+  $lease = Get-Content -LiteralPath $leasePath -Raw -Encoding UTF8 | ConvertFrom-Json
+  if ($lease.schema -ne "rainskills.windows-machine-lease.v1" -or
+      $lease.operation_id -ne $leaseRequest.operation_id -or
+      $lease.installation_id -ne $leaseRequest.installation_id -or
+      $lease.nonce -ne $leaseRequest.nonce -or
+      (Get-Item -LiteralPath $leasePath).IsReadOnly) {
+    throw "Machine lease replacement contract failed"
+  }
+} finally {
+  if (Test-Path -LiteralPath $leaseRoot) {
+    Get-ChildItem -LiteralPath $leaseRoot -Force -ErrorAction SilentlyContinue | ForEach-Object { $_.IsReadOnly = $false }
+    Remove-Item -LiteralPath $leaseRoot -Recurse -Force -ErrorAction SilentlyContinue
+  }
 }
 
 Write-Host "Windows PowerShell contracts passed."
