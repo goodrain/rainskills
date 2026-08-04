@@ -422,6 +422,23 @@ test("PowerShell upgrades only a verified machine bundle from the same installat
   assert.doesNotMatch(aclFunction, /\s\/c(?:\s|$)/);
 });
 
+test("PowerShell rebuilds an effective ACL on every existing machine item", () => {
+  const source = fs.readFileSync(powershellPath, "utf8");
+  const itemAcl = source.match(/function Set-MachineItemAcl[\s\S]*?\n\}/)?.[0];
+  assert(itemAcl, "Set-MachineItemAcl must remain a standalone fixed operation");
+  assert.match(itemAcl, /DirectorySecurity/);
+  assert.match(itemAcl, /FileSecurity/);
+  assert.match(itemAcl, /SetAccessRuleProtection\(\$true, \$false\)/);
+  assert.match(itemAcl, /S-1-5-18/);
+  assert.match(itemAcl, /S-1-5-32-544/);
+  assert.match(itemAcl, /ReadAndExecute/);
+  assert.match(itemAcl, /FullControl/);
+  const aclFunction = source.match(/function Set-MachineRootAcl[\s\S]*?\n\}/)?.[0];
+  assert.match(aclFunction, /Get-ChildItem[^\n]*-Recurse/);
+  assert.match(aclFunction, /Set-MachineItemAcl/);
+  assert.doesNotMatch(aclFunction, /\/grant:r/);
+});
+
 test("PowerShell identifies the failing PrepareWsl substep", () => {
   const source = fs.readFileSync(powershellPath, "utf8");
   const prepareWsl = source.match(/function Invoke-PrepareWsl\(\$Request\) \{[\s\S]*?\n\}\n\nfunction Invoke-ProvisionRainbond/)?.[0];

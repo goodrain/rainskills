@@ -420,12 +420,51 @@ function Assert-ManagedMachineRoot([string]$MachineRoot, [string]$InstallationId
   }
 }
 
+function Set-MachineItemAcl([string]$PathValue, [bool]$IsDirectory, [string]$OriginalSid) {
+  $acl = if ($IsDirectory) {
+    [Security.AccessControl.DirectorySecurity]::new()
+  } else {
+    [Security.AccessControl.FileSecurity]::new()
+  }
+  $acl.SetAccessRuleProtection($true, $false)
+  $inheritance = if ($IsDirectory) {
+    [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
+      [Security.AccessControl.InheritanceFlags]::ObjectInherit
+  } else {
+    [Security.AccessControl.InheritanceFlags]::None
+  }
+  foreach ($entry in @(
+    [ordered]@{ sid = "S-1-5-18"; rights = [Security.AccessControl.FileSystemRights]::FullControl },
+    [ordered]@{ sid = "S-1-5-32-544"; rights = [Security.AccessControl.FileSystemRights]::FullControl },
+    [ordered]@{ sid = $OriginalSid; rights = [Security.AccessControl.FileSystemRights]::ReadAndExecute }
+  )) {
+    $rule = [Security.AccessControl.FileSystemAccessRule]::new(
+      [Security.Principal.SecurityIdentifier]::new($entry.sid),
+      $entry.rights,
+      $inheritance,
+      [Security.AccessControl.PropagationFlags]::None,
+      [Security.AccessControl.AccessControlType]::Allow
+    )
+    [void]$acl.AddAccessRule($rule)
+  }
+  if ($IsDirectory) {
+    [IO.Directory]::SetAccessControl($PathValue, $acl)
+  } else {
+    [IO.File]::SetAccessControl($PathValue, $acl)
+  }
+}
+
 function Set-MachineRootAcl([string]$MachineRoot, [string]$OriginalSid) {
   $ownerResult = & "$env:SystemRoot\System32\icacls.exe" $MachineRoot /setowner "*S-1-5-32-544" /t 2>&1
   if ($LASTEXITCODE -ne 0) { throw "Failed to restore ProgramData machine bundle ownership: $($ownerResult -join ' ')" }
-  $aclResult = & "$env:SystemRoot\System32\icacls.exe" $MachineRoot /inheritance:r `
-    /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "*$OriginalSid`:(OI)(CI)RX" /t 2>&1
-  if ($LASTEXITCODE -ne 0) { throw "Failed to protect ProgramData machine bundle: $($aclResult -join ' ')" }
+  $items = @((Get-Item -LiteralPath $MachineRoot -Force)) +
+    @(Get-ChildItem -LiteralPath $MachineRoot -Force -Recurse)
+  foreach ($item in $items) {
+    if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+      throw "ProgramData machine bundle may not contain reparse points"
+    }
+    Set-MachineItemAcl $item.FullName $item.PSIsContainer $OriginalSid
+  }
   $verifyResult = & "$env:SystemRoot\System32\icacls.exe" $MachineRoot /verify /t 2>&1
   if ($LASTEXITCODE -ne 0) { throw "ProgramData machine bundle ACL verification failed: $($verifyResult -join ' ')" }
 }

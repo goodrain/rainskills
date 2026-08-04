@@ -32,6 +32,13 @@ $leaseWriterAst = $platformAst.Find({
 }, $true)
 if ($null -eq $leaseWriterAst) { throw "Write-MachineLease function is missing" }
 . ([ScriptBlock]::Create($leaseWriterAst.Extent.Text))
+$machineItemAclAst = $platformAst.Find({
+  param($node)
+  $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+    $node.Name -eq "Set-MachineItemAcl"
+}, $true)
+if ($null -eq $machineItemAclAst) { throw "Set-MachineItemAcl function is missing" }
+. ([ScriptBlock]::Create($machineItemAclAst.Extent.Text))
 
 $global:rainskillsContractOpenedUrl = $null
 function Start-Process {
@@ -79,14 +86,9 @@ try {
   [void](New-Item -ItemType Directory -Path $leaseRoot)
   $leasePath = Join-Path $leaseRoot "lease.json"
   [IO.File]::WriteAllText($leasePath, "stale", [Text.UTF8Encoding]::new($false))
-  (Get-Item -LiteralPath $leasePath).IsReadOnly = $true
-  $leaseAcl = [IO.File]::GetAccessControl($leasePath)
-  $denyWrite = [Security.AccessControl.FileSystemAccessRule]::new(
-    [Security.Principal.SecurityIdentifier]::new($currentSid),
-    [Security.AccessControl.FileSystemRights]::WriteData,
-    [Security.AccessControl.AccessControlType]::Deny
-  )
-  [void]$leaseAcl.AddAccessRule($denyWrite)
+  $leaseAcl = [Security.AccessControl.FileSecurity]::new()
+  $leaseAcl.SetOwner([Security.Principal.SecurityIdentifier]::new($currentSid))
+  $leaseAcl.SetAccessRuleProtection($true, $false)
   [IO.File]::SetAccessControl($leasePath, $leaseAcl)
   $inPlaceWriteDenied = $false
   try {
@@ -95,6 +97,7 @@ try {
     $inPlaceWriteDenied = $true
   }
   if (-not $inPlaceWriteDenied) { throw "Lease contract did not reproduce an access denied overwrite" }
+  Set-MachineItemAcl $leasePath $false $currentSid
   $leaseRequest = [pscustomobject]@{
     operation_id = "11111111-1111-4111-8111-111111111111"
     installation_id = "22222222-2222-4222-8222-222222222222"
