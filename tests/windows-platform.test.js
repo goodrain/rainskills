@@ -1188,12 +1188,13 @@ test("Rainbond WSL bootstrap verifies artifacts, prepares Docker, emits heartbea
   assert.match(source, /curl[\s\S]*7070/);
 });
 
-test("Rainbond WSL installation forces CPU mode and replaces only its stopped GPU container", () => {
+test("Rainbond WSL installation forces CPU mode and rebuilds its owned stopped container", () => {
   const source = fs.readFileSync(wslBootstrapPath, "utf8");
   const installRainbond = source.match(/install_rainbond\(\) \{[\s\S]*?\n\}\n\nverify_rainbond\(\)/)?.[0];
   assert(installRainbond, "install_rainbond must remain a standalone fixed action");
-  assert.match(installRainbond, /rainbond-installation-id[\s\S]*ENABLE_GPU=true[\s\S]*docker rm rainbond/);
+  assert.match(installRainbond, /rainbond-installation-id[\s\S]*State\.Status[\s\S]*return[\s\S]*docker rm rainbond/);
   assert.doesNotMatch(installRainbond, /docker rm\s+-f/);
+  assert.doesNotMatch(installRainbond, /existing_gpu_mode|ENABLE_GPU=true/);
   assert.match(installRainbond, /setsid env[\s\S]*ENABLE_GPU=false[\s\S]*bash "\$INSTALLER_PATH"/);
 });
 
