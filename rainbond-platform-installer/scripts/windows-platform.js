@@ -520,6 +520,18 @@ function defaultArtifactDownload({ url, partialPath, allowedOrigins, expectedByt
   });
 }
 
+function hasLegacyProgressPrefix(filePath) {
+  const prefix = Buffer.from('{"schema":"rainskills.platform-progress.v1"');
+  const header = Buffer.alloc(prefix.length);
+  const file = fs.openSync(filePath, "r");
+  try {
+    return fs.readSync(file, header, 0, header.length, 0) === header.length
+      && header.equals(prefix);
+  } finally {
+    fs.closeSync(file);
+  }
+}
+
 async function ensureRootfsArtifact({
   destination,
   urls,
@@ -535,7 +547,7 @@ async function ensureRootfsArtifact({
   if (fs.existsSync(destination)) {
     const info = fs.lstatSync(destination);
     if (info.isSymbolicLink() || !info.isFile()) throw new Error(`Ubuntu 根文件系统不是安全的普通文件：${destination}`);
-    if (info.size > 0 && info.size <= maximumBytes) {
+    if (info.size > 0 && info.size <= maximumBytes && !hasLegacyProgressPrefix(destination)) {
       return { reused: true, path: destination, bytes: info.size, finalUrl: urls[0] };
     }
     quarantineFile(destination);

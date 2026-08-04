@@ -1109,11 +1109,6 @@ function appendEvent(paths, state, stage, status, extra = {}) {
   };
   fs.appendFileSync(paths.events, `${JSON.stringify(event)}\n`, { encoding: "utf8", mode: 0o600 });
   fs.chmodSync(paths.events, 0o600);
-  try {
-    fs.writeSync(3, `${JSON.stringify(event)}\n`);
-  } catch {
-    // FD 3 is optional and normally absent in a human terminal.
-  }
   state.last_sequence = sequence;
   atomicWriteJson(paths.state, state);
 }

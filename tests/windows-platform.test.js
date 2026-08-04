@@ -783,6 +783,34 @@ test("Windows rootfs delegates archive validation to WSL import without inspecti
   assert.deepEqual(fs.readFileSync(destination), downloaded);
 });
 
+test("Windows rootfs replaces cache contaminated by legacy progress JSON", async () => {
+  const { ensureRootfsArtifact } = require(windowsPlatformPath);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-rootfs-progress-"));
+  const destination = path.join(root, "ubuntu-rootfs.tar.gz");
+  fs.writeFileSync(destination, Buffer.concat([
+    Buffer.from('{"schema":"rainskills.platform-progress.v1","sequence":1}\n'),
+    Buffer.from([0x1f, 0x8b, 0x08, 0x00]),
+  ]));
+  const downloaded = Buffer.from("clean-rootfs-delegated-to-wsl");
+  let downloads = 0;
+
+  const result = await ensureRootfsArtifact({
+    destination,
+    urls: policy.windows.ubuntu_rootfs.urls.slice(0, 1),
+    maximumBytes: policy.windows.ubuntu_rootfs.max_bytes,
+    allowedOrigins: policy.windows.preflight_allowed_origins,
+    download: async ({ partialPath, url }) => {
+      downloads += 1;
+      fs.writeFileSync(partialPath, downloaded);
+      return { finalUrl: url, bytes: downloaded.length };
+    },
+  });
+
+  assert.equal(result.reused, false);
+  assert.equal(downloads, 1);
+  assert.deepEqual(fs.readFileSync(destination), downloaded);
+});
+
 test("pinned rootfs artifacts are reused only after digest verification", async () => {
   const { ensurePinnedArtifact } = require(windowsPlatformPath);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-rootfs-"));

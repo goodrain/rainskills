@@ -1043,6 +1043,12 @@ test("Windows installation batches privileged work and explains the elevated pro
   assert.doesNotMatch(source, /adapter\.(?:installMachineBundle|enableWsl|registerResume|registerFinalize|importDistro|prepareRuntime|configureNetwork|verifyNetwork|prepareDocker|installRainbond|verifyDeployment)\(/);
 });
 
+test("platform progress never writes to an unreserved file descriptor", () => {
+  const source = fs.readFileSync(platformInstallerPath, "utf8");
+  assert.match(source, /appendFileSync\(paths\.events/);
+  assert.doesNotMatch(source, /writeSync\(3\s*,/);
+});
+
 test("Windows preflight reports progress before invoking the blocking helper", () => {
   const source = fs.readFileSync(platformInstallerPath, "utf8");
   const runInstall = source.slice(source.indexOf("async function runInstall"));
