@@ -44,6 +44,18 @@ const OPERATION_ID = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
 const INSTALLATION_ID = "a72d3cf0-3f8f-4c24-99de-7bd76c65c3a1";
 const USER_SID = "S-1-5-21-111-222-333-1001";
 
+function normalizeLineEndings(value) {
+  return String(value).replace(/\r\n?/g, "\n");
+}
+
+function readNormalizedSource(filePath) {
+  return normalizeLineEndings(fs.readFileSync(filePath, "utf8"));
+}
+
+test("PowerShell source assertions treat CRLF and LF identically", () => {
+  assert.equal(normalizeLineEndings("first\r\nsecond\r\n"), "first\nsecond\n");
+});
+
 function passingFacts(overrides = {}) {
   return {
     productType: "workstation",
@@ -354,7 +366,7 @@ test("passing Windows preflight lists the exact user-visible effects", () => {
 });
 
 test("PowerShell preflight is a fixed read-only action with structured output", () => {
-  const source = fs.readFileSync(powershellPath, "utf8");
+  const source = readNormalizedSource(powershellPath);
   const preflight = source.match(/function Invoke-Preflight\(\$Request\) \{[\s\S]*?\n\}/)?.[0];
   assert(preflight, "Invoke-Preflight must remain a standalone fixed action");
   assert.match(source, /ValidateSet\("Preflight",/);
@@ -370,13 +382,13 @@ test("PowerShell preflight is a fixed read-only action with structured output", 
 });
 
 test("PowerShell helper emits UTF-8 diagnostics for the Node launcher", () => {
-  const source = fs.readFileSync(powershellPath, "utf8");
+  const source = readNormalizedSource(powershellPath);
   assert.match(source, /\[Console\]::OutputEncoding = \$utf8Encoding/);
   assert.match(source, /\$OutputEncoding = \$utf8Encoding/);
 });
 
 test("PowerShell treats unsupported WSL probe commands as facts instead of terminating errors", () => {
-  const source = fs.readFileSync(powershellPath, "utf8");
+  const source = readNormalizedSource(powershellPath);
   const runtimeFacts = source.match(/function Get-WslRuntimeFacts \{[\s\S]*?\n\}\n\nfunction Install-LegacyWslKernel/)?.[0];
   assert(runtimeFacts, "Get-WslRuntimeFacts must remain a standalone fixed probe");
   assert.match(source, /function Invoke-NativeCapture/);
@@ -386,7 +398,7 @@ test("PowerShell treats unsupported WSL probe commands as facts instead of termi
 });
 
 test("PowerShell returns a nonce-bound structured result when an elevated action fails", () => {
-  const source = fs.readFileSync(powershellPath, "utf8");
+  const source = readNormalizedSource(powershellPath);
   assert.match(source, /function Write-ActionErrorResult/);
   assert.match(source, /Write-ActionResult[\s\S]*"error"/);
   assert.match(source, /failedAction/);
@@ -397,14 +409,14 @@ test("PowerShell returns a nonce-bound structured result when an elevated action
 });
 
 test("PowerShell reads every persisted JSON document as UTF-8", () => {
-  const source = fs.readFileSync(powershellPath, "utf8");
+  const source = readNormalizedSource(powershellPath);
   const jsonReads = source.match(/Get-Content -LiteralPath[^\n]*ConvertFrom-Json/g) || [];
   assert(jsonReads.length >= 6, "expected all persisted Windows JSON read sites");
   for (const read of jsonReads) assert.match(read, /-Encoding UTF8/);
 });
 
 test("PowerShell upgrades only a verified machine bundle from the same installation", () => {
-  const source = fs.readFileSync(powershellPath, "utf8");
+  const source = readNormalizedSource(powershellPath);
   const installBundle = source.match(/function Invoke-InstallMachineBundle\(\$Request\) \{[\s\S]*?\n\}\n\nfunction Get-TrustedWslPath/)?.[0];
   assert(installBundle, "Invoke-InstallMachineBundle must remain a standalone fixed action");
   assert.match(installBundle, /Assert-ManagedMachineRoot \$machineRoot \$Request\.installation_id/);
@@ -423,7 +435,7 @@ test("PowerShell upgrades only a verified machine bundle from the same installat
 });
 
 test("PowerShell rebuilds an effective ACL on every existing machine item", () => {
-  const source = fs.readFileSync(powershellPath, "utf8");
+  const source = readNormalizedSource(powershellPath);
   const itemAcl = source.match(/function Set-MachineItemAcl[\s\S]*?\n\}/)?.[0];
   assert(itemAcl, "Set-MachineItemAcl must remain a standalone fixed operation");
   assert.match(itemAcl, /DirectorySecurity/);
@@ -440,7 +452,7 @@ test("PowerShell rebuilds an effective ACL on every existing machine item", () =
 });
 
 test("PowerShell identifies the failing PrepareWsl substep", () => {
-  const source = fs.readFileSync(powershellPath, "utf8");
+  const source = readNormalizedSource(powershellPath);
   const prepareWsl = source.match(/function Invoke-PrepareWsl\(\$Request\) \{[\s\S]*?\n\}\n\nfunction Invoke-ProvisionRainbond/)?.[0];
   assert(prepareWsl, "Invoke-PrepareWsl must remain a standalone fixed action");
   assert.match(prepareWsl, /InstallMachineBundle failed/);
@@ -448,7 +460,7 @@ test("PowerShell identifies the failing PrepareWsl substep", () => {
 });
 
 test("PowerShell replaces a stale regular machine lease instead of overwriting it in place", () => {
-  const source = fs.readFileSync(powershellPath, "utf8");
+  const source = readNormalizedSource(powershellPath);
   const leaseWriter = source.match(/function Write-MachineLease[\s\S]*?\n\}/)?.[0];
   assert(leaseWriter, "Write-MachineLease must remain a standalone fixed operation");
   assert.match(leaseWriter, /ReparsePoint/);
@@ -662,7 +674,7 @@ test("Windows adapter reports the elevated action's structured failure", async (
 });
 
 test("PowerShell machine actions enforce UAC, signed WSL setup, protected tasks, and fixed reboot", () => {
-  const source = fs.readFileSync(powershellPath, "utf8");
+  const source = readNormalizedSource(powershellPath);
   assert.match(source, /InstallMachineBundle/);
   assert.match(source, /Enable-WindowsOptionalFeature[\s\S]*-NoRestart/);
   assert.match(source, /--update[\s\S]*--web-download/);
@@ -791,7 +803,7 @@ test("artifact redirects and managed subnets reject untrusted or overlapping net
 });
 
 test("Windows distro and network actions are fixed to Rainbond ownership and loopback access", () => {
-  const source = fs.readFileSync(powershellPath, "utf8");
+  const source = readNormalizedSource(powershellPath);
   assert.match(source, /--import[\s\S]*Rainbond[\s\S]*--version[\s\S]*2/);
   assert.match(source, /rainskills-installation-id/);
   assert.match(source, /--terminate/);
@@ -836,7 +848,7 @@ test("Rainbond WSL bootstrap verifies artifacts, prepares Docker, emits heartbea
 });
 
 test("Windows executes the dynamically hashed installer instead of a package-pinned digest", () => {
-  const powershell = fs.readFileSync(powershellPath, "utf8");
+  const powershell = readNormalizedSource(powershellPath);
   const platformInstaller = fs.readFileSync(platformInstallerPath, "utf8");
   assert.match(powershell, /installer_sha256/);
   assert.doesNotMatch(powershell, /policy\.installer\.sha256/);
@@ -907,7 +919,7 @@ test("Windows delivery requires WSL and Windows-side health evidence", () => {
 });
 
 test("PowerShell exposes fixed Rainbond install and dual-side verification actions", () => {
-  const source = fs.readFileSync(powershellPath, "utf8");
+  const source = readNormalizedSource(powershellPath);
   assert.match(source, /PrepareDocker/);
   assert.match(source, /InstallRainbond/);
   assert.match(source, /VerifyDeployment/);
