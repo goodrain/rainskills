@@ -1370,7 +1370,12 @@ django_not_found = (
     and "<title>page not found" in body.lower()
     and "device" in body.lower()
 )
-raise SystemExit(0 if plain_not_found or django_not_found else 1)
+html_not_found = (
+    "content-type: text/html" in headers
+    and "<title>" in body.lower()
+    and "not found" in body.lower()
+)
+raise SystemExit(0 if plain_not_found or django_not_found or html_not_found else 1)
 PY
 }
 

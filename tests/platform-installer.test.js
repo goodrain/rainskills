@@ -1043,6 +1043,15 @@ test("Windows installation batches privileged work and explains the elevated pro
   assert.doesNotMatch(source, /adapter\.(?:installMachineBundle|enableWsl|registerResume|registerFinalize|importDistro|prepareRuntime|configureNetwork|verifyNetwork|prepareDocker|installRainbond|verifyDeployment)\(/);
 });
 
+test("Windows preflight reports progress before invoking the blocking helper", () => {
+  const source = fs.readFileSync(platformInstallerPath, "utf8");
+  const runInstall = source.slice(source.indexOf("async function runInstall"));
+  const progress = runInstall.indexOf("正在检查 Windows 环境");
+  const preflight = runInstall.indexOf("windowsAdapter.preflight");
+  assert(progress >= 0);
+  assert(preflight > progress);
+});
+
 test("atomic state writes reject a symlink directory", {
   skip: process.platform === "win32",
 }, () => {

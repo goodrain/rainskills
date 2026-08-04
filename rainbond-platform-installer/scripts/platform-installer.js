@@ -129,7 +129,7 @@ function readOnboardingState(filePath, expectedOperationId, stateStore = secureS
   if (!UUID_PATTERN.test(state.operation_id || "")) {
     throw new Error("状态文件中的 operation_id 无效");
   }
-  if (!["codex", "claude", "all"].includes(state.target)) {
+  if (!["codex", "claude", "openclaw", "pi", "all"].includes(state.target)) {
     throw new Error("状态文件中的安装目标无效");
   }
   if (state.deployment_mode !== "self-hosted") {
@@ -2022,6 +2022,9 @@ async function runInstallOperation(options) {
     process.stdout.write(`正在通过 SSH 检查 Linux 服务器 ${remoteTarget.host}...\n`);
   }
   let windowsPreflight = null;
+  if (isWindowsLocal) {
+    process.stdout.write("\n正在检查 Windows 环境（系统、WSL、端口和网络），通常需要 1–2 分钟...\n");
+  }
   const facts = isWindowsLocal
     ? (windowsPreflight = await windowsAdapter.preflight({
       operationId: options.onboardingId,

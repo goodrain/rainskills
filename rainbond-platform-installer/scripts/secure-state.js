@@ -124,6 +124,17 @@ function createSecureStateStore({
     return target;
   }
 
+  function protectRegularFile(filePath) {
+    const target = assertInsideHome(filePath, "状态文件");
+    const info = fs.lstatSync(target);
+    if (info.isSymbolicLink()) {
+      throw new Error(`${platform === "win32" ? "拒绝使用 Windows reparse point" : "拒绝使用符号链接状态路径"}：${target}`);
+    }
+    if (!info.isFile()) throw new Error(`状态路径不是普通文件：${target}`);
+    harden(target, "file");
+    return target;
+  }
+
   function atomicWriteJson(filePath, value) {
     const target = assertInsideHome(filePath, "状态文件");
     const directory = ensurePrivateDirectory(path.dirname(target));
@@ -243,6 +254,7 @@ function createSecureStateStore({
     assertProtectedRegularFile,
     atomicWriteJson,
     ensurePrivateDirectory,
+    protectRegularFile,
     readProtectedJson,
   };
 }

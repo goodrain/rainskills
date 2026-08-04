@@ -176,6 +176,39 @@ test("Windows adapter sends only a fixed nonce-bound preflight request", async (
   }
 });
 
+test("Windows adapter protects an externally created result before reading it", async () => {
+  const { createWindowsPlatformAdapter } = require(windowsPlatformPath);
+  const fixture = createFixture();
+  const protectedResults = new Set();
+  const stateStore = {
+    ...fixture.stateStore,
+    protectRegularFile(filePath) {
+      protectedResults.add(filePath);
+    },
+    readProtectedJson(filePath) {
+      if (path.basename(filePath).startsWith("result-") && !protectedResults.has(filePath)) {
+        throw new Error(`Windows 状态路径 owner 不匹配：${filePath}`);
+      }
+      return fixture.stateStore.readProtectedJson(filePath);
+    },
+  };
+  const adapter = createWindowsPlatformAdapter({
+    runner: fixture.runner,
+    stateStore,
+    policy,
+    userSid: USER_SID,
+    home: fixture.home,
+  });
+
+  const result = await adapter.preflight({
+    operationId: OPERATION_ID,
+    installationId: INSTALLATION_ID,
+  });
+
+  assert.equal(result.facts.productType, "workstation");
+  assert.equal(protectedResults.size, 1);
+});
+
 test("Windows adapter translates only host filesystem payload paths for a WSL control shell", () => {
   const { translateWindowsPayloadPaths } = require(windowsPlatformPath);
   const seen = [];

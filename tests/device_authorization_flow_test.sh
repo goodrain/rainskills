@@ -134,4 +134,11 @@ if is_verified_legacy_device_route "405" "$legacy_body" "$legacy_headers"; then
   fail "405 must not trigger legacy fallback"
 fi
 
+html404_body="$TEST_ROOT/legacy-html404.body"
+html404_headers="$TEST_ROOT/legacy-html404.headers"
+printf '<!doctype html>\n<html><head><title>Not Found</title></head><body><h1>Not Found</h1></body></html>' > "$html404_body"
+printf 'HTTP/1.1 404 Not Found\r\nContent-Type: text/html; charset=utf8\r\n\r\n' > "$html404_headers"
+is_verified_legacy_device_route "404" "$html404_body" "$html404_headers" \
+  || fail "verified HTML 404 (v6.9.x console) was not recognized"
+
 printf 'PASS: device authorization flow tests\n'

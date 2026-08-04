@@ -105,6 +105,8 @@ test("secure state enforces Windows owner, ACL, and reparse-point checks", () =>
     writableSids: [],
   });
   assert.throws(() => store.readProtectedJson(filePath), /owner/i);
+  store.protectRegularFile(filePath);
+  assert.deepEqual(store.readProtectedJson(filePath), { ok: true });
   facts.set(filePath, {
     reparsePoint: false,
     ownerSid: "S-1-5-21-current",

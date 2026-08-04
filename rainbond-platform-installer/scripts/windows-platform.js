@@ -690,6 +690,7 @@ function createWindowsPlatformAdapter({
       throw new Error(`Windows helper 执行失败（退出码 ${status}）：${String(execution?.stderr || "").trim()}`);
     }
     if (prepareResultForRead) prepareResultForRead(resultPath);
+    else stateStore.protectRegularFile(resultPath);
     const result = stateStore.readProtectedJson(resultPath);
     return validateResult(result, { action, operationId, installationId, nonce });
   }
