@@ -78,7 +78,7 @@ Content-Type: application/x-www-form-urlencoded
 client_id=rainskills&scope=mcp
 ```
 
-接口只需返回一个完整 HTTP 响应即可证明网络与应用层连通；业务状态码由已有授权逻辑处理。连接重置、超时和无 HTTP 响应都视为平台尚未稳定，不进入授权。
+接口必须返回 `2xx`，响应 JSON 必须包含现有 Windows Device Flow 授权逻辑要求的字段：非空 `device_code`、符合现有格式的 `user_code`、正整数 `expires_in` 和正整数 `interval`。`404`、其他非 `2xx`、无效 JSON、字段不完整、连接重置、超时和无 HTTP 响应都视为 Device Flow 尚不可用，不进入授权。探测产生的 device code 不写入状态或日志，也不用于后续授权；正式授权仍重新申请一次 code。
 
 ## 三、整体架构设计
 
@@ -109,8 +109,8 @@ Dedicated Rainbond WSL2
 1. **Inspect**：读取受保护机器 bundle、计划任务、发行版身份、固定网络、Docker 服务、Rainbond 容器启动时间、K3s 和 Console 事实。
 2. **Plan**：将状态分类为 `reused`、`repair_required`、`blocked` 或 `reinstall_required`。
 3. **Reconcile**：只修复 RainSkills 拥有的对象。运行时网络修复直接调用幂等 helper，不重启 systemd network unit，也不传播停止 Docker。
-4. **Stabilize**：若 Docker/Rainbond 原本停止则启动并建立新基线；若原本运行则保持不变。连续三次探测必须成功，探测间隔为 5 秒，并且 `rainbond` 容器 `StartedAt` 保持一致。
-5. **Verify**：验证 Windows loopback Console 和 Device Flow endpoint 均可形成 HTTP 响应。
+4. **Stabilize**：若 Docker/Rainbond 原本停止则启动并建立新基线；若原本运行则保持不变。每轮连续三次探测必须成功，探测间隔为 5 秒，并且 `rainbond` 容器 `StartedAt` 保持一致。`StartedAt` 变化时重新建立基线，最多执行三轮，整体预算为 120 秒；仍不稳定时返回 `RAINBOND_RUNTIME_UNSTABLE`。
+5. **Verify**：验证 Windows loopback Console 可用，并验证 Device Flow endpoint 返回 `2xx` 和符合既有授权契约的 JSON。
 6. **Authorize**：只有最新事实通过后才写入 `authorizing` 并启动浏览器授权。
 
 收敛动作使用 installation 级全局互斥，防止安装、登录计划任务、keepalive 与 `resume` 同时修改同一个本地平台。锁过期后可以回收，但必须验证持有者进程或租约时间。
@@ -200,7 +200,7 @@ action 名必须加入现有固定 allowlist；request/result 继续使用既有
 
 #### 稳定性与授权门控
 
-每轮验证记录外层容器 `StartedAt`，检查 K3s node/component readiness、WSL Console、Windows loopback Console 和 Device Flow HTTP 响应。连续三次、每次间隔 5 秒成功且 `StartedAt` 不变才进入授权。若在窗口内变化，重新建立基线并最多重试有限次数，最终报告运行时持续重启的具体错误。
+每轮验证记录外层容器 `StartedAt`，检查 K3s node/component readiness、WSL Console 和 Windows loopback Console。连续三次、每次间隔 5 秒成功且 `StartedAt` 不变后，再对 Device Flow 执行一次 `2xx` 与响应结构验证。若在窗口内变化则重新建立基线；最多三轮且整体不超过 120 秒，超限返回 `RAINBOND_RUNTIME_UNSTABLE`。Device Flow 非 `2xx` 或响应无效返回 `CONSOLE_DEVICE_FLOW_UNAVAILABLE`。
 
 #### 任务最终清理
 
