@@ -1219,6 +1219,41 @@ test("WSL network gate restores persistent addresses on every distro boot", () =
   assert.match(configureNetwork, /systemctl restart rainskills-network-ready\.service/);
 });
 
+test("WSL forwards the fixed guest address through Docker and verifies Console on loopback", () => {
+  const source = readNormalizedSource(wslBootstrapPath);
+  const prepareRuntime = source.match(/prepare_runtime\(\) \{[\s\S]*?\n\}\n\nconfigure_guest_network\(\)/)?.[0];
+  const prepareDocker = source.match(/prepare_docker\(\) \{[\s\S]*?\n\}\n\ninstall_rainbond\(\)/)?.[0];
+  const verifyRainbond = source.match(/verify_rainbond\(\) \{[\s\S]*?\n\}\n\ncase "\$ACTION"/)?.[0];
+  assert(prepareRuntime, "prepare_runtime must remain a standalone fixed action");
+  assert(prepareDocker, "prepare_docker must remain a standalone fixed action");
+  assert(verifyRainbond, "verify_rainbond must remain a standalone fixed action");
+  assert.match(prepareRuntime, /rainskills-forward-docker-ports/);
+  assert.match(prepareRuntime, /After=docker\.service rainskills-network-ready\.service/);
+  assert.match(prepareRuntime, /for chain in PREROUTING OUTPUT/);
+  assert.match(prepareRuntime, /iptables -t nat -C "\$chain" -d "\$guest_address\/32" -j DOCKER/);
+  const forwardHelper = prepareRuntime.match(/cat > "\$FORWARD_DOCKER_HELPER" <<'SCRIPT'\n([\s\S]*?)\nSCRIPT/)?.[1];
+  assert(forwardHelper, "the fixed Docker forwarding helper must be embedded verbatim");
+  const syntax = spawnSync("bash", ["-n"], { input: forwardHelper, encoding: "utf8" });
+  assert.equal(syntax.status, 0, syntax.stderr);
+  assert.match(prepareDocker, /systemctl restart rainskills-docker-forwarding\.service/);
+  assert.match(verifyRainbond, /http:\/\/127\.0\.0\.1:7070\//);
+  assert.doesNotMatch(verifyRainbond, /http:\/\/\$GUEST_ADDRESS:7070\//);
+});
+
+test("PowerShell starts a persistent managed WSL keepalive task", () => {
+  const source = readNormalizedSource(powershellPath);
+  const registerMaintenance = source.match(/function Register-NetworkMaintenance\(\$Request, \$Manifest\) \{[\s\S]*?\n\}\n\nfunction Test-ExpectedPortProxy/)?.[0];
+  const finalize = source.match(/function Invoke-Finalize\(\$Request\) \{[\s\S]*?\n\}\n\nfunction Invoke-PrepareWsl/)?.[0];
+  assert(registerMaintenance, "Register-NetworkMaintenance must remain a standalone fixed helper");
+  assert(finalize, "Invoke-Finalize must remain a standalone fixed action");
+  assert.match(registerMaintenance, /RainSkills-Keepalive-\$\(\$Request\.installation_id\)/);
+  assert.match(registerMaintenance, /wsl\.exe/);
+  assert.match(registerMaintenance, /-d[\s\S]*Rainbond[\s\S]*\/bin\/sleep[\s\S]*infinity/);
+  assert.match(registerMaintenance, /New-ScheduledTaskSettingsSet[\s\S]*ExecutionTimeLimit[\s\S]*Zero/);
+  assert.match(registerMaintenance, /Start-ScheduledTask[\s\S]*keepalive/);
+  assert.doesNotMatch(finalize, /RainSkills-Keepalive|RainSkills-Network/);
+});
+
 test("Rainbond WSL bootstrap verifies artifacts, prepares Docker, emits heartbeats, and redacts logs", () => {
   const source = readNormalizedSource(wslBootstrapPath);
   assert.match(source, /PrepareDocker/);

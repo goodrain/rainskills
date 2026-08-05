@@ -62,6 +62,7 @@ STATE_DIR="/var/lib/rainskills"
 IDENTITY_FILE="/etc/rainskills-installation-id"
 NETWORK_READY_FILE="/run/rainskills/network-ready"
 RESTORE_NETWORK_HELPER="/usr/local/libexec/rainskills-restore-network"
+FORWARD_DOCKER_HELPER="/usr/local/libexec/rainskills-forward-docker-ports"
 LOCK_FILE="/run/lock/rainskills-platform.lock"
 INSTALL_LOG="/var/log/rainskills/rainbond-install.log"
 VERIFY_TIMEOUT_SECONDS=1200
@@ -156,6 +157,40 @@ touch "$NETWORK_READY_FILE"
 SCRIPT
   chmod 755 "$RESTORE_NETWORK_HELPER"
 
+  cat > "$FORWARD_DOCKER_HELPER" <<'SCRIPT'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+STATE_DIR="/var/lib/rainskills"
+
+guest_state="$STATE_DIR/guest-address"
+[[ -f "$guest_state" && ! -L "$guest_state" && "$(stat -c '%u' "$guest_state")" == "0" ]] || {
+  printf 'Managed guest address is missing or unsafe\n' >&2
+  exit 1
+}
+guest_address="$(tr -d '\r\n' < "$guest_state")"
+[[ "$guest_address" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || {
+  printf 'Managed guest address is invalid\n' >&2
+  exit 1
+}
+
+command -v iptables >/dev/null 2>&1 || {
+  printf 'iptables is unavailable\n' >&2
+  exit 1
+}
+iptables -t nat -S DOCKER >/dev/null 2>&1 || {
+  printf 'Docker NAT chain is unavailable\n' >&2
+  exit 1
+}
+
+for chain in PREROUTING OUTPUT; do
+  if ! iptables -t nat -C "$chain" -d "$guest_address/32" -j DOCKER >/dev/null 2>&1; then
+    iptables -t nat -I "$chain" 1 -d "$guest_address/32" -j DOCKER
+  fi
+done
+SCRIPT
+  chmod 755 "$FORWARD_DOCKER_HELPER"
+
   cat > /etc/systemd/system/rainskills-network-ready.service <<'UNIT'
 [Unit]
 Description=Restore the RainSkills managed WSL network
@@ -178,8 +213,25 @@ After=rainskills-network-ready.service
 UNIT
   cp /etc/systemd/system/docker.service.d/10-rainskills-network.conf \
     /etc/systemd/system/containerd.service.d/10-rainskills-network.conf
+  cat > /etc/systemd/system/rainskills-docker-forwarding.service <<'UNIT'
+[Unit]
+Description=Forward the RainSkills fixed WSL address through Docker
+ConditionPathExists=/etc/rainskills-installation-id
+Requires=docker.service rainskills-network-ready.service
+After=docker.service rainskills-network-ready.service
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/rainskills-forward-docker-ports
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+UNIT
   systemctl daemon-reload 2>/dev/null || true
   systemctl enable rainskills-network-ready.service >/dev/null 2>&1 || true
+  systemctl enable rainskills-docker-forwarding.service >/dev/null 2>&1 || true
 }
 
 configure_guest_network() {
@@ -236,6 +288,7 @@ prepare_docker() {
   systemctl enable docker >/dev/null
   systemctl start docker
   docker info >/dev/null
+  systemctl restart rainskills-docker-forwarding.service
   emit_progress preparing-docker completed
 }
 
@@ -331,8 +384,8 @@ verify_rainbond() {
       done
       if ((${#missing_ports[@]} > 0)); then
         last_check="Required ports are not listening: ${missing_ports[*]}"
-      elif ! curl -fsS --max-time 10 "http://$GUEST_ADDRESS:7070/" >/dev/null; then
-        last_check="Rainbond Console is not reachable at http://$GUEST_ADDRESS:7070/"
+      elif ! curl -fsS --max-time 10 "http://127.0.0.1:7070/" >/dev/null; then
+        last_check="Rainbond Console is not reachable inside WSL"
       fi
     fi
 

@@ -915,8 +915,35 @@ function Register-NetworkMaintenance($Request, $Manifest) {
   $trigger = New-ScheduledTaskTrigger -AtLogOn -User $Request.user_sid
   $trigger.Delay = "PT10S"
   $principal = New-ScheduledTaskPrincipal -UserId $Request.user_sid -LogonType Interactive -RunLevel Highest
-  $taskName = "RainSkills-Network-$($Request.installation_id)"
-  Register-VerifiedTask $taskName $taskAction $trigger $principal
+  $networkTaskName = "RainSkills-Network-$($Request.installation_id)"
+  Register-VerifiedTask $networkTaskName $taskAction $trigger $principal
+
+  $keepaliveTaskName = "RainSkills-Keepalive-$($Request.installation_id)"
+  $keepaliveAction = New-ScheduledTaskAction `
+    -Execute "$env:SystemRoot\System32\wsl.exe" `
+    -Argument '-d "Rainbond" -u root --exec /bin/sleep infinity'
+  $keepaliveTrigger = New-ScheduledTaskTrigger -AtLogOn -User $Request.user_sid
+  $keepaliveTrigger.Delay = "PT20S"
+  $keepalivePrincipal = New-ScheduledTaskPrincipal -UserId $Request.user_sid -LogonType Interactive
+  $keepaliveSettings = New-ScheduledTaskSettingsSet `
+    -ExecutionTimeLimit ([TimeSpan]::Zero) `
+    -RestartCount 3 `
+    -RestartInterval (New-TimeSpan -Minutes 1) `
+    -MultipleInstances IgnoreNew
+  Register-VerifiedTask $keepaliveTaskName $keepaliveAction $keepaliveTrigger $keepalivePrincipal $keepaliveSettings
+  Start-ScheduledTask -TaskName $keepaliveTaskName
+  return [ordered]@{ network = $networkTaskName; keepalive = $keepaliveTaskName }
+}
+
+function Assert-WslKeepaliveTask($Request) {
+  $taskName = "RainSkills-Keepalive-$($Request.installation_id)"
+  $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+  $expectedExecutable = "$env:SystemRoot\System32\wsl.exe"
+  $expectedArguments = '-d "Rainbond" -u root --exec /bin/sleep infinity'
+  if (-not $task -or $task.Principal.UserId -ne $Request.user_sid -or
+      $task.Actions.Execute -ne $expectedExecutable -or $task.Actions.Arguments -ne $expectedArguments) {
+    throw "Managed WSL keepalive task read-back mismatch"
+  }
   return $taskName
 }
 
@@ -1039,7 +1066,7 @@ function Invoke-ConfigureNetwork($Request) {
   $manifestDigest = (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
   [IO.File]::WriteAllText((Join-Path (Get-MachineRoot $Request) "managed-network.sha256"), $manifestDigest + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
   Set-MachineRootAcl (Get-MachineRoot $Request) $Request.user_sid
-  $maintenanceTask = Register-NetworkMaintenance $Request $manifest
+  $maintenanceTasks = Register-NetworkMaintenance $Request $manifest
   return [ordered]@{
     networkManifestVerified = $true
     portproxyVerified = $true
@@ -1048,7 +1075,8 @@ function Invoke-ConfigureNetwork($Request) {
     guestAddress = $guestAddress
     hnsNetworkId = $hnsNetworkId
     adapterIfIndex = [int]$adapter.ifIndex
-    maintenanceTask = $maintenanceTask
+    maintenanceTask = $maintenanceTasks.network
+    keepaliveTask = $maintenanceTasks.keepalive
   }
 }
 
@@ -1068,6 +1096,7 @@ function Invoke-VerifyNetwork($Request) {
   $hostAddress = @(Get-NetIPAddress -InterfaceIndex $adapter.ifIndex -IPAddress $manifest.host_address -ErrorAction SilentlyContinue)
   if ($hostAddress.Count -ne 1) { throw "Managed host address is missing" }
   if ((Get-DistroIdentity $Request) -ne $Request.installation_id) { throw "Managed distro identity mismatch" }
+  [void](Assert-WslKeepaliveTask $Request)
   return [ordered]@{
     networkManifestVerified = $true
     portproxyVerified = $true
@@ -1178,8 +1207,12 @@ function Assert-MachineManifest($Request) {
   return $manifest
 }
 
-function Register-VerifiedTask([string]$TaskName, $ActionValue, $Trigger, $Principal) {
-  Register-ScheduledTask -TaskName $TaskName -Action $ActionValue -Trigger $Trigger -Principal $Principal -Force | Out-Null
+function Register-VerifiedTask([string]$TaskName, $ActionValue, $Trigger, $Principal, $Settings = $null) {
+  if ($null -ne $Settings) {
+    Register-ScheduledTask -TaskName $TaskName -Action $ActionValue -Trigger $Trigger -Principal $Principal -Settings $Settings -Force | Out-Null
+  } else {
+    Register-ScheduledTask -TaskName $TaskName -Action $ActionValue -Trigger $Trigger -Principal $Principal -Force | Out-Null
+  }
   $task = Get-ScheduledTask -TaskName $TaskName
   if ($task.Principal.UserId -ne $Principal.UserId -or $task.Principal.RunLevel -ne $Principal.RunLevel -or
       $task.Actions.Execute -ne $ActionValue.Execute -or $task.Actions.Arguments -ne $ActionValue.Arguments) {
