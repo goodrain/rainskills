@@ -1243,14 +1243,23 @@ test("WSL forwards the fixed guest address through Docker and verifies Console o
 test("PowerShell starts a persistent managed WSL keepalive task", () => {
   const source = readNormalizedSource(powershellPath);
   const registerMaintenance = source.match(/function Register-NetworkMaintenance\(\$Request, \$Manifest\) \{[\s\S]*?\n\}\n\nfunction Test-ExpectedPortProxy/)?.[0];
+  const assertKeepalive = source.match(/function Assert-WslKeepaliveTask\(\$Request\) \{[\s\S]*?\n\}\n\nfunction Test-ExpectedPortProxy/)?.[0];
+  const taskContract = source.match(/function Get-ScheduledTaskContractMismatches\([^\n]+\) \{[\s\S]*?\n\}\n\nfunction Assert-ScheduledTaskContract/)?.[0];
   const finalize = source.match(/function Invoke-Finalize\(\$Request\) \{[\s\S]*?\n\}\n\nfunction Invoke-PrepareWsl/)?.[0];
   assert(registerMaintenance, "Register-NetworkMaintenance must remain a standalone fixed helper");
+  assert(assertKeepalive, "Assert-WslKeepaliveTask must remain a standalone fixed helper");
+  assert(taskContract, "scheduled task metadata must be normalized in one fixed helper");
   assert(finalize, "Invoke-Finalize must remain a standalone fixed action");
   assert.match(registerMaintenance, /RainSkills-Keepalive-\$\(\$Request\.installation_id\)/);
   assert.match(registerMaintenance, /wsl\.exe/);
   assert.match(registerMaintenance, /-d[\s\S]*Rainbond[\s\S]*\/bin\/sleep[\s\S]*infinity/);
   assert.match(registerMaintenance, /New-ScheduledTaskSettingsSet[\s\S]*ExecutionTimeLimit[\s\S]*Zero/);
   assert.match(registerMaintenance, /Start-ScheduledTask[\s\S]*keepalive/);
+  assert.match(taskContract, /Convert-IdentityToSid/);
+  assert.match(source, /function Normalize-ScheduledTaskExecutable[\s\S]*ExpandEnvironmentVariables/);
+  assert.match(taskContract, /OrdinalIgnoreCase/);
+  assert.match(assertKeepalive, /Assert-ScheduledTaskContract/);
+  assert.match(source, /read-back mismatch: \$\(\$mismatches -join/);
   assert.doesNotMatch(finalize, /RainSkills-Keepalive|RainSkills-Network/);
 });
 

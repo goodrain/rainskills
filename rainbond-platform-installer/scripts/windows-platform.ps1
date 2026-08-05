@@ -886,6 +886,60 @@ function Assert-NetworkManifestDigest($Request) {
   [void](Assert-FileDigest $manifestPath $expected)
 }
 
+function Normalize-ScheduledTaskExecutable([string]$Executable) {
+  if ([string]::IsNullOrWhiteSpace($Executable)) { return "" }
+  $expanded = [Environment]::ExpandEnvironmentVariables($Executable.Trim().Trim([char]34))
+  try {
+    return [IO.Path]::GetFullPath($expanded).TrimEnd("\")
+  } catch {
+    return $expanded
+  }
+}
+
+function Get-ScheduledTaskContractMismatches($Task, [string]$ExpectedExecutable, [string]$ExpectedArguments, [string]$ExpectedUserId, [string]$ExpectedRunLevel) {
+  $mismatches = @()
+  $tasks = @($Task)
+  if ($tasks.Count -ne 1) { return @("task-count") }
+  $taskValue = $tasks[0]
+  $actions = @($taskValue.Actions)
+  if ($actions.Count -ne 1) {
+    $mismatches += "action-count"
+  } else {
+    $actualExecutable = Normalize-ScheduledTaskExecutable ([string]$actions[0].Execute)
+    $normalizedExpectedExecutable = Normalize-ScheduledTaskExecutable $ExpectedExecutable
+    if (-not $actualExecutable.Equals($normalizedExpectedExecutable, [StringComparison]::OrdinalIgnoreCase)) {
+      $mismatches += "executable"
+    }
+    $actualArguments = ([string]$actions[0].Arguments).Trim()
+    $normalizedExpectedArguments = $ExpectedArguments.Trim()
+    if (-not $actualArguments.Equals($normalizedExpectedArguments, [StringComparison]::Ordinal)) {
+      $mismatches += "arguments"
+    }
+  }
+
+  try {
+    $actualSid = Convert-IdentityToSid $taskValue.Principal.UserId
+    $expectedSid = Convert-IdentityToSid $ExpectedUserId
+    if (-not $actualSid.Equals($expectedSid, [StringComparison]::OrdinalIgnoreCase)) {
+      $mismatches += "principal"
+    }
+  } catch {
+    $mismatches += "principal"
+  }
+  if (-not [string]::IsNullOrWhiteSpace($ExpectedRunLevel) -and
+      -not ([string]$taskValue.Principal.RunLevel).Equals($ExpectedRunLevel, [StringComparison]::OrdinalIgnoreCase)) {
+    $mismatches += "run-level"
+  }
+  return $mismatches
+}
+
+function Assert-ScheduledTaskContract($Task, [string]$ExpectedExecutable, [string]$ExpectedArguments, [string]$ExpectedUserId, [string]$ExpectedRunLevel, [string]$Label) {
+  $mismatches = @(Get-ScheduledTaskContractMismatches $Task $ExpectedExecutable $ExpectedArguments $ExpectedUserId $ExpectedRunLevel)
+  if ($mismatches.Count -gt 0) {
+    throw "$Label read-back mismatch: $($mismatches -join ', ')"
+  }
+}
+
 function Register-NetworkMaintenance($Request, $Manifest) {
   $machineRoot = Get-MachineRoot $Request
   $machineHelper = Join-Path $machineRoot "windows-platform.ps1"
@@ -940,10 +994,7 @@ function Assert-WslKeepaliveTask($Request) {
   $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
   $expectedExecutable = "$env:SystemRoot\System32\wsl.exe"
   $expectedArguments = '-d "Rainbond" -u root --exec /bin/sleep infinity'
-  if (-not $task -or $task.Principal.UserId -ne $Request.user_sid -or
-      $task.Actions.Execute -ne $expectedExecutable -or $task.Actions.Arguments -ne $expectedArguments) {
-    throw "Managed WSL keepalive task read-back mismatch"
-  }
+  Assert-ScheduledTaskContract $task $expectedExecutable $expectedArguments $Request.user_sid "Limited" "Managed WSL keepalive task"
   return $taskName
 }
 
@@ -1214,10 +1265,8 @@ function Register-VerifiedTask([string]$TaskName, $ActionValue, $Trigger, $Princ
     Register-ScheduledTask -TaskName $TaskName -Action $ActionValue -Trigger $Trigger -Principal $Principal -Force | Out-Null
   }
   $task = Get-ScheduledTask -TaskName $TaskName
-  if ($task.Principal.UserId -ne $Principal.UserId -or $task.Principal.RunLevel -ne $Principal.RunLevel -or
-      $task.Actions.Execute -ne $ActionValue.Execute -or $task.Actions.Arguments -ne $ActionValue.Arguments) {
-    throw "Scheduled task read-back mismatch: $TaskName"
-  }
+  Assert-ScheduledTaskContract $task ([string]$ActionValue.Execute) ([string]$ActionValue.Arguments) `
+    ([string]$Principal.UserId) ([string]$Principal.RunLevel) "Scheduled task $TaskName"
 }
 
 function Invoke-RegisterResume($Request) {
