@@ -61,11 +61,13 @@ fi
 STATE_DIR="/var/lib/rainskills"
 IDENTITY_FILE="/etc/rainskills-installation-id"
 NETWORK_READY_FILE="/run/rainskills/network-ready"
+RESTORE_NETWORK_HELPER="/usr/local/libexec/rainskills-restore-network"
 LOCK_FILE="/run/lock/rainskills-platform.lock"
 INSTALL_LOG="/var/log/rainskills/rainbond-install.log"
 VERIFY_TIMEOUT_SECONDS=1200
 VERIFY_INTERVAL_SECONDS=10
 mkdir -p "$STATE_DIR" /run/rainskills /run/lock
+chmod 700 "$STATE_DIR"
 exec 9>"$LOCK_FILE"
 flock -n 9 || { printf 'Another RainSkills WSL action is running\n' >&2; exit 1; }
 
@@ -95,15 +97,74 @@ prepare_runtime() {
   printf '[boot]\nsystemd=true\n' > /etc/wsl.conf
   chmod 644 /etc/wsl.conf
 
+  install -d -m 755 /usr/local/libexec
+  cat > "$RESTORE_NETWORK_HELPER" <<'SCRIPT'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+STATE_DIR="/var/lib/rainskills"
+NETWORK_READY_FILE="/run/rainskills/network-ready"
+
+is_ipv4() {
+  local value="$1" part
+  local -a parts
+  [[ "$value" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+  IFS=. read -r -a parts <<< "$value"
+  for part in "${parts[@]}"; do
+    ((10#$part >= 0 && 10#$part <= 255)) || return 1
+  done
+}
+
+read_address() {
+  local path="$1" value
+  [[ -f "$path" && ! -L "$path" && "$(stat -c '%u' "$path")" == "0" ]] || {
+    printf 'Managed network state is missing or unsafe: %s\n' "$path" >&2
+    exit 1
+  }
+  value="$(tr -d '\r\n' < "$path")"
+  is_ipv4 "$value" || {
+    printf 'Managed network state contains an invalid address: %s\n' "$path" >&2
+    exit 1
+  }
+  printf '%s' "$value"
+}
+
+host_address="$(read_address "$STATE_DIR/host-address")"
+guest_address="$(read_address "$STATE_DIR/guest-address")"
+[[ "$host_address" != "$guest_address" ]] || {
+  printf 'Managed host and guest addresses must differ\n' >&2
+  exit 1
+}
+
+interface_name=""
+for _ in $(seq 1 30); do
+  interface_name="$(ip -o route show default | awk 'NR == 1 { print $5 }')"
+  [[ -n "$interface_name" ]] && break
+  sleep 1
+done
+[[ -n "$interface_name" ]] || {
+  printf 'Unable to identify the WSL network interface during boot\n' >&2
+  exit 1
+}
+
+if ! ip -o -4 address show dev "$interface_name" | awk '{print $4}' | grep -Fxq "$guest_address/30"; then
+  ip address add "$guest_address/30" dev "$interface_name"
+fi
+ip route replace "$host_address/32" dev "$interface_name" src "$guest_address"
+install -d -m 755 /run/rainskills
+touch "$NETWORK_READY_FILE"
+SCRIPT
+  chmod 755 "$RESTORE_NETWORK_HELPER"
+
   cat > /etc/systemd/system/rainskills-network-ready.service <<'UNIT'
 [Unit]
-Description=Wait for the RainSkills managed WSL network
+Description=Restore the RainSkills managed WSL network
 ConditionPathExists=/etc/rainskills-installation-id
 Before=docker.service containerd.service
 
 [Service]
 Type=oneshot
-ExecStart=/bin/bash -c 'until test -f /run/rainskills/network-ready; do sleep 1; done'
+ExecStart=/usr/local/libexec/rainskills-restore-network
 RemainAfterExit=yes
 
 [Install]
@@ -128,16 +189,17 @@ configure_guest_network() {
     exit 2
   }
   [[ "$HOST_ADDRESS" != "$GUEST_ADDRESS" ]] || { printf 'Host and guest addresses must differ\n' >&2; exit 2; }
-  local interface_name
-  interface_name="$(ip -o route show default | awk 'NR == 1 { print $5 }')"
-  [[ -n "$interface_name" ]] || { printf 'Unable to identify the WSL network interface\n' >&2; exit 1; }
-  if ! ip -o -4 address show dev "$interface_name" | awk '{print $4}' | grep -Fxq "$GUEST_ADDRESS/30"; then
-    ip address add "$GUEST_ADDRESS/30" dev "$interface_name"
-  fi
-  ip route replace "$HOST_ADDRESS/32" dev "$interface_name" src "$GUEST_ADDRESS"
-  printf '%s\n' "$GUEST_ADDRESS" > "$STATE_DIR/guest-address"
-  touch "$NETWORK_READY_FILE"
-  systemctl start rainskills-network-ready.service
+  local host_state guest_state
+  host_state="$(mktemp "$STATE_DIR/.host-address.XXXXXX")"
+  guest_state="$(mktemp "$STATE_DIR/.guest-address.XXXXXX")"
+  printf '%s\n' "$HOST_ADDRESS" > "$host_state"
+  printf '%s\n' "$GUEST_ADDRESS" > "$guest_state"
+  chmod 600 "$host_state" "$guest_state"
+  mv -f -- "$host_state" "$STATE_DIR/host-address"
+  mv -f -- "$guest_state" "$STATE_DIR/guest-address"
+  rm -f "$NETWORK_READY_FILE"
+  systemctl restart rainskills-network-ready.service
+  [[ -f "$NETWORK_READY_FILE" ]] || { printf 'Managed network restore did not complete\n' >&2; exit 1; }
 }
 
 verify_installer() {

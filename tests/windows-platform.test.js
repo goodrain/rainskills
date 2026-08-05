@@ -1170,6 +1170,15 @@ test("PowerShell rolls back a distro when first-run bootstrap fails", () => {
   assert.match(importDistro, /--unregister[\s\S]*Remove-Item -LiteralPath \$distroRoot/);
 });
 
+test("PowerShell refreshes the WSL runtime when resuming an existing managed distro", () => {
+  const source = readNormalizedSource(powershellPath);
+  const importDistro = source.match(/function Invoke-ImportDistro\(\$Request\) \{[\s\S]*?\n\}\n\nfunction Invoke-PrepareRuntime/)?.[0];
+  assert(importDistro, "Invoke-ImportDistro must remain a standalone fixed action");
+  const existingDistro = importDistro.match(/if \(\$distroNames -contains "Rainbond"\) \{[\s\S]*?\n  \} else \{/)?.[0];
+  assert(existingDistro, "existing managed distro branch must remain explicit");
+  assert.match(existingDistro, /Invoke-DistroBootstrap \$Request "PrepareRuntime"/);
+});
+
 test("PowerShell checks systemd without terminal-dependent ps output", () => {
   const source = readNormalizedSource(powershellPath);
   const assertSystemd = source.match(/function Assert-SystemdPidOne\(\$Request\) \{[\s\S]*?\n\}\n\nfunction Invoke-ImportDistro/)?.[0];
@@ -1190,6 +1199,24 @@ test("WSL bootstrap enables systemd and gates runtime startup on the fixed netwo
   assert.match(source, /ConditionPathExists/);
   assert.match(source, /rainskills-installation-id/);
   assert.doesNotMatch(source, /eval\s/);
+});
+
+test("WSL network gate restores persistent addresses on every distro boot", () => {
+  const source = readNormalizedSource(wslBootstrapPath);
+  const prepareRuntime = source.match(/prepare_runtime\(\) \{[\s\S]*?\n\}\n\nconfigure_guest_network\(\)/)?.[0];
+  const configureNetwork = source.match(/configure_guest_network\(\) \{[\s\S]*?\n\}\n\nverify_installer\(\)/)?.[0];
+  assert(prepareRuntime, "prepare_runtime must remain a standalone fixed action");
+  assert(configureNetwork, "configure_guest_network must remain a standalone fixed action");
+  assert.match(prepareRuntime, /\/usr\/local\/libexec\/rainskills-restore-network/);
+  assert.match(prepareRuntime, /ExecStart=\/usr\/local\/libexec\/rainskills-restore-network/);
+  assert.doesNotMatch(prepareRuntime, /until test -f \/run\/rainskills\/network-ready/);
+  const restoreHelper = prepareRuntime.match(/<<'SCRIPT'\n([\s\S]*?)\nSCRIPT/)?.[1];
+  assert(restoreHelper, "the fixed network restore helper must be embedded verbatim");
+  const syntax = spawnSync("bash", ["-n"], { input: restoreHelper, encoding: "utf8" });
+  assert.equal(syntax.status, 0, syntax.stderr);
+  assert.match(configureNetwork, /host-address/);
+  assert.match(configureNetwork, /guest-address/);
+  assert.match(configureNetwork, /systemctl restart rainskills-network-ready\.service/);
 });
 
 test("Rainbond WSL bootstrap verifies artifacts, prepares Docker, emits heartbeats, and redacts logs", () => {

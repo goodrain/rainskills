@@ -773,6 +773,7 @@ function Invoke-ImportDistro($Request) {
     if ((Get-DistroIdentity $Request) -ne $Request.installation_id) {
       throw "An existing Rainbond WSL distro is not owned by this installation"
     }
+    Invoke-DistroBootstrap $Request "PrepareRuntime"
   } else {
     if (Test-Path -LiteralPath $distroRoot) { throw "Unknown existing Rainbond distro directory" }
     New-Item -ItemType Directory -Path $distroRoot -Force | Out-Null
