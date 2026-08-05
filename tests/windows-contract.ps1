@@ -25,6 +25,24 @@ $platformAst = [System.Management.Automation.Language.Parser]::ParseFile(
   [ref]$platformTokens,
   [ref]$platformErrors
 )
+$originProbeAst = $platformAst.Find({
+  param($node)
+  $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+    $node.Name -eq "Test-OriginReachability"
+}, $true)
+if ($null -eq $originProbeAst) { throw "Test-OriginReachability function is missing" }
+. ([ScriptBlock]::Create($originProbeAst.Extent.Text))
+
+function Invoke-WebRequest { throw [InvalidOperationException]::new("simulated transport failure") }
+try {
+  $originResult = Test-OriginReachability "https://unreachable.example" @("https://unreachable.example")
+  if ($originResult.reachable -or $originResult.origin -ne "https://unreachable.example") {
+    throw "Transport failure was not returned as an unreachable origin"
+  }
+} finally {
+  Remove-Item Function:\Invoke-WebRequest
+}
+
 $leaseWriterAst = $platformAst.Find({
   param($node)
   $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and

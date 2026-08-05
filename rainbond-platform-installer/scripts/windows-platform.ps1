@@ -144,7 +144,8 @@ function Test-OriginReachability([string]$Origin, [string[]]$AllowedOrigins) {
       $response = Invoke-WebRequest -Uri $current -Method Head -MaximumRedirection 0 -UseBasicParsing -TimeoutSec 15
       return [ordered]@{ origin = $Origin; reachable = $true; redirectOrigins = $redirects }
     } catch {
-      $webResponse = $_.Exception.Response
+      $responseProperty = $_.Exception.PSObject.Properties["Response"]
+      $webResponse = if ($null -ne $responseProperty) { $responseProperty.Value } else { $null }
       if ($null -eq $webResponse) {
         return [ordered]@{ origin = $Origin; reachable = $false; redirectOrigins = $redirects }
       }

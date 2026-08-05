@@ -404,6 +404,14 @@ test("PowerShell preflight is a fixed read-only action with structured output", 
   assert.doesNotMatch(source, /ScriptBlock/);
 });
 
+test("PowerShell preflight handles transport failures without an HTTP response", () => {
+  const source = readNormalizedSource(powershellPath);
+  const probe = source.match(/function Test-OriginReachability\(\[string\]\$Origin, \[string\[\]\]\$AllowedOrigins\) \{[\s\S]*?\n\}/)?.[0];
+  assert(probe, "Test-OriginReachability must remain a standalone fixed probe");
+  assert.match(probe, /PSObject\.Properties\["Response"\]/);
+  assert.doesNotMatch(probe, /\$_\.Exception\.Response/);
+});
+
 test("PowerShell helper emits UTF-8 diagnostics for the Node launcher", () => {
   const source = readNormalizedSource(powershellPath);
   assert.match(source, /\[Console\]::OutputEncoding = \$utf8Encoding/);
