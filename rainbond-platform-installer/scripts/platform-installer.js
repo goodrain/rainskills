@@ -1516,6 +1516,66 @@ function buildWindowsMachineBundlePayload({ recovery, onboarding, nodePath = pro
   };
 }
 
+function createWindowsAdapterForOnboarding(onboarding) {
+  const controlMode = onboarding.control_mode || (process.platform === "win32" ? "windows-native" : "posix");
+  const windowsRunner = (command, args) => runCommand(
+    normalizeWindowsExecutableForControl(command, controlMode),
+    args,
+    windowsHelperRunOptions(args)
+  );
+  return createWindowsPlatformAdapter({
+    runner: windowsRunner,
+    stateStore: secureStateStore,
+    policy: POLICY,
+    userSid: resolveWindowsUserSid(windowsRunner),
+    pathTranslator: controlMode === "wsl"
+      ? (filePath) => translateWslPathToWindows(filePath, runCommand)
+      : (filePath) => filePath,
+    prepareResultForRead: controlMode === "wsl" ? prepareWslHelperResult : null,
+  });
+}
+
+async function refreshWindowsMachineBundleBeforeAuthorization({
+  adapter,
+  onboarding,
+  operationId,
+  paths,
+  state,
+  recovery = windowsRecoveryBundle(paths),
+  stateUpdater = updateState,
+  write = (value) => process.stdout.write(value),
+}) {
+  if (state.target_kind !== "local-windows") return { state, refreshed: false };
+  if (state.stage !== "platform-ready") {
+    throw new Error(`当前 Windows 平台阶段不能恢复授权：${state.stage}`);
+  }
+  if (!UUID_PATTERN.test(state.installation_id || "")) {
+    throw new Error("Windows 平台安装状态缺少有效的 installation id");
+  }
+
+  const payload = buildWindowsMachineBundlePayload({ recovery, onboarding });
+  if (state.machine_bundle_helper_sha256 === payload.helper_sha256
+      && state.machine_bundle_bootstrap_sha256 === payload.bootstrap_sha256) {
+    return { state, refreshed: false };
+  }
+
+  write("\n当前版本包含 Windows 运行时更新；接下来会弹出一次管理员确认，仅更新受保护的 RainSkills helper，不会重新安装 Rainbond。\n");
+  const installed = await adapter.installMachineBundle({
+    operationId,
+    installationId: state.installation_id,
+    payload,
+  });
+  if (!installed.facts.machineBundleVerified) {
+    throw new Error("Windows 受保护 RainSkills helper 更新后未通过验证");
+  }
+  state = stateUpdater(paths.state, state, {
+    package_version: packageManifest.version,
+    machine_bundle_helper_sha256: payload.helper_sha256,
+    machine_bundle_bootstrap_sha256: payload.bootstrap_sha256,
+  });
+  return { state, refreshed: true };
+}
+
 async function prepareWindowsWsl({ adapter, onboarding, options, paths, state }) {
   const installationId = state.installation_id;
   const recovery = windowsRecoveryBundle(paths);
@@ -1673,6 +1733,9 @@ async function provisionWindowsDistroAndNetwork({ adapter, onboarding, options, 
       installer_sha256: installer.sha256,
     },
   });
+  if (!provisioned.facts.machineBundleVerified) {
+    throw new Error("Windows 受保护 RainSkills helper 未通过验证");
+  }
   const stageFacts = () => ({
     ...provisioned.facts,
     installationId,
@@ -1684,6 +1747,8 @@ async function provisionWindowsDistroAndNetwork({ adapter, onboarding, options, 
     managed_subnet: network.cidr,
     host_address: network.hostAddress,
     guest_address: network.guestAddress,
+    machine_bundle_helper_sha256: machineBundlePayload.helper_sha256,
+    machine_bundle_bootstrap_sha256: machineBundlePayload.bootstrap_sha256,
   });
 
   if (state.stage === "importing-distro") {
@@ -1806,6 +1871,26 @@ async function runResume(onboardingId) {
     throw new Error("平台尚未完成验证，不能继续 RainSkills 授权");
   }
 
+  const paths = operationPaths(onboardingId);
+  if (onboarding.platform_state_path) {
+    if (path.resolve(onboarding.platform_state_path) !== path.resolve(paths.state)) {
+      throw new Error("onboarding 中的平台状态路径与当前操作不匹配");
+    }
+    ensurePrivateOperationDirectory(paths.root);
+    assertOperationFilesSafe(paths);
+    let state = readPlatformState(paths.state, onboardingId);
+    if (state.target_kind === "local-windows") {
+      const refreshed = await refreshWindowsMachineBundleBeforeAuthorization({
+        adapter: createWindowsAdapterForOnboarding(onboarding),
+        onboarding,
+        operationId: onboardingId,
+        paths,
+        state,
+      });
+      state = refreshed.state;
+    }
+  }
+
   onboarding = updateOnboarding(onboarding, { stage: "authorizing" });
   const invocation = resumeInvocationForOnboarding(onboarding);
 
@@ -1902,23 +1987,8 @@ async function runInstallOperation(options) {
   activeOperation.state = state;
 
   const isWindowsLocal = target.kind === "local-windows";
-  const controlMode = onboarding.control_mode || (process.platform === "win32" ? "windows-native" : "posix");
-  const windowsRunner = (command, args) => runCommand(
-    normalizeWindowsExecutableForControl(command, controlMode),
-    args,
-    windowsHelperRunOptions(args)
-  );
   const windowsAdapter = isWindowsLocal
-    ? createWindowsPlatformAdapter({
-      runner: windowsRunner,
-      stateStore: secureStateStore,
-      policy: POLICY,
-      userSid: resolveWindowsUserSid(windowsRunner),
-      pathTranslator: controlMode === "wsl"
-        ? (filePath) => translateWslPathToWindows(filePath, runCommand)
-        : (filePath) => filePath,
-      prepareResultForRead: controlMode === "wsl" ? prepareWslHelperResult : null,
-    })
+    ? createWindowsAdapterForOnboarding(onboarding)
     : null;
   if (isWindowsLocal && state.stage === "enabling-wsl") {
     const prepared = await prepareWindowsWsl({
@@ -2328,6 +2398,7 @@ module.exports = {
   prepareRemoteInstaller,
   readOnboardingState,
   readPlatformState,
+  refreshWindowsMachineBundleBeforeAuthorization,
   remoteInstallerInvocation,
   runCommand,
   runInstall,

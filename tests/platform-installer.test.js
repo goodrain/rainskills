@@ -179,6 +179,86 @@ test("resumed Windows provisioning refreshes the protected machine bundle", () =
   assert.match(provision, /windowsRecoveryBundle\(paths\)/);
   assert.match(provision, /buildWindowsMachineBundlePayload/);
   assert.match(provision, /adapter\.provisionRainbond\([\s\S]*\.\.\.machineBundlePayload/);
+  assert.match(provision, /if \(!provisioned\.facts\.machineBundleVerified\)/);
+  assert.match(provision, /machine_bundle_helper_sha256: machineBundlePayload\.helper_sha256/);
+  assert.match(provision, /machine_bundle_bootstrap_sha256: machineBundlePayload\.bootstrap_sha256/);
+});
+
+test("Windows authorization resume upgrades a stale protected machine bundle once", async () => {
+  const { refreshWindowsMachineBundleBeforeAuthorization } = require(platformInstallerPath);
+  assert.equal(typeof refreshWindowsMachineBundleBeforeAuthorization, "function");
+
+  const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-resume-package-"));
+  const bundleRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-resume-recovery-"));
+  const scriptsRoot = path.join(packageRoot, "rainbond-platform-installer", "scripts");
+  const recoveryEntry = path.join(bundleRoot, "bin", "rainskills.js");
+  fs.mkdirSync(scriptsRoot, { recursive: true });
+  fs.mkdirSync(path.dirname(recoveryEntry), { recursive: true });
+  fs.writeFileSync(path.join(scriptsRoot, "windows-platform.ps1"), "# upgraded helper\n");
+  fs.writeFileSync(path.join(scriptsRoot, "wsl-bootstrap.sh"), "#!/bin/bash\n# upgraded bootstrap\n");
+  fs.writeFileSync(recoveryEntry, "#!/usr/bin/env node\n");
+  fs.writeFileSync(path.join(bundleRoot, "manifest.json"), "{}\n");
+
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  const installationId = "f1805132-20ad-4a20-9f88-43fe41e50813";
+  const calls = [];
+  const writes = [];
+  const adapter = {
+    async installMachineBundle(options) {
+      calls.push(options);
+      return { facts: { machineBundleVerified: true } };
+    },
+  };
+  const stateUpdater = (filePath, current, values) => {
+    writes.push({ filePath, values });
+    return { ...current, ...values };
+  };
+  const input = {
+    adapter,
+    onboarding: { control_mode: "windows-native" },
+    operationId,
+    paths: { state: "/protected/state.json" },
+    recovery: { packageRoot, bundleRoot },
+    write() {},
+    state: {
+      operation_id: operationId,
+      installation_id: installationId,
+      target_kind: "local-windows",
+      stage: "platform-ready",
+    },
+    stateUpdater,
+  };
+
+  const upgraded = await refreshWindowsMachineBundleBeforeAuthorization(input);
+  assert.equal(upgraded.refreshed, true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].operationId, operationId);
+  assert.equal(calls[0].installationId, installationId);
+  assert.equal(calls[0].payload.bootstrap_path, path.join(scriptsRoot, "wsl-bootstrap.sh"));
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].filePath, input.paths.state);
+  assert.equal(writes[0].values.machine_bundle_helper_sha256, calls[0].payload.helper_sha256);
+  assert.equal(writes[0].values.machine_bundle_bootstrap_sha256, calls[0].payload.bootstrap_sha256);
+
+  const current = await refreshWindowsMachineBundleBeforeAuthorization({
+    ...input,
+    state: upgraded.state,
+  });
+  assert.equal(current.refreshed, false);
+  assert.equal(calls.length, 1, "a verified current bundle must not prompt for UAC again");
+  assert.equal(writes.length, 1);
+});
+
+test("authorization resume refreshes the Windows machine bundle before spawning the client flow", () => {
+  const source = readNormalizedSource(platformInstallerPath);
+  const resume = source.match(/async function runResume[\s\S]*?\n\}\n\nasync function completePlatform/)?.[0];
+  assert(resume, "runResume must remain a standalone operation");
+  const refresh = resume.indexOf("refreshWindowsMachineBundleBeforeAuthorization");
+  const authorize = resume.indexOf('stage: "authorizing"');
+  const spawn = resume.indexOf("spawnAttached(");
+  assert(refresh >= 0, "runResume must refresh a local Windows machine bundle");
+  assert(authorize > refresh, "the machine bundle must be current before authorization starts");
+  assert(spawn > authorize, "the authorization client must start after the state transition");
 });
 
 test("WSL control paths bridge to Windows without parsing shell text", () => {
@@ -1103,7 +1183,7 @@ test("Windows installation batches privileged work and explains the elevated pro
   assert.match(source, /adapter\.prepareWsl\(/);
   assert.match(source, /adapter\.provisionRainbond\(/);
   assert.match(source, /管理员窗口.*进度/s);
-  assert.doesNotMatch(source, /adapter\.(?:installMachineBundle|enableWsl|registerResume|registerFinalize|importDistro|prepareRuntime|configureNetwork|verifyNetwork|prepareDocker|installRainbond|verifyDeployment)\(/);
+  assert.doesNotMatch(source, /adapter\.(?:enableWsl|registerResume|registerFinalize|importDistro|prepareRuntime|configureNetwork|verifyNetwork|prepareDocker|installRainbond|verifyDeployment)\(/);
 });
 
 test("platform progress never writes to an unreserved file descriptor", () => {
