@@ -1209,6 +1209,27 @@ test("Rainbond WSL installation forces CPU mode and rebuilds its owned stopped c
   assert.match(installRainbond, /setsid env[\s\S]*ENABLE_GPU=false[\s\S]*bash "\$INSTALLER_PATH"/);
 });
 
+test("Rainbond WSL verification uses the bundled K3s CLI and waits for readiness", () => {
+  const source = readNormalizedSource(wslBootstrapPath);
+  const verifyRainbond = source.match(/verify_rainbond\(\) \{[\s\S]*?\n\}\n\ncase "\$ACTION"/)?.[0];
+  assert(verifyRainbond, "verify_rainbond must remain a standalone fixed action");
+  assert.match(verifyRainbond, /docker exec rainbond \/bin\/k3s kubectl get nodes/);
+  assert.match(verifyRainbond, /docker exec rainbond \/bin\/k3s kubectl get pods -n rbd-system/);
+  assert.doesNotMatch(verifyRainbond, /docker exec rainbond kubectl/);
+  assert.match(verifyRainbond, /VERIFY_TIMEOUT_SECONDS/);
+  assert.match(verifyRainbond, /emit_progress verifying-rainbond heartbeat/);
+  assert.match(verifyRainbond, /Completed[\s\S]*Succeeded/);
+  assert.match(verifyRainbond, /Last check:/);
+});
+
+test("PowerShell returns the concrete managed WSL bootstrap failure", () => {
+  const source = readNormalizedSource(powershellPath);
+  const invokeBootstrap = source.match(/function Invoke-DistroBootstrap\([^\n]+\) \{[\s\S]*?\n\}\n\nfunction Get-DistroIdentity/)?.[0];
+  assert(invokeBootstrap, "Invoke-DistroBootstrap must remain a standalone fixed action");
+  assert.match(invokeBootstrap, /lastMeaningfulOutput/);
+  assert.match(invokeBootstrap, /Managed WSL bootstrap action failed: \$BootstrapAction: \$lastMeaningfulOutput/);
+});
+
 test("Windows executes the dynamically hashed installer instead of a package-pinned digest", () => {
   const powershell = readNormalizedSource(powershellPath);
   const platformInstaller = readNormalizedSource(platformInstallerPath);

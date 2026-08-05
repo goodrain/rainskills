@@ -63,6 +63,8 @@ IDENTITY_FILE="/etc/rainskills-installation-id"
 NETWORK_READY_FILE="/run/rainskills/network-ready"
 LOCK_FILE="/run/lock/rainskills-platform.lock"
 INSTALL_LOG="/var/log/rainskills/rainbond-install.log"
+VERIFY_TIMEOUT_SECONDS=1200
+VERIFY_INTERVAL_SECONDS=10
 mkdir -p "$STATE_DIR" /run/rainskills /run/lock
 exec 9>"$LOCK_FILE"
 flock -n 9 || { printf 'Another RainSkills WSL action is running\n' >&2; exit 1; }
@@ -221,23 +223,70 @@ install_rainbond() {
 verify_rainbond() {
   assert_identity
   is_ipv4 "$GUEST_ADDRESS" || { printf 'Invalid Rainbond EIP\n' >&2; exit 2; }
-  [[ "$(docker inspect rainbond --format '{{.State.Status}}')" == "running" ]] || {
-    printf 'Rainbond container is not running\n' >&2
+  timeout 60 systemctl start docker || {
+    printf 'Docker service did not start within 60 seconds\n' >&2
     exit 1
   }
-  docker exec rainbond kubectl get nodes --no-headers \
-    | awk 'NF && $2 != "Ready" { exit 1 } END { if (NR == 0) exit 1 }'
-  docker exec rainbond kubectl get pods -n rbd-system --no-headers \
-    | awk 'NF { split($2, ready, "/"); if (ready[1] != ready[2] || ($3 != "Running" && $3 != "Completed")) exit 1 } END { if (NR == 0) exit 1 }'
-  local port
-  for port in 80 443 6060 7070; do
-    ss -lntH | awk '{print $4}' | grep -Eq "(^|:)$port$" || {
-      printf 'Required port %s is not listening\n' "$port" >&2
-      exit 1
-    }
+  timeout 30 docker info >/dev/null 2>&1 || {
+    printf 'Docker API did not become ready within 30 seconds\n' >&2
+    exit 1
+  }
+
+  local deadline=$((SECONDS + VERIFY_TIMEOUT_SECONDS))
+  local status nodes pods port last_check detail
+  local -a missing_ports
+  emit_progress verifying-rainbond started
+  while ((SECONDS < deadline)); do
+    last_check=""
+    if ! status="$(timeout 20 docker inspect rainbond --format '{{.State.Status}}' 2>&1)"; then
+      detail="${status//$'\r'/ }"
+      detail="${detail//$'\n'/ }"
+      last_check="Unable to inspect Rainbond container: ${detail:0:240}"
+    elif [[ "$status" != "running" ]]; then
+      last_check="Rainbond container state is $status"
+    elif ! nodes="$(timeout 30 docker exec rainbond /bin/k3s kubectl get nodes --no-headers 2>&1)"; then
+      detail="${nodes//$'\r'/ }"
+      detail="${detail//$'\n'/ }"
+      last_check="K3s node query failed: ${detail:0:240}"
+    elif ! printf '%s\n' "$nodes" \
+      | awk 'NF { seen=1; if ($2 != "Ready") bad=1 } END { exit (!seen || bad) }'; then
+      detail="${nodes//$'\r'/ }"
+      detail="${detail//$'\n'/ }"
+      last_check="K3s node is not Ready: ${detail:0:240}"
+    elif ! pods="$(timeout 30 docker exec rainbond /bin/k3s kubectl get pods -n rbd-system --no-headers 2>&1)"; then
+      detail="${pods//$'\r'/ }"
+      detail="${detail//$'\n'/ }"
+      last_check="rbd-system pod query failed: ${detail:0:240}"
+    elif ! printf '%s\n' "$pods" \
+      | awk 'NF { seen=1; split($2, ready, "/"); if ($3 != "Completed" && $3 != "Succeeded" && ($3 != "Running" || ready[1] != ready[2])) bad=1 } END { exit (!seen || bad) }'; then
+      last_check="rbd-system still has pending components"
+    else
+      missing_ports=()
+      for port in 80 443 6060 7070; do
+        if ! ss -lntH | awk '{print $4}' | grep -Eq "(^|:)$port$"; then
+          missing_ports+=("$port")
+        fi
+      done
+      if ((${#missing_ports[@]} > 0)); then
+        last_check="Required ports are not listening: ${missing_ports[*]}"
+      elif ! curl -fsS --max-time 10 "http://$GUEST_ADDRESS:7070/" >/dev/null; then
+        last_check="Rainbond Console is not reachable at http://$GUEST_ADDRESS:7070/"
+      fi
+    fi
+
+    if [[ -z "$last_check" ]]; then
+      emit_progress verifying-rainbond completed
+      printf 'containerRunning=true\nnodeReady=true\ncomponentsReady=true\nwslConsoleReachable=true\n'
+      return
+    fi
+    printf 'Rainbond is still starting: %s\n' "$last_check"
+    emit_progress verifying-rainbond heartbeat
+    sleep "$VERIFY_INTERVAL_SECONDS"
   done
-  curl -fsS --max-time 10 "http://$GUEST_ADDRESS:7070/" >/dev/null
-  printf 'containerRunning=true\nnodeReady=true\ncomponentsReady=true\nwslConsoleReachable=true\n'
+
+  printf 'Rainbond readiness timed out after %s seconds. Last check: %s\n' \
+    "$VERIFY_TIMEOUT_SECONDS" "$last_check" >&2
+  exit 1
 }
 
 case "$ACTION" in
