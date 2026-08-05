@@ -250,7 +250,11 @@ configure_guest_network() {
   mv -f -- "$host_state" "$STATE_DIR/host-address"
   mv -f -- "$guest_state" "$STATE_DIR/guest-address"
   rm -f "$NETWORK_READY_FILE"
-  systemctl restart rainskills-network-ready.service
+  if systemctl is-active --quiet rainskills-network-ready.service; then
+    "$RESTORE_NETWORK_HELPER"
+  else
+    systemctl start rainskills-network-ready.service
+  fi
   [[ -f "$NETWORK_READY_FILE" ]] || { printf 'Managed network restore did not complete\n' >&2; exit 1; }
 }
 

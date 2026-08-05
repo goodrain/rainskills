@@ -1216,7 +1216,10 @@ test("WSL network gate restores persistent addresses on every distro boot", () =
   assert.equal(syntax.status, 0, syntax.stderr);
   assert.match(configureNetwork, /host-address/);
   assert.match(configureNetwork, /guest-address/);
-  assert.match(configureNetwork, /systemctl restart rainskills-network-ready\.service/);
+  assert.match(configureNetwork, /systemctl is-active --quiet rainskills-network-ready\.service/);
+  assert.match(configureNetwork, /"\$RESTORE_NETWORK_HELPER"/);
+  assert.match(configureNetwork, /systemctl start rainskills-network-ready\.service/);
+  assert.doesNotMatch(configureNetwork, /systemctl restart rainskills-network-ready\.service/);
 });
 
 test("WSL forwards the fixed guest address through Docker and verifies Console on loopback", () => {
