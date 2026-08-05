@@ -633,7 +633,7 @@ memory_bytes="$((memory_kb * 1024))"
 disk_kb="$(df -Pk "$HOME" 2>/dev/null | awk 'END { print $4 }')"
 disk_bytes="$((disk_kb * 1024))"
 occupied=""
-for port in 80 443 6060 7070; do
+for port in 80 443 7070; do
   if command -v ss >/dev/null 2>&1 && ss -lntH 2>/dev/null | awk '{print $4}' | grep -Eq "(^|:)$port$"; then
     if [ -n "$occupied" ]; then occupied="$occupied,$port"; else occupied="$port"; fi
   elif command -v lsof >/dev/null 2>&1 && lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then

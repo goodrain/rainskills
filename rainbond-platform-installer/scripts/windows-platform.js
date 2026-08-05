@@ -749,8 +749,9 @@ function evaluateWindowsDeployment(facts, policy) {
   if (!facts?.wslConsoleReachable) blockers.push("WSL 内无法访问 Rainbond Console");
   if (!facts?.windowsConsoleReachable) blockers.push("Windows 无法通过 127.0.0.1 访问 Rainbond Console");
   const listening = new Set((facts?.portsListening || []).map(Number));
-  const missingPorts = (policy?.windows?.managed_ports || []).filter((port) => !listening.has(port));
-  if (missingPorts.length > 0) blockers.push(`端口 80、443、6060、7070 尚未全部监听，缺少：${missingPorts.join("、")}`);
+  const expectedPorts = policy?.windows?.managed_ports || [];
+  const missingPorts = expectedPorts.filter((port) => !listening.has(port));
+  if (missingPorts.length > 0) blockers.push(`端口 ${expectedPorts.join("、")} 尚未全部监听，缺少：${missingPorts.join("、")}`);
   if (!/^(?:\d{1,3}\.){3}\d{1,3}$/.test(String(facts?.guestAddress || ""))) {
     blockers.push("Rainbond WSL 固定地址无效");
   }

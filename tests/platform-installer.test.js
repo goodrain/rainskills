@@ -402,7 +402,7 @@ test("remote inspection script expands occupied ports and detects an existing Ra
     });
 
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /^OCCUPIED_PORTS=80,443,6060,7070$/m);
+    assert.match(result.stdout, /^OCCUPIED_PORTS=80,443,7070$/m);
     assert.match(result.stdout, /^HAS_RAINBOND=true$/m);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
@@ -1026,7 +1026,7 @@ test("official installer policy trusts only the fixed HTTPS origin and bounds mu
   assert.equal(POLICY.minimums.cpu_cores, 4);
   assert.equal(POLICY.minimums.memory_bytes, 8 * 1024 ** 3);
   assert.equal(POLICY.minimums.disk_bytes, 50 * 1024 ** 3);
-  assert.deepEqual(POLICY.required_ports, [80, 443, 6060, 7070]);
+  assert.deepEqual(POLICY.required_ports, [80, 443, 7070]);
   assert.equal(POLICY.installer.url, "https://get.rainbond.com/");
   assert.deepEqual(POLICY.installer.allowed_origins, ["https://get.rainbond.com"]);
   assert.equal(POLICY.installer.trust, "https-origin+runtime-validation");

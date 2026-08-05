@@ -262,7 +262,7 @@ verify_rainbond() {
       last_check="rbd-system still has pending components"
     else
       missing_ports=()
-      for port in 80 443 6060 7070; do
+      for port in 80 443 7070; do
         if ! ss -lntH | awk '{print $4}' | grep -Eq "(^|:)$port$"; then
           missing_ports+=("$port")
         fi

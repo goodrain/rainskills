@@ -967,6 +967,37 @@ function Invoke-ConfigureNetwork($Request) {
   Invoke-DistroBootstrap $Request "ConfigureGuestNetwork" $hostAddress $guestAddress
 
   $ports = @($Request.policy.windows.managed_ports | ForEach-Object { [int]$_ })
+  $obsoletePortProxies = @()
+  if ($existing) {
+    foreach ($entry in @($existing.portproxy)) {
+      $listenAddress = [string](Get-PropertyValue $entry "listenAddress")
+      $listenPort = [int](Get-PropertyValue $entry "listenPort")
+      $connectAddress = [string](Get-PropertyValue $entry "connectAddress")
+      $connectPort = [int](Get-PropertyValue $entry "connectPort")
+      if ($ports -contains $listenPort) { continue }
+      if ($listenAddress -ne "127.0.0.1" -or $connectAddress -ne $guestAddress -or
+          $connectPort -ne $listenPort -or $listenPort -lt 1 -or $listenPort -gt 65535) {
+        throw "Obsolete managed portproxy manifest entry is invalid"
+      }
+      $obsoletePortProxies += [ordered]@{
+        listenAddress = $listenAddress
+        listenPort = $listenPort
+        connectAddress = $connectAddress
+        connectPort = $connectPort
+      }
+    }
+  }
+  $currentTuples = @(Get-PortProxyTuples)
+  foreach ($obsolete in $obsoletePortProxies) {
+    $matches = @($currentTuples | Where-Object {
+      $_.listenAddress -eq $obsolete.listenAddress -and $_.listenPort -eq $obsolete.listenPort -and
+      $_.connectAddress -eq $obsolete.connectAddress -and $_.connectPort -eq $obsolete.connectPort
+    })
+    if ($matches.Count -ne 1) { throw "Obsolete managed portproxy rule changed outside RainSkills" }
+    & "$env:SystemRoot\System32\netsh.exe" interface portproxy delete v4tov4 `
+      listenaddress=$($obsolete.listenAddress) listenport=$($obsolete.listenPort) | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Failed to remove obsolete managed portproxy for port $($obsolete.listenPort)" }
+  }
   $currentTuples = @(Get-PortProxyTuples)
   $conflicts = @($currentTuples | Where-Object {
     $ports -contains $_.listenPort -and -not (

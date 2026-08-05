@@ -27,7 +27,7 @@ Windows 本地安装当前标记为 preview。只有 Windows 10 和 Windows 11 �
 - [ ] 需要重启时先保存断点；登录后固定任务恢复到同一 operation/installation id。
 - [ ] 创建独立 `Rainbond` WSL2 发行版，PID 1 为 systemd，Docker 正常。
 - [ ] 固定 `/30` NAT、guest 地址和 `127.0.0.1` portproxy 在重启、DHCP 变化和 VPN 重连后仍一致。
-- [ ] 外层容器运行、K3s 节点 Ready、`rbd-system` 组件就绪、端口 `80/443/6060/7070` 监听。
+- [ ] 外层容器运行、K3s 节点 Ready、`rbd-system` 组件就绪、端口 `80/443/7070` 监听。
 - [ ] WSL 内和 Windows `http://127.0.0.1:7070` 都能访问 Console。
 - [ ] 原生 Windows和 WSL 控制端都能打开 Windows 浏览器、完成授权和 MCP 验证。
 - [ ] 成功输出只包含部署成功、部署位置、运行状态、Console 地址和授权交接。

@@ -122,7 +122,7 @@ test("Windows policy pins supported hosts and trusted artifacts", () => {
   assert.deepEqual(policy.windows.supported_product_types, ["workstation"]);
   assert.equal(policy.windows.distro_name, "Rainbond");
   assert.deepEqual(policy.windows.networking_modes, ["nat"]);
-  assert.deepEqual(policy.windows.managed_ports, [80, 443, 6060, 7070]);
+  assert.deepEqual(policy.windows.managed_ports, [80, 443, 7070]);
   assert.deepEqual(policy.windows.ubuntu_rootfs, {
     urls: [
       "https://mirror.nju.edu.cn/ubuntu-cloud-images/wsl/jammy/20250318/ubuntu-jammy-wsl-amd64-ubuntu22.04lts.rootfs.tar.gz",
@@ -1132,6 +1132,16 @@ test("Windows distro and network actions are fixed to Rainbond ownership and loo
   assert.doesNotMatch(source, /(?:Set-Content|WriteAllText)[^\n]*\.wslconfig/);
 });
 
+test("PowerShell removes only obsolete portproxy rules recorded by the verified manifest", () => {
+  const source = readNormalizedSource(powershellPath);
+  const configureNetwork = source.match(/function Invoke-ConfigureNetwork\(\$Request\) \{[\s\S]*?\n\}\n\nfunction Invoke-VerifyNetwork/)?.[0];
+  assert(configureNetwork, "Invoke-ConfigureNetwork must remain a standalone fixed action");
+  assert(configureNetwork.indexOf("Assert-NetworkManifestDigest") < configureNetwork.indexOf("obsoletePortProxies"));
+  assert.match(configureNetwork, /\$existing\.portproxy/);
+  assert.match(configureNetwork, /obsoletePortProxies[\s\S]*listenAddress[\s\S]*connectAddress[\s\S]*guestAddress/);
+  assert.match(configureNetwork, /portproxy delete v4tov4/);
+});
+
 test("PowerShell resolves the WSL adapter from the managed distro default gateway", () => {
   const source = readNormalizedSource(powershellPath);
   const getAdapter = source.match(/function Get-WslAdapter \{[\s\S]*?\n\}\n\nfunction Get-WslHnsNetworkId/)?.[0];
@@ -1221,6 +1231,7 @@ test("Rainbond WSL verification uses the bundled K3s CLI and waits for readiness
   assert.match(verifyRainbond, /emit_progress verifying-rainbond heartbeat/);
   assert.match(verifyRainbond, /Completed[\s\S]*Succeeded/);
   assert.match(verifyRainbond, /Last check:/);
+  assert.doesNotMatch(verifyRainbond, /6060/);
 });
 
 test("PowerShell returns the concrete managed WSL bootstrap failure", () => {
@@ -1281,7 +1292,7 @@ test("Windows delivery requires WSL and Windows-side health evidence", () => {
     componentsReady: true,
     wslConsoleReachable: true,
     windowsConsoleReachable: true,
-    portsListening: [80, 443, 6060, 7070],
+    portsListening: [80, 443, 7070],
     guestAddress: "172.31.253.2",
   }, policy);
   assert.equal(passing.ok, true);
@@ -1298,7 +1309,7 @@ test("Windows delivery requires WSL and Windows-side health evidence", () => {
     componentsReady: true,
     wslConsoleReachable: true,
     windowsConsoleReachable: true,
-    portsListening: [80, 443, 6060, 7070],
+    portsListening: [80, 443, 7070],
     guestAddress: "172.31.253.2",
   }, policy);
   assert.equal(wslControl.consoleUrl, "http://127.0.0.1:7070");
@@ -1312,11 +1323,11 @@ test("Windows delivery requires WSL and Windows-side health evidence", () => {
     componentsReady: false,
     wslConsoleReachable: true,
     windowsConsoleReachable: false,
-    portsListening: [7070],
+    portsListening: [],
     guestAddress: "172.31.253.2",
   }, policy);
   assert.equal(failing.ok, false);
-  assert.match(failing.blockers.join("\n"), /K3s|rbd-system|Windows|80.*443.*6060/);
+  assert.match(failing.blockers.join("\n"), /K3s|rbd-system|Windows|80.*443.*7070/);
 });
 
 test("PowerShell exposes fixed Rainbond install and dual-side verification actions", () => {

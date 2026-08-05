@@ -5,7 +5,7 @@
     "memory_bytes": 8589934592,
     "disk_bytes": 53687091200
   },
-  "required_ports": [80, 443, 6060, 7070],
+  "required_ports": [80, 443, 7070],
   "supported_control_platforms": ["linux", "darwin", "win32"],
   "supported_platforms": ["linux", "darwin"],
   "supported_architectures": ["x64", "arm64"],
@@ -23,7 +23,7 @@
     "supported_product_types": ["workstation"],
     "distro_name": "Rainbond",
     "networking_modes": ["nat"],
-    "managed_ports": [80, 443, 6060, 7070],
+    "managed_ports": [80, 443, 7070],
     "preflight_allowed_origins": [
       "https://wslstorestorage.blob.core.windows.net",
       "https://mirror.nju.edu.cn",

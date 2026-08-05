@@ -310,7 +310,7 @@ Rainbond Linux 安装器不接受 `127.0.0.1` 作为 EIP，而 DHCP、Wi-Fi、VP
 
 ### 5.2 受管端口转发
 
-安装器为策略中声明的 `80`、`443`、`6060` 和 `7070` 创建只监听 `127.0.0.1` 的 Windows portproxy，目标是固定 Rainbond guest address。`netsh interface portproxy` 本身没有所有者标签，因此归属依据不是规则名称，而是 `%ProgramData%` 中受保护的 `managed-network.json`：它保存 `installation_id`、精确 listen/connect 四元组、创建前不存在的证据和最后一次应用后的规则快照。
+安装器为策略中声明的 `80`、`443` 和 `7070` 创建只监听 `127.0.0.1` 的 Windows portproxy，目标是固定 Rainbond guest address。`netsh interface portproxy` 本身没有所有者标签，因此归属依据不是规则名称，而是 `%ProgramData%` 中受保护的 `managed-network.json`：它保存 `installation_id`、精确 listen/connect 四元组、创建前不存在的证据和最后一次应用后的规则快照。
 
 每次修改前必须同时满足：清单 ACL/owner/hash 有效、当前规则与上次受管快照完全一致、目标 installation id 匹配。规则缺失时可以按清单重建；规则存在但与快照不符时视为外部修改并停止。安装器不保存、恢复或改写任何不在清单中的 portproxy 规则。
 
@@ -339,7 +339,7 @@ Windows 预检至少验证：
 - 当前用户可触发一次 Windows UAC 提权；
 - WSL、Virtual Machine Platform、WSL2 kernel 和待重启状态；
 - WSL 实际网络模式；仅默认 NAT 可以继续，不修改用户 `.wslconfig`；
-- 端口 `80`、`443`、`6060`、`7070` 的监听进程，以及 portproxy 精确规则与受保护清单的一致性；
+- 端口 `80`、`443`、`7070` 的监听进程，以及 portproxy 精确规则与受保护清单的一致性；
 - `Rainbond` 同名发行版、受管目录、计划任务和历史状态；
 - 到 Microsoft、Canonical、Rainbond 官方下载源和镜像仓库的网络；
 - 可分配且不与现有路由重叠的安装级 `/30` 私网。

@@ -120,7 +120,7 @@ Run preflight checks as one read-only batch and report a compact pass summary. C
 - usable disk space on the installation data path;
 - outbound access required for official installers and images;
 - required command availability and privilege strategy;
-- availability of ports `80`, `443`, `6060`, and `7070`;
+- availability of ports `80`, `443`, and `7070`;
 - existing Docker-compatible runtime, OrbStack, Rainbond container, and `/opt/rainbond` state where applicable.
 
 Keep resource thresholds in one versioned reference or helper definition so the skill text, tests, and installer do not diverge. Version 1 freezes the RainSkills product baseline at 4 CPU cores, 8 GB memory, and 50 GB usable disk. The policy also records the tested official quick-installer URL, detected Rainbond release, allowed redirect origins, and expected script digest. Updating that policy is a reviewed package release, not a runtime guess.
