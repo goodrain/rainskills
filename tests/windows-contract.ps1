@@ -47,6 +47,63 @@ $machineRootAclAst = $platformAst.Find({
 if ($null -eq $machineRootAclAst) { throw "Set-MachineRootAcl function is missing" }
 . ([ScriptBlock]::Create($machineRootAclAst.Extent.Text))
 
+$distroBootstrapAst = $platformAst.Find({
+  param($node)
+  $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+    $node.Name -eq "Invoke-DistroBootstrap"
+}, $true)
+if ($null -eq $distroBootstrapAst) { throw "Invoke-DistroBootstrap function is missing" }
+. ([ScriptBlock]::Create($distroBootstrapAst.Extent.Text))
+
+$nativeProbeRoot = Join-Path ([IO.Path]::GetTempPath()) ("rainskills-native-stderr-" + [Guid]::NewGuid().ToString("N"))
+$script:nativeProbePath = Join-Path $nativeProbeRoot "native-stderr.cmd"
+$script:nativeProbeRoot = $nativeProbeRoot
+function Get-TrustedWslPath { return $script:nativeProbePath }
+function Get-MachineRoot { return $script:nativeProbeRoot }
+function Assert-MachineManifest {
+  return [pscustomobject]@{ bootstrap_sha256 = ("a" * 64) }
+}
+function Assert-FileDigest { return $true }
+function Convert-WindowsPathForDistro { return "/tmp/wsl-bootstrap.sh" }
+
+try {
+  [void](New-Item -ItemType Directory -Path $nativeProbeRoot)
+  [IO.File]::WriteAllLines($script:nativeProbePath, @(
+    "@echo off",
+    "echo curl: (56) Recv failure: Connection reset by peer 1>&2",
+    "exit /b 0"
+  ), [Text.Encoding]::ASCII)
+  $originalPreference = $ErrorActionPreference
+  Invoke-DistroBootstrap ([pscustomobject]@{
+    installation_id = "22222222-2222-4222-8222-222222222222"
+  }) "VerifyRainbond"
+  if ($ErrorActionPreference -ne $originalPreference) {
+    throw "Invoke-DistroBootstrap did not restore ErrorActionPreference"
+  }
+
+  [IO.File]::WriteAllLines($script:nativeProbePath, @(
+    "@echo off",
+    "echo concrete WSL failure 1>&2",
+    "exit /b 23"
+  ), [Text.Encoding]::ASCII)
+  $bootstrapFailure = $null
+  try {
+    Invoke-DistroBootstrap ([pscustomobject]@{
+      installation_id = "22222222-2222-4222-8222-222222222222"
+    }) "VerifyRainbond"
+  } catch {
+    $bootstrapFailure = $_.Exception.Message
+  }
+  if ($bootstrapFailure -ne "Managed WSL bootstrap action failed: VerifyRainbond: concrete WSL failure") {
+    throw "Invoke-DistroBootstrap did not preserve the native exit failure: $bootstrapFailure"
+  }
+  if ($ErrorActionPreference -ne $originalPreference) {
+    throw "Invoke-DistroBootstrap did not restore ErrorActionPreference after a native failure"
+  }
+} finally {
+  Remove-Item -LiteralPath $nativeProbeRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 $global:rainskillsContractOpenedUrl = $null
 function Start-Process {
   param([Parameter(Mandatory = $true)][string]$FilePath)

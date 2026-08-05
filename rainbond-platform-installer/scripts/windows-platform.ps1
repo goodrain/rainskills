@@ -723,14 +723,20 @@ function Invoke-DistroBootstrap($Request, [string]$BootstrapAction, [string]$Hos
   if ($InstallerPath) { $arguments += @("--installer-path", $InstallerPath) }
   if ($InstallerDigest) { $arguments += @("--installer-sha256", $InstallerDigest) }
   $lastMeaningfulOutput = ""
-  & $wslPath @arguments 2>&1 | ForEach-Object {
-    $line = ([string]$_).Trim()
-    Write-Host $_
-    if ($line -and $line -notmatch '^\{"schema":"rainskills\.platform-progress\.v1"') {
-      $lastMeaningfulOutput = $line
+  $previousPreference = $ErrorActionPreference
+  try {
+    $ErrorActionPreference = "Continue"
+    & $wslPath @arguments 2>&1 | ForEach-Object {
+      $line = ([string]$_).Trim()
+      Write-Host $_
+      if ($line -and $line -notmatch '^\{"schema":"rainskills\.platform-progress\.v1"') {
+        $lastMeaningfulOutput = $line
+      }
     }
+    $exitCode = $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $previousPreference
   }
-  $exitCode = $LASTEXITCODE
   if ($exitCode -ne 0) {
     if ($lastMeaningfulOutput) {
       throw "Managed WSL bootstrap action failed: ${BootstrapAction}: $lastMeaningfulOutput"

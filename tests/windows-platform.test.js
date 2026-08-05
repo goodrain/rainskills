@@ -1314,6 +1314,15 @@ test("PowerShell returns the concrete managed WSL bootstrap failure", () => {
   assert.doesNotMatch(invokeBootstrap, /\$BootstrapAction:/);
 });
 
+test("PowerShell does not promote managed WSL stderr to a terminating error", () => {
+  const source = readNormalizedSource(powershellPath);
+  const invokeBootstrap = source.match(/function Invoke-DistroBootstrap\([^\n]+\) \{[\s\S]*?\n\}\n\nfunction Get-DistroIdentity/)?.[0];
+  assert(invokeBootstrap, "Invoke-DistroBootstrap must remain a standalone fixed action");
+  assert.match(invokeBootstrap, /\$previousPreference = \$ErrorActionPreference/);
+  assert.match(invokeBootstrap, /try \{[\s\S]*\$ErrorActionPreference = "Continue"[\s\S]*& \$wslPath @arguments 2>&1/);
+  assert.match(invokeBootstrap, /\$exitCode = \$LASTEXITCODE[\s\S]*\} finally \{[\s\S]*\$ErrorActionPreference = \$previousPreference/);
+});
+
 test("Windows PowerShell parses the complete helper without syntax errors", {
   skip: process.platform !== "win32",
 }, () => {
