@@ -8,18 +8,19 @@ Windows 本地安装当前标记为 preview。只有 Windows 10 和 Windows 11 �
 - 浏览器桥接必须原样传递包含 `&` 的授权 URL，并拒绝非 HTTP(S)、带凭据或控制字符的 URL。
 - Node 专项测试只检查固定 action、请求/结果 schema、阶段事实、摘要、恢复任务、网络和敏感信息脱敏，不调用 DISM、WSL、计划任务、portproxy 或安装脚本。
 
-## 现有平台续接验收（rc.42）
+## 现有平台续接验收（rc.43）
 
 使用现有 onboarding、WSL 发行版、Rainbond 容器和数据执行：
 
 ```cmd
-npx --yes rainskills@0.1.0-rc.42 resume --onboarding-id <onboarding-id>
+npx --yes rainskills@0.1.0-rc.43 resume --onboarding-id <onboarding-id>
 ```
 
 - [ ] 授权前不出现平台收敛 UAC；不重新下载 Ubuntu、不重新导入发行版、不重新运行 Rainbond 安装脚本。
 - [ ] RainSkills 启动并在本次授权期间保持现有 `Rainbond` WSL 运行，只等待已安装 Console 可以访问。
 - [ ] Console 就绪后立即进入浏览器授权，不再执行 `ConvergeInstalledPlatform`、三轮 Pod 稳定性采样或安装修复。
 - [ ] Device Flow 请求由授权客户端执行；返回的 device code 和 user code 不写入状态或日志。
+- [ ] Windows `PATH` 中没有 Codex CLI 时，直接更新并备份 `%USERPROFILE%\.codex\config.toml`，不把客户端命令缺失误报为授权失败。
 - [ ] 授权成功后才清理一次性恢复任务；授权失败保留恢复任务，可再次执行同一条 `resume` 命令。
 - [ ] WSL 保持进程提前退出时报告 `WINDOWS_WSL_UNAVAILABLE`；Console 超时未就绪时报告 `WINDOWS_CONSOLE_UNAVAILABLE`。
 

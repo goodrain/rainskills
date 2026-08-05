@@ -1,5 +1,7 @@
 "use strict";
 
+const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { looksLikeJwt } = require("./windows-auth.js");
@@ -60,6 +62,35 @@ function removeExistingClient(spawnImpl, command, args, options) {
   if (result.signal) throw new Error(`${command} 被信号 ${result.signal} 中断`);
 }
 
+function writeCodexMcpConfig({ baseUrl, home = process.env.USERPROFILE || os.homedir() }) {
+  const configDirectory = path.join(home, ".codex");
+  const configPath = path.join(configDirectory, "config.toml");
+  fs.mkdirSync(configDirectory, { recursive: true });
+  const original = fs.existsSync(configPath) ? fs.readFileSync(configPath, "utf8") : "";
+  const lines = original.replace(/\r\n?/g, "\n").split("\n");
+  const sectionPattern = /^\s*\[\s*mcp_servers\.rainbond\s*\]\s*(?:#.*)?$/;
+  const nextSectionPattern = /^\s*\[/;
+  const start = lines.findIndex((line) => sectionPattern.test(line));
+  const block = [
+    "[mcp_servers.rainbond]",
+    `url = ${JSON.stringify(`${baseUrl}/console/mcp/rainskills/codex/query`)}`,
+    'bearer_token_env_var = "RAINBOND_JWT"',
+  ];
+
+  if (start >= 0) {
+    let end = start + 1;
+    while (end < lines.length && !nextSectionPattern.test(lines[end])) end += 1;
+    lines.splice(start, end - start, ...block, "");
+  } else {
+    while (lines.length > 0 && lines.at(-1) === "") lines.pop();
+    if (lines.length > 0) lines.push("");
+    lines.push(...block, "");
+  }
+
+  if (original) fs.copyFileSync(configPath, `${configPath}.rainskills-backup`);
+  fs.writeFileSync(configPath, lines.join("\n"), "utf8");
+}
+
 function persistWindowsEnvironment({
   token,
   baseUrl,
@@ -92,6 +123,7 @@ function configureSelectedClients({
   baseUrl,
   token,
   spawnImpl = spawnSync,
+  home = process.env.USERPROFILE || os.homedir(),
 }) {
   if (!looksLikeJwt(token)) throw new Error("Rainbond JWT 格式无效");
   if (!["codex", "claude", "all"].includes(target)) throw new Error("安装目标无效");
@@ -103,16 +135,22 @@ function configureSelectedClients({
   };
   const options = { encoding: "utf8", env: environment, windowsHide: true };
   if (target === "codex" || target === "all") {
-    removeExistingClient(spawnImpl, "codex", ["mcp", "remove", "rainbond"], options);
-    checkedSpawn(spawnImpl, "codex", [
-      "mcp",
-      "add",
-      "rainbond",
-      "--url",
-      `${normalizedBase}/console/mcp/rainskills/codex/query`,
-      "--bearer-token-env-var",
-      "RAINBOND_JWT",
-    ], options);
+    const remove = spawnImpl("codex", ["mcp", "remove", "rainbond"], options);
+    if (remove.error?.code === "ENOENT") {
+      writeCodexMcpConfig({ baseUrl: normalizedBase, home });
+    } else {
+      if (remove.error) throw remove.error;
+      if (remove.signal) throw new Error(`codex 被信号 ${remove.signal} 中断`);
+      checkedSpawn(spawnImpl, "codex", [
+        "mcp",
+        "add",
+        "rainbond",
+        "--url",
+        `${normalizedBase}/console/mcp/rainskills/codex/query`,
+        "--bearer-token-env-var",
+        "RAINBOND_JWT",
+      ], options);
+    }
   }
   if (target === "claude" || target === "all") {
     removeExistingClient(spawnImpl, "claude", [

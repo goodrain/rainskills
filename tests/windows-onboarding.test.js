@@ -636,17 +636,40 @@ test("Windows MCP validation and client configuration keep JWT out of argv", asy
   );
   assert.equal(calls[0].options.env.RAINSKILLS_RAINBOND_JWT, token);
 
-  assert.throws(
-    () => configureSelectedClients({
-      target: "codex",
-      baseUrl: "https://rainbond.example.com",
-      token,
-      spawnImpl() {
-        return { status: null, error: Object.assign(new Error("missing"), { code: "ENOENT" }) };
-      },
-    }),
-    /未找到.*codex/
-  );
+  const home = temporaryHome();
+  const configPath = path.join(home, ".codex", "config.toml");
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  fs.writeFileSync(configPath, [
+    'model = "gpt-5"',
+    "",
+    "[mcp_servers.rainbond]",
+    'url = "http://old.example.com/query"',
+    'bearer_token_env_var = "OLD_TOKEN"',
+    "",
+    "[projects.'C:\\\\work']",
+    'trust_level = "trusted"',
+    "",
+  ].join("\n"));
+
+  configureSelectedClients({
+    target: "codex",
+    baseUrl: "https://rainbond.example.com",
+    token,
+    home,
+    spawnImpl() {
+      return { status: null, error: Object.assign(new Error("missing"), { code: "ENOENT" }) };
+    },
+  });
+
+  const config = fs.readFileSync(configPath, "utf8");
+  assert.match(config, /model = "gpt-5"/);
+  assert.match(config, /\[projects\.'C:\\\\work'\]/);
+  assert.match(config, /\[mcp_servers\.rainbond\]/);
+  assert.match(config, /url = "https:\/\/rainbond\.example\.com\/console\/mcp\/rainskills\/codex\/query"/);
+  assert.match(config, /bearer_token_env_var = "RAINBOND_JWT"/);
+  assert.doesNotMatch(config, /old\.example\.com|OLD_TOKEN|header\.payload\.signature/);
+  assert.equal((config.match(/\[mcp_servers\.rainbond\]/g) || []).length, 1);
+  assert.equal(fs.existsSync(`${configPath}.rainskills-backup`), true);
 });
 
 test("native authorization orchestration falls back from Device Flow and configures clients", async () => {
