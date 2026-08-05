@@ -5,6 +5,7 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { spawnSync } = require("node:child_process");
 const { Readable, Writable } = require("node:stream");
 const { pipeline } = require("node:stream/promises");
 const test = require("node:test");
@@ -1227,7 +1228,24 @@ test("PowerShell returns the concrete managed WSL bootstrap failure", () => {
   const invokeBootstrap = source.match(/function Invoke-DistroBootstrap\([^\n]+\) \{[\s\S]*?\n\}\n\nfunction Get-DistroIdentity/)?.[0];
   assert(invokeBootstrap, "Invoke-DistroBootstrap must remain a standalone fixed action");
   assert.match(invokeBootstrap, /lastMeaningfulOutput/);
-  assert.match(invokeBootstrap, /Managed WSL bootstrap action failed: \$BootstrapAction: \$lastMeaningfulOutput/);
+  assert.match(invokeBootstrap, /Managed WSL bootstrap action failed: \$\{BootstrapAction\}: \$lastMeaningfulOutput/);
+  assert.doesNotMatch(invokeBootstrap, /\$BootstrapAction:/);
+});
+
+test("Windows PowerShell parses the complete helper without syntax errors", {
+  skip: process.platform !== "win32",
+}, () => {
+  const command = [
+    "$tokens = $null",
+    "$errors = $null",
+    "[Management.Automation.Language.Parser]::ParseFile($env:RAINSKILLS_PS_PATH, [ref]$tokens, [ref]$errors) | Out-Null",
+    "if ($errors.Count -gt 0) { $errors | ForEach-Object { [Console]::Error.WriteLine($_.Message) }; exit 1 }",
+  ].join("; ");
+  const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command], {
+    encoding: "utf8",
+    env: { ...process.env, RAINSKILLS_PS_PATH: powershellPath },
+  });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
 });
 
 test("Windows executes the dynamically hashed installer instead of a package-pinned digest", () => {

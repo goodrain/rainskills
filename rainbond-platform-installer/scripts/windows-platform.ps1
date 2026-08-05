@@ -733,7 +733,7 @@ function Invoke-DistroBootstrap($Request, [string]$BootstrapAction, [string]$Hos
   $exitCode = $LASTEXITCODE
   if ($exitCode -ne 0) {
     if ($lastMeaningfulOutput) {
-      throw "Managed WSL bootstrap action failed: $BootstrapAction: $lastMeaningfulOutput"
+      throw "Managed WSL bootstrap action failed: ${BootstrapAction}: $lastMeaningfulOutput"
     }
     throw "Managed WSL bootstrap action failed: $BootstrapAction"
   }
