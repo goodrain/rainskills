@@ -8,6 +8,21 @@ Windows 本地安装当前标记为 preview。只有 Windows 10 和 Windows 11 �
 - 浏览器桥接必须原样传递包含 `&` 的授权 URL，并拒绝非 HTTP(S)、带凭据或控制字符的 URL。
 - Node 专项测试只检查固定 action、请求/结果 schema、阶段事实、摘要、恢复任务、网络和敏感信息脱敏，不调用 DISM、WSL、计划任务、portproxy 或安装脚本。
 
+## 现有平台续接验收（rc.41）
+
+使用现有 onboarding、WSL 发行版、Rainbond 容器和数据执行：
+
+```cmd
+npx --yes rainskills@0.1.0-rc.41 resume --onboarding-id <onboarding-id>
+```
+
+- [ ] 只出现一次授权前 UAC；不重新下载 Ubuntu、不重新导入发行版、不重新运行 Rainbond 安装脚本。
+- [ ] 自动更新受保护 helper、修复固定网络与恢复任务，并原地启动处于 `created` 或 `exited` 的自有 Rainbond 容器。
+- [ ] 连续三次探测均确认容器、K3s、`rbd-system`、WSL Console、Windows 回环和端口就绪，且容器 `StartedAt` 不变。
+- [ ] 浏览器授权前，Device Flow 端点返回有效的 2xx JSON；返回的 device code 和 user code 不写入状态或日志。
+- [ ] 授权成功后才清理一次性恢复任务；授权失败保留恢复任务，可再次执行同一条 `resume` 命令。
+- [ ] 不稳定运行时只报告 `RAINBOND_RUNTIME_UNSTABLE`；Device Flow 不可用只报告 `CONSOLE_DEVICE_FLOW_UNAVAILABLE`，不再进入泛化的 `fetch failed`。
+
 ## 真机矩阵
 
 每次验收记录 Windows 版本/build、CPU 架构、WSL 版本、Rainskills 版本、开始/结束时间和最终 Console 地址。不得在生产工作站执行。

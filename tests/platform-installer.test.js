@@ -321,9 +321,9 @@ test("Windows recovery cleanup also refuses a dangling final-directory junction"
   );
 });
 
-test("Windows authorization resume upgrades a stale protected machine bundle once", async () => {
-  const { refreshWindowsMachineBundleBeforeAuthorization } = require(platformInstallerPath);
-  assert.equal(typeof refreshWindowsMachineBundleBeforeAuthorization, "function");
+test("Windows authorization convergence runs on every entry and persists current facts", async () => {
+  const { ensureWindowsPlatformConverged } = require(platformInstallerPath);
+  assert.equal(typeof ensureWindowsPlatformConverged, "function");
 
   const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-resume-package-"));
   const bundleRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-resume-recovery-"));
@@ -340,10 +340,33 @@ test("Windows authorization resume upgrades a stale protected machine bundle onc
   const installationId = "f1805132-20ad-4a20-9f88-43fe41e50813";
   const calls = [];
   const writes = [];
+  const containerStartedAt = "2026-08-05T02:03:04.000000000Z";
   const adapter = {
-    async installMachineBundle(options) {
+    async convergeInstalledPlatform(options) {
       calls.push(options);
-      return { facts: { machineBundleVerified: true } };
+      return {
+        facts: {
+          installationId,
+          machineBundleVerified: true,
+          networkManifestVerified: true,
+          portproxyVerified: true,
+          recoveryTasksVerified: true,
+          containerRunning: true,
+          nodeReady: true,
+          componentsReady: true,
+          wslConsoleReachable: true,
+          windowsConsoleReachable: true,
+          portsListening: [80, 443, 7070],
+          subnet: "172.31.253.0/30",
+          hostAddress: "172.31.253.1",
+          guestAddress: "172.31.253.2",
+          windowsConsoleUrl: "http://127.0.0.1:7070",
+          controlConsoleUrl: "http://127.0.0.1:7070",
+          stableProbeCount: 3,
+          containerStartedAt,
+          deviceFlowHttpReachable: true,
+        },
+      };
     },
   };
   const stateUpdater = (filePath, current, values) => {
@@ -362,56 +385,199 @@ test("Windows authorization resume upgrades a stale protected machine bundle onc
       installation_id: installationId,
       target_kind: "local-windows",
       stage: "platform-ready",
+      windows_subnet: "172.31.253.0/30",
+      managed_subnet: "172.31.252.0/30",
+      host_address: "172.31.253.1",
+      guest_address: "172.31.253.2",
     },
     stateUpdater,
   };
 
-  const upgraded = await refreshWindowsMachineBundleBeforeAuthorization(input);
-  assert.equal(upgraded.refreshed, true);
+  const converged = await ensureWindowsPlatformConverged(input);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].operationId, operationId);
   assert.equal(calls[0].installationId, installationId);
   assert.equal(calls[0].payload.bootstrap_path, path.join(scriptsRoot, "wsl-bootstrap.sh"));
+  assert.equal(calls[0].payload.subnet, "172.31.253.0/30");
+  assert.equal(calls[0].payload.host_address, "172.31.253.1");
+  assert.equal(calls[0].payload.guest_address, "172.31.253.2");
   assert.equal(writes.length, 1);
   assert.equal(writes[0].filePath, input.paths.state);
   assert.equal(writes[0].values.machine_bundle_helper_sha256, calls[0].payload.helper_sha256);
   assert.equal(writes[0].values.machine_bundle_bootstrap_sha256, calls[0].payload.bootstrap_sha256);
   assert.equal(writes[0].values.machine_bundle_recovery_manifest_sha256, calls[0].payload.recovery_manifest_sha256);
   assert.equal(writes[0].values.package_version, calls[0].payload.package_version);
+  assert.equal(writes[0].values.stable_probe_count, 3);
+  assert.equal(writes[0].values.container_started_at, containerStartedAt);
+  assert.equal(writes[0].values.device_flow_http_reachable, true);
+  assert.deepEqual(writes[0].values.windows_convergence_facts, calls.length && adapter ? {
+    installationId,
+    machineBundleVerified: true,
+    networkManifestVerified: true,
+    portproxyVerified: true,
+    recoveryTasksVerified: true,
+    containerRunning: true,
+    nodeReady: true,
+    componentsReady: true,
+    wslConsoleReachable: true,
+    windowsConsoleReachable: true,
+    portsListening: [80, 443, 7070],
+    subnet: "172.31.253.0/30",
+    hostAddress: "172.31.253.1",
+    guestAddress: "172.31.253.2",
+    windowsConsoleUrl: "http://127.0.0.1:7070",
+    controlConsoleUrl: "http://127.0.0.1:7070",
+    stableProbeCount: 3,
+    containerStartedAt,
+    deviceFlowHttpReachable: true,
+  } : null);
 
-  const currentState = upgraded.state;
-  for (const key of [
-    "machine_bundle_helper_sha256",
-    "machine_bundle_bootstrap_sha256",
-    "machine_bundle_recovery_manifest_sha256",
-    "package_version",
-  ]) {
-    const stale = await refreshWindowsMachineBundleBeforeAuthorization({
-      ...input,
-      state: { ...currentState, [key]: "stale" },
-    });
-    assert.equal(stale.refreshed, true, `${key} must participate in Windows bundle currentness`);
-  }
-
-  const current = await refreshWindowsMachineBundleBeforeAuthorization({
+  await ensureWindowsPlatformConverged({
     ...input,
-    state: currentState,
+    state: converged.state,
   });
-  assert.equal(current.refreshed, false);
-  assert.equal(calls.length, 5, "only a verified four-field match may avoid another UAC prompt");
-  assert.equal(writes.length, 5);
+  assert.equal(calls.length, 2, "persisted convergence facts must never skip a later real convergence");
+  assert.equal(writes.length, 2);
 });
 
-test("authorization resume refreshes the Windows machine bundle before spawning the client flow", () => {
+test("authorization resume converges both Windows resume stages before spawning and finalizes on success", async () => {
+  const { runResume } = require(platformInstallerPath);
+  assert.equal(typeof runResume, "function");
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  const installationId = "f1805132-20ad-4a20-9f88-43fe41e50813";
+
+  for (const stage of ["platform-ready", "authorizing"]) {
+    const events = [];
+    const adapter = {
+      async finalize(options) {
+        events.push({ type: "finalize", options });
+        return { facts: { finalized: true } };
+      },
+    };
+    await runResume(operationId, {
+      onboardingPath: () => "/protected/onboarding.json",
+      ensurePrivateDirectory() {},
+      onboardingReader: () => ({
+        operation_id: operationId,
+        target: "codex",
+        deployment_mode: "self-hosted",
+        stage,
+        console_url: "http://127.0.0.1:7070",
+        platform_state_path: "/protected/state.json",
+        control_mode: "windows-native",
+      }),
+      pathsResolver: () => ({ root: "/protected", state: "/protected/state.json" }),
+      assertFilesSafe() {},
+      platformStateReader: () => ({
+        operation_id: operationId,
+        installation_id: installationId,
+        target_kind: "local-windows",
+        stage: "platform-ready",
+      }),
+      windowsAdapterFactory: () => adapter,
+      async windowsConvergence({ adapter: receivedAdapter }) {
+        assert.equal(receivedAdapter, adapter);
+        events.push({ type: "converge" });
+        return { state: {} };
+      },
+      onboardingUpdater: (onboarding, values) => {
+        events.push({ type: values.stage });
+        return { ...onboarding, ...values };
+      },
+      invocationBuilder: () => ({ executable: "node", args: ["authorize.js"] }),
+      attachedRunner: async () => {
+        events.push({ type: "spawn" });
+        return { code: 0, signal: null };
+      },
+      write() {},
+    });
+
+    assert.deepEqual(events.map((event) => event.type), [
+      "converge",
+      "authorizing",
+      "spawn",
+      "finalize",
+      "configured",
+    ], `resume stage ${stage}`);
+    assert.deepEqual(events[3].options, {
+      operationId,
+      installationId,
+      payload: { status: "success" },
+    });
+  }
+});
+
+test("failed Windows authorization preserves recovery tasks and non-Windows resume never creates an adapter", async () => {
+  const { runResume } = require(platformInstallerPath);
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  const installationId = "f1805132-20ad-4a20-9f88-43fe41e50813";
+  const base = {
+    onboardingPath: () => "/protected/onboarding.json",
+    ensurePrivateDirectory() {},
+    onboardingReader: () => ({
+      operation_id: operationId,
+      target: "codex",
+      deployment_mode: "self-hosted",
+      stage: "platform-ready",
+      console_url: "http://127.0.0.1:7070",
+      platform_state_path: "/protected/state.json",
+    }),
+    pathsResolver: () => ({ root: "/protected", state: "/protected/state.json" }),
+    assertFilesSafe() {},
+    onboardingUpdater: (onboarding, values) => ({ ...onboarding, ...values }),
+    invocationBuilder: () => ({ executable: "node", args: ["authorize.js"] }),
+    write() {},
+  };
+
+  let finalized = false;
+  await assert.rejects(runResume(operationId, {
+    ...base,
+    platformStateReader: () => ({
+      operation_id: operationId,
+      installation_id: installationId,
+      target_kind: "local-windows",
+      stage: "platform-ready",
+    }),
+    windowsAdapterFactory: () => ({
+      async finalize() { finalized = true; },
+    }),
+    windowsConvergence: async () => ({ state: {} }),
+    attachedRunner: async () => ({ code: 23, signal: null }),
+  }), /退出码为 23/);
+  assert.equal(finalized, false, "authorization failure must preserve recovery tasks");
+
+  let adapterCreated = false;
+  await runResume(operationId, {
+    ...base,
+    platformStateReader: () => ({
+      operation_id: operationId,
+      installation_id: installationId,
+      target_kind: "local-linux",
+      stage: "platform-ready",
+    }),
+    windowsAdapterFactory() {
+      adapterCreated = true;
+      throw new Error("Windows adapter must not be created");
+    },
+    windowsConvergence: async () => assert.fail("Windows convergence must not run"),
+    attachedRunner: async () => ({ code: 0, signal: null }),
+  });
+  assert.equal(adapterCreated, false);
+});
+
+test("authorization resume converges before authorizing and fresh completion has no second finalize", () => {
   const source = readNormalizedSource(platformInstallerPath);
   const resume = source.match(/async function runResume[\s\S]*?\n\}\n\nasync function completePlatform/)?.[0];
   assert(resume, "runResume must remain a standalone operation");
-  const refresh = resume.indexOf("refreshWindowsMachineBundleBeforeAuthorization");
+  const converge = resume.indexOf("ensureWindowsPlatformConverged");
   const authorize = resume.indexOf('stage: "authorizing"');
-  const spawn = resume.indexOf("spawnAttached(");
-  assert(refresh >= 0, "runResume must refresh a local Windows machine bundle");
-  assert(authorize > refresh, "the machine bundle must be current before authorization starts");
+  const spawn = resume.indexOf("attachedRunner(");
+  assert(converge >= 0, "runResume must converge a local Windows platform");
+  assert(authorize > converge, "the platform must converge before authorization starts");
   assert(spawn > authorize, "the authorization client must start after the state transition");
+  const installWindows = source.match(/async function installWindowsRainbond[\s\S]*?\n\}\n\nfunction resumeInvocationForOnboarding/)?.[0];
+  assert(installWindows, "installWindowsRainbond must remain a standalone operation");
+  assert.doesNotMatch(installWindows, /adapter\.finalize/, "fresh success must finalize only inside runResume");
 });
 
 test("WSL control paths bridge to Windows without parsing shell text", () => {

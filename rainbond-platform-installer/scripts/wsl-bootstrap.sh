@@ -42,7 +42,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$ACTION" in
-  PrepareRuntime|ConfigureGuestNetwork|PrepareDocker|InstallRainbond|VerifyRainbond|ConvergeInstalledRainbond) ;;
+  PrepareRuntime|ConfigureGuestNetwork|PrepareDocker|InstallRainbond|VerifyRainbond|ProbeRainbond|ConvergeInstalledRainbond) ;;
   *)
     printf 'Unsupported action\n' >&2
     exit 2
@@ -393,6 +393,52 @@ converge_installed_rainbond() {
   printf 'dockerReady=true\nrainbondRuntimeVerified=true\ncontainerRunning=true\n'
 }
 
+probe_rainbond() {
+  assert_identity
+  local status nodes pods port
+  local -a missing_ports
+  status="$(timeout 10 docker inspect rainbond --format '{{.State.Status}}')" || {
+    printf 'Unable to inspect the managed Rainbond container\n' >&2
+    exit 1
+  }
+  [[ "$status" == "running" ]] || {
+    printf 'Managed Rainbond container is not running\n' >&2
+    exit 1
+  }
+  nodes="$(timeout 15 docker exec rainbond /bin/k3s kubectl get nodes --no-headers)" || {
+    printf 'K3s node readiness probe failed\n' >&2
+    exit 1
+  }
+  printf '%s\n' "$nodes" \
+    | awk 'NF { seen=1; if ($2 != "Ready") bad=1 } END { exit (!seen || bad) }' || {
+      printf 'K3s node is not Ready\n' >&2
+      exit 1
+    }
+  pods="$(timeout 15 docker exec rainbond /bin/k3s kubectl get pods -n rbd-system --no-headers)" || {
+    printf 'rbd-system readiness probe failed\n' >&2
+    exit 1
+  }
+  printf '%s\n' "$pods" \
+    | awk 'NF { seen=1; split($2, ready, "/"); if ($3 != "Completed" && $3 != "Succeeded" && ($3 != "Running" || ready[1] != ready[2])) bad=1 } END { exit (!seen || bad) }' || {
+      printf 'rbd-system still has pending components\n' >&2
+      exit 1
+    }
+  missing_ports=()
+  for port in 80 443 7070; do
+    if ! timeout 5 ss -lntH | awk '{print $4}' | grep -Eq "(^|:)$port$"; then
+      missing_ports+=("$port")
+    fi
+  done
+  ((${#missing_ports[@]} == 0)) || {
+    printf 'Required Rainbond ports are not listening\n' >&2
+    exit 1
+  }
+  curl -fsS --max-time 10 "http://127.0.0.1:7070/" >/dev/null || {
+    printf 'Rainbond Console is not reachable inside WSL\n' >&2
+    exit 1
+  }
+}
+
 verify_rainbond() {
   assert_identity
   is_ipv4 "$GUEST_ADDRESS" || { printf 'Invalid Rainbond EIP\n' >&2; exit 2; }
@@ -477,6 +523,9 @@ case "$ACTION" in
     ;;
   ConvergeInstalledRainbond)
     converge_installed_rainbond
+    ;;
+  ProbeRainbond)
+    probe_rainbond
     ;;
   VerifyRainbond)
     verify_rainbond

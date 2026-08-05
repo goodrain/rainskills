@@ -1647,6 +1647,69 @@ async function refreshWindowsMachineBundleBeforeAuthorization({
   return { state, refreshed: true };
 }
 
+async function ensureWindowsPlatformConverged({
+  adapter,
+  onboarding,
+  operationId,
+  paths,
+  state,
+  recovery = windowsRecoveryBundle(paths),
+  stateUpdater = updateState,
+  write = (value) => process.stdout.write(value),
+}) {
+  if (state.target_kind !== "local-windows") return { state, converged: false };
+  if (state.stage !== "platform-ready") {
+    throw new Error(`当前 Windows 平台阶段不能恢复授权：${state.stage}`);
+  }
+  if (!UUID_PATTERN.test(state.installation_id || "")) {
+    throw new Error("Windows 平台安装状态缺少有效的 installation id");
+  }
+
+  const machineBundlePayload = buildWindowsMachineBundlePayload({ recovery, onboarding });
+  const payload = {
+    ...machineBundlePayload,
+    subnet: state.windows_subnet || state.managed_subnet,
+    host_address: state.host_address,
+    guest_address: state.guest_address,
+  };
+  write("\n接下来会弹出一次 Windows 管理员确认，用于更新受保护的 RainSkills helper 并确认 Rainbond 已稳定就绪。\n");
+  const result = await adapter.convergeInstalledPlatform({
+    operationId,
+    installationId: state.installation_id,
+    payload,
+  });
+  const facts = result?.facts || {};
+  const delivery = evaluateWindowsDeployment({
+    ...facts,
+    expectedInstallationId: state.installation_id,
+    controlMode: onboarding.control_mode || "windows-native",
+  }, POLICY);
+  if (!delivery.ok) {
+    throw new Error(`Windows 平台收敛验证未通过：${delivery.blockers.join("；")}`);
+  }
+  if (facts.stableProbeCount !== 3 || !String(facts.containerStartedAt || "").trim()) {
+    throw new Error("RAINBOND_RUNTIME_UNSTABLE: Windows 收敛未返回稳定的 Rainbond 运行时证据");
+  }
+  if (facts.deviceFlowHttpReachable !== true) {
+    throw new Error("CONSOLE_DEVICE_FLOW_UNAVAILABLE: Windows 收敛未确认 Console Device Flow 就绪");
+  }
+
+  state = stateUpdater(paths.state, state, {
+    package_version: machineBundlePayload.package_version,
+    machine_bundle_helper_sha256: machineBundlePayload.helper_sha256,
+    machine_bundle_bootstrap_sha256: machineBundlePayload.bootstrap_sha256,
+    machine_bundle_recovery_manifest_sha256: machineBundlePayload.recovery_manifest_sha256,
+    managed_subnet: facts.subnet || payload.subnet,
+    host_address: facts.hostAddress || payload.host_address,
+    guest_address: facts.guestAddress || payload.guest_address,
+    stable_probe_count: facts.stableProbeCount,
+    container_started_at: facts.containerStartedAt,
+    device_flow_http_reachable: facts.deviceFlowHttpReachable,
+    windows_convergence_facts: facts,
+  });
+  return { state, facts, delivery, converged: true };
+}
+
 async function prepareWindowsWsl({ adapter, onboarding, options, paths, state }) {
   const installationId = state.installation_id;
   const recovery = windowsRecoveryBundle(paths);
@@ -1882,7 +1945,6 @@ async function installWindowsRainbond({ adapter, onboarding, options, paths, sta
     throw new Error(`当前 Windows 安装阶段不能安装 Rainbond：${state.stage}`);
   }
   if (!verifiedFacts) throw new Error("缺少组合安装返回的 Windows 双侧验证结果");
-  const common = { operationId: options.onboardingId, installationId };
   const verified = { facts: verifiedFacts };
   const delivery = evaluateWindowsDeployment({
     ...verified.facts,
@@ -1911,8 +1973,6 @@ async function installWindowsRainbond({ adapter, onboarding, options, paths, sta
     controlConsoleUrl: delivery.controlConsoleUrl,
   };
   await completePlatform(onboarding, state, paths, verification, options.noResume);
-  process.stdout.write("\n最后会弹出一次 Windows 管理员确认，用于清理自动恢复任务。\n");
-  await adapter.finalize({ ...common, payload: { status: "success" } });
   return { state, verification };
 }
 
@@ -1936,39 +1996,56 @@ function resumeInvocationForOnboarding(onboarding, execPath = process.execPath) 
   };
 }
 
-async function runResume(onboardingId) {
+async function runResume(onboardingId, {
+  onboardingPath = onboardingStatePath,
+  ensurePrivateDirectory = ensurePrivateOperationDirectory,
+  onboardingReader = readOnboardingState,
+  pathsResolver = operationPaths,
+  assertFilesSafe = assertOperationFilesSafe,
+  platformStateReader = readPlatformState,
+  windowsAdapterFactory = createWindowsAdapterForOnboarding,
+  windowsConvergence = ensureWindowsPlatformConverged,
+  onboardingUpdater = updateOnboarding,
+  invocationBuilder = resumeInvocationForOnboarding,
+  attachedRunner = spawnAttached,
+  write = (value) => process.stdout.write(value),
+} = {}) {
   assertOperationId(onboardingId);
-  ensurePrivateOperationDirectory(path.dirname(onboardingStatePath()));
-  let onboarding = readOnboardingState(onboardingStatePath(), onboardingId);
+  ensurePrivateDirectory(path.dirname(onboardingPath()));
+  let onboarding = onboardingReader(onboardingPath(), onboardingId);
   if (!onboarding.console_url || !["platform-ready", "authorizing"].includes(onboarding.stage)) {
     throw new Error("平台尚未完成验证，不能继续 RainSkills 授权");
   }
 
-  const paths = operationPaths(onboardingId);
+  const paths = pathsResolver(onboardingId);
+  let windowsContext = null;
   if (onboarding.platform_state_path) {
     if (path.resolve(onboarding.platform_state_path) !== path.resolve(paths.state)) {
       throw new Error("onboarding 中的平台状态路径与当前操作不匹配");
     }
-    ensurePrivateOperationDirectory(paths.root);
-    assertOperationFilesSafe(paths);
-    let state = readPlatformState(paths.state, onboardingId);
+    ensurePrivateDirectory(paths.root);
+    assertFilesSafe(paths);
+    let state = platformStateReader(paths.state, onboardingId);
     if (state.target_kind === "local-windows") {
-      const refreshed = await refreshWindowsMachineBundleBeforeAuthorization({
-        adapter: createWindowsAdapterForOnboarding(onboarding),
+      const installationId = state.installation_id;
+      const adapter = windowsAdapterFactory(onboarding);
+      const converged = await windowsConvergence({
+        adapter,
         onboarding,
         operationId: onboardingId,
         paths,
         state,
       });
-      state = refreshed.state;
+      state = converged.state;
+      windowsContext = { adapter, installationId };
     }
   }
 
-  onboarding = updateOnboarding(onboarding, { stage: "authorizing" });
-  const invocation = resumeInvocationForOnboarding(onboarding);
+  onboarding = onboardingUpdater(onboarding, { stage: "authorizing" });
+  const invocation = invocationBuilder(onboarding);
 
-  process.stdout.write("\n正在恢复 RainSkills 授权流程，将在浏览器中完成登录和授权。\n");
-  const result = await spawnAttached(
+  write("\n正在恢复 RainSkills 授权流程，将在浏览器中完成登录和授权。\n");
+  const result = await attachedRunner(
     invocation.executable,
     invocation.args,
     { env: process.env },
@@ -1976,11 +2053,19 @@ async function runResume(onboardingId) {
   );
   if (result.signal) throw new Error(`授权流程被信号 ${result.signal} 中断`);
   if (result.code !== 0) {
-    process.stdout.write(`\nRainbond 已部署，授权尚未完成。稍后继续：\n  npx rainskills@${packageManifest.version} resume --onboarding-id ${onboardingId}\n`);
+    write(`\nRainbond 已部署，授权尚未完成。稍后继续：\n  npx rainskills@${packageManifest.version} resume --onboarding-id ${onboardingId}\n`);
     throw new Error(`RainSkills 授权流程退出码为 ${result.code}`);
   }
-  updateOnboarding(onboarding, { stage: "configured" });
-  process.stdout.write("\nRainSkills 已连接到新部署的 Rainbond。\n");
+  if (windowsContext) {
+    write("\n最后会弹出一次 Windows 管理员确认，用于清理自动恢复任务。\n");
+    await windowsContext.adapter.finalize({
+      operationId: onboardingId,
+      installationId: windowsContext.installationId,
+      payload: { status: "success" },
+    });
+  }
+  onboardingUpdater(onboarding, { stage: "configured" });
+  write("\nRainSkills 已连接到新部署的 Rainbond。\n");
 }
 
 async function completePlatform(onboarding, state, paths, verification, noResume) {
@@ -2461,6 +2546,7 @@ module.exports = {
   closeSshSession,
   controlHostPlatform,
   establishSshSession,
+  ensureWindowsPlatformConverged,
   evaluatePreflight,
   extractConsoleUrl,
   inspectRemoteSystem,
@@ -2475,6 +2561,7 @@ module.exports = {
   remoteInstallerInvocation,
   runCommand,
   runInstall,
+  runResume,
   resolveRemoteConsole,
   resumeInvocationForOnboarding,
   resolveSshHostname,

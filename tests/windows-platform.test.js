@@ -755,7 +755,7 @@ test("installed-platform convergence is exposed only through fixed Windows and W
   assert.match(validateSet, /"ConvergeInstalledPlatform"/);
   assert.match(machineAllowlist, /"ConvergeInstalledPlatform"/);
   assert.match(dispatch, /"ConvergeInstalledPlatform" \{ \$facts = Invoke-ConvergeInstalledPlatform \$request \}/);
-  assert.match(bootstrap, /PrepareRuntime\|ConfigureGuestNetwork\|PrepareDocker\|InstallRainbond\|VerifyRainbond\|ConvergeInstalledRainbond/);
+  assert.match(bootstrap, /PrepareRuntime\|ConfigureGuestNetwork\|PrepareDocker\|InstallRainbond\|VerifyRainbond\|ProbeRainbond\|ConvergeInstalledRainbond/);
   assert.match(bootstrap, /ConvergeInstalledRainbond\)\n    converge_installed_rainbond/);
 });
 
@@ -1599,7 +1599,7 @@ test("PowerShell converges an installed platform without importing or reinstalli
     "Invoke-ConfigureNetwork $Request",
     'Invoke-DistroBootstrap $Request "ConvergeInstalledRainbond"',
     "Invoke-RegisterResume $Request",
-    "Invoke-VerifyDeployment $Request",
+    "Invoke-StableDeployment $Request",
   ];
   let previous = -1;
   for (const step of steps) {
@@ -1638,4 +1638,123 @@ test("PowerShell converges an installed platform without importing or reinstalli
   ]) {
     assert.match(converge, new RegExp(`\\b${fact}\\b`), `convergence facts must include ${fact}`);
   }
+});
+
+test("PowerShell convergence bounds three stable rounds and checks Device Flow exactly once", () => {
+  const source = readNormalizedSource(powershellPath);
+  const stable = source.match(/function Invoke-StableDeployment\(\$Request\) \{[\s\S]*?\n\}/)?.[0];
+  const deviceFlow = source.match(/function Invoke-DeviceFlowReadiness\(\$Request\) \{[\s\S]*?\n\}/)?.[0];
+  const converge = source.match(/function Invoke-ConvergeInstalledPlatform\(\$Request\) \{[\s\S]*?\n\}\n\nfunction Invoke-ProvisionRainbond/)?.[0];
+  assert(stable, "stable deployment sampling must remain a standalone fixed operation");
+  assert(deviceFlow, "Device Flow readiness must remain a standalone fixed operation");
+  assert(converge, "Invoke-ConvergeInstalledPlatform must remain a standalone fixed action");
+
+  assert.match(stable, /AddSeconds\(120\)/);
+  assert.match(stable, /for \(\$round = 1; \$round -le 3; \$round\+\+\)/);
+  assert.match(stable, /for \(\$probe = 1; \$probe -le 3; \$probe\+\+\)/);
+  assert.match(stable, /Invoke-ProbeDeployment \$Request \$deadline/);
+  assert.match(stable, /Start-Sleep -Seconds 5/);
+  assert.match(stable, /containerStartedAt/);
+  assert.match(stable, /Select-Object -Unique/);
+  assert.match(stable, /RAINBOND_RUNTIME_UNSTABLE:/);
+  assert.match(stable, /stableProbeCount = 3/);
+
+  assert.match(deviceFlow, /http:\/\/127\.0\.0\.1:7070\/console\/mcp\/device\/code/);
+  assert.match(deviceFlow, /-Method Post/);
+  assert.match(deviceFlow, /client_id=rainskills&scope=mcp/);
+  assert.match(deviceFlow, /-TimeoutSec 15/);
+  assert.match(deviceFlow, /StatusCode -lt 200|StatusCode -ge 300/);
+  assert.match(deviceFlow, /device_code/);
+  assert.match(deviceFlow, /\[23456789BCDFGHJKMNPQRTVWXY\]/);
+  assert.match(deviceFlow, /expires_in/);
+  assert.match(deviceFlow, /interval/);
+  assert.match(deviceFlow, /CONSOLE_DEVICE_FLOW_UNAVAILABLE:/);
+  assert.match(deviceFlow, /deviceFlowHttpReachable = \$true/);
+  assert.doesNotMatch(deviceFlow, /Write-(?:Host|Output)[^\n]*(?:device_code|user_code|Content)/i);
+
+  assert.equal((converge.match(/Invoke-DeviceFlowReadiness \$Request/g) || []).length, 1);
+  assert(
+    converge.indexOf("Invoke-StableDeployment $Request") < converge.indexOf("Invoke-DeviceFlowReadiness $Request"),
+    "Device Flow readiness must be checked only after a stable deployment round"
+  );
+  assert.match(converge, /deviceFlowHttpReachable = \[bool\]\$deviceFlow\.deviceFlowHttpReachable/);
+  assert.match(converge, /stableProbeCount = \[int\]\$stability\.stableProbeCount/);
+  assert.match(converge, /containerStartedAt = \[string\]\$stability\.containerStartedAt/);
+  assert.doesNotMatch(converge, /device_code|user_code|response\.Content/i);
+});
+
+test("each stable sample uses a fixed bounded readiness probe and captures container StartedAt", () => {
+  const powershell = readNormalizedSource(powershellPath);
+  const bootstrap = readNormalizedSource(wslBootstrapPath);
+  const bounded = powershell.match(/function Invoke-BoundedDistroBootstrap[\s\S]*?\n\}/)?.[0];
+  const probe = powershell.match(/function Invoke-ProbeDeployment\(\$Request, \[DateTime\]\$Deadline\) \{[\s\S]*?\n\}/)?.[0];
+  const verify = powershell.match(/function Invoke-VerifyDeployment\(\$Request\) \{[\s\S]*?\n\}/)?.[0];
+  const guestProbe = bootstrap.match(/probe_rainbond\(\) \{[\s\S]*?\n\}/)?.[0];
+  assert(bounded, "WSL stability probes must use a host-bounded invocation");
+  assert(probe, "each stability sample must remain a standalone deployment probe");
+  assert(verify, "Invoke-VerifyDeployment must remain a standalone fixed action");
+  assert(guestProbe, "ProbeRainbond must remain a standalone fixed WSL operation");
+
+  assert.match(bounded, /WaitForExit\(/);
+  assert.match(bounded, /Kill\(\)/);
+  assert.match(bounded, /Timed out/);
+  assert.match(probe, /Invoke-BoundedDistroBootstrap \$Request "ProbeRainbond"/);
+  assert.match(probe, /docker", "inspect", "rainbond", "--format", "\{\{\.State\.StartedAt\}\}"/);
+  assert.match(probe, /containerStartedAt/);
+  assert.match(probe, /Invoke-WebRequest[\s\S]*127\.0\.0\.1:7070[\s\S]*-TimeoutSec/);
+  assert.match(probe, /Get-NetTCPConnection/);
+  assert.match(verify, /containerStartedAt/);
+
+  assert.match(bootstrap, /PrepareRuntime\|ConfigureGuestNetwork\|PrepareDocker\|InstallRainbond\|VerifyRainbond\|ProbeRainbond\|ConvergeInstalledRainbond/);
+  assert.match(bootstrap, /ProbeRainbond\)\n    probe_rainbond/);
+  for (const command of [
+    /timeout 10 docker inspect rainbond/,
+    /timeout 15 docker exec rainbond \/bin\/k3s kubectl get nodes/,
+    /timeout 15 docker exec rainbond \/bin\/k3s kubectl get pods/,
+    /curl -fsS --max-time 10/,
+  ]) {
+    assert.match(guestProbe, command);
+  }
+  assert.doesNotMatch(guestProbe, /while|sleep|VERIFY_TIMEOUT_SECONDS/);
+});
+
+test("Windows adapter preserves stable convergence error prefixes without fetch text", async () => {
+  const { createWindowsPlatformAdapter } = require(windowsPlatformPath);
+  const fixture = createFixture();
+  const runner = async (command, args) => {
+    const valueAfter = (name) => args[args.indexOf(name) + 1];
+    const requestPath = valueAfter("-RequestPath");
+    const resultPath = valueAfter("-ResultPath");
+    const request = fixture.stateStore.readProtectedJson(requestPath);
+    fixture.stateStore.atomicWriteJson(resultPath, {
+      schema: "rainskills.windows-result.v1",
+      action: request.action,
+      operation_id: request.operation_id,
+      installation_id: request.installation_id,
+      nonce: request.nonce,
+      status: "error",
+      facts: {
+        failedAction: request.action,
+        failureMessage: "CONSOLE_DEVICE_FLOW_UNAVAILABLE: windows-loopback request failed",
+      },
+    });
+    return { status: 1, stdout: "", stderr: "" };
+  };
+  const adapter = createWindowsPlatformAdapter({
+    runner,
+    stateStore: fixture.stateStore,
+    policy,
+    userSid: USER_SID,
+    home: fixture.home,
+  });
+
+  await assert.rejects(adapter.convergeInstalledPlatform({
+    operationId: OPERATION_ID,
+    installationId: INSTALLATION_ID,
+    payload: {},
+  }), (error) => {
+    assert.match(error.message, /CONSOLE_DEVICE_FLOW_UNAVAILABLE:/);
+    assert.doesNotMatch(error.message, /fetch failed/i);
+    return true;
+  });
 });

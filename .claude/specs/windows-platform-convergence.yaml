@@ -173,7 +173,7 @@ sprints:
     tasks:
       - id: task-2.1
         name: "Converge and stabilize every Windows authorization entry"
-        status: pending
+        status: completed
         files:
           modify:
             - path: "rainbond-platform-installer/scripts/platform-installer.js"

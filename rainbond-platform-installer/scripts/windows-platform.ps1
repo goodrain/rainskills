@@ -898,6 +898,57 @@ function Invoke-DistroBootstrap($Request, [string]$BootstrapAction, [string]$Hos
   }
 }
 
+function ConvertTo-NativeProcessArgument([string]$Value) {
+  if ($Value -match '"') { throw "Native process arguments cannot contain quotes" }
+  if ($Value -notmatch '\s') { return $Value }
+  return '"' + $Value + '"'
+}
+
+function Invoke-BoundedDistroBootstrap($Request, [string]$BootstrapAction, [DateTime]$Deadline) {
+  if ($BootstrapAction -ne "ProbeRainbond") { throw "Unsupported bounded WSL bootstrap action" }
+  $wslPath = Get-TrustedWslPath
+  $machineRoot = Get-MachineRoot $Request
+  $manifest = Assert-MachineManifest $Request
+  $bootstrapPath = Join-Path $machineRoot "wsl-bootstrap.sh"
+  [void](Assert-FileDigest $bootstrapPath $manifest.bootstrap_sha256)
+  $linuxBootstrap = Convert-WindowsPathForDistro $bootstrapPath
+  $arguments = @("-d", "Rainbond", "-u", "root", "--", "/bin/bash", $linuxBootstrap,
+    "--action", $BootstrapAction, "--installation-id", [string]$Request.installation_id)
+  $remainingMilliseconds = [int][Math]::Floor(($Deadline - [DateTime]::UtcNow).TotalMilliseconds)
+  if ($remainingMilliseconds -le 0) { throw "Timed out before the managed WSL readiness probe started" }
+  $timeoutMilliseconds = [Math]::Min(45000, $remainingMilliseconds)
+
+  $startInfo = [Diagnostics.ProcessStartInfo]::new()
+  $startInfo.FileName = $wslPath
+  $startInfo.Arguments = (($arguments | ForEach-Object { ConvertTo-NativeProcessArgument ([string]$_) }) -join " ")
+  $startInfo.UseShellExecute = $false
+  $startInfo.CreateNoWindow = $true
+  $startInfo.RedirectStandardOutput = $true
+  $startInfo.RedirectStandardError = $true
+  $process = [Diagnostics.Process]::new()
+  $process.StartInfo = $startInfo
+  try {
+    if (-not $process.Start()) { throw "Managed WSL readiness probe did not start" }
+    $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+    $stderrTask = $process.StandardError.ReadToEndAsync()
+    if (-not $process.WaitForExit($timeoutMilliseconds)) {
+      $process.Kill()
+      $process.WaitForExit()
+      throw "Timed out while running the managed WSL readiness probe"
+    }
+    $stdout = $stdoutTask.Result
+    $stderr = $stderrTask.Result
+    if ($process.ExitCode -ne 0) {
+      $lastLine = @((($stderr + "`n" + $stdout) -split "`r?`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ }) |
+        Select-Object -Last 1
+      if ($lastLine) { throw "Managed WSL readiness probe failed: $lastLine" }
+      throw "Managed WSL readiness probe failed"
+    }
+  } finally {
+    $process.Dispose()
+  }
+}
+
 function Get-DistroIdentity($Request) {
   $wslPath = Get-TrustedWslPath
   $identity = (& $wslPath -d Rainbond -u root -- cat /etc/rainskills-installation-id 2>$null | Out-String).Trim()
@@ -1349,6 +1400,13 @@ function Invoke-InstallRainbond($Request) {
 function Invoke-VerifyDeployment($Request) {
   $network = Get-VerifiedManagedNetwork $Request
   Invoke-DistroBootstrap $Request "VerifyRainbond" ([string]$network.host_address) ([string]$network.guest_address)
+  $wslPath = Get-TrustedWslPath
+  $startedAtProbe = Invoke-NativeCapture $wslPath @("-d", "Rainbond", "-u", "root", "--", "docker", "inspect", "rainbond", "--format", "{{.State.StartedAt}}")
+  $containerStartedAt = @($startedAtProbe.output -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ }) |
+    Select-Object -Last 1
+  if ($startedAtProbe.exitCode -ne 0 -or [string]::IsNullOrWhiteSpace([string]$containerStartedAt)) {
+    throw "Rainbond outer container start timestamp is unavailable"
+  }
   $windowsReachable = $false
   try {
     $response = Invoke-WebRequest -Uri "http://127.0.0.1:7070/" -UseBasicParsing -TimeoutSec 15
@@ -1367,9 +1425,113 @@ function Invoke-VerifyDeployment($Request) {
     wslConsoleReachable = $true
     windowsConsoleReachable = [bool]$windowsReachable
     portsListening = $portsListening
+    containerStartedAt = [string]$containerStartedAt
     guestAddress = [string]$network.guest_address
     windowsConsoleUrl = "http://127.0.0.1:7070"
     controlConsoleUrl = "http://127.0.0.1:7070"
+  }
+}
+
+function Invoke-ProbeDeployment($Request, [DateTime]$Deadline) {
+  Invoke-BoundedDistroBootstrap $Request "ProbeRainbond" $Deadline
+  $network = Get-VerifiedManagedNetwork $Request
+  $wslPath = Get-TrustedWslPath
+  $startedAtProbe = Invoke-NativeCapture $wslPath @("-d", "Rainbond", "-u", "root", "--", "docker", "inspect", "rainbond", "--format", "{{.State.StartedAt}}")
+  $containerStartedAt = @($startedAtProbe.output -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ }) |
+    Select-Object -Last 1
+  if ($startedAtProbe.exitCode -ne 0 -or [string]::IsNullOrWhiteSpace([string]$containerStartedAt)) {
+    throw "Rainbond outer container start timestamp is unavailable"
+  }
+
+  try {
+    $response = Invoke-WebRequest -Uri "http://127.0.0.1:7070/" -UseBasicParsing -TimeoutSec 10
+    $windowsReachable = $response.StatusCode -ge 200 -and $response.StatusCode -lt 500
+  } catch {
+    $windowsReachable = $false
+  }
+  $ports = @($Request.policy.windows.managed_ports | ForEach-Object { [int]$_ })
+  $listeners = @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue)
+  $portsListening = @($ports | Where-Object { $port = $_; @($listeners | Where-Object { $_.LocalPort -eq $port }).Count -gt 0 })
+  if (-not $windowsReachable -or $portsListening.Count -ne $ports.Count) {
+    throw "Windows loopback readiness probe failed"
+  }
+  return [ordered]@{
+    installationId = [string]$Request.installation_id
+    containerRunning = $true
+    nodeReady = $true
+    componentsReady = $true
+    wslConsoleReachable = $true
+    windowsConsoleReachable = $true
+    portsListening = $portsListening
+    containerStartedAt = [string]$containerStartedAt
+    guestAddress = [string]$network.guest_address
+    windowsConsoleUrl = "http://127.0.0.1:7070"
+    controlConsoleUrl = "http://127.0.0.1:7070"
+  }
+}
+
+function Invoke-StableDeployment($Request) {
+  $deadline = [DateTime]::UtcNow.AddSeconds(120)
+  $lastFailure = "readiness evidence did not remain stable"
+  for ($round = 1; $round -le 3; $round++) {
+    $samples = @()
+    $roundFailure = ""
+    for ($probe = 1; $probe -le 3; $probe++) {
+      if ([DateTime]::UtcNow -ge $deadline) {
+        $roundFailure = "stability deadline expired"
+        break
+      }
+      try {
+        $samples += ,(Invoke-ProbeDeployment $Request $deadline)
+      } catch {
+        $roundFailure = [string]$_.Exception.Message
+      }
+      if ($probe -lt 3 -and [DateTime]::UtcNow.AddSeconds(5) -lt $deadline) { Start-Sleep -Seconds 5 }
+    }
+    $startedAtValues = @($samples | ForEach-Object { [string]$_.containerStartedAt } | Select-Object -Unique)
+    if ($samples.Count -eq 3 -and $startedAtValues.Count -eq 1) {
+      $verified = $samples[-1]
+      return [ordered]@{
+        installationId = [string]$verified.installationId
+        containerRunning = [bool]$verified.containerRunning
+        nodeReady = [bool]$verified.nodeReady
+        componentsReady = [bool]$verified.componentsReady
+        wslConsoleReachable = [bool]$verified.wslConsoleReachable
+        windowsConsoleReachable = [bool]$verified.windowsConsoleReachable
+        portsListening = $verified.portsListening
+        guestAddress = [string]$verified.guestAddress
+        windowsConsoleUrl = [string]$verified.windowsConsoleUrl
+        controlConsoleUrl = [string]$verified.controlConsoleUrl
+        stableProbeCount = 3
+        containerStartedAt = [string]$startedAtValues[0]
+      }
+    }
+    $lastFailure = if ($roundFailure) { $roundFailure } else { "Rainbond outer container restarted during readiness sampling" }
+    if ([DateTime]::UtcNow -ge $deadline) { break }
+  }
+  throw "RAINBOND_RUNTIME_UNSTABLE: $lastFailure"
+}
+
+function Invoke-DeviceFlowReadiness($Request) {
+  try {
+    $response = Invoke-WebRequest -Uri "http://127.0.0.1:7070/console/mcp/device/code" `
+      -Method Post -ContentType "application/x-www-form-urlencoded" `
+      -Body "client_id=rainskills&scope=mcp" -UseBasicParsing -TimeoutSec 15
+    if ($response.StatusCode -lt 200 -or $response.StatusCode -ge 300) { throw "unexpected HTTP status" }
+    $body = $response.Content | ConvertFrom-Json
+    if ([string]::IsNullOrWhiteSpace([string]$body.device_code)) { throw "device_code is missing" }
+    if ([string]$body.user_code -notmatch '^[23456789BCDFGHJKMNPQRTVWXY]{4}-[23456789BCDFGHJKMNPQRTVWXY]{4}$') {
+      throw "user_code is invalid"
+    }
+    $expiresIn = 0
+    $interval = 0
+    if (-not [int]::TryParse([string]$body.expires_in, [ref]$expiresIn) -or $expiresIn -le 0 -or
+        -not [int]::TryParse([string]$body.interval, [ref]$interval) -or $interval -le 0) {
+      throw "device code timing is invalid"
+    }
+    return [ordered]@{ deviceFlowHttpReachable = $true }
+  } catch {
+    throw "CONSOLE_DEVICE_FLOW_UNAVAILABLE: Rainbond Console Device Flow readiness check failed"
   }
 }
 
@@ -1617,8 +1779,9 @@ function Invoke-ConvergeInstalledPlatform($Request) {
     ([string]$configured.hostAddress) ([string]$configured.guestAddress)
   Write-Host "[4/5] Refreshing recovery tasks..."
   $resume = Invoke-RegisterResume $Request
-  Write-Host "[5/5] Verifying the existing deployment..."
-  $verified = Invoke-VerifyDeployment $Request
+  Write-Host "[5/5] Verifying stable deployment and Device Flow readiness..."
+  $stability = Invoke-StableDeployment $Request
+  $deviceFlow = Invoke-DeviceFlowReadiness $Request
   return [ordered]@{
     installationId = [string]$Request.installation_id
     machineBundleVerified = [bool]$bundle.machineBundleVerified
@@ -1626,21 +1789,24 @@ function Invoke-ConvergeInstalledPlatform($Request) {
     systemdReady = $true
     networkGateReady = [bool]$configured.networkManifestVerified
     dockerReady = $true
-    rainbondRuntimeVerified = [bool]$verified.containerRunning
+    rainbondRuntimeVerified = [bool]$stability.containerRunning
     networkManifestVerified = [bool]$configured.networkManifestVerified
     portproxyVerified = [bool]$configured.portproxyVerified
     recoveryTasksVerified = [bool]$resume.recoveryTasksVerified
-    containerRunning = [bool]$verified.containerRunning
-    nodeReady = [bool]$verified.nodeReady
-    componentsReady = [bool]$verified.componentsReady
-    wslConsoleReachable = [bool]$verified.wslConsoleReachable
-    windowsConsoleReachable = [bool]$verified.windowsConsoleReachable
-    portsListening = $verified.portsListening
+    containerRunning = [bool]$stability.containerRunning
+    nodeReady = [bool]$stability.nodeReady
+    componentsReady = [bool]$stability.componentsReady
+    wslConsoleReachable = [bool]$stability.wslConsoleReachable
+    windowsConsoleReachable = [bool]$stability.windowsConsoleReachable
+    portsListening = $stability.portsListening
+    stableProbeCount = [int]$stability.stableProbeCount
+    containerStartedAt = [string]$stability.containerStartedAt
+    deviceFlowHttpReachable = [bool]$deviceFlow.deviceFlowHttpReachable
     subnet = [string]$configured.subnet
     hostAddress = [string]$configured.hostAddress
-    guestAddress = [string]$verified.guestAddress
-    windowsConsoleUrl = [string]$verified.windowsConsoleUrl
-    controlConsoleUrl = [string]$verified.controlConsoleUrl
+    guestAddress = [string]$stability.guestAddress
+    windowsConsoleUrl = [string]$stability.windowsConsoleUrl
+    controlConsoleUrl = [string]$stability.controlConsoleUrl
   }
 }
 
