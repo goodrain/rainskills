@@ -492,7 +492,7 @@ test("Windows Device Flow handles unsupported, expiration, and cancellation", as
         headers: { "content-type": "application/json" },
       }),
     }),
-    (error) => error.code !== "DEVICE_FLOW_UNSUPPORTED"
+    (error) => error.code === "DEVICE_FLOW_UNSUPPORTED"
   );
 
   const controller = new AbortController();

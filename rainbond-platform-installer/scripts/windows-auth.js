@@ -180,17 +180,9 @@ async function authorizeWithDeviceFlow({
     signal,
   });
   if (codeResponse.status === 404) {
-    const contentType = (codeResponse.headers.get("content-type") || "").toLowerCase();
-    const body = (await codeResponse.text()).trim();
-    const isPlainLegacyRoute = contentType.includes("text/plain") && body === "Not Found";
-    const isDjangoLegacyRoute = contentType.includes("text/html")
-      && /<title>page not found/i.test(body)
-      && /device/i.test(body);
-    if (isPlainLegacyRoute || isDjangoLegacyRoute) {
-      const error = new Error("当前 Rainbond Console 不支持 Device Flow");
-      error.code = "DEVICE_FLOW_UNSUPPORTED";
-      throw error;
-    }
+    const error = new Error("当前 Rainbond Console 不支持 Device Flow");
+    error.code = "DEVICE_FLOW_UNSUPPORTED";
+    throw error;
   }
   if (!codeResponse.ok) throw new Error(`Rainbond Device Flow 初始化失败（HTTP ${codeResponse.status}）`);
   const authorization = await jsonResponse(codeResponse);
