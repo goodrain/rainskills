@@ -1996,6 +1996,79 @@ function resumeInvocationForOnboarding(onboarding, execPath = process.execPath) 
   };
 }
 
+function startWindowsRuntimeLease({
+  controlMode = "windows-native",
+  systemRoot = process.env.SystemRoot || "C:\\Windows",
+  spawnFn = spawn,
+} = {}) {
+  const executable = controlMode === "windows-native"
+    ? path.win32.join(systemRoot, "System32", "wsl.exe")
+    : "wsl.exe";
+  const child = spawnFn(
+    executable,
+    ["-d", "Rainbond", "-u", "root", "--exec", "/bin/sleep", "infinity"],
+    { stdio: "ignore", windowsHide: true }
+  );
+
+  return new Promise((resolve, reject) => {
+    child.once("error", (error) => {
+      reject(new Error(`无法启动 Rainbond WSL：${error.message}`));
+    });
+    child.once("spawn", () => {
+      resolve({
+        hasExited: () => child.exitCode !== null || child.killed,
+        exitCode: () => child.exitCode,
+        stop() {
+          if (child.exitCode === null && !child.killed) child.kill();
+        },
+      });
+    });
+  });
+}
+
+function probeWindowsConsole(consoleUrl, timeoutMs = 5000) {
+  return new Promise((resolve) => {
+    let target;
+    try {
+      target = new URL(consoleUrl);
+    } catch {
+      resolve(false);
+      return;
+    }
+    const client = target.protocol === "https:" ? https : http;
+    const request = client.request(target, { method: "GET" }, (response) => {
+      response.resume();
+      resolve(response.statusCode >= 200 && response.statusCode < 400);
+    });
+    request.setTimeout(timeoutMs, () => request.destroy());
+    request.on("error", () => resolve(false));
+    request.end();
+  });
+}
+
+async function waitForWindowsConsole({
+  consoleUrl,
+  lease,
+  probe = probeWindowsConsole,
+  sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+  now = () => Date.now(),
+  timeoutMs = 10 * 60 * 1000,
+  intervalMs = 2000,
+}) {
+  const deadline = now() + timeoutMs;
+  while (now() < deadline) {
+    if (await probe(consoleUrl)) return;
+    if (lease.hasExited()) {
+      const exitCode = lease.exitCode?.();
+      const detail = exitCode === null || exitCode === undefined ? "未知退出码" : `退出码 ${exitCode}`;
+      throw new Error(`WINDOWS_WSL_UNAVAILABLE: Rainbond WSL 保持进程已退出（${detail}）`);
+    }
+    if (now() >= deadline) break;
+    await sleep(intervalMs);
+  }
+  throw new Error(`WINDOWS_CONSOLE_UNAVAILABLE: ${consoleUrl} 在等待时间内未就绪`);
+}
+
 async function runResume(onboardingId, {
   onboardingPath = onboardingStatePath,
   ensurePrivateDirectory = ensurePrivateOperationDirectory,
@@ -2004,7 +2077,8 @@ async function runResume(onboardingId, {
   assertFilesSafe = assertOperationFilesSafe,
   platformStateReader = readPlatformState,
   windowsAdapterFactory = createWindowsAdapterForOnboarding,
-  windowsConvergence = ensureWindowsPlatformConverged,
+  windowsRuntimeLease = startWindowsRuntimeLease,
+  consoleReadiness = waitForWindowsConsole,
   onboardingUpdater = updateOnboarding,
   invocationBuilder = resumeInvocationForOnboarding,
   attachedRunner = spawnAttached,
@@ -2019,53 +2093,63 @@ async function runResume(onboardingId, {
 
   const paths = pathsResolver(onboardingId);
   let windowsContext = null;
-  if (onboarding.platform_state_path) {
-    if (path.resolve(onboarding.platform_state_path) !== path.resolve(paths.state)) {
-      throw new Error("onboarding 中的平台状态路径与当前操作不匹配");
+  let runtimeLease = null;
+  try {
+    if (onboarding.platform_state_path) {
+      if (path.resolve(onboarding.platform_state_path) !== path.resolve(paths.state)) {
+        throw new Error("onboarding 中的平台状态路径与当前操作不匹配");
+      }
+      ensurePrivateDirectory(paths.root);
+      assertFilesSafe(paths);
+      const state = platformStateReader(paths.state, onboardingId);
+      if (state.target_kind === "local-windows") {
+        if (state.stage !== "platform-ready") {
+          throw new Error(`当前 Windows 平台阶段不能恢复授权：${state.stage}`);
+        }
+        if (!UUID_PATTERN.test(state.installation_id || "")) {
+          throw new Error("Windows 平台安装状态缺少有效的 installation id");
+        }
+        write("\n正在启动 Rainbond WSL，Console 就绪后将直接继续授权。\n");
+        runtimeLease = await windowsRuntimeLease({
+          controlMode: onboarding.control_mode || "windows-native",
+        });
+        await consoleReadiness({
+          consoleUrl: onboarding.console_url,
+          lease: runtimeLease,
+        });
+        windowsContext = { installationId: state.installation_id };
+      }
     }
-    ensurePrivateDirectory(paths.root);
-    assertFilesSafe(paths);
-    let state = platformStateReader(paths.state, onboardingId);
-    if (state.target_kind === "local-windows") {
-      const installationId = state.installation_id;
+
+    onboarding = onboardingUpdater(onboarding, { stage: "authorizing" });
+    const invocation = invocationBuilder(onboarding);
+
+    write("\n正在恢复 RainSkills 授权流程，将在浏览器中完成登录和授权。\n");
+    const result = await attachedRunner(
+      invocation.executable,
+      invocation.args,
+      { env: process.env },
+      null
+    );
+    if (result.signal) throw new Error(`授权流程被信号 ${result.signal} 中断`);
+    if (result.code !== 0) {
+      write(`\nRainbond 已部署，授权尚未完成。稍后继续：\n  npx rainskills@${packageManifest.version} resume --onboarding-id ${onboardingId}\n`);
+      throw new Error(`RainSkills 授权流程退出码为 ${result.code}`);
+    }
+    if (windowsContext) {
       const adapter = windowsAdapterFactory(onboarding);
-      const converged = await windowsConvergence({
-        adapter,
-        onboarding,
+      write("\n最后会弹出一次 Windows 管理员确认，用于清理自动恢复任务。\n");
+      await adapter.finalize({
         operationId: onboardingId,
-        paths,
-        state,
+        installationId: windowsContext.installationId,
+        payload: { status: "success" },
       });
-      state = converged.state;
-      windowsContext = { adapter, installationId };
     }
+    onboardingUpdater(onboarding, { stage: "configured" });
+    write("\nRainSkills 已连接到新部署的 Rainbond。\n");
+  } finally {
+    runtimeLease?.stop();
   }
-
-  onboarding = onboardingUpdater(onboarding, { stage: "authorizing" });
-  const invocation = invocationBuilder(onboarding);
-
-  write("\n正在恢复 RainSkills 授权流程，将在浏览器中完成登录和授权。\n");
-  const result = await attachedRunner(
-    invocation.executable,
-    invocation.args,
-    { env: process.env },
-    null
-  );
-  if (result.signal) throw new Error(`授权流程被信号 ${result.signal} 中断`);
-  if (result.code !== 0) {
-    write(`\nRainbond 已部署，授权尚未完成。稍后继续：\n  npx rainskills@${packageManifest.version} resume --onboarding-id ${onboardingId}\n`);
-    throw new Error(`RainSkills 授权流程退出码为 ${result.code}`);
-  }
-  if (windowsContext) {
-    write("\n最后会弹出一次 Windows 管理员确认，用于清理自动恢复任务。\n");
-    await windowsContext.adapter.finalize({
-      operationId: onboardingId,
-      installationId: windowsContext.installationId,
-      payload: { status: "success" },
-    });
-  }
-  onboardingUpdater(onboarding, { stage: "configured" });
-  write("\nRainSkills 已连接到新部署的 Rainbond。\n");
 }
 
 async function completePlatform(onboarding, state, paths, verification, noResume) {
@@ -2568,11 +2652,13 @@ module.exports = {
   selectInstallTarget,
   selectReachableConsole,
   selectRemoteInstallationEip,
+  startWindowsRuntimeLease,
   targetChoicesForPlatform,
   translateWslPathToWindows,
   validateInstaller,
   verifyRemoteDeployment,
   verifyRemoteRainbond,
+  waitForWindowsConsole,
   windowsRecoveryBundle,
   windowsHelperRunOptions,
 };

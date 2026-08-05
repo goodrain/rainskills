@@ -1,5 +1,6 @@
 const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
+const { EventEmitter } = require("node:events");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -149,6 +150,59 @@ test("platform resume selects native Node or POSIX Bash from onboarding control 
       "--allow-insecure-http",
     ],
   });
+});
+
+test("Windows authorization lease starts a fixed Rainbond WSL process and can stop it", async () => {
+  const { startWindowsRuntimeLease } = require(platformInstallerPath);
+  const calls = [];
+  const child = new EventEmitter();
+  child.exitCode = null;
+  child.killed = false;
+  child.kill = () => {
+    child.killed = true;
+    return true;
+  };
+
+  const leasePromise = startWindowsRuntimeLease({
+    controlMode: "windows-native",
+    systemRoot: "C:\\Windows",
+    spawnFn(command, args, options) {
+      calls.push({ command, args, options });
+      queueMicrotask(() => child.emit("spawn"));
+      return child;
+    },
+  });
+  const lease = await leasePromise;
+
+  assert.deepEqual(calls, [{
+    command: "C:\\Windows\\System32\\wsl.exe",
+    args: ["-d", "Rainbond", "-u", "root", "--exec", "/bin/sleep", "infinity"],
+    options: { stdio: "ignore", windowsHide: true },
+  }]);
+  assert.equal(lease.hasExited(), false);
+  lease.stop();
+  assert.equal(child.killed, true);
+});
+
+test("Windows authorization waits only until the existing Console responds", async () => {
+  const { waitForWindowsConsole } = require(platformInstallerPath);
+  let attempts = 0;
+  let sleeps = 0;
+
+  await waitForWindowsConsole({
+    consoleUrl: "http://127.0.0.1:7070",
+    lease: { hasExited: () => false },
+    probe: async () => {
+      attempts += 1;
+      return attempts === 3;
+    },
+    sleep: async () => { sleeps += 1; },
+    now: () => 0,
+    timeoutMs: 60_000,
+  });
+
+  assert.equal(attempts, 3);
+  assert.equal(sleeps, 2);
 });
 
 test("combined Windows provisioning has no parent timeout", () => {
@@ -440,7 +494,7 @@ test("Windows authorization convergence runs on every entry and persists current
   assert.equal(writes.length, 2);
 });
 
-test("authorization resume converges both Windows resume stages before spawning and finalizes on success", async () => {
+test("authorization resume keeps Windows WSL alive, waits for Console, then finalizes on success", async () => {
   const { runResume } = require(platformInstallerPath);
   assert.equal(typeof runResume, "function");
   const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
@@ -475,10 +529,17 @@ test("authorization resume converges both Windows resume stages before spawning 
         stage: "platform-ready",
       }),
       windowsAdapterFactory: () => adapter,
-      async windowsConvergence({ adapter: receivedAdapter }) {
-        assert.equal(receivedAdapter, adapter);
-        events.push({ type: "converge" });
-        return { state: {} };
+      async windowsRuntimeLease() {
+        events.push({ type: "keep-wsl-running" });
+        return {
+          stop() {
+            events.push({ type: "stop-wsl-lease" });
+          },
+        };
+      },
+      async consoleReadiness({ consoleUrl }) {
+        assert.equal(consoleUrl, "http://127.0.0.1:7070");
+        events.push({ type: "console-ready" });
       },
       onboardingUpdater: (onboarding, values) => {
         events.push({ type: values.stage });
@@ -493,13 +554,15 @@ test("authorization resume converges both Windows resume stages before spawning 
     });
 
     assert.deepEqual(events.map((event) => event.type), [
-      "converge",
+      "keep-wsl-running",
+      "console-ready",
       "authorizing",
       "spawn",
       "finalize",
       "configured",
+      "stop-wsl-lease",
     ], `resume stage ${stage}`);
-    assert.deepEqual(events[3].options, {
+    assert.deepEqual(events[4].options, {
       operationId,
       installationId,
       payload: { status: "success" },
@@ -507,7 +570,7 @@ test("authorization resume converges both Windows resume stages before spawning 
   }
 });
 
-test("failed Windows authorization preserves recovery tasks and non-Windows resume never creates an adapter", async () => {
+test("failed Windows authorization releases the WSL lease, preserves recovery tasks, and leaves non-Windows unchanged", async () => {
   const { runResume } = require(platformInstallerPath);
   const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
   const installationId = "f1805132-20ad-4a20-9f88-43fe41e50813";
@@ -530,6 +593,7 @@ test("failed Windows authorization preserves recovery tasks and non-Windows resu
   };
 
   let finalized = false;
+  let leaseStopped = false;
   await assert.rejects(runResume(operationId, {
     ...base,
     platformStateReader: () => ({
@@ -541,12 +605,17 @@ test("failed Windows authorization preserves recovery tasks and non-Windows resu
     windowsAdapterFactory: () => ({
       async finalize() { finalized = true; },
     }),
-    windowsConvergence: async () => ({ state: {} }),
+    windowsRuntimeLease: async () => ({
+      stop() { leaseStopped = true; },
+    }),
+    consoleReadiness: async () => {},
     attachedRunner: async () => ({ code: 23, signal: null }),
   }), /退出码为 23/);
   assert.equal(finalized, false, "authorization failure must preserve recovery tasks");
+  assert.equal(leaseStopped, true, "authorization failure must release its temporary WSL lease");
 
   let adapterCreated = false;
+  let leaseCreated = false;
   await runResume(operationId, {
     ...base,
     platformStateReader: () => ({
@@ -559,22 +628,30 @@ test("failed Windows authorization preserves recovery tasks and non-Windows resu
       adapterCreated = true;
       throw new Error("Windows adapter must not be created");
     },
-    windowsConvergence: async () => assert.fail("Windows convergence must not run"),
+    windowsRuntimeLease: async () => {
+      leaseCreated = true;
+      throw new Error("Windows WSL lease must not start");
+    },
+    consoleReadiness: async () => assert.fail("Windows Console readiness must not run"),
     attachedRunner: async () => ({ code: 0, signal: null }),
   });
   assert.equal(adapterCreated, false);
+  assert.equal(leaseCreated, false);
 });
 
-test("authorization resume converges before authorizing and fresh completion has no second finalize", () => {
+test("authorization resume waits only for Windows Console before authorizing and fresh completion has no second finalize", () => {
   const source = readNormalizedSource(platformInstallerPath);
   const resume = source.match(/async function runResume[\s\S]*?\n\}\n\nasync function completePlatform/)?.[0];
   assert(resume, "runResume must remain a standalone operation");
-  const converge = resume.indexOf("ensureWindowsPlatformConverged");
+  const keepWslRunning = resume.indexOf("startWindowsRuntimeLease");
+  const waitForConsole = resume.indexOf("waitForWindowsConsole");
   const authorize = resume.indexOf('stage: "authorizing"');
   const spawn = resume.indexOf("attachedRunner(");
-  assert(converge >= 0, "runResume must converge a local Windows platform");
-  assert(authorize > converge, "the platform must converge before authorization starts");
+  assert(keepWslRunning >= 0, "runResume must keep the installed Windows WSL running");
+  assert(waitForConsole > keepWslRunning, "runResume must wait for the existing Console after starting WSL");
+  assert(authorize > waitForConsole, "authorization must start as soon as the existing Console is reachable");
   assert(spawn > authorize, "the authorization client must start after the state transition");
+  assert.doesNotMatch(resume, /ensureWindowsPlatformConverged|convergeInstalledPlatform/);
   const installWindows = source.match(/async function installWindowsRainbond[\s\S]*?\n\}\n\nfunction resumeInvocationForOnboarding/)?.[0];
   assert(installWindows, "installWindowsRainbond must remain a standalone operation");
   assert.doesNotMatch(installWindows, /adapter\.finalize/, "fresh success must finalize only inside runResume");
