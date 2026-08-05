@@ -21,7 +21,7 @@ sprints:
     tasks:
       - id: task-1.1
         name: "Version and refresh the complete Windows recovery bundle"
-        status: pending
+        status: completed
         files:
           modify:
             - path: "rainbond-platform-installer/scripts/platform-installer.js"
@@ -85,7 +85,7 @@ sprints:
 
       - id: task-1.2
         name: "Add an idempotent installed-platform convergence action"
-        status: pending
+        status: completed
         files:
           modify:
             - path: "rainbond-platform-installer/scripts/windows-platform.js"

@@ -17,6 +17,7 @@ const USER_ACTIONS = Object.freeze(["Preflight"]);
 const MACHINE_ACTIONS = Object.freeze([
   "PrepareWsl",
   "ProvisionRainbond",
+  "ConvergeInstalledPlatform",
   "InstallMachineBundle",
   "EnableWsl",
   "UpdateWsl",
@@ -293,7 +294,18 @@ function collectRecoveryFiles(packageRoot, requiredFiles, requiredDirectories) {
   return [...files].sort();
 }
 
-function createRecoveryBundle({ packageRoot, bundleRoot, requiredFiles, requiredDirectories }) {
+function assertSafePackageVersion(packageVersion) {
+  if (typeof packageVersion !== "string"
+      || packageVersion.length === 0
+      || packageVersion.length > 128
+      || !/^[0-9A-Za-z][0-9A-Za-z.+-]*$/.test(packageVersion)) {
+    throw new Error("恢复包 package version 必须是非空且安全的 npm 版本");
+  }
+  return packageVersion;
+}
+
+function createRecoveryBundle({ packageRoot, bundleRoot, packageVersion, requiredFiles, requiredDirectories }) {
+  const safePackageVersion = assertSafePackageVersion(packageVersion);
   const sourceRoot = path.resolve(packageRoot);
   const destinationRoot = path.resolve(bundleRoot);
   if (destinationRoot === sourceRoot || destinationRoot.startsWith(`${sourceRoot}${path.sep}`)) {
@@ -318,7 +330,8 @@ function createRecoveryBundle({ packageRoot, bundleRoot, requiredFiles, required
   }
   const manifest = {
     schema: "rainskills.windows-recovery-bundle.v1",
-    version: 1,
+    version: 2,
+    package_version: safePackageVersion,
     files: entries,
   };
   fs.writeFileSync(path.join(destinationRoot, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600, flag: "wx" });
@@ -329,9 +342,11 @@ function verifyRecoveryBundle(bundleRoot, suppliedManifest = null) {
   const root = path.resolve(bundleRoot);
   const manifestPath = path.join(root, "manifest.json");
   const manifest = suppliedManifest || JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-  if (manifest.schema !== "rainskills.windows-recovery-bundle.v1" || manifest.version !== 1 || !Array.isArray(manifest.files)) {
+  if (manifest.schema !== "rainskills.windows-recovery-bundle.v1" || !Array.isArray(manifest.files)) {
     throw new Error("恢复包 manifest 版本无效");
   }
+  if (manifest.version === 2) assertSafePackageVersion(manifest.package_version);
+  else if (manifest.version !== 1) throw new Error("恢复包 manifest 版本无效");
   const expected = new Set(["manifest.json"]);
   for (const entry of manifest.files) {
     const relative = assertSafeRelativePath(entry.path);
@@ -1034,6 +1049,9 @@ function createWindowsPlatformAdapter({
     provisionRainbond(options) {
       return invoke("ProvisionRainbond", options);
     },
+    convergeInstalledPlatform(options) {
+      return invoke("ConvergeInstalledPlatform", options);
+    },
     verifyDeployment(options) {
       return invoke("VerifyDeployment", options);
     },
@@ -1048,6 +1066,7 @@ module.exports = {
   STATE_ACTIONS,
   USER_ACTIONS,
   WINDOWS_STAGES,
+  assertSafePackageVersion,
   createRecoveryBundle,
   createArtifactByteLimiter,
   createWindowsSecureStateStore,

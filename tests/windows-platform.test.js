@@ -445,8 +445,12 @@ test("PowerShell upgrades only a verified machine bundle from the same installat
   assert.match(installBundle, /Assert-ManagedMachineRoot \$machineRoot \$Request\.installation_id/);
   assert.match(installBundle, /Set-MachineRootAcl \$machineRoot \$Request\.user_sid[\s\S]*Assert-MachineManifestIdentity \$Request/);
   assert.match(installBundle, /Assert-UpgradableMachineBundle/);
+  assert.match(installBundle, /Get-PropertyValue \$payload "package_version"/);
+  assert.match(installBundle, /Assert-SafePackageVersion \$packageVersion/);
+  assert.match(installBundle, /package_version = \$packageVersion/);
+  assert.match(installBundle, /Publish-MachineBundleTransaction/);
   assert.doesNotMatch(installBundle, /existing\.helper_sha256 -ne \$expectedHelperDigest/);
-  assert.match(installBundle, /Copy-Item[\s\S]*Assert-FileDigest \$machineHelper \$expectedHelperDigest/);
+  assert.doesNotMatch(installBundle, /Copy-Item/);
   assert.match(source, /function Assert-UpgradableMachineBundle[\s\S]*Assert-FileDigestOneOf/);
   assert.match(source, /b2315dcec815187f3f48144981487bf2646dad5ed0de12a1125b99c45ecf18fd/);
   assert.match(source, /function Assert-ManagedMachineRoot[\s\S]*ReparsePoint/);
@@ -455,6 +459,59 @@ test("PowerShell upgrades only a verified machine bundle from the same installat
   assert.match(aclFunction, /\/setowner[\s\S]*S-1-5-32-544/);
   assert.match(aclFunction, /\/verify/);
   assert.doesNotMatch(aclFunction, /\s\/c(?:\s|$)/);
+
+  const identity = source.match(/function Assert-MachineManifestIdentity[\s\S]*?\n\}/)?.[0];
+  const verifiedManifest = source.match(/function Assert-MachineManifest\(\$Request\)[\s\S]*?\n\}/)?.[0];
+  const packageVersionValidator = source.match(/function Assert-SafePackageVersion[\s\S]*?\n\}/)?.[0];
+  assert(identity, "machine identity verification must remain independently reusable for legacy upgrades");
+  assert(verifiedManifest, "current machine manifest verification must remain a standalone operation");
+  assert(packageVersionValidator, "package version validation must remain a standalone fixed operation");
+  assert.match(packageVersionValidator, /IsNullOrWhiteSpace/);
+  assert.match(packageVersionValidator, /Length -gt 128/);
+  assert.match(packageVersionValidator, /-notmatch '\^\[0-9A-Za-z\]/);
+  assert.doesNotMatch(identity, /Assert-SafePackageVersion/);
+  assert.match(verifiedManifest, /Assert-SafePackageVersion/);
+  assert(
+    installBundle.indexOf("Assert-MachineManifestIdentity") < installBundle.indexOf("Assert-UpgradableMachineBundle")
+      && installBundle.indexOf("Assert-UpgradableMachineBundle") < installBundle.indexOf("package_version = $packageVersion"),
+    "a legacy manifest must pass identity and digest checks before it is upgraded"
+  );
+});
+
+test("PowerShell stages and rolls back the protected machine bundle as one transaction", () => {
+  const source = readNormalizedSource(powershellPath);
+  const installBundle = source.match(/function Invoke-InstallMachineBundle\(\$Request\) \{[\s\S]*?\n\}\n\nfunction Get-TrustedWslPath/)?.[0];
+  const transaction = source.match(/function Publish-MachineBundleTransaction[\s\S]*?\n\}\n\nfunction Invoke-InstallMachineBundle/)?.[0];
+  const rollback = source.match(/function Restore-MachineBundleFile[\s\S]*?\n\}/)?.[0];
+  const regularFileCheck = source.match(/function Test-RegularMachineBundleFile[\s\S]*?\n\}/)?.[0];
+  assert(installBundle, "Invoke-InstallMachineBundle must remain a standalone fixed action");
+  assert(transaction, "machine bundle publication must remain a standalone transaction");
+  assert(rollback, "machine bundle rollback must remain a standalone fixed operation");
+  assert(regularFileCheck, "machine bundle file validation must remain a standalone fixed operation");
+
+  assert.match(transaction, /Copy-Item -LiteralPath \$SourceHelper -Destination \$helperStage/);
+  assert.match(transaction, /Copy-Item -LiteralPath \$BootstrapSource -Destination \$bootstrapStage/);
+  const helperVerified = transaction.indexOf("Assert-FileDigest $helperStage $ExpectedHelperDigest");
+  const bootstrapVerified = transaction.indexOf("Assert-FileDigest $bootstrapStage $BootstrapDigest");
+  const firstSwitch = Math.min(
+    ...[transaction.indexOf("[IO.File]::Replace"), transaction.indexOf("[IO.File]::Move")]
+      .filter((index) => index >= 0)
+  );
+  assert(helperVerified >= 0 && bootstrapVerified >= 0, "both staged files must be digest verified");
+  assert(firstSwitch > helperVerified && firstSwitch > bootstrapVerified, "both staged files must verify before any final path changes");
+  assert.match(transaction, /ConvertFrom-Json/);
+  assert.match(transaction, /helperBackup/);
+  assert.match(transaction, /bootstrapBackup/);
+  assert.match(transaction, /manifestBackup/);
+  assert.match(transaction, /catch \{[\s\S]*Restore-MachineBundleFile \$ManifestPath[\s\S]*Restore-MachineBundleFile \$MachineBootstrap[\s\S]*Restore-MachineBundleFile \$MachineHelper/);
+  assert.match(rollback, /Test-RegularMachineBundleFile/);
+  assert.match(regularFileCheck, /ReparsePoint/);
+  assert.match(rollback, /\[IO\.File\]::Replace/);
+  assert.match(rollback, /\[IO\.File\]::Move/);
+  assert.doesNotMatch(installBundle, /Copy-Item[^\n]*-Destination \$(?:machineHelper|machineBootstrap)/);
+  assert.match(installBundle, /\$machineRootCreated = \$false/);
+  assert.match(installBundle, /catch \{[\s\S]*\$machineRootCreated[\s\S]*Get-ChildItem -LiteralPath \$machineRoot -Force[\s\S]*Remove-Item -LiteralPath \$machineRoot -Force/);
+  assert.match(installBundle, /Set-MachineRootAcl \$machineRoot \$Request\.user_sid[\s\S]*Assert-MachineManifest \$Request/);
 });
 
 test("PowerShell rebuilds an effective ACL on every existing machine item", () => {
@@ -608,6 +665,7 @@ test("machine actions are fixed and reboot requires an interactive explicit conf
   assert.deepEqual(MACHINE_ACTIONS, [
     "PrepareWsl",
     "ProvisionRainbond",
+    "ConvergeInstalledPlatform",
     "InstallMachineBundle",
     "EnableWsl",
     "UpdateWsl",
@@ -677,6 +735,28 @@ test("machine actions are fixed and reboot requires an interactive explicit conf
     payload: { rootfs_path: "/tmp/rootfs.tar.gz" },
   });
   assert.equal(fixture.requests.at(-1).request.action, "ProvisionRainbond");
+  await adapter.convergeInstalledPlatform({
+    operationId: OPERATION_ID,
+    installationId: INSTALLATION_ID,
+    payload: { subnet: "172.31.253.0/30" },
+  });
+  assert.equal(fixture.requests.at(-1).request.action, "ConvergeInstalledPlatform");
+});
+
+test("installed-platform convergence is exposed only through fixed Windows and WSL actions", () => {
+  const powershell = readNormalizedSource(powershellPath);
+  const bootstrap = readNormalizedSource(wslBootstrapPath);
+  const validateSet = powershell.match(/\[ValidateSet\([^\n]+\)\]/)?.[0];
+  const machineAllowlist = powershell.match(/\$machineActions = @\([^\n]+\)/)?.[0];
+  const dispatch = powershell.match(/switch \(\$Action\) \{[\s\S]*?default \{ throw "Unsupported fixed action" \}\n  \}/)?.[0];
+  assert(validateSet, "PowerShell action validation must remain fixed");
+  assert(machineAllowlist, "PowerShell elevated machine allowlist must remain explicit");
+  assert(dispatch, "PowerShell fixed-action dispatch must remain explicit");
+  assert.match(validateSet, /"ConvergeInstalledPlatform"/);
+  assert.match(machineAllowlist, /"ConvergeInstalledPlatform"/);
+  assert.match(dispatch, /"ConvergeInstalledPlatform" \{ \$facts = Invoke-ConvergeInstalledPlatform \$request \}/);
+  assert.match(bootstrap, /PrepareRuntime\|ConfigureGuestNetwork\|PrepareDocker\|InstallRainbond\|VerifyRainbond\|ConvergeInstalledRainbond/);
+  assert.match(bootstrap, /ConvergeInstalledRainbond\)\n    converge_installed_rainbond/);
 });
 
 test("Windows adapter reports the elevated action's structured failure", async () => {
@@ -774,20 +854,49 @@ test("recovery bundle is explicit, digest-verified, and independent of the packa
   const manifest = createRecoveryBundle({
     packageRoot,
     bundleRoot: destination,
+    packageVersion: "0.1.0-rc.41",
     requiredFiles: ["package.json", "install.sh", "bin/rainskills.js"],
     requiredDirectories: ["rainbond-demo"],
   });
   fs.rmSync(packageRoot, { recursive: true });
   assert.equal(verifyRecoveryBundle(destination, manifest).ok, true);
+  assert.equal(manifest.version, 2);
+  assert.equal(manifest.package_version, "0.1.0-rc.41");
   assert(manifest.files.every((entry) => /^[a-f0-9]{64}$/.test(entry.sha256)));
   assert.deepEqual(manifest.files.map((entry) => entry.path), [...manifest.files.map((entry) => entry.path)].sort());
   const badBundleParent = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-bad-recovery-"));
   assert.throws(() => createRecoveryBundle({
     packageRoot: bundleRoot,
     bundleRoot: path.join(badBundleParent, "bad"),
+    packageVersion: "0.1.0-rc.41",
     requiredFiles: ["../escape"],
     requiredDirectories: [],
   }), /相对路径|越界/);
+});
+
+test("recovery verification accepts legacy v1 manifests only for upgrade compatibility", () => {
+  const { verifyRecoveryBundle } = require(windowsPlatformPath);
+  const bundleRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-legacy-recovery-"));
+  const relative = "bin/rainskills.js";
+  const content = "#!/usr/bin/env node\n";
+  fs.mkdirSync(path.join(bundleRoot, "bin"), { recursive: true });
+  fs.writeFileSync(path.join(bundleRoot, relative), content);
+  const legacyManifest = {
+    schema: "rainskills.windows-recovery-bundle.v1",
+    version: 1,
+    files: [{
+      path: relative,
+      sha256: crypto.createHash("sha256").update(content).digest("hex"),
+      size: Buffer.byteLength(content),
+    }],
+  };
+  fs.writeFileSync(path.join(bundleRoot, "manifest.json"), `${JSON.stringify(legacyManifest, null, 2)}\n`);
+
+  assert.equal(verifyRecoveryBundle(bundleRoot).manifest.version, 1);
+  assert.throws(
+    () => verifyRecoveryBundle(bundleRoot, { ...legacyManifest, version: 2 }),
+    /package version|版本/i
+  );
 });
 
 test("Windows rootfs delegates archive validation to WSL import without inspecting the file header", async () => {
@@ -1203,14 +1312,17 @@ test("WSL bootstrap enables systemd and gates runtime startup on the fixed netwo
 
 test("WSL network gate restores persistent addresses on every distro boot", () => {
   const source = readNormalizedSource(wslBootstrapPath);
+  const installHelpers = source.match(/install_network_helpers\(\) \{[\s\S]*?\n\}\n\nprepare_runtime\(\)/)?.[0];
   const prepareRuntime = source.match(/prepare_runtime\(\) \{[\s\S]*?\n\}\n\nconfigure_guest_network\(\)/)?.[0];
   const configureNetwork = source.match(/configure_guest_network\(\) \{[\s\S]*?\n\}\n\nverify_installer\(\)/)?.[0];
+  assert(installHelpers, "network helper and unit installation must remain reusable");
   assert(prepareRuntime, "prepare_runtime must remain a standalone fixed action");
   assert(configureNetwork, "configure_guest_network must remain a standalone fixed action");
-  assert.match(prepareRuntime, /\/usr\/local\/libexec\/rainskills-restore-network/);
-  assert.match(prepareRuntime, /ExecStart=\/usr\/local\/libexec\/rainskills-restore-network/);
-  assert.doesNotMatch(prepareRuntime, /until test -f \/run\/rainskills\/network-ready/);
-  const restoreHelper = prepareRuntime.match(/<<'SCRIPT'\n([\s\S]*?)\nSCRIPT/)?.[1];
+  assert.match(prepareRuntime, /install_network_helpers/);
+  assert.match(installHelpers, /\/usr\/local\/libexec\/rainskills-restore-network/);
+  assert.match(installHelpers, /ExecStart=\/usr\/local\/libexec\/rainskills-restore-network/);
+  assert.doesNotMatch(installHelpers, /until test -f \/run\/rainskills\/network-ready/);
+  const restoreHelper = installHelpers.match(/<<'SCRIPT'\n([\s\S]*?)\nSCRIPT/)?.[1];
   assert(restoreHelper, "the fixed network restore helper must be embedded verbatim");
   const syntax = spawnSync("bash", ["-n"], { input: restoreHelper, encoding: "utf8" });
   assert.equal(syntax.status, 0, syntax.stderr);
@@ -1222,19 +1334,72 @@ test("WSL network gate restores persistent addresses on every distro boot", () =
   assert.doesNotMatch(configureNetwork, /systemctl restart rainskills-network-ready\.service/);
 });
 
+test("WSL network convergence replaces strong runtime dependencies before restoring the address", () => {
+  const source = readNormalizedSource(wslBootstrapPath);
+  const installHelpers = source.match(/install_network_helpers\(\) \{[\s\S]*?\n\}\n\nprepare_runtime\(\)/)?.[0];
+  const configureNetwork = source.match(/configure_guest_network\(\) \{[\s\S]*?\n\}\n\nverify_installer\(\)/)?.[0];
+  assert(installHelpers, "network helper and unit installation must remain reusable");
+  assert(configureNetwork, "configure_guest_network must remain a standalone fixed action");
+  const dropIn = installHelpers.match(/docker\.service\.d\/10-rainskills-network\.conf <<'UNIT'\n([\s\S]*?)\nUNIT/)?.[1];
+  assert(dropIn, "Docker and containerd must share a fixed managed network drop-in");
+  assert.match(dropIn, /^Wants=rainskills-network-ready\.service$/m);
+  assert.match(dropIn, /^After=rainskills-network-ready\.service$/m);
+  assert.doesNotMatch(dropIn, /^Requires=/m);
+  assert.match(installHelpers, /containerd\.service\.d\/10-rainskills-network\.conf/);
+
+  const installIndex = configureNetwork.indexOf("install_network_helpers");
+  const activeIndex = configureNetwork.indexOf("systemctl is-active --quiet rainskills-network-ready.service");
+  const restoreIndex = configureNetwork.indexOf('"$RESTORE_NETWORK_HELPER"');
+  assert(installIndex >= 0 && installIndex < activeIndex && activeIndex < restoreIndex,
+    "current helpers and units must be installed before an in-place active-service restore");
+  assert.match(configureNetwork, /else\n    systemctl start rainskills-network-ready\.service/);
+  assert.doesNotMatch(configureNetwork, /systemctl (?:restart|stop) rainskills-network-ready\.service/);
+});
+
+test("WSL installed Rainbond convergence preserves Docker and the owned outer container", () => {
+  const source = readNormalizedSource(wslBootstrapPath);
+  const converge = source.match(/converge_installed_rainbond\(\) \{[\s\S]*?\n\}\n\nverify_rainbond\(\)/)?.[0];
+  assert(converge, "converge_installed_rainbond must remain a standalone fixed action");
+  assert.match(converge, /systemctl is-active --quiet docker[\s\S]*systemctl start docker/);
+  assert.match(converge, /rainbond-installation-id/);
+  assert.match(converge, /\[\[ "\$ownership" == "\$INSTALLATION_ID" \]\]/);
+  assert.match(converge, /docker inspect rainbond/);
+  assert.match(converge, /State\.Status/);
+  assert.match(converge, /case "\$status" in[\s\S]*?running\)[\s\S]*?;;[\s\S]*?created\|exited\)[\s\S]*?docker start rainbond[\s\S]*?;;[\s\S]*?\*\)[\s\S]*?safe_status[\s\S]*?exit 1[\s\S]*?;;[\s\S]*?esac/);
+  assert.match(converge, /safe_status="\$\{status\/\/\$'\\r'\/ \}"[\s\S]*safe_status="\$\{safe_status\/\/\$'\\n'\/ \}"/);
+  assert.match(converge, /safe_status="\$\{safe_status\/\/\[\^A-Za-z0-9_\.\-\]\/\?\}"/);
+  assert.match(converge, /safe_status="\$\{safe_status:0:80\}"/);
+  assert.match(converge, /safe_status="\$\{safe_status:\-<empty>\}"/);
+  assert.match(converge, /Managed rainbond container state is not safely startable: %s/);
+  assert.doesNotMatch(converge, /if \[\[ "\$status" != "running" \]\]; then[\s\S]*docker start rainbond/);
+  for (const forbidden of [
+    /verify_installer/,
+    /INSTALLER_PATH/,
+    /docker rm/,
+    /systemctl restart docker/,
+    /systemctl stop docker/,
+    /systemctl restart rainskills-network-ready/,
+  ]) {
+    assert.doesNotMatch(converge, forbidden);
+  }
+});
+
 test("WSL forwards the fixed guest address through Docker and verifies Console on loopback", () => {
   const source = readNormalizedSource(wslBootstrapPath);
+  const installHelpers = source.match(/install_network_helpers\(\) \{[\s\S]*?\n\}\n\nprepare_runtime\(\)/)?.[0];
   const prepareRuntime = source.match(/prepare_runtime\(\) \{[\s\S]*?\n\}\n\nconfigure_guest_network\(\)/)?.[0];
   const prepareDocker = source.match(/prepare_docker\(\) \{[\s\S]*?\n\}\n\ninstall_rainbond\(\)/)?.[0];
   const verifyRainbond = source.match(/verify_rainbond\(\) \{[\s\S]*?\n\}\n\ncase "\$ACTION"/)?.[0];
+  assert(installHelpers, "network helper and unit installation must remain reusable");
   assert(prepareRuntime, "prepare_runtime must remain a standalone fixed action");
   assert(prepareDocker, "prepare_docker must remain a standalone fixed action");
   assert(verifyRainbond, "verify_rainbond must remain a standalone fixed action");
-  assert.match(prepareRuntime, /rainskills-forward-docker-ports/);
-  assert.match(prepareRuntime, /After=docker\.service rainskills-network-ready\.service/);
-  assert.match(prepareRuntime, /for chain in PREROUTING OUTPUT/);
-  assert.match(prepareRuntime, /iptables -t nat -C "\$chain" -d "\$guest_address\/32" -j DOCKER/);
-  const forwardHelper = prepareRuntime.match(/cat > "\$FORWARD_DOCKER_HELPER" <<'SCRIPT'\n([\s\S]*?)\nSCRIPT/)?.[1];
+  assert.match(prepareRuntime, /install_network_helpers/);
+  assert.match(installHelpers, /rainskills-forward-docker-ports/);
+  assert.match(installHelpers, /After=docker\.service rainskills-network-ready\.service/);
+  assert.match(installHelpers, /for chain in PREROUTING OUTPUT/);
+  assert.match(installHelpers, /iptables -t nat -C "\$chain" -d "\$guest_address\/32" -j DOCKER/);
+  const forwardHelper = installHelpers.match(/cat > "\$FORWARD_DOCKER_HELPER" <<'SCRIPT'\n([\s\S]*?)\nSCRIPT/)?.[1];
   assert(forwardHelper, "the fixed Docker forwarding helper must be embedded verbatim");
   const syntax = spawnSync("bash", ["-n"], { input: forwardHelper, encoding: "utf8" });
   assert.equal(syntax.status, 0, syntax.stderr);
@@ -1423,4 +1588,54 @@ test("PowerShell exposes fixed Rainbond install and dual-side verification actio
   assert.match(source, /nodeReady/);
   assert.match(source, /componentsReady/);
   assert.match(source, /windowsConsoleReachable/);
+});
+
+test("PowerShell converges an installed platform without importing or reinstalling Rainbond", () => {
+  const source = readNormalizedSource(powershellPath);
+  const converge = source.match(/function Invoke-ConvergeInstalledPlatform\(\$Request\) \{[\s\S]*?\n\}\n\nfunction Invoke-ProvisionRainbond/)?.[0];
+  assert(converge, "Invoke-ConvergeInstalledPlatform must remain a standalone fixed action");
+  const steps = [
+    "Invoke-InstallMachineBundle $Request",
+    "Invoke-ConfigureNetwork $Request",
+    'Invoke-DistroBootstrap $Request "ConvergeInstalledRainbond"',
+    "Invoke-RegisterResume $Request",
+    "Invoke-VerifyDeployment $Request",
+  ];
+  let previous = -1;
+  for (const step of steps) {
+    const current = converge.indexOf(step);
+    assert(current > previous, `${step} must run in convergence order`);
+    previous = current;
+  }
+  for (const forbidden of [
+    /Invoke-ImportDistro/,
+    /Invoke-InstallRainbond/,
+    /--import/,
+    /installer_path/,
+    /installer_sha256/,
+  ]) {
+    assert.doesNotMatch(converge, forbidden);
+  }
+  for (const fact of [
+    "machineBundleVerified",
+    "distroIdentityVerified",
+    "systemdReady",
+    "networkGateReady",
+    "dockerReady",
+    "rainbondRuntimeVerified",
+    "networkManifestVerified",
+    "portproxyVerified",
+    "recoveryTasksVerified",
+    "containerRunning",
+    "nodeReady",
+    "componentsReady",
+    "wslConsoleReachable",
+    "windowsConsoleReachable",
+    "portsListening",
+    "subnet",
+    "hostAddress",
+    "guestAddress",
+  ]) {
+    assert.match(converge, new RegExp(`\\b${fact}\\b`), `convergence facts must include ${fact}`);
+  }
 });

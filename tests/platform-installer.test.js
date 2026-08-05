@@ -25,6 +25,35 @@ function readNormalizedSource(filePath) {
   return fs.readFileSync(filePath, "utf8").replace(/\r\n?/g, "\n");
 }
 
+function createRecoveryPackageFixture(version) {
+  const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-recovery-package-"));
+  fs.mkdirSync(path.join(packageRoot, "bin"), { recursive: true });
+  fs.mkdirSync(path.join(packageRoot, "rainbond-demo"), { recursive: true });
+  fs.writeFileSync(path.join(packageRoot, "package.json"), `${JSON.stringify({ version })}\n`);
+  fs.writeFileSync(path.join(packageRoot, "install.sh"), "#!/bin/sh\n");
+  fs.writeFileSync(path.join(packageRoot, "bin", "rainskills.js"), "#!/usr/bin/env node\n");
+  fs.writeFileSync(path.join(packageRoot, "rainbond-demo", "SKILL.md"), "---\nname: demo\ndescription: demo\n---\n");
+  return packageRoot;
+}
+
+function writeLegacyRecoveryBundle(bundleRoot) {
+  const relative = "bin/rainskills.js";
+  const content = "#!/usr/bin/env node\n// rc.40 legacy recovery\n";
+  fs.mkdirSync(path.join(bundleRoot, "bin"), { recursive: true });
+  fs.writeFileSync(path.join(bundleRoot, relative), content);
+  const manifest = {
+    schema: "rainskills.windows-recovery-bundle.v1",
+    version: 1,
+    files: [{
+      path: relative,
+      sha256: crypto.createHash("sha256").update(content).digest("hex"),
+      size: Buffer.byteLength(content),
+    }],
+  };
+  fs.writeFileSync(path.join(bundleRoot, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+  return manifest;
+}
+
 test("launcher routes platform and resume commands to the bundled helper", () => {
   const { resolveInvocation } = require(launcherPath);
   const fakeNode = path.join(repoRoot, "fake-node");
@@ -167,6 +196,7 @@ test("Windows machine bundle payload pins the current helper and bootstrap", () 
   assert.equal(payload.helper_sha256, crypto.createHash("sha256").update("# current helper\n").digest("hex"));
   assert.equal(payload.bootstrap_sha256, crypto.createHash("sha256").update("#!/bin/bash\n# current bootstrap\n").digest("hex"));
   assert.equal(payload.recovery_manifest_sha256, crypto.createHash("sha256").update("{}\n").digest("hex"));
+  assert.equal(payload.package_version, require(path.join(repoRoot, "package.json")).version);
   assert.equal(payload.recovery_entry, recoveryEntry);
   assert.equal(payload.node_path, "C:\\Program Files\\nodejs\\node.exe");
   assert.equal(payload.control_mode, "windows-native");
@@ -182,6 +212,113 @@ test("resumed Windows provisioning refreshes the protected machine bundle", () =
   assert.match(provision, /if \(!provisioned\.facts\.machineBundleVerified\)/);
   assert.match(provision, /machine_bundle_helper_sha256: machineBundlePayload\.helper_sha256/);
   assert.match(provision, /machine_bundle_bootstrap_sha256: machineBundlePayload\.bootstrap_sha256/);
+  assert.match(provision, /machine_bundle_recovery_manifest_sha256: machineBundlePayload\.recovery_manifest_sha256/);
+  assert.match(provision, /package_version: machineBundlePayload\.package_version/);
+});
+
+test("Windows recovery bundles are package-versioned and do not reuse a verified legacy bundle", () => {
+  const { windowsRecoveryBundle } = require(platformInstallerPath);
+  assert.equal(typeof windowsRecoveryBundle, "function");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-recovery-root-"));
+  const packageVersion = "0.1.0-rc.41";
+  const packageRoot = createRecoveryPackageFixture(packageVersion);
+  const legacyRoot = path.join(root, "recovery-v1");
+  const legacyManifest = writeLegacyRecoveryBundle(legacyRoot);
+
+  const recovery = windowsRecoveryBundle({ root }, { packageRoot, packageVersion });
+
+  assert.equal(recovery.bundleRoot, path.join(root, "recovery-v2", packageVersion));
+  assert.notEqual(recovery.bundleRoot, legacyRoot);
+  assert.equal(recovery.manifest.version, 2);
+  assert.equal(recovery.manifest.package_version, packageVersion);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(legacyRoot, "manifest.json"), "utf8")), legacyManifest);
+
+  const currentManifestPath = path.join(recovery.bundleRoot, "manifest.json");
+  fs.writeFileSync(currentManifestPath, `${JSON.stringify({
+    ...recovery.manifest,
+    package_version: "0.1.0-rc.42",
+  }, null, 2)}\n`);
+  const rebuilt = windowsRecoveryBundle({ root }, { packageRoot, packageVersion });
+  assert.equal(rebuilt.manifest.version, 2);
+  assert.equal(rebuilt.manifest.package_version, packageVersion);
+});
+
+test("Windows recovery bundle rejects package versions that can escape the recovery root", () => {
+  const { windowsRecoveryBundle } = require(platformInstallerPath);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-recovery-safe-root-"));
+  const packageRoot = createRecoveryPackageFixture("0.1.0-rc.41");
+
+  for (const packageVersion of ["", "../escape", "nested/version", "nested\\version", "bad\u0000version"]) {
+    assert.throws(
+      () => windowsRecoveryBundle({ root }, { packageRoot, packageVersion }),
+      /package version|版本|安全/i
+    );
+  }
+});
+
+test("Windows recovery bundle retries after partial final and stale staging directories", () => {
+  const { windowsRecoveryBundle } = require(platformInstallerPath);
+  const { verifyRecoveryBundle } = require(path.join(
+    repoRoot,
+    "rainbond-platform-installer",
+    "scripts",
+    "windows-platform.js"
+  ));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-recovery-retry-root-"));
+  const packageVersion = "0.1.0-rc.41";
+  const packageRoot = createRecoveryPackageFixture(packageVersion);
+  const recoveryRoot = path.join(root, "recovery-v2");
+  const bundleRoot = path.join(recoveryRoot, packageVersion);
+  const stagingRoot = path.join(recoveryRoot, `.${packageVersion}.staging`);
+  fs.mkdirSync(bundleRoot, { recursive: true });
+  fs.writeFileSync(path.join(bundleRoot, "partial-copy"), "interrupted final\n");
+  fs.mkdirSync(stagingRoot, { recursive: true });
+  fs.writeFileSync(path.join(stagingRoot, "partial-copy"), "interrupted staging\n");
+
+  const recovery = windowsRecoveryBundle({ root }, { packageRoot, packageVersion });
+
+  assert.equal(recovery.bundleRoot, bundleRoot);
+  assert.equal(verifyRecoveryBundle(bundleRoot).ok, true);
+  assert.equal(fs.existsSync(path.join(bundleRoot, "partial-copy")), false);
+  assert.equal(fs.existsSync(stagingRoot), false);
+});
+
+test("Windows recovery cleanup refuses a final-directory junction and leaves its target untouched", () => {
+  const { windowsRecoveryBundle } = require(platformInstallerPath);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-recovery-junction-root-"));
+  const outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-recovery-outside-"));
+  const packageVersion = "0.1.0-rc.41";
+  const packageRoot = createRecoveryPackageFixture(packageVersion);
+  const recoveryRoot = path.join(root, "recovery-v2");
+  const bundleRoot = path.join(recoveryRoot, packageVersion);
+  const outsideMarker = path.join(outsideRoot, "must-remain");
+  fs.mkdirSync(recoveryRoot, { recursive: true });
+  fs.writeFileSync(outsideMarker, "outside\n");
+  fs.symlinkSync(outsideRoot, bundleRoot, "junction");
+
+  assert.throws(
+    () => windowsRecoveryBundle({ root }, { packageRoot, packageVersion }),
+    /符号链接|reparse point/i
+  );
+  assert.equal(fs.readFileSync(outsideMarker, "utf8"), "outside\n");
+});
+
+test("Windows recovery cleanup also refuses a dangling final-directory junction", () => {
+  const { windowsRecoveryBundle } = require(platformInstallerPath);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-recovery-dangling-root-"));
+  const outsideRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-recovery-dangling-target-"));
+  const packageVersion = "0.1.0-rc.41";
+  const packageRoot = createRecoveryPackageFixture(packageVersion);
+  const recoveryRoot = path.join(root, "recovery-v2");
+  const bundleRoot = path.join(recoveryRoot, packageVersion);
+  fs.mkdirSync(recoveryRoot, { recursive: true });
+  fs.symlinkSync(outsideRoot, bundleRoot, "junction");
+  fs.rmSync(outsideRoot, { recursive: true });
+
+  assert.throws(
+    () => windowsRecoveryBundle({ root }, { packageRoot, packageVersion }),
+    /符号链接|reparse point/i
+  );
 });
 
 test("Windows authorization resume upgrades a stale protected machine bundle once", async () => {
@@ -239,14 +376,30 @@ test("Windows authorization resume upgrades a stale protected machine bundle onc
   assert.equal(writes[0].filePath, input.paths.state);
   assert.equal(writes[0].values.machine_bundle_helper_sha256, calls[0].payload.helper_sha256);
   assert.equal(writes[0].values.machine_bundle_bootstrap_sha256, calls[0].payload.bootstrap_sha256);
+  assert.equal(writes[0].values.machine_bundle_recovery_manifest_sha256, calls[0].payload.recovery_manifest_sha256);
+  assert.equal(writes[0].values.package_version, calls[0].payload.package_version);
+
+  const currentState = upgraded.state;
+  for (const key of [
+    "machine_bundle_helper_sha256",
+    "machine_bundle_bootstrap_sha256",
+    "machine_bundle_recovery_manifest_sha256",
+    "package_version",
+  ]) {
+    const stale = await refreshWindowsMachineBundleBeforeAuthorization({
+      ...input,
+      state: { ...currentState, [key]: "stale" },
+    });
+    assert.equal(stale.refreshed, true, `${key} must participate in Windows bundle currentness`);
+  }
 
   const current = await refreshWindowsMachineBundleBeforeAuthorization({
     ...input,
-    state: upgraded.state,
+    state: currentState,
   });
   assert.equal(current.refreshed, false);
-  assert.equal(calls.length, 1, "a verified current bundle must not prompt for UAC again");
-  assert.equal(writes.length, 1);
+  assert.equal(calls.length, 5, "only a verified four-field match may avoid another UAC prompt");
+  assert.equal(writes.length, 5);
 });
 
 test("authorization resume refreshes the Windows machine bundle before spawning the client flow", () => {

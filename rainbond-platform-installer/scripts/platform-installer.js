@@ -11,6 +11,7 @@ const readline = require("node:readline/promises");
 const { spawn, spawnSync } = require("node:child_process");
 const { createSecureStateStore } = require("./secure-state.js");
 const {
+  assertSafePackageVersion,
   createRecoveryBundle,
   createWindowsPlatformAdapter,
   createWindowsSecureStateStore,
@@ -1474,24 +1475,87 @@ async function confirmWindowsRestart() {
   }
 }
 
-function windowsRecoveryBundle(paths) {
-  const packageRoot = path.resolve(__dirname, "..", "..");
-  const bundleRoot = path.join(paths.root, "recovery-v1");
-  if (fs.existsSync(path.join(bundleRoot, "manifest.json"))) {
-    const verification = verifyRecoveryBundle(bundleRoot);
-    return { packageRoot, bundleRoot, manifest: verification.manifest };
+function assertManagedRecoveryDirectory(targetPath, recoveryRoot, expectedName) {
+  const resolvedTarget = path.resolve(targetPath);
+  if (path.dirname(resolvedTarget) !== recoveryRoot || path.basename(resolvedTarget) !== expectedName) {
+    throw new Error("恢复包清理目标不在受管理的 recovery-v2 目录内");
   }
+  let info;
+  try {
+    info = fs.lstatSync(resolvedTarget);
+  } catch (error) {
+    if (error.code === "ENOENT") return false;
+    throw error;
+  }
+  if (info.isSymbolicLink() || !info.isDirectory()) {
+    throw new Error(`恢复包目录必须是普通目录，不能是符号链接或 reparse point：${resolvedTarget}`);
+  }
+  return true;
+}
+
+function removeManagedRecoveryDirectory(targetPath, recoveryRoot, expectedName) {
+  if (!assertManagedRecoveryDirectory(targetPath, recoveryRoot, expectedName)) return;
+  fs.rmSync(targetPath, { recursive: true, force: true });
+}
+
+function windowsRecoveryBundle(paths, {
+  packageRoot = path.resolve(__dirname, "..", ".."),
+  packageVersion = packageManifest.version,
+} = {}) {
+  const safePackageVersion = assertSafePackageVersion(packageVersion);
+  const recoveryRoot = path.resolve(paths.root, "recovery-v2");
+  const bundleRoot = path.join(recoveryRoot, safePackageVersion);
+  const stagingName = `.${safePackageVersion}.staging`;
+  const stagingRoot = path.join(recoveryRoot, stagingName);
+  if (path.dirname(bundleRoot) !== recoveryRoot) {
+    throw new Error("恢复包 package version 不能越过 recovery-v2 目录");
+  }
+  fs.mkdirSync(recoveryRoot, { recursive: true, mode: 0o700 });
+  const recoveryRootInfo = fs.lstatSync(recoveryRoot);
+  if (recoveryRootInfo.isSymbolicLink() || !recoveryRootInfo.isDirectory()) {
+    throw new Error("recovery-v2 必须是普通目录，不能是符号链接或 reparse point");
+  }
+  fs.chmodSync(recoveryRoot, 0o700);
+
+  const finalExists = assertManagedRecoveryDirectory(bundleRoot, recoveryRoot, safePackageVersion);
+  if (finalExists) {
+    try {
+      const verification = verifyRecoveryBundle(bundleRoot);
+      if (verification.manifest.version === 2
+          && verification.manifest.package_version === safePackageVersion) {
+        removeManagedRecoveryDirectory(stagingRoot, recoveryRoot, stagingName);
+        return { packageRoot, bundleRoot, manifest: verification.manifest };
+      }
+    } catch {
+      // An interrupted or invalid exact-version directory is rebuilt below.
+    }
+  }
+  removeManagedRecoveryDirectory(stagingRoot, recoveryRoot, stagingName);
+  if (finalExists) removeManagedRecoveryDirectory(bundleRoot, recoveryRoot, safePackageVersion);
+
   const skillDirectories = fs.readdirSync(packageRoot, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && entry.name.startsWith("rainbond-"))
     .map((entry) => entry.name)
     .sort();
-  const manifest = createRecoveryBundle({
-    packageRoot,
-    bundleRoot,
-    requiredFiles: ["package.json", "install.sh", "bin/rainskills.js"],
-    requiredDirectories: skillDirectories,
-  });
-  return { packageRoot, bundleRoot, manifest };
+  try {
+    const manifest = createRecoveryBundle({
+      packageRoot,
+      bundleRoot: stagingRoot,
+      packageVersion: safePackageVersion,
+      requiredFiles: ["package.json", "install.sh", "bin/rainskills.js"],
+      requiredDirectories: skillDirectories,
+    });
+    const verification = verifyRecoveryBundle(stagingRoot, manifest);
+    if (verification.manifest.version !== 2
+        || verification.manifest.package_version !== safePackageVersion) {
+      throw new Error("恢复包 manifest package version 与当前 npm 包不匹配");
+    }
+    fs.renameSync(stagingRoot, bundleRoot);
+    return { packageRoot, bundleRoot, manifest: verification.manifest };
+  } catch (error) {
+    removeManagedRecoveryDirectory(stagingRoot, recoveryRoot, stagingName);
+    throw error;
+  }
 }
 
 function buildWindowsMachineBundlePayload({ recovery, onboarding, nodePath = process.execPath }) {
@@ -1500,6 +1564,9 @@ function buildWindowsMachineBundlePayload({ recovery, onboarding, nodePath = pro
   const recoveryManifestPath = path.join(recovery.bundleRoot, "manifest.json");
   const recoveryEntry = path.join(recovery.bundleRoot, "bin", "rainskills.js");
   const controlMode = onboarding.control_mode || "windows-native";
+  const packageVersion = assertSafePackageVersion(
+    recovery.manifest?.package_version || packageManifest.version
+  );
   return {
     helper_path: helperPath,
     helper_sha256: sha256File(helperPath),
@@ -1507,6 +1574,7 @@ function buildWindowsMachineBundlePayload({ recovery, onboarding, nodePath = pro
     bootstrap_sha256: sha256File(bootstrapPath),
     recovery_root: recovery.bundleRoot,
     recovery_manifest_sha256: sha256File(recoveryManifestPath),
+    package_version: packageVersion,
     recovery_entry: recoveryEntry,
     node_path: nodePath,
     control_mode: controlMode,
@@ -1555,7 +1623,9 @@ async function refreshWindowsMachineBundleBeforeAuthorization({
 
   const payload = buildWindowsMachineBundlePayload({ recovery, onboarding });
   if (state.machine_bundle_helper_sha256 === payload.helper_sha256
-      && state.machine_bundle_bootstrap_sha256 === payload.bootstrap_sha256) {
+      && state.machine_bundle_bootstrap_sha256 === payload.bootstrap_sha256
+      && state.machine_bundle_recovery_manifest_sha256 === payload.recovery_manifest_sha256
+      && state.package_version === payload.package_version) {
     return { state, refreshed: false };
   }
 
@@ -1569,9 +1639,10 @@ async function refreshWindowsMachineBundleBeforeAuthorization({
     throw new Error("Windows 受保护 RainSkills helper 更新后未通过验证");
   }
   state = stateUpdater(paths.state, state, {
-    package_version: packageManifest.version,
+    package_version: payload.package_version,
     machine_bundle_helper_sha256: payload.helper_sha256,
     machine_bundle_bootstrap_sha256: payload.bootstrap_sha256,
+    machine_bundle_recovery_manifest_sha256: payload.recovery_manifest_sha256,
   });
   return { state, refreshed: true };
 }
@@ -1749,6 +1820,8 @@ async function provisionWindowsDistroAndNetwork({ adapter, onboarding, options, 
     guest_address: network.guestAddress,
     machine_bundle_helper_sha256: machineBundlePayload.helper_sha256,
     machine_bundle_bootstrap_sha256: machineBundlePayload.bootstrap_sha256,
+    machine_bundle_recovery_manifest_sha256: machineBundlePayload.recovery_manifest_sha256,
+    package_version: machineBundlePayload.package_version,
   });
 
   if (state.stage === "importing-distro") {
@@ -2413,6 +2486,7 @@ module.exports = {
   validateInstaller,
   verifyRemoteDeployment,
   verifyRemoteRainbond,
+  windowsRecoveryBundle,
   windowsHelperRunOptions,
 };
 

@@ -42,7 +42,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$ACTION" in
-  PrepareRuntime|ConfigureGuestNetwork|PrepareDocker|InstallRainbond|VerifyRainbond) ;;
+  PrepareRuntime|ConfigureGuestNetwork|PrepareDocker|InstallRainbond|VerifyRainbond|ConvergeInstalledRainbond) ;;
   *)
     printf 'Unsupported action\n' >&2
     exit 2
@@ -93,11 +93,7 @@ is_ipv4() {
   done
 }
 
-prepare_runtime() {
-  assert_identity
-  printf '[boot]\nsystemd=true\n' > /etc/wsl.conf
-  chmod 644 /etc/wsl.conf
-
+install_network_helpers() {
   install -d -m 755 /usr/local/libexec
   cat > "$RESTORE_NETWORK_HELPER" <<'SCRIPT'
 #!/usr/bin/env bash
@@ -208,7 +204,7 @@ UNIT
   mkdir -p /etc/systemd/system/docker.service.d /etc/systemd/system/containerd.service.d
   cat > /etc/systemd/system/docker.service.d/10-rainskills-network.conf <<'UNIT'
 [Unit]
-Requires=rainskills-network-ready.service
+Wants=rainskills-network-ready.service
 After=rainskills-network-ready.service
 UNIT
   cp /etc/systemd/system/docker.service.d/10-rainskills-network.conf \
@@ -234,6 +230,13 @@ UNIT
   systemctl enable rainskills-docker-forwarding.service >/dev/null 2>&1 || true
 }
 
+prepare_runtime() {
+  assert_identity
+  printf '[boot]\nsystemd=true\n' > /etc/wsl.conf
+  chmod 644 /etc/wsl.conf
+  install_network_helpers
+}
+
 configure_guest_network() {
   assert_identity
   is_ipv4 "$HOST_ADDRESS" && is_ipv4 "$GUEST_ADDRESS" || {
@@ -249,6 +252,7 @@ configure_guest_network() {
   chmod 600 "$host_state" "$guest_state"
   mv -f -- "$host_state" "$STATE_DIR/host-address"
   mv -f -- "$guest_state" "$STATE_DIR/guest-address"
+  install_network_helpers
   rm -f "$NETWORK_READY_FILE"
   if systemctl is-active --quiet rainskills-network-ready.service; then
     "$RESTORE_NETWORK_HELPER"
@@ -339,6 +343,56 @@ install_rainbond() {
   emit_progress installing-rainbond completed
 }
 
+converge_installed_rainbond() {
+  assert_identity
+  [[ -f "$NETWORK_READY_FILE" ]] || { printf 'Managed network is not ready\n' >&2; exit 1; }
+  if ! systemctl is-active --quiet docker; then
+    timeout 60 systemctl start docker || {
+      printf 'Docker service did not start within 60 seconds\n' >&2
+      exit 1
+    }
+  fi
+  timeout 30 docker info >/dev/null 2>&1 || {
+    printf 'Docker API did not become ready within 30 seconds\n' >&2
+    exit 1
+  }
+  "$FORWARD_DOCKER_HELPER"
+
+  local ownership_file="$STATE_DIR/rainbond-installation-id"
+  [[ -f "$ownership_file" && ! -L "$ownership_file" && "$(stat -c '%u' "$ownership_file")" == "0" ]] || {
+    printf 'Rainbond ownership marker is missing or unsafe\n' >&2
+    exit 1
+  }
+  local ownership status safe_status
+  ownership="$(tr -d '\r\n' < "$ownership_file")"
+  [[ "$ownership" == "$INSTALLATION_ID" ]] || {
+    printf 'Rainbond ownership marker mismatch\n' >&2
+    exit 1
+  }
+  docker inspect rainbond >/dev/null 2>&1 || {
+    printf 'Managed rainbond container is missing\n' >&2
+    exit 1
+  }
+  status="$(docker inspect rainbond --format '{{.State.Status}}')"
+  case "$status" in
+    running)
+      ;;
+    created|exited)
+      docker start rainbond >/dev/null
+      ;;
+    *)
+      safe_status="${status//$'\r'/ }"
+      safe_status="${safe_status//$'\n'/ }"
+      safe_status="${safe_status//[^A-Za-z0-9_.-]/?}"
+      safe_status="${safe_status:0:80}"
+      safe_status="${safe_status:-<empty>}"
+      printf 'Managed rainbond container state is not safely startable: %s\n' "$safe_status" >&2
+      exit 1
+      ;;
+  esac
+  printf 'dockerReady=true\nrainbondRuntimeVerified=true\ncontainerRunning=true\n'
+}
+
 verify_rainbond() {
   assert_identity
   is_ipv4 "$GUEST_ADDRESS" || { printf 'Invalid Rainbond EIP\n' >&2; exit 2; }
@@ -420,6 +474,9 @@ case "$ACTION" in
     ;;
   InstallRainbond)
     install_rainbond
+    ;;
+  ConvergeInstalledRainbond)
+    converge_installed_rainbond
     ;;
   VerifyRainbond)
     verify_rainbond

@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
   [Parameter(Mandatory = $true)]
-  [ValidateSet("Preflight", "InspectState", "ProtectState", "PrepareWsl", "ProvisionRainbond", "InstallMachineBundle", "EnableWsl", "UpdateWsl", "VerifyWsl", "RegisterResume", "RegisterFinalize", "RequestReboot", "Finalize", "ImportDistro", "PrepareRuntime", "ConfigureNetwork", "VerifyNetwork", "PrepareDocker", "InstallRainbond", "VerifyDeployment")]
+  [ValidateSet("Preflight", "InspectState", "ProtectState", "PrepareWsl", "ProvisionRainbond", "ConvergeInstalledPlatform", "InstallMachineBundle", "EnableWsl", "UpdateWsl", "VerifyWsl", "RegisterResume", "RegisterFinalize", "RequestReboot", "Finalize", "ImportDistro", "PrepareRuntime", "ConfigureNetwork", "VerifyNetwork", "PrepareDocker", "InstallRainbond", "VerifyDeployment")]
   [string]$Action,
 
   [string]$RequestPath = "",
@@ -518,6 +518,147 @@ function Write-MachineLease([string]$MachineRoot, $Request) {
   [IO.File]::WriteAllText($leasePath, (($lease | ConvertTo-Json -Depth 4) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
 }
 
+function Assert-SafePackageVersion([string]$PackageVersion) {
+  if ([string]::IsNullOrWhiteSpace($PackageVersion) -or
+      $PackageVersion.Length -gt 128 -or
+      $PackageVersion -notmatch '^[0-9A-Za-z][0-9A-Za-z.+-]*$') {
+    throw "Invalid package_version"
+  }
+  return $PackageVersion
+}
+
+function Test-RegularMachineBundleFile([string]$FilePath, [string]$Description) {
+  if (-not (Test-Path -LiteralPath $FilePath)) { return $false }
+  $item = Get-Item -LiteralPath $FilePath -Force
+  if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+    throw "$Description must be a regular non-reparse file"
+  }
+  return $true
+}
+
+function Restore-MachineBundleFile(
+  [string]$FinalPath,
+  [string]$BackupPath,
+  [bool]$HadExisting,
+  [bool]$Published
+) {
+  if (-not $Published) { return }
+  if ($HadExisting) {
+    if (-not (Test-RegularMachineBundleFile $BackupPath "Machine bundle rollback backup")) {
+      throw "Machine bundle rollback backup is missing"
+    }
+    if (Test-RegularMachineBundleFile $FinalPath "Published machine bundle file") {
+      [IO.File]::Replace($BackupPath, $FinalPath, $null)
+    } else {
+      [IO.File]::Move($BackupPath, $FinalPath)
+    }
+    return
+  }
+  if (Test-RegularMachineBundleFile $FinalPath "Published machine bundle file") {
+    Remove-Item -LiteralPath $FinalPath -Force
+  }
+}
+
+function Remove-MachineBundleTemporaryFile([string]$FilePath, [string]$Description) {
+  if (Test-RegularMachineBundleFile $FilePath $Description) {
+    Remove-Item -LiteralPath $FilePath -Force
+  }
+}
+
+function Publish-MachineBundleTransaction(
+  $Request,
+  [string]$SourceHelper,
+  [string]$ExpectedHelperDigest,
+  [string]$BootstrapSource,
+  [string]$BootstrapDigest,
+  [string]$MachineHelper,
+  [string]$MachineBootstrap,
+  [string]$ManifestPath,
+  $Manifest
+) {
+  $transactionId = [Guid]::NewGuid().ToString("N")
+  $helperStage = "$MachineHelper.$transactionId.stage"
+  $bootstrapStage = "$MachineBootstrap.$transactionId.stage"
+  $manifestStage = "$ManifestPath.$transactionId.stage"
+  $helperBackup = "$MachineHelper.$transactionId.backup"
+  $bootstrapBackup = "$MachineBootstrap.$transactionId.backup"
+  $manifestBackup = "$ManifestPath.$transactionId.backup"
+  $helperHadExisting = Test-RegularMachineBundleFile $MachineHelper "Existing machine helper"
+  $bootstrapHadExisting = Test-RegularMachineBundleFile $MachineBootstrap "Existing machine bootstrap"
+  $manifestHadExisting = Test-RegularMachineBundleFile $ManifestPath "Existing machine manifest"
+  $helperPublished = $false
+  $bootstrapPublished = $false
+  $manifestPublished = $false
+
+  try {
+    Copy-Item -LiteralPath $SourceHelper -Destination $helperStage
+    Copy-Item -LiteralPath $BootstrapSource -Destination $bootstrapStage
+    [void](Assert-FileDigest $helperStage $ExpectedHelperDigest)
+    [void](Assert-FileDigest $bootstrapStage $BootstrapDigest)
+    [IO.File]::WriteAllText($manifestStage, (($Manifest | ConvertTo-Json -Depth 6) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+    $stagedManifest = Get-Content -LiteralPath $manifestStage -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($stagedManifest.schema -ne "rainskills.windows-machine-bundle.v1" -or
+        $stagedManifest.operation_id -ne $Request.operation_id -or
+        $stagedManifest.installation_id -ne $Request.installation_id -or
+        $stagedManifest.original_user_sid -ne $Request.user_sid -or
+        $stagedManifest.helper_sha256 -ne $ExpectedHelperDigest -or
+        $stagedManifest.bootstrap_sha256 -ne $BootstrapDigest) {
+      throw "Staged machine manifest verification failed"
+    }
+    [void](Assert-SafePackageVersion ([string]$stagedManifest.package_version))
+
+    if ($helperHadExisting) {
+      [IO.File]::Replace($helperStage, $MachineHelper, $helperBackup)
+    } else {
+      [IO.File]::Move($helperStage, $MachineHelper)
+    }
+    $helperPublished = $true
+    if ($bootstrapHadExisting) {
+      [IO.File]::Replace($bootstrapStage, $MachineBootstrap, $bootstrapBackup)
+    } else {
+      [IO.File]::Move($bootstrapStage, $MachineBootstrap)
+    }
+    $bootstrapPublished = $true
+    if ($manifestHadExisting) {
+      [IO.File]::Replace($manifestStage, $ManifestPath, $manifestBackup)
+    } else {
+      [IO.File]::Move($manifestStage, $ManifestPath)
+    }
+    $manifestPublished = $true
+    [void](Assert-MachineManifest $Request)
+  } catch {
+    $publicationError = $_
+    $rollbackFailures = [Collections.Generic.List[string]]::new()
+    try {
+      Restore-MachineBundleFile $ManifestPath $manifestBackup $manifestHadExisting $manifestPublished
+    } catch {
+      $rollbackFailures.Add($_.Exception.Message)
+    }
+    try {
+      Restore-MachineBundleFile $MachineBootstrap $bootstrapBackup $bootstrapHadExisting $bootstrapPublished
+    } catch {
+      $rollbackFailures.Add($_.Exception.Message)
+    }
+    try {
+      Restore-MachineBundleFile $MachineHelper $helperBackup $helperHadExisting $helperPublished
+    } catch {
+      $rollbackFailures.Add($_.Exception.Message)
+    }
+    if ($rollbackFailures.Count -gt 0) {
+      throw "Machine bundle publication failed: $($publicationError.Exception.Message); rollback failed: $($rollbackFailures -join '; ')"
+    }
+    throw $publicationError
+  } finally {
+    foreach ($stagePath in @($manifestStage, $bootstrapStage, $helperStage)) {
+      Remove-MachineBundleTemporaryFile $stagePath "Machine bundle staging file"
+    }
+  }
+
+  foreach ($backupPath in @($manifestBackup, $bootstrapBackup, $helperBackup)) {
+    Remove-MachineBundleTemporaryFile $backupPath "Machine bundle backup file"
+  }
+}
+
 function Invoke-InstallMachineBundle($Request) {
   $payload = $Request.payload
   $sourceHelper = [string](Get-PropertyValue $payload "helper_path")
@@ -528,6 +669,8 @@ function Invoke-InstallMachineBundle($Request) {
   $recoveryEntry = [string](Get-PropertyValue $payload "recovery_entry")
   $bootstrapSource = [string](Get-PropertyValue $payload "bootstrap_path")
   $bootstrapDigest = [string](Get-PropertyValue $payload "bootstrap_sha256")
+  $packageVersion = [string](Get-PropertyValue $payload "package_version")
+  [void](Assert-SafePackageVersion $packageVersion)
   $controlMode = [string](Get-PropertyValue $payload "control_mode" "windows-native")
   $controlDistro = Get-PropertyValue $payload "control_distro"
   $controlNodePath = Get-PropertyValue $payload "control_node_path"
@@ -556,6 +699,7 @@ function Invoke-InstallMachineBundle($Request) {
   $machineRoot = Get-MachineRoot $Request
   $machineHelper = Join-Path $machineRoot "windows-platform.ps1"
   $manifestPath = Join-Path $machineRoot "machine-manifest.json"
+  $machineRootCreated = $false
   if (Test-Path -LiteralPath $machineRoot) {
     Assert-ManagedMachineRoot $machineRoot $Request.installation_id
     Set-MachineRootAcl $machineRoot $Request.user_sid
@@ -564,13 +708,10 @@ function Invoke-InstallMachineBundle($Request) {
     Assert-UpgradableMachineBundle $Request $existing $expectedHelperDigest $bootstrapDigest
   } else {
     New-Item -ItemType Directory -Path $machineRoot | Out-Null
+    $machineRootCreated = $true
     Assert-ManagedMachineRoot $machineRoot $Request.installation_id
   }
-  Copy-Item -LiteralPath $sourceHelper -Destination $machineHelper -Force
   $machineBootstrap = Join-Path $machineRoot "wsl-bootstrap.sh"
-  Copy-Item -LiteralPath $bootstrapSource -Destination $machineBootstrap -Force
-  [void](Assert-FileDigest $machineHelper $expectedHelperDigest)
-  [void](Assert-FileDigest $machineBootstrap $bootstrapDigest)
   $manifest = [ordered]@{
     schema = "rainskills.windows-machine-bundle.v1"
     operation_id = $Request.operation_id
@@ -578,6 +719,7 @@ function Invoke-InstallMachineBundle($Request) {
     original_user_sid = $Request.user_sid
     helper_sha256 = $expectedHelperDigest
     bootstrap_sha256 = $bootstrapDigest
+    package_version = $packageVersion
     recovery_root = $recoveryRoot
     recovery_manifest_sha256 = $recoveryManifestDigest
     recovery_entry = $recoveryEntry
@@ -587,7 +729,18 @@ function Invoke-InstallMachineBundle($Request) {
     control_node_path = if ($controlMode -eq "wsl") { [string]$controlNodePath } else { $null }
     control_recovery_entry = if ($controlMode -eq "wsl") { [string]$controlRecoveryEntry } else { $null }
   }
-  [IO.File]::WriteAllText($manifestPath, (($manifest | ConvertTo-Json -Depth 6) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+  try {
+    Publish-MachineBundleTransaction $Request $sourceHelper $expectedHelperDigest $bootstrapSource `
+      $bootstrapDigest $machineHelper $machineBootstrap $manifestPath $manifest
+  } catch {
+    if ($machineRootCreated -and (Test-Path -LiteralPath $machineRoot -PathType Container)) {
+      Assert-ManagedMachineRoot $machineRoot $Request.installation_id
+      if (@(Get-ChildItem -LiteralPath $machineRoot -Force).Count -eq 0) {
+        Remove-Item -LiteralPath $machineRoot -Force
+      }
+    }
+    throw
+  }
   Write-MachineLease $machineRoot $Request
   Set-MachineRootAcl $machineRoot $Request.user_sid
   [void](Assert-MachineManifest $Request)
@@ -1261,6 +1414,7 @@ function Assert-MachineManifest($Request) {
   [void](Assert-FileDigest (Join-Path $machineRoot "windows-platform.ps1") $manifest.helper_sha256)
   [void](Assert-FileDigest (Join-Path $machineRoot "wsl-bootstrap.sh") $manifest.bootstrap_sha256)
   [void](Assert-FileDigest (Join-Path $manifest.recovery_root "manifest.json") $manifest.recovery_manifest_sha256)
+  [void](Assert-SafePackageVersion ([string](Get-PropertyValue $manifest "package_version")))
   return $manifest
 }
 
@@ -1453,6 +1607,43 @@ function Invoke-PrepareWsl($Request) {
   return $facts
 }
 
+function Invoke-ConvergeInstalledPlatform($Request) {
+  Write-Host "[1/5] Updating the protected RainSkills helper..."
+  $bundle = Invoke-InstallMachineBundle $Request
+  Write-Host "[2/5] Reconciling fixed local networking..."
+  $configured = Invoke-ConfigureNetwork $Request
+  Write-Host "[3/5] Converging the existing Rainbond runtime..."
+  Invoke-DistroBootstrap $Request "ConvergeInstalledRainbond" `
+    ([string]$configured.hostAddress) ([string]$configured.guestAddress)
+  Write-Host "[4/5] Refreshing recovery tasks..."
+  $resume = Invoke-RegisterResume $Request
+  Write-Host "[5/5] Verifying the existing deployment..."
+  $verified = Invoke-VerifyDeployment $Request
+  return [ordered]@{
+    installationId = [string]$Request.installation_id
+    machineBundleVerified = [bool]$bundle.machineBundleVerified
+    distroIdentityVerified = $true
+    systemdReady = $true
+    networkGateReady = [bool]$configured.networkManifestVerified
+    dockerReady = $true
+    rainbondRuntimeVerified = [bool]$verified.containerRunning
+    networkManifestVerified = [bool]$configured.networkManifestVerified
+    portproxyVerified = [bool]$configured.portproxyVerified
+    recoveryTasksVerified = [bool]$resume.recoveryTasksVerified
+    containerRunning = [bool]$verified.containerRunning
+    nodeReady = [bool]$verified.nodeReady
+    componentsReady = [bool]$verified.componentsReady
+    wslConsoleReachable = [bool]$verified.wslConsoleReachable
+    windowsConsoleReachable = [bool]$verified.windowsConsoleReachable
+    portsListening = $verified.portsListening
+    subnet = [string]$configured.subnet
+    hostAddress = [string]$configured.hostAddress
+    guestAddress = [string]$verified.guestAddress
+    windowsConsoleUrl = [string]$verified.windowsConsoleUrl
+    controlConsoleUrl = [string]$verified.controlConsoleUrl
+  }
+}
+
 function Invoke-ProvisionRainbond($Request) {
   Write-Host "[1/7] Updating the protected RainSkills helper..."
   try {
@@ -1542,7 +1733,7 @@ try {
   }
   $resultIdentityValidated = $true
 
-  $machineActions = @("PrepareWsl", "ProvisionRainbond", "InstallMachineBundle", "EnableWsl", "UpdateWsl", "VerifyWsl", "RegisterResume", "RegisterFinalize", "RequestReboot", "Finalize", "ImportDistro", "PrepareRuntime", "ConfigureNetwork", "VerifyNetwork", "PrepareDocker", "InstallRainbond", "VerifyDeployment")
+  $machineActions = @("PrepareWsl", "ProvisionRainbond", "ConvergeInstalledPlatform", "InstallMachineBundle", "EnableWsl", "UpdateWsl", "VerifyWsl", "RegisterResume", "RegisterFinalize", "RequestReboot", "Finalize", "ImportDistro", "PrepareRuntime", "ConfigureNetwork", "VerifyNetwork", "PrepareDocker", "InstallRainbond", "VerifyDeployment")
   if ($machineActions -contains $Action -and -not (Test-IsElevated)) {
     Invoke-ElevatedSelf
     exit 0
@@ -1557,6 +1748,7 @@ try {
     "Preflight" { $facts = Invoke-Preflight $request }
     "PrepareWsl" { $facts = Invoke-PrepareWsl $request }
     "ProvisionRainbond" { $facts = Invoke-ProvisionRainbond $request }
+    "ConvergeInstalledPlatform" { $facts = Invoke-ConvergeInstalledPlatform $request }
     "InstallMachineBundle" { $facts = Invoke-InstallMachineBundle $request }
     "EnableWsl" { $facts = Invoke-EnableWsl $request }
     "UpdateWsl" { $facts = Invoke-UpdateWsl $request }
