@@ -60,6 +60,7 @@ Windows 的管理员 PowerShell/WSL 动作只返回固定结构化事实和错�
   "phase": "preflight",
   "step": "resource_check",
   "action": "preflight",
+  "legacy_action": "install|refresh|null",
   "status": "started|completed|blocked|failed|interrupted|skipped",
   "duration_ms": 1234,
   "error_code": "containerd_not_ready",
@@ -110,9 +111,11 @@ Windows 的管理员 PowerShell/WSL 动作只返回固定结构化事实和错�
 - 后续 RainSkills 执行时尽力补发未发送事件，使用 `event_id` 幂等；过期（7 天）或超过 10 MB/1000 条上限的事件自动丢弃并写入本地丢弃计数；
 - 发送器不继承 Token、密码或完整环境变量，且不把请求内容写入错误日志。
 
-每次请求发送单个 JSON 事件，事件包含 `schema`、`event_id`、`install_attempt_id`、阶段字段以及现有兼容摘要字段。服务端 rollout 必须为 `event_id` 建立唯一约束或幂等键：同一事件重复 POST 必须返回 2xx 且只计数一次。客户端不能依赖响应正文。
+每次请求发送单个 JSON 事件，事件包含 `schema`、`event_id`、`install_attempt_id`、阶段字段以及现有兼容摘要字段。新事件的 `action` 始终使用生命周期动作枚举；旧安装摘要所需的 `install/refresh` 单独放入 `legacy_action`，不得复用同名字段。服务端 rollout 必须为 `event_id` 建立唯一约束或幂等键：同一事件重复 POST 必须返回 2xx 且只计数一次。客户端不能依赖响应正文。
 
-兼容 rollout 分两步：新服务先接受事件 schema 并按 `event_id` 去重；在服务端支持确认前，客户端发送失败时把事件投影为旧字段集合（`install_attempt_id`、`eid`、`install_client`、`action`、`phase`、`status`、`failure_stage`、`failure_category`）重试一次。若旧服务拒绝未知字段，legacy 投影仍可记录四类摘要，但不声称旧服务已接收完整中间事件。固定 JSON golden/contract 测试覆盖新服务、旧服务忽略未知字段、旧服务拒绝未知字段、网络重试和重复 `event_id`。
+兼容 rollout 分两步：新服务先接受事件 schema 并按 `event_id` 去重；若服务明确返回 schema 不兼容的 400/415/422（带固定错误码或响应头），客户端才把事件投影为旧字段集合（`install_attempt_id`、`eid`、`install_client`、`action=legacy_action`、`phase`、`status`、`failure_stage`、`failure_category`）发送一次 legacy 请求。映射固定为：`status=started` → `phase=started,status=started`；`phase=authorize_device_flow|authorize_legacy` 且 `status=completed` → `phase=authorized,status=success`；`phase=configure_mcp` 且 `status=completed` → `phase=configured,status=success`；`status=failed|blocked|interrupted` → `phase=failed,status=failure`，`failure_stage=error_stage`，`failure_category=error_code|blocked_reason|interrupted`；其他完成阶段保留 `phase=started,status=started`，不伪造授权或配置成功。`eid`、`install_client` 和 `legacy_action` 沿用本次安装上下文；直接平台安装默认 `legacy_action=install`，`refresh` 仅来自 `install.sh refresh`。
+
+DNS 失败、连接超时、TLS 错误、5xx 或响应丢失属于不确定投递结果，只允许重试相同 JSON 和相同 `event_id`，禁止切换到 legacy 请求；旧服务必须通过 `Idempotency-Key: event_id` 或已部署的唯一键避免重复。若明确 schema 不兼容后 legacy 请求也失败，只保留本地队列。固定 JSON golden/contract 测试覆盖新服务、旧服务忽略未知字段、旧服务明确拒绝未知字段、每个阶段到旧四类摘要的映射、网络重试和重复 `event_id`。
 
 `install_attempt_id` 在首次 `install.sh` 启动时生成并写入 onboarding 状态；`platform install`、`resume`、重启后继续和 SIGINT 后恢复都沿用该 ID。直接执行没有 onboarding 状态的 `platform install` 时生成新的 ID。每个操作目录另有 `operation_id`，事件通过 `operation_id`、`installation_id`、`parent_event_id` 和单调递增 `sequence` 还原阶段顺序；恢复运行使用 `resumed_from` 指向上一次未完成操作的最后事件，不重新创建 install attempt。
 
