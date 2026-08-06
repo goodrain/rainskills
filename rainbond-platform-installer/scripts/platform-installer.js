@@ -615,7 +615,9 @@ function remoteScriptInvocation(target, session, script, scriptArgs = [], option
   if (session?.interactive) {
     return {
       args: [...sshArgs(normalized, session), ...remoteScriptInvocationArgs(script, scriptArgs)],
-      options: { ...options, interactive: true },
+      // Native Windows OpenSSH reads the password from the attached terminal.
+      // Do not let spawnSync kill that prompt while the user is typing it.
+      options: { ...options, timeout: null, interactive: true },
     };
   }
   return {
@@ -848,7 +850,7 @@ function prepareRemoteInstaller(target, operationId, installerPath, runner = run
     "-P", String(normalized.port),
     installerPath,
     `${normalized.host}:${workspace}/rainbond-install.sh`,
-  ], session?.interactive ? { timeout: 120000, interactive: true } : { timeout: 120000 });
+  ], session?.interactive ? { timeout: null, interactive: true } : { timeout: 120000 });
   assertCommandResult(copy, `无法把官方安装脚本传输到 ${normalized.host}`);
   return workspace;
 }

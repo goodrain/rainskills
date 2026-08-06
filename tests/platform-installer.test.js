@@ -1471,9 +1471,11 @@ test("Windows remote preparation keeps SSH and SCP password prompts attached", (
   );
 
   assert.equal(calls[0].options.interactive, true);
+  assert.equal(calls[0].options.timeout, null);
   assert.equal(calls[0].options.input, undefined);
   assert(calls[1].args.includes("BatchMode=no"));
   assert.equal(calls[1].options.interactive, true);
+  assert.equal(calls[1].options.timeout, null);
 });
 
 test("remote installer invocation verifies the transferred digest and Bash syntax", () => {
