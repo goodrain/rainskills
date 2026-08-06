@@ -59,8 +59,8 @@ Windows 的管理员 PowerShell/WSL 动作只返回固定结构化事实和错�
   "client": "codex|claude_code|pi|unknown",
   "phase": "preflight",
   "step": "resource_check",
-  "action": "preflight",
-  "legacy_action": "install|refresh|null",
+  "action": "install|refresh|null",
+  "lifecycle_action": "preflight",
   "status": "started|completed|blocked|failed|interrupted|skipped",
   "duration_ms": 1234,
   "error_code": "containerd_not_ready",
@@ -83,7 +83,7 @@ Windows 的管理员 PowerShell/WSL 动作只返回固定结构化事实和错�
 
 步骤枚举至少包含：`select_target`、`inspect_host`、`resource_check`、`port_check`、`confirm_install`、`enable_wsl`、`request_reboot`、`download_rootfs`、`import_distro`、`prepare_runtime`、`prepare_docker`、`install_rainbond`、`configure_network`、`verify_console`、`device_code`、`browser_callback`、`legacy_callback`、`verify_mcp`、`configure_mcp`、`resume`、`finalize`。
 
-动作枚举为固定小写值：`preflight`、`prepare_wsl`、`request_reboot`、`update_wsl`、`verify_wsl`、`import_distro`、`prepare_runtime`、`configure_network`、`verify_network`、`prepare_docker`、`install_rainbond`、`verify_deployment`、`converge_platform`、`authorize`、`configure_mcp`、`resume`、`finalize` 或 `null`。Windows PowerShell action 写入前统一转小写。
+`lifecycle_action` 枚举为固定小写值：`preflight`、`prepare_wsl`、`request_reboot`、`update_wsl`、`verify_wsl`、`import_distro`、`prepare_runtime`、`configure_network`、`verify_network`、`prepare_docker`、`install_rainbond`、`verify_deployment`、`converge_platform`、`authorize`、`configure_mcp`、`resume`、`finalize` 或 `null`。顶层 `action` 始终保留旧安装摘要值 `install`、`refresh` 或 `null`。Windows PowerShell action 写入 `lifecycle_action` 前统一转小写。
 
 `error_stage` 只允许阶段枚举值或 `null`；`error_code`/`reason_code` 只允许错误分类枚举值或 `null`；`auth_method` 只允许 `device_flow`、`browser_loopback`、`browser_manual`、`jwt_flag`、`legacy_password` 或 `null`。
 
@@ -111,9 +111,9 @@ Windows 的管理员 PowerShell/WSL 动作只返回固定结构化事实和错�
 - 后续 RainSkills 执行时尽力补发未发送事件，使用 `event_id` 幂等；过期（7 天）或超过 10 MB/1000 条上限的事件自动丢弃并写入本地丢弃计数；
 - 发送器不继承 Token、密码或完整环境变量，且不把请求内容写入错误日志。
 
-每次请求发送单个 JSON 事件，事件包含 `schema`、`event_id`、`install_attempt_id`、阶段字段以及现有兼容摘要字段。新事件的 `action` 始终使用生命周期动作枚举；旧安装摘要所需的 `install/refresh` 单独放入 `legacy_action`，不得复用同名字段。服务端 rollout 必须为 `event_id` 建立唯一约束或幂等键：同一事件重复 POST 必须返回 2xx 且只计数一次。客户端不能依赖响应正文。
+每次请求发送单个 JSON 事件，事件包含 `schema`、`event_id`、`install_attempt_id`、阶段字段以及现有兼容摘要字段。顶层 `action` 始终是旧的 `install/refresh` 值，新的生命周期动作只放在 `lifecycle_action`；旧服务即使忽略未知字段，也不会把 `preflight` 误读为旧 action。服务端 rollout 必须为 `event_id` 建立唯一约束或幂等键：同一事件重复 POST 必须返回 2xx 且只计数一次。客户端不能依赖响应正文。
 
-兼容 rollout 分两步：新服务先接受事件 schema 并按 `event_id` 去重；若服务明确返回 schema 不兼容的 400/415/422（带固定错误码或响应头），客户端才把事件投影为旧字段集合（`install_attempt_id`、`eid`、`install_client`、`action=legacy_action`、`phase`、`status`、`failure_stage`、`failure_category`）发送一次 legacy 请求。映射固定为：`status=started` → `phase=started,status=started`；`phase=authorize_device_flow|authorize_legacy` 且 `status=completed` → `phase=authorized,status=success`；`phase=configure_mcp` 且 `status=completed` → `phase=configured,status=success`；`status=failed|blocked|interrupted` → `phase=failed,status=failure`，`failure_stage=error_stage`，`failure_category=error_code|blocked_reason|interrupted`；其他完成阶段保留 `phase=started,status=started`，不伪造授权或配置成功。`eid`、`install_client` 和 `legacy_action` 沿用本次安装上下文；直接平台安装默认 `legacy_action=install`，`refresh` 仅来自 `install.sh refresh`。
+兼容 rollout 分两步：新服务先接受事件 schema 并按 `event_id` 去重；若服务明确返回 schema 不兼容的 400/415/422（带固定错误码或响应头），客户端才把事件投影为旧字段集合（`install_attempt_id`、`eid`、`install_client`、`action`、`phase`、`status`、`failure_stage`、`failure_category`）发送一次 legacy 请求。映射固定为：`status=started` → `phase=started,status=started`；`phase=authorize_device_flow|authorize_legacy` 且 `status=completed` → `phase=authorized,status=success`；`phase=configure_mcp` 且 `status=completed` → `phase=configured,status=success`；`status=failed|blocked|interrupted` → `phase=failed,status=failure`，`failure_stage=error_stage`，`failure_category=error_code|blocked_reason|interrupted`；其他完成阶段保留 `phase=started,status=started`，不伪造授权或配置成功。`eid`、`install_client` 和顶层 `action` 沿用本次安装上下文；直接平台安装默认 `action=install`，`refresh` 仅来自 `install.sh refresh`。
 
 DNS 失败、连接超时、TLS 错误、5xx 或响应丢失属于不确定投递结果，只允许重试相同 JSON 和相同 `event_id`，禁止切换到 legacy 请求；旧服务必须通过 `Idempotency-Key: event_id` 或已部署的唯一键避免重复。若明确 schema 不兼容后 legacy 请求也失败，只保留本地队列。固定 JSON golden/contract 测试覆盖新服务、旧服务忽略未知字段、旧服务明确拒绝未知字段、每个阶段到旧四类摘要的映射、网络重试和重复 `event_id`。
 
@@ -138,7 +138,7 @@ DNS 失败、连接超时、TLS 错误、5xx 或响应丢失属于不确定投�
 | Windows/WSL 控制端 | remote-linux | SSH 预检、认证等待/超时、远程目录/脚本、安装、远程验证、授权 | `ssh` |
 | macOS/Linux | remote-linux | SSH 预检、认证等待/超时、远程目录/脚本、安装、远程验证、授权 | `ssh` |
 
-合法组合固定为：`posix+local-linux+direct`、`posix+local-macos+direct`、`windows-native+local-windows+powershell|wsl`、`wsl+local-windows+wsl|powershell`、以及任意控制端的 `remote-linux+ssh`。组合不匹配时上报 `invalid_arguments` 后沿用原业务错误。`control_distro`、SSH 主机和 Console 地址不写入事件；仅记录 `transport`、`auth_method` 和目标枚举。Windows action 名称进入 `action` 白名单，WSL 发行版版本只记录受限版本号事实，不记录路径或命令输出。重启等待写 `status=blocked, blocked_reason=awaiting_reboot`；设备码轮询写 `status=blocked, blocked_reason=device_authorization_pending`；用户取消/进程信号分别写 `user_cancelled`/`interrupted`。
+合法组合固定为：`posix+local-linux+direct`、`posix+local-macos+direct`、`windows-native+local-windows+powershell|wsl`、`wsl+local-windows+wsl|powershell`、以及任意控制端的 `remote-linux+ssh`。组合不匹配时上报 `invalid_arguments` 后沿用原业务错误。`control_distro`、SSH 主机和 Console 地址不写入事件；仅记录 `transport`、`auth_method` 和目标枚举。Windows action 名称进入 `lifecycle_action` 白名单，WSL 发行版版本只记录受限版本号事实，不记录路径或命令输出。重启等待写 `status=blocked, blocked_reason=awaiting_reboot`；设备码轮询写 `status=blocked, blocked_reason=device_authorization_pending`；用户取消/进程信号分别写 `user_cancelled`/`interrupted`。
 
 ## 六、错误与隐私
 
