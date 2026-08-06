@@ -39,7 +39,7 @@ let interruptedSignal = null;
 
 function usage() {
   process.stdout.write(`Usage:
-  npx rainskills platform install --onboarding-id <id> [--target <kind>] [--ssh <target>] [--ssh-port <port>] [--console-host <host>] [--yes] [--no-resume]
+  npx rainskills platform install --onboarding-id <id> [--target <kind>] [--ssh <target>] [--ssh-port <port>] [--console-host <host>] [--rainbond-image <image>] [--yes] [--no-resume]
   npx rainskills resume --onboarding-id <id>
 
 Commands:
@@ -52,6 +52,8 @@ Options:
   --ssh TARGET        Existing SSH alias or user@host for remote-linux
   --ssh-port PORT     SSH port (default: 22)
   --console-host HOST Public IP or DNS name used to reach Console on port 7070
+  --rainbond-image IMAGE
+                      Override the complete Rainbond all-in-one image
   --yes               Confirm the displayed installation effects non-interactively
   --no-resume         Stop after verified platform installation
   -h, --help          Show this help
@@ -66,6 +68,7 @@ function parseArgs(argv) {
     ssh: "",
     sshPort: 22,
     consoleHost: "",
+    rainbondImage: "",
     yes: false,
     noResume: false,
   };
@@ -90,6 +93,10 @@ function parseArgs(argv) {
     } else if (argument === "--console-host") {
       if (!argv[index + 1]) throw new Error("--console-host 需要一个值");
       result.consoleHost = normalizeConsoleHost(argv[index + 1]);
+      index += 1;
+    } else if (argument === "--rainbond-image") {
+      if (!argv[index + 1]) throw new Error("--rainbond-image 需要一个值");
+      result.rainbondImage = normalizeRainbondImage(argv[index + 1]);
       index += 1;
     } else if (argument === "--yes") {
       result.yes = true;
@@ -396,6 +403,14 @@ function normalizeConsoleHost(value) {
     throw new Error("Console 地址无效，请填写 IP 或域名，不要包含协议、端口或路径");
   }
   return host.toLowerCase();
+}
+
+function normalizeRainbondImage(value) {
+  const image = String(value || "").trim();
+  if (!image || image.length > 512 || !/^[A-Za-z0-9][A-Za-z0-9._/@:-]*$/.test(image)) {
+    throw new Error("Rainbond 镜像地址无效，请填写不含空格或 shell 特殊字符的完整镜像名");
+  }
+  return image;
 }
 
 function consoleUrlForHost(host) {
@@ -1092,11 +1107,20 @@ function createPlatformState(operationId, paths) {
     remote_workspace: null,
     artifact_url: null,
     artifact_sha256: null,
+    rainbond_image: null,
     detected_rainbond_version: POLICY.installer.tested_rainbond_version,
     approved_effects: [],
     console_url: null,
     log_path: paths.log,
   };
+}
+
+function requestedRainbondImage(options = {}, state = {}) {
+  const candidate = options.rainbondImage
+    || state.rainbond_image
+    || process.env.RAINSKILLS_RAINBOND_IMAGE
+    || "";
+  return candidate ? normalizeRainbondImage(candidate) : "";
 }
 
 function updateState(filePath, state, values) {
@@ -1280,6 +1304,43 @@ function validateInstaller(filePath, {
     }
   }
   return crypto.createHash("sha256").update(content).digest("hex");
+}
+
+function prepareInstallerForRainbondImage(filePath, image, options = {}) {
+  const normalizedImage = image ? normalizeRainbondImage(image) : "";
+  if (!normalizedImage) return { sha256: validateInstaller(filePath, options), overridden: false };
+
+  const content = fs.readFileSync(filePath, "utf8");
+  const markerPattern = /^# RainSkills image override: (.+)$/m;
+  const existingMarker = content.match(markerPattern);
+  if (existingMarker) {
+    if (existingMarker[1] !== normalizedImage) {
+      throw new Error("缓存的 Rainbond 安装脚本已经绑定了另一个镜像，请清理该 onboarding 状态后重试");
+    }
+    return { sha256: validateInstaller(filePath, options), overridden: true };
+  }
+
+  const imageAssignment = /^RBD_IMAGE="\$\{IMGHUB_MIRROR\}\/rainbond:\$\{RAINBOND_VERSION\}-k3s"$/m;
+  if (!imageAssignment.test(content)) {
+    throw new Error("官方 Rainbond 安装脚本不支持安全的完整镜像覆盖");
+  }
+  const patched = content.replace(
+    imageAssignment,
+    `# RainSkills image override: ${normalizedImage}\nRBD_IMAGE='${normalizedImage}'`
+  );
+  const tempPath = `${filePath}.${process.pid}.${crypto.randomBytes(6).toString("hex")}.image.part`;
+  try {
+    fs.writeFileSync(tempPath, patched, { flag: "wx", mode: 0o600 });
+    fs.renameSync(tempPath, filePath);
+  } catch (error) {
+    try {
+      if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+    } catch {
+      // Preserve the original write error.
+    }
+    throw error;
+  }
+  return { sha256: validateInstaller(filePath, options), overridden: true };
 }
 
 function quarantineInstaller(filePath) {
@@ -1842,10 +1903,18 @@ async function provisionWindowsDistroAndNetwork({ adapter, onboarding, options, 
   const installer = await ensureTrustedInstaller(paths.installer, paths, state, {
     skipSyntaxCheck: true,
   });
+  const preparedInstaller = prepareInstallerForRainbondImage(
+    paths.installer,
+    state.rainbond_image,
+    { skipSyntaxCheck: true }
+  );
   process.stdout.write(installer.reused ? "已复用检查通过的 Rainbond 安装脚本。\n" : "Rainbond 安装脚本下载并检查完成。\n");
+  if (preparedInstaller.overridden) {
+    process.stdout.write(`已将 Rainbond 安装镜像切换为：${state.rainbond_image}\n`);
+  }
   state = updateState(paths.state, state, {
     artifact_url: installer.finalUrl,
-    artifact_sha256: installer.sha256,
+    artifact_sha256: preparedInstaller.sha256,
     rootfs_path: rootfsPath,
     rootfs_trust: POLICY.windows.ubuntu_rootfs.trust,
     rootfs_sha256: null,
@@ -1864,7 +1933,7 @@ async function provisionWindowsDistroAndNetwork({ adapter, onboarding, options, 
       host_address: network.hostAddress,
       guest_address: network.guestAddress,
       installer_path: paths.installer,
-      installer_sha256: installer.sha256,
+      installer_sha256: preparedInstaller.sha256,
     },
   });
   if (!provisioned.facts.machineBundleVerified) {
@@ -2196,6 +2265,13 @@ async function runInstallOperation(options) {
   if (!UUID_PATTERN.test(state.installation_id || "")) {
     state = { ...state, installation_id: crypto.randomUUID() };
   }
+  const configuredRainbondImage = requestedRainbondImage(options, state);
+  if (state.rainbond_image && configuredRainbondImage && state.rainbond_image !== configuredRainbondImage) {
+    throw new Error("当前 onboarding 已绑定另一个 Rainbond 镜像，请使用原镜像继续或清理后重新安装");
+  }
+  if (configuredRainbondImage && state.rainbond_image !== configuredRainbondImage) {
+    state = { ...state, rainbond_image: configuredRainbondImage };
+  }
   atomicWriteJson(paths.state, state);
   activeOperation = { paths, state, onboardingId: options.onboardingId };
 
@@ -2475,8 +2551,12 @@ async function runInstallOperation(options) {
     state = updateState(paths.state, state, { stage: "downloading", status: "running" });
     appendEvent(paths, state, "downloading", "started");
     const download = await ensureTrustedInstaller(paths.installer, paths, state);
-    const digest = download.sha256;
+    const preparedInstaller = prepareInstallerForRainbondImage(paths.installer, state.rainbond_image);
+    const digest = preparedInstaller.sha256;
     if (download.reused) process.stdout.write("已复用检查通过的官方安装脚本。\n");
+    if (preparedInstaller.overridden) {
+      process.stdout.write(`已将 Rainbond 安装镜像切换为：${state.rainbond_image}\n`);
+    }
     state = updateState(paths.state, state, {
       artifact_url: download.finalUrl,
       artifact_sha256: digest,
@@ -2635,9 +2715,11 @@ module.exports = {
   extractConsoleUrl,
   inspectRemoteSystem,
   normalizeConsoleHost,
+  normalizeRainbondImage,
   normalizeRemoteTarget,
   normalizeWindowsExecutableForControl,
   parseArgs,
+  prepareInstallerForRainbondImage,
   prepareRemoteInstaller,
   readOnboardingState,
   readPlatformState,

@@ -690,6 +690,42 @@ test("platform CLI accepts an explicit Console host without accepting a URL", ()
   );
 });
 
+test("platform CLI accepts a complete Rainbond image override", () => {
+  const { normalizeRainbondImage, parseArgs } = require(platformInstallerPath);
+  const image = "registry.cn-hangzhou.aliyuncs.com/goodrain/rainbond:v6.9.7-devs";
+  assert.equal(parseArgs([
+    "install",
+    "--onboarding-id", "1d6754d6-6fb3-4bda-9a04-15c2d261d178",
+    "--rainbond-image", image,
+  ]).rainbondImage, image);
+  assert.equal(normalizeRainbondImage(image), image);
+  assert.throws(
+    () => normalizeRainbondImage("registry.example/rainbond:tag;touch /tmp/pwned"),
+    /镜像地址无效/
+  );
+});
+
+test("trusted Rainbond installer can be explicitly materialized with a complete image", () => {
+  const { prepareInstallerForRainbondImage } = require(platformInstallerPath);
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-installer-image-"));
+  const installerPath = path.join(tempDir, "rainbond-install.sh");
+  fs.writeFileSync(installerPath, [
+    "#!/bin/bash",
+    "set -euo pipefail",
+    "RBD_IMAGE=\"${IMGHUB_MIRROR}/rainbond:${RAINBOND_VERSION}-k3s\"",
+    "echo \"$RBD_IMAGE\"",
+    "",
+  ].join("\n"), { mode: 0o600 });
+  const image = "registry.cn-hangzhou.aliyuncs.com/goodrain/rainbond:v6.9.7-devs";
+  const first = prepareInstallerForRainbondImage(installerPath, image);
+  const content = fs.readFileSync(installerPath, "utf8");
+  assert.equal(first.overridden, true);
+  assert.match(content, new RegExp(`# RainSkills image override: ${image.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}`));
+  assert.match(content, /RBD_IMAGE='registry\.cn-hangzhou\.aliyuncs\.com\/goodrain\/rainbond:v6\.9\.7-devs'/);
+  const second = prepareInstallerForRainbondImage(installerPath, image);
+  assert.deepEqual(second, { sha256: first.sha256, overridden: true });
+});
+
 test("onboarding state is schema checked and must be a protected regular file", {
   skip: process.platform === "win32",
 }, () => {
