@@ -980,6 +980,7 @@ test("SSH session reuses existing non-interactive authentication", async () => {
   const session = await establishSshSession(
     { host: "root@192.168.1.20", port: 22 },
     {
+      platform: "linux",
       interactive: true,
       runner: (command, args) => {
         calls.push({ command, args });
@@ -1010,6 +1011,7 @@ test("SSH session falls back to one native interactive authentication and reuses
   const session = await establishSshSession(
     { host: "root@192.168.1.20", port: 22 },
     {
+      platform: "linux",
       interactive: true,
       runner: (command, args) => {
         probeCalls.push({ command, args });
