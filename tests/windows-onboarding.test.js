@@ -441,11 +441,15 @@ test("Windows Device Flow pins origin and follows pending, slow_down, and Retry-
   const calls = [];
   const sleeps = [];
   let openedUrl = "";
+  const output = [];
 
   const token = await authorizeWithDeviceFlow({
     baseUrl: "https://rainbond.example.com",
     openBrowser(url) {
       openedUrl = url;
+    },
+    logger(message) {
+      output.push(message);
     },
     async fetchImpl(url, options) {
       calls.push({ url, options });
@@ -462,6 +466,10 @@ test("Windows Device Flow pins origin and follows pending, slow_down, and Retry-
 
   assert.equal(token, "header.payload.signature");
   assert.equal(openedUrl, "https://rainbond.example.com/#/device?user_code=BCDF-GHJK");
+  assert.deepEqual(output, [
+    "授权码：BCDF-GHJK",
+    "授权地址：https://rainbond.example.com/#/device?user_code=BCDF-GHJK",
+  ]);
   assert.deepEqual(calls.map((call) => new URL(call.url).pathname), [
     "/console/mcp/device/code",
     "/console/mcp/device/token",

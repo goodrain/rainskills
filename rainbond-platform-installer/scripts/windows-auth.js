@@ -34,6 +34,7 @@ function authorizeWithLoopback({
   openBrowser,
   timeoutMs = 600000,
   signal,
+  logger = () => {},
 }) {
   if (typeof openBrowser !== "function") throw new Error("缺少浏览器打开器");
   const normalizedBase = normalizedBaseUrl(baseUrl);
@@ -140,6 +141,7 @@ function authorizeWithLoopback({
       const query = new URLSearchParams({ callback, state: expectedState });
       const authorizationUrl = `${normalizedBase}/#/cli-auth?${query.toString()}`;
       try {
+        logger(`授权地址：${authorizationUrl}`);
         await openBrowser(authorizationUrl);
       } catch (error) {
         settle(new Error(`无法打开 Rainbond 授权页面：${error.message}`));
@@ -167,6 +169,7 @@ async function authorizeWithDeviceFlow({
   sleep = (seconds) => new Promise((resolve) => setTimeout(resolve, seconds * 1000)),
   now = () => Math.floor(Date.now() / 1000),
   signal,
+  logger = () => {},
 }) {
   const normalizedBase = normalizedBaseUrl(baseUrl);
   abortIfNeeded(signal);
@@ -200,6 +203,8 @@ async function authorizeWithDeviceFlow({
   const verificationUrl = `${normalizedBase}/#/device?${new URLSearchParams({
     user_code: authorization.user_code,
   }).toString()}`;
+  logger(`授权码：${authorization.user_code}`);
+  logger(`授权地址：${verificationUrl}`);
   await openBrowser(verificationUrl);
   const startedAt = now();
   const deadline = startedAt + authorization.expires_in;
