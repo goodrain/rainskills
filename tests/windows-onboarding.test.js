@@ -296,8 +296,11 @@ test("native main saves private onboarding and shows the fixed continuation comm
   assert(output.includes("支持 Windows 本地安装，也可以安装到 Linux 服务器。"));
   assert(output.some((line) => line.includes("终端用户可以直接执行：")));
   assert(output.includes(continuationCommand));
-  assert(output.indexOf(continuationCommand) < output.length - 1);
-  assert.deepEqual(JSON.parse(output.at(-1)), result.nextAction);
+  assert.equal(output.at(-1), continuationCommand);
+  assert.equal(
+    output.some((line) => line.includes('"schema":"rainskills.next-action.v1"')),
+    false
+  );
   assert.equal(
     fs.existsSync(path.join(
       home,

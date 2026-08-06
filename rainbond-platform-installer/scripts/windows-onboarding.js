@@ -492,7 +492,6 @@ async function main(argv, dependencies = {}) {
       logger("");
       logger("如果由 AI 代为安装，请按下面的固定参数继续；终端用户可以直接执行：");
       logger(`npx rainskills@${packageManifest.version} platform install --onboarding-id ${operationId}`);
-      logger(JSON.stringify(nextAction));
       return { status: "awaiting-platform", counts, checkpoint, nextAction };
     } finally {
       operationLock.release();
