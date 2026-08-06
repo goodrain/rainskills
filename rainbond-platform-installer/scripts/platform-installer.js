@@ -1487,7 +1487,11 @@ async function ensureTrustedInstaller(destination, paths, state, options = {}) {
       sha256: sourceSha256,
     };
   }
-  if (fs.existsSync(destination)) {
+  const cachedFromBundledInstaller = String(state.artifact_url || "").startsWith("bundled://");
+  if (cachedFromBundledInstaller && fs.existsSync(destination)) {
+    quarantineInstaller(destination);
+  }
+  if (!cachedFromBundledInstaller && fs.existsSync(destination)) {
     try {
       const sha256 = validateInstaller(destination, options);
       return {
@@ -2855,6 +2859,7 @@ module.exports = {
   closeSshSession,
   controlHostPlatform,
   establishSshSession,
+  ensureTrustedInstaller,
   ensureWindowsPlatformConverged,
   evaluatePreflight,
   extractConsoleUrl,

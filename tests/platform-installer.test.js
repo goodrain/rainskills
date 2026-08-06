@@ -741,6 +741,48 @@ test("official Rainbond installer is the default with an explicit bundled overri
   else process.env.RAINSKILLS_USE_BUNDLED_RAINBOND_INSTALLER = previous;
 });
 
+test("official installer mode replaces a cached bundled installer", async () => {
+  const https = require("node:https");
+  const { ensureTrustedInstaller } = require(platformInstallerPath);
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-installer-source-"));
+  const destination = path.join(tempDir, "rainbond-install.sh");
+  const oldInstaller = fs.readFileSync(path.join(repoRoot, "rainbond-platform-installer", "assets", "install-rainbond.sh"));
+  fs.writeFileSync(destination, oldInstaller, { mode: 0o600 });
+  const officialInstaller = Buffer.from("#!/bin/bash\nset -eu\nprintf 'official\\n'\n");
+  const originalGet = https.get;
+  const previous = process.env.RAINSKILLS_USE_BUNDLED_RAINBOND_INSTALLER;
+  delete process.env.RAINSKILLS_USE_BUNDLED_RAINBOND_INSTALLER;
+  https.get = (url, options, callback) => {
+    const request = new (require("node:events").EventEmitter)();
+    request.setTimeout = () => {};
+    const response = new (require("node:events").EventEmitter)();
+    response.statusCode = 200;
+    response.headers = { "content-length": String(officialInstaller.length) };
+    queueMicrotask(() => {
+      callback(response);
+      response.emit("data", officialInstaller);
+      response.emit("end");
+    });
+    return request;
+  };
+  try {
+    const result = await ensureTrustedInstaller(
+      destination,
+      { installer: destination },
+      { artifact_url: "bundled://rainbond-console/script/install-rainbond.sh" },
+      { skipSyntaxCheck: false }
+    );
+    assert.equal(result.reused, false);
+    assert.equal(fs.readFileSync(destination, "utf8"), officialInstaller.toString("utf8"));
+    assert.equal(fs.readdirSync(tempDir).some((name) => name.startsWith("rainbond-install.sh.invalid-")), true);
+  } finally {
+    https.get = originalGet;
+    if (previous === undefined) delete process.env.RAINSKILLS_USE_BUNDLED_RAINBOND_INSTALLER;
+    else process.env.RAINSKILLS_USE_BUNDLED_RAINBOND_INSTALLER = previous;
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("onboarding state is schema checked and must be a protected regular file", {
   skip: process.platform === "win32",
 }, () => {
