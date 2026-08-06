@@ -331,9 +331,7 @@ async function authorizeAndConfigure({
   now,
   spawnImpl,
 }) {
-  const browserOpener = noBrowser
-    ? async (url) => logger(`授权地址：${url}`)
-    : openBrowser;
+  const browserOpener = noBrowser ? async () => {} : openBrowser;
   let token;
   try {
     token = await authorizeWithDeviceFlowImpl({
@@ -341,6 +339,7 @@ async function authorizeAndConfigure({
       fetchImpl,
       now,
       openBrowser: browserOpener,
+      logger,
       signal,
       sleep,
     });
@@ -349,6 +348,7 @@ async function authorizeAndConfigure({
     token = await authorizeWithLoopbackImpl({
       baseUrl,
       openBrowser: browserOpener,
+      logger,
       signal,
     });
   }
@@ -540,7 +540,7 @@ async function main(argv, dependencies = {}) {
     target,
     baseUrl: normalizedBase,
     noBrowser: options.noBrowser,
-    logger: dependencies.logger,
+    logger,
     ...(dependencies.authorizationDependencies || {}),
   });
   const clientLabel = target === "codex"
