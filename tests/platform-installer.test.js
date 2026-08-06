@@ -726,6 +726,14 @@ test("trusted Rainbond installer can be explicitly materialized with a complete 
   assert.deepEqual(second, { sha256: first.sha256, overridden: true });
 });
 
+test("bundled Rainbond installer asset is valid and carries the requested test tag", () => {
+  const { bundledInstallerPath, validateInstaller } = require(platformInstallerPath);
+  const installerPath = bundledInstallerPath();
+  const content = fs.readFileSync(installerPath, "utf8");
+  assert.match(content, /RAINBOND_VERSION=\$\{VERSION:-'v6\.9\.7-devs'\}/);
+  assert.equal(validateInstaller(installerPath, { skipSyntaxCheck: false }), crypto.createHash("sha256").update(content).digest("hex"));
+});
+
 test("onboarding state is schema checked and must be a protected regular file", {
   skip: process.platform === "win32",
 }, () => {

@@ -29,6 +29,7 @@ const ONBOARDING_SCHEMA = "rainskills.onboarding.v1";
 const PLATFORM_STATE_SCHEMA = "rainskills.platform-state.v1";
 const PROGRESS_SCHEMA = "rainskills.platform-progress.v1";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const BUNDLED_INSTALLER_ENV = "RAINSKILLS_USE_BUNDLED_RAINBOND_INSTALLER";
 
 let activeChild = null;
 let activeChildDetached = false;
@@ -1084,6 +1085,14 @@ function operationPaths(operationId) {
   };
 }
 
+function bundledInstallerPath() {
+  return path.join(__dirname, "..", "assets", "install-rainbond.sh");
+}
+
+function useBundledInstaller() {
+  return process.env[BUNDLED_INSTALLER_ENV] === "1";
+}
+
 function now() {
   return new Date().toISOString();
 }
@@ -1355,6 +1364,45 @@ function quarantineInstaller(filePath) {
 }
 
 async function ensureTrustedInstaller(destination, paths, state, options = {}) {
+  if (useBundledInstaller()) {
+    const source = bundledInstallerPath();
+    const sourceSha256 = validateInstaller(source, options);
+    if (fs.existsSync(destination)) {
+      try {
+        const destinationSha256 = validateInstaller(destination, options);
+        if (destinationSha256 === sourceSha256) {
+          return {
+            reused: true,
+            finalUrl: "bundled://rainbond-console/script/install-rainbond.sh",
+            bytes: fs.statSync(destination).size,
+            sha256: destinationSha256,
+          };
+        }
+      } catch (error) {
+        process.stderr.write(`已隔离未通过检查的安装脚本缓存：${error.message}\n`);
+      }
+      quarantineInstaller(destination);
+    }
+    const tempPath = `${destination}.${process.pid}.${crypto.randomBytes(6).toString("hex")}.bundled.part`;
+    try {
+      fs.copyFileSync(source, tempPath, fs.constants.COPYFILE_EXCL);
+      fs.chmodSync(tempPath, 0o600);
+      fs.renameSync(tempPath, destination);
+    } catch (error) {
+      try {
+        if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+      } catch {
+        // Preserve the original copy error.
+      }
+      throw error;
+    }
+    return {
+      reused: false,
+      finalUrl: "bundled://rainbond-console/script/install-rainbond.sh",
+      bytes: fs.statSync(destination).size,
+      sha256: sourceSha256,
+    };
+  }
   if (fs.existsSync(destination)) {
     try {
       const sha256 = validateInstaller(destination, options);
@@ -1908,7 +1956,9 @@ async function provisionWindowsDistroAndNetwork({ adapter, onboarding, options, 
     state.rainbond_image,
     { skipSyntaxCheck: true }
   );
-  process.stdout.write(installer.reused ? "已复用检查通过的 Rainbond 安装脚本。\n" : "Rainbond 安装脚本下载并检查完成。\n");
+  process.stdout.write(installer.reused
+    ? (useBundledInstaller() ? "已复用项目内的 Rainbond 安装脚本。\n" : "已复用检查通过的 Rainbond 安装脚本。\n")
+    : (useBundledInstaller() ? "已使用项目内的 Rainbond 安装脚本。\n" : "Rainbond 安装脚本下载并检查完成。\n"));
   if (preparedInstaller.overridden) {
     process.stdout.write(`已将 Rainbond 安装镜像切换为：${state.rainbond_image}\n`);
   }
@@ -2553,7 +2603,13 @@ async function runInstallOperation(options) {
     const download = await ensureTrustedInstaller(paths.installer, paths, state);
     const preparedInstaller = prepareInstallerForRainbondImage(paths.installer, state.rainbond_image);
     const digest = preparedInstaller.sha256;
-    if (download.reused) process.stdout.write("已复用检查通过的官方安装脚本。\n");
+    if (download.reused) {
+      process.stdout.write(useBundledInstaller()
+        ? "已复用项目内的 Rainbond 安装脚本。\n"
+        : "已复用检查通过的官方安装脚本。\n");
+    } else if (useBundledInstaller()) {
+      process.stdout.write("已使用项目内的 Rainbond 安装脚本。\n");
+    }
     if (preparedInstaller.overridden) {
       process.stdout.write(`已将 Rainbond 安装镜像切换为：${state.rainbond_image}\n`);
     }
@@ -2706,6 +2762,7 @@ module.exports = {
   REMOTE_VERIFICATION_SCRIPT,
   atomicWriteJson,
   buildWindowsMachineBundlePayload,
+  bundledInstallerPath,
   buildRemoteConsoleCandidates,
   closeSshSession,
   controlHostPlatform,

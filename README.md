@@ -211,6 +211,8 @@ npx --yes rainskills platform install --onboarding-id <id> \\
 
 镜像覆盖会记录在 onboarding 状态中，后续继续或恢复时无需重复填写；默认不指定时仍使用官方脚本的默认镜像。
 
+仅用于验证随包携带的测试安装脚本时，可以显式设置 `RAINSKILLS_USE_BUNDLED_RAINBOND_INSTALLER=1`；该模式当前携带 `v6.9.7-devs` 镜像配置，验证结束后应取消此环境变量。
+
 远程部署完成后，Rainskills 会从当前设备验证 SSH 地址、Rainbond 上报地址和远端主网卡地址，自动选择实际可访问的 Console。云服务器的内网地址不可达时会优先使用 SSH 公网地址；只有全部候选都失败时才询问公网 IP 或域名。
 
 如果 AI 使用的执行工具不能保持交互终端，平台预检后会输出：
