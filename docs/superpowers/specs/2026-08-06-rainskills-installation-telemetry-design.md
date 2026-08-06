@@ -62,7 +62,8 @@ Windows 的管理员 PowerShell/WSL 动作只返回固定结构化事实和错�
   "step": "resource_check",
   "action": "install|refresh|null",
   "lifecycle_action": "preflight",
-  "status": "started|completed|blocked|failed|interrupted|skipped",
+  "status": "started|success|failure|null",
+  "lifecycle_status": "started|completed|blocked|failed|interrupted|skipped",
   "duration_ms": 1234,
   "error_code": "containerd_not_ready",
   "error_stage": "verify_console",
@@ -112,9 +113,9 @@ Windows 的管理员 PowerShell/WSL 动作只返回固定结构化事实和错�
 - 后续 RainSkills 执行时尽力补发未发送事件，使用 `event_id` 幂等；过期（7 天）或超过 10 MB/1000 条上限的事件自动丢弃并写入本地丢弃计数；
 - 发送器不继承 Token、密码或完整环境变量，且不把请求内容写入错误日志。
 
-每次请求发送单个 JSON 事件，事件包含 `schema`、`event_id`、`install_attempt_id`、生命周期字段以及现有兼容摘要字段。顶层 `action` 始终是旧的 `install/refresh` 值，顶层 `phase` 始终是旧的 `started/authorized/configured/failed` 值；新的生命周期动作和阶段只放在 `lifecycle_action`、`lifecycle_phase`。旧服务即使忽略未知字段，也不会把 `preflight` 误读为旧 action 或旧 phase。服务端 rollout 必须为 `event_id` 建立唯一约束或幂等键：同一事件重复 POST 必须返回 2xx 且只计数一次。客户端不能依赖响应正文。
+每次请求发送单个 JSON 事件，事件包含 `schema`、`event_id`、`install_attempt_id`、生命周期字段以及现有兼容摘要字段。顶层 `action` 始终是旧的 `install/refresh` 值，顶层 `phase` 始终是旧的 `started/authorized/configured/failed` 值，顶层 `status` 始终是旧的 `started/success/failure` 值；新的生命周期动作、阶段和状态只放在 `lifecycle_action`、`lifecycle_phase`、`lifecycle_status`。旧服务即使忽略未知字段，也不会把 `preflight`、`completed` 或 `blocked` 误读为旧字段值。服务端 rollout 必须为 `event_id` 建立唯一约束或幂等键：同一事件重复 POST 必须返回 2xx 且只计数一次。客户端不能依赖响应正文。
 
-兼容 rollout 分两步：新服务先接受事件 schema 并按 `event_id` 去重；若服务明确返回 schema 不兼容的 400/415/422（带固定错误码或响应头），客户端才把事件投影为旧字段集合（`install_attempt_id`、`eid`、`install_client`、`action`、`phase`、`status`、`failure_stage`、`failure_category`）发送一次 legacy 请求。映射固定为：`status=started` → `phase=started,status=started`；`lifecycle_phase=authorize_device_flow|authorize_legacy` 且 `status=completed` → `phase=authorized,status=success`；`lifecycle_phase=configure_mcp` 且 `status=completed` → `phase=configured,status=success`；`status=failed|blocked|interrupted` → `phase=failed,status=failure`，`failure_stage=error_stage`，`failure_category=error_code|blocked_reason|interrupted`；其他完成阶段保留 `phase=started,status=started`，不伪造授权或配置成功。`eid`、`install_client` 和顶层 `action` 沿用本次安装上下文；直接平台安装默认 `action=install`，`refresh` 仅来自 `install.sh refresh`。
+兼容 rollout 分两步：新服务先接受事件 schema 并按 `event_id` 去重；若服务明确返回 schema 不兼容的 400/415/422（带固定错误码或响应头），客户端才把事件投影为旧字段集合（`install_attempt_id`、`eid`、`install_client`、`action`、`phase`、`status`、`failure_stage`、`failure_category`）发送一次 legacy 请求。映射固定为：`lifecycle_status=started` → `phase=started,status=started`；`lifecycle_phase=authorize_device_flow|authorize_legacy` 且 `lifecycle_status=completed` → `phase=authorized,status=success`；`lifecycle_phase=configure_mcp` 且 `lifecycle_status=completed` → `phase=configured,status=success`；`lifecycle_status=failed|blocked|interrupted` → `phase=failed,status=failure`，`failure_stage=error_stage`，`failure_category=error_code|blocked_reason|interrupted`；其他完成阶段保留 `phase=started,status=started`，不伪造授权或配置成功。`eid`、`install_client` 和顶层 `action` 沿用本次安装上下文；直接平台安装默认 `action=install`，`refresh` 仅来自 `install.sh refresh`。
 
 DNS 失败、连接超时、TLS 错误、5xx 或响应丢失属于不确定投递结果，只允许重试相同 JSON 和相同 `event_id`，禁止切换到 legacy 请求；旧服务必须通过 `Idempotency-Key: event_id` 或已部署的唯一键避免重复。若明确 schema 不兼容后 legacy 请求也失败，只保留本地队列。固定 JSON golden/contract 测试覆盖新服务、旧服务忽略未知字段、旧服务明确拒绝未知字段、每个阶段到旧四类摘要的映射、网络重试和重复 `event_id`。
 
@@ -139,7 +140,7 @@ DNS 失败、连接超时、TLS 错误、5xx 或响应丢失属于不确定投�
 | Windows/WSL 控制端 | remote-linux | SSH 预检、认证等待/超时、远程目录/脚本、安装、远程验证、授权 | `ssh` |
 | macOS/Linux | remote-linux | SSH 预检、认证等待/超时、远程目录/脚本、安装、远程验证、授权 | `ssh` |
 
-合法组合固定为：`posix+local-linux+direct`、`posix+local-macos+direct`、`windows-native+local-windows+powershell|wsl`、`wsl+local-windows+wsl|powershell`、以及任意控制端的 `remote-linux+ssh`。组合不匹配时上报 `invalid_arguments` 后沿用原业务错误。`control_distro`、SSH 主机和 Console 地址不写入事件；仅记录 `transport`、`auth_method` 和目标枚举。Windows action 名称进入 `lifecycle_action` 白名单，WSL 发行版版本只记录受限版本号事实，不记录路径或命令输出。重启等待写 `status=blocked, blocked_reason=awaiting_reboot`；设备码轮询写 `status=blocked, blocked_reason=device_authorization_pending`；用户取消/进程信号分别写 `user_cancelled`/`interrupted`。
+合法组合固定为：`posix+local-linux+direct`、`posix+local-macos+direct`、`windows-native+local-windows+powershell|wsl`、`wsl+local-windows+wsl|powershell`、以及任意控制端的 `remote-linux+ssh`。组合不匹配时上报 `error_code=invalid_arguments,lifecycle_status=failed` 后沿用原业务错误。`control_distro`、SSH 主机和 Console 地址不写入事件；仅记录 `transport`、`auth_method` 和目标枚举。Windows action 名称进入 `lifecycle_action` 白名单，WSL 发行版版本只记录受限版本号事实，不记录路径或命令输出。重启等待写 `lifecycle_status=blocked, blocked_reason=awaiting_reboot,status=started`；设备码轮询写 `lifecycle_status=blocked, blocked_reason=device_authorization_pending,status=started`；用户取消/进程信号分别写 `error_code=user_cancelled`/`interrupted`。
 
 ## 六、错误与隐私
 
@@ -174,7 +175,7 @@ DNS 失败、连接超时、TLS 错误、5xx 或响应丢失属于不确定投�
 ### 验收标准
 
 - 当本地遥测目录可写时，任意支持平台的每次安装都能在本地找到完整阶段链；目录不可写、磁盘已满、队列损坏或进程被强制终止时，遥测链允许缺失，但业务流程、原始错误和退出码必须与关闭遥测时一致；
-- 在任意阶段失败、阻塞、中断或恢复时，最后一条事件包含阶段、步骤、稳定错误分类/阻塞原因、可重试性、序号和关联 ID；
+- 在任意阶段失败、阻塞、中断或恢复时，最后一条事件包含生命周期阶段、步骤、生命周期状态、稳定错误分类/阻塞原因、可重试性、序号和关联 ID；
 - 日志服务 DNS 失败、连接超时、TLS 错误、4xx/5xx、非法响应、本地目录不可写或磁盘已满时，安装业务结果与无遥测版本一致；
 - `event_id` 重试和进程重启不会导致服务端重复计数；旧 `/api/rainskills/installations` 接口忽略未知字段时，旧四类摘要仍可解析；
 - Windows CI 的 PowerShell 合约、macOS/Linux 测试和完整 npm 测试通过；测试覆盖 WSL/SSH/授权/中断/恢复、schema golden、脱敏、安全路径和遥测发送失败矩阵；
