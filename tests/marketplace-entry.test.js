@@ -55,6 +55,13 @@ test("repository exposes one complete Rainskills marketplace entry", () => {
   );
 });
 
+test("POSIX platform handoff prints only the fixed continuation command", () => {
+  const installer = read("install.sh");
+
+  assert.match(installer, /log "npx \$\{package_spec\} platform install --onboarding-id \$\{onboarding_id\}"/);
+  assert.doesNotMatch(installer, /"schema": "rainskills\.next-action\.v1"/);
+});
+
 test("marketplace metadata presents Rainskills as one product", () => {
   const metadata = read("agents/openai.yaml");
 

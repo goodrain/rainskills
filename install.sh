@@ -1011,18 +1011,6 @@ PY
   log ""
   log "如果由 AI 代为安装，请按下面的固定参数继续；终端用户也可以直接执行："
   log "npx ${package_spec} platform install --onboarding-id ${onboarding_id}"
-  python3 - "$onboarding_id" <<'PY'
-import json
-import sys
-
-operation_id = sys.argv[1]
-print(json.dumps({
-    "schema": "rainskills.next-action.v1",
-    "action": "install-platform",
-    "onboarding_id": operation_id,
-    "argv": ["platform", "install", "--onboarding-id", operation_id],
-}, ensure_ascii=False, separators=(",", ":")))
-PY
 }
 
 resolve_self_hosted_path() {
