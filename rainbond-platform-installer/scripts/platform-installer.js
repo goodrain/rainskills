@@ -29,7 +29,7 @@ const ONBOARDING_SCHEMA = "rainskills.onboarding.v1";
 const PLATFORM_STATE_SCHEMA = "rainskills.platform-state.v1";
 const PROGRESS_SCHEMA = "rainskills.platform-progress.v1";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const BUNDLED_INSTALLER_ENV = "RAINSKILLS_USE_BUNDLED_RAINBOND_INSTALLER";
+const OFFICIAL_INSTALLER_ENV = "RAINSKILLS_USE_OFFICIAL_RAINBOND_INSTALLER";
 
 let activeChild = null;
 let activeChildDetached = false;
@@ -1090,7 +1090,7 @@ function bundledInstallerPath() {
 }
 
 function useBundledInstaller() {
-  return process.env[BUNDLED_INSTALLER_ENV] === "1";
+  return process.env[OFFICIAL_INSTALLER_ENV] !== "1";
 }
 
 function now() {
@@ -2782,6 +2782,7 @@ module.exports = {
   readPlatformState,
   refreshWindowsMachineBundleBeforeAuthorization,
   remoteInstallerInvocation,
+  useBundledInstaller,
   runCommand,
   runInstall,
   runResume,
