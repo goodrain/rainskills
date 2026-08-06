@@ -853,7 +853,7 @@ test("preflight treats below-recommended resources as advisory", () => {
     arch: "x64",
     cpuCores: 2,
     memoryBytes: 4 * 1024 ** 3,
-    diskBytes: 10 * 1024 ** 3,
+    diskBytes: 30 * 1024 ** 3,
     occupiedPorts: [],
     hasPrivilege: true,
     hasDocker: true,
@@ -871,7 +871,7 @@ test("preflight treats below-recommended resources as advisory", () => {
     arch: "x64",
     cpuCores: 1,
     memoryBytes: 3 * 1024 ** 3,
-    diskBytes: 9 * 1024 ** 3,
+    diskBytes: 29 * 1024 ** 3,
     occupiedPorts: [80, 7070],
     hasPrivilege: false,
     hasDocker: true,
@@ -883,7 +883,7 @@ test("preflight treats below-recommended resources as advisory", () => {
   assert.equal(failing.ok, false);
   assert.match(failing.blockers.join("\n"), /最低.*2 核/);
   assert.match(failing.blockers.join("\n"), /最低.*4 GB/);
-  assert.match(failing.blockers.join("\n"), /最低.*10 GB/);
+  assert.match(failing.blockers.join("\n"), /最低.*30 GB/);
   assert.match(failing.blockers.join("\n"), /80.*7070/);
   assert.match(failing.blockers.join("\n"), /root.*sudo -n/);
 });
@@ -1720,7 +1720,7 @@ test("official installer policy trusts only the fixed HTTPS origin and bounds mu
   assert.equal(POLICY.recommended.disk_bytes, 50 * 1024 ** 3);
   assert.equal(POLICY.minimums.cpu_cores, 2);
   assert.equal(POLICY.minimums.memory_bytes, 4 * 1024 ** 3);
-  assert.equal(POLICY.minimums.disk_bytes, 10 * 1024 ** 3);
+  assert.equal(POLICY.minimums.disk_bytes, 30 * 1024 ** 3);
   assert.deepEqual(POLICY.required_ports, [80, 443, 7070]);
   assert.equal(POLICY.installer.url, "https://get.rainbond.com/");
   assert.deepEqual(POLICY.installer.allowed_origins, ["https://get.rainbond.com"]);
