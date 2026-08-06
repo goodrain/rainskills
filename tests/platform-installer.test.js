@@ -726,19 +726,19 @@ test("trusted Rainbond installer can be explicitly materialized with a complete 
   assert.deepEqual(second, { sha256: first.sha256, overridden: true });
 });
 
-test("bundled Rainbond installer is the default with an explicit official fallback", () => {
+test("official Rainbond installer is the default with an explicit bundled override", () => {
   const { bundledInstallerPath, useBundledInstaller, validateInstaller } = require(platformInstallerPath);
   const installerPath = bundledInstallerPath();
   const content = fs.readFileSync(installerPath, "utf8");
   assert.match(content, /RAINBOND_VERSION=\$\{VERSION:-'v6\.9\.7-devs'\}/);
   assert.equal(validateInstaller(installerPath, { skipSyntaxCheck: false }), crypto.createHash("sha256").update(content).digest("hex"));
-  const previous = process.env.RAINSKILLS_USE_OFFICIAL_RAINBOND_INSTALLER;
-  delete process.env.RAINSKILLS_USE_OFFICIAL_RAINBOND_INSTALLER;
-  assert.equal(useBundledInstaller(), true);
-  process.env.RAINSKILLS_USE_OFFICIAL_RAINBOND_INSTALLER = "1";
+  const previous = process.env.RAINSKILLS_USE_BUNDLED_RAINBOND_INSTALLER;
+  delete process.env.RAINSKILLS_USE_BUNDLED_RAINBOND_INSTALLER;
   assert.equal(useBundledInstaller(), false);
-  if (previous === undefined) delete process.env.RAINSKILLS_USE_OFFICIAL_RAINBOND_INSTALLER;
-  else process.env.RAINSKILLS_USE_OFFICIAL_RAINBOND_INSTALLER = previous;
+  process.env.RAINSKILLS_USE_BUNDLED_RAINBOND_INSTALLER = "1";
+  assert.equal(useBundledInstaller(), true);
+  if (previous === undefined) delete process.env.RAINSKILLS_USE_BUNDLED_RAINBOND_INSTALLER;
+  else process.env.RAINSKILLS_USE_BUNDLED_RAINBOND_INSTALLER = previous;
 });
 
 test("onboarding state is schema checked and must be a protected regular file", {
