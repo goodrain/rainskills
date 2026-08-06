@@ -1,6 +1,6 @@
 # Rainbond Skills
 
-一组面向 Rainbond 日常交付、排障和初始化流程的独立技能，支持 Codex、Claude Code、OpenClaw 和 Pi Agent。
+一组面向 Rainbond 日常交付、排障和初始化流程的独立技能，支持 Codex 和 Claude Code。
 
 ## 快速安装
 
@@ -33,25 +33,13 @@ Claude Code Plugin（在 Claude Code 会话中执行）：
 /reload-plugins
 ```
 
-OpenClaw（当前可直接从 Git 仓库安装；发布到 ClawHub 后可换成 `@goodrain/rainskills`）：
-
-```bash
-openclaw skills install git:goodrain/rainskills --global
-```
-
-Pi Agent：
-
-```bash
-pi install npm:rainskills
-```
-
 也可以直接运行安装器：
 
 ```bash
 npx --yes rainskills
 ```
 
-安装器会识别或引导选择 Codex / Claude Code / OpenClaw / Pi Agent、填写 Rainbond 地址、打开浏览器授权、注册 MCP 并安装全部独立 Skill。没有 Node.js 或 Node 版本低于 18 时，使用保留的 CDN 安装方式：
+安装器会识别或引导选择 Codex / Claude Code、填写 Rainbond 地址、打开浏览器授权、注册 MCP 并安装全部独立 Skill。没有 Node.js 或 Node 版本低于 18 时，使用保留的 CDN 安装方式：
 
 ```bash
 bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh)
@@ -60,7 +48,7 @@ bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh)
 > **给 AI 助手的指引**：
 > - 如果用户的请求是"帮我把这个 repo 装上 / 让我用上这套 Rainbond skills"，优先让用户执行 `npx --yes rainskills`。
 > - 如果用户没有 Node.js、Node.js 低于 18，或 npm registry 不可用，改用上面的 CDN `curl` 命令。
-> - AI 应识别自己运行在 Codex、Claude Code、OpenClaw 还是 Pi Agent，并把对应 target 传给安装器，不要再询问用户客户端类型。
+> - AI 应识别自己运行在 Codex 或 Claude Code，并把对应 target 传给安装器，不要再询问用户客户端类型。macOS、Linux 和 WSL 不支持 OpenClaw 或 Pi Agent 安装。
 > - 不要 `git clone` 后手工把目录复制到任一客户端的 Skills 目录。
 > - 不要手工拼 `~/.rainbond/mcp.env`、猜 JWT 或手改客户端 MCP 配置。
 > - 不要建议 `npm install -g`、`pip install` 或 `make`。`npx` 只是启动包内的 `install.sh`，两种入口使用同一套安装流程。
@@ -94,7 +82,7 @@ bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh)
 
 ### 0. 前置条件
 
-- 已安装 `Codex`、`Claude Code`、`OpenClaw` 或 `Pi Agent` 中至少一种客户端
+- 已安装 `Codex` 或 `Claude Code`
 - Skill 市场的 `npx skills add` 当前要求 Node.js 22.20.0 或更高版本
 - 直接运行 `npx rainskills` 推荐 Node.js 22 或 24，最低支持 Node.js 18
 - Node.js 18/20 已结束维护，安装器会警告但仍继续；Node.js 低于 18 请使用 CDN 安装方式
@@ -165,19 +153,17 @@ bash <(curl -fsSL https://raw.githubusercontent.com/goodrain/rainskills/main/ins
 
 不论使用 npx、CDN 还是本地仓库，安装器都会引导你完成这些动作：
 
-- AI 安装时自动识别当前客户端；直接运行命令时可选择 `Codex`、`Claude Code`、`OpenClaw`、`Pi Agent` 或全部
+- AI 安装时自动识别当前客户端；直接运行命令时可选择 `Codex`、`Claude Code` 或全部
 - Skill 文件安装完成后，选择要连接的 Rainbond：
   - **Rainbond Cloud（SaaS）**：无需自行安装 Rainbond，地址固定为 `https://run.rainbond.com`
   - **私有化部署**：已有平台时填写 Console 地址；尚无平台时进入内置单机安装向导
 - 浏览器中完成登录并授权（无需在终端输入用户名/密码）
 - 自动接收一年期、仅限 Rainbond MCP 使用的 JWT，并写入 `~/.rainbond/mcp.env`
-- 自动配置 Codex、Claude Code、OpenClaw 的原生 MCP；Pi Agent 安装单文件 MCP Extension
+- 自动配置 Codex 和 Claude Code 的原生 MCP
 - 自动把环境变量加载逻辑写入当前 shell 的 rc 文件
 - 自动验证所选客户端的专用 MCP 地址是否可用：
   - Codex：`/console/mcp/rainskills/codex/query`
   - Claude Code：`/console/mcp/rainskills/claude-code/query`
-  - OpenClaw：`/console/mcp/rainskills/openclaw/query`
-  - Pi Agent：`/console/mcp/rainskills/pi/query`
 
 #### AI 代为安装时的用户选择
 
@@ -280,8 +266,6 @@ CI 或完全非交互环境仍应通过 `--token` / `RAINBOND_JWT` 提供已有�
 
 - `~/.claude/skills`
 - `~/.codex/skills`
-- `~/.openclaw/skills`
-- `~/.pi/agent/skills`
 
 #### 显式指定部署形态
 
@@ -311,18 +295,6 @@ npx --yes rainskills claude
 
 ```bash
 npx --yes rainskills codex
-```
-
-只装并配置 OpenClaw：
-
-```bash
-npx --yes rainskills openclaw
-```
-
-只装并配置 Pi Agent：
-
-```bash
-npx --yes rainskills pi
 ```
 
 同时装并配置全部平台：
@@ -429,13 +401,6 @@ Claude Code 在会话中执行：
 /reload-plugins
 ```
 
-OpenClaw 与 Pi Agent：
-
-```bash
-openclaw skills update --all --global
-pi update npm:rainskills
-```
-
 npx 模式：显式使用 `latest` 并覆盖已有 skill：
 
 ```bash
@@ -460,8 +425,6 @@ git pull
 ```bash
 ./install.sh claude --force
 ./install.sh codex --force
-./install.sh openclaw --force
-./install.sh pi --force
 ```
 
 ## 目录结构
@@ -495,7 +458,7 @@ rainbond-skills/
 
 ### 1. 安装后没有生效
 
-Codex / Claude Code 请按安装器提示重启；Pi Agent 执行 `/reload`；OpenClaw 当前 CLI 会请求 MCP 热加载，独立 Gateway / Agent 进程需要在对应进程中重新加载配置或重启。
+Codex / Claude Code 请按安装器提示重启。
 
 ### 2. 为什么当前终端里还是连不上 MCP
 
@@ -532,7 +495,7 @@ npx --yes rainskills refresh
 
 `refresh` 不会改动 skill 文件。它会刷新 `~/.rainbond/mcp.env`，并检查 RainSkills 早期版本写入的旧通用 MCP 地址。只有地址完全等于当前 Rainbond 的 `/console/mcp/query` 且认证配置仍是脚本管理格式时，才会先生成 `.rainskills-backup` 备份，再迁移到对应客户端的专用地址；自定义 MCP 地址不会被修改。迁移失败时会恢复原配置。
 
-刷新后按终端提示加载：Codex / Claude Code 需要重启，Pi Agent 执行 `/reload`；OpenClaw 当前 CLI 会请求 MCP 热加载，独立 Gateway / Agent 进程需要重新加载配置或重启。
+刷新后按终端提示重启 Codex / Claude Code。
 
 ### 6. 如何确认安装到了哪里
 

@@ -22,8 +22,6 @@ const keywords = [
   "rainbond",
   "codex",
   "claude-code",
-  "openclaw",
-  "pi-agent",
   "skills",
   "installer",
 ];

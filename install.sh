@@ -180,8 +180,6 @@ Usage:
   ./install.sh
   ./install.sh claude
   ./install.sh codex
-  ./install.sh openclaw
-  ./install.sh pi
   ./install.sh all
   ./install.sh --dest <path>
   ./install.sh all --saas
@@ -192,9 +190,7 @@ Usage:
 Options:
   claude                 Install and configure Claude Code
   codex                  Install and configure Codex
-  openclaw               Install and configure OpenClaw
-  pi                     Install and configure Pi Agent
-  all                    Install and configure every supported client
+  all                    Install and configure Codex and Claude Code
   refresh                Re-run browser login and rewrite ~/.rainbond/mcp.env only
                          (skips skill copy and Codex/Claude MCP re-registration;
                           use when MCP returns 401/403 because the JWT expired —
@@ -250,12 +246,6 @@ rainskills_install_client_for_target() {
       ;;
     claude)
       printf 'claude_code\n'
-      ;;
-    openclaw)
-      printf 'openclaw\n'
-      ;;
-    pi)
-      printf 'pi\n'
       ;;
     all)
       printf 'all\n'
@@ -329,7 +319,7 @@ initialize_rainskills_installation_reporting() {
       refresh)
         RAINSKILLS_INSTALL_ACTION="refresh"
         ;;
-      codex|claude|openclaw|pi|all)
+      codex|claude|all)
         target="$arg"
         ;;
     esac
@@ -606,9 +596,12 @@ parse_args() {
         ACTION="refresh"
         shift
         ;;
-      claude|codex|openclaw|pi|all)
+      claude|codex|all)
         TARGET="$1"
         shift
+        ;;
+      openclaw|pi)
+        die "macOS/Linux 安装器不再支持 OpenClaw 和 Pi Agent，请使用 Codex 或 Claude Code。"
         ;;
       --dest)
         [[ $# -ge 2 ]] || die "--dest 需要一个路径值"
@@ -693,12 +686,10 @@ resolve_target() {
   log "请选择要安装和配置的平台："
   log "  1) Codex"
   log "  2) Claude Code"
-  log "  3) OpenClaw"
-  log "  4) Pi Agent"
-  log "  5) 全部"
+  log "  3) 全部"
 
   while true; do
-    printf '请输入选项 [1-5]: '
+    printf '请输入选项 [1-3]: '
     read -r choice
     case "$choice" in
       1)
@@ -709,20 +700,12 @@ resolve_target() {
         TARGET="claude"
         return 0
         ;;
-      3)
-        TARGET="openclaw"
-        return 0
-        ;;
-      4)
-        TARGET="pi"
-        return 0
-        ;;
-      5|"")
+      3|"")
         TARGET="all"
         return 0
         ;;
       *)
-        log "请输入 1、2、3、4 或 5。"
+        log "请输入 1、2 或 3。"
         ;;
     esac
   done
@@ -741,17 +724,9 @@ collect_destinations() {
       codex)
         destinations+=("$HOME/.codex/skills")
         ;;
-      openclaw)
-        destinations+=("$HOME/.openclaw/skills")
-        ;;
-      pi)
-        destinations+=("$HOME/.pi/agent/skills")
-        ;;
       all)
         destinations+=("$HOME/.claude/skills")
         destinations+=("$HOME/.codex/skills")
-        destinations+=("$HOME/.openclaw/skills")
-        destinations+=("$HOME/.pi/agent/skills")
         ;;
       *)
         die "未知安装目标：$TARGET"
@@ -774,8 +749,6 @@ normalize_rainbond_url() {
   raw="${raw%/}"
   raw="${raw%/console/mcp/rainskills/codex/query}"
   raw="${raw%/console/mcp/rainskills/claude-code/query}"
-  raw="${raw%/console/mcp/rainskills/openclaw/query}"
-  raw="${raw%/console/mcp/rainskills/pi/query}"
   raw="${raw%/console/mcp/query}"
   raw="${raw%/console/users/login}"
   raw="${raw%/console/}"
@@ -1889,101 +1862,6 @@ configure_claude_mcp() {
   log "[configure] 已配置 Claude MCP"
 }
 
-write_openclaw_env() {
-  local token="$1"
-  local base_url="$2"
-  local env_file="$HOME/.openclaw/.env"
-  local begin_marker="# >>> rainbond skills mcp >>>"
-  local end_marker="# <<< rainbond skills mcp <<<"
-  local escaped_token escaped_url block
-  escaped_token="$(shell_quote_single "$token")"
-  escaped_url="$(shell_quote_single "$base_url")"
-  block="RAINBOND_JWT='${escaped_token}'
-RAINBOND_URL='${escaped_url}'"
-
-  mkdir -p "$HOME/.openclaw"
-  chmod 700 "$HOME/.openclaw"
-  backup_file "$env_file"
-  update_managed_block "$env_file" "$begin_marker" "$end_marker" "$block"
-  chmod 600 "$env_file"
-  log "[write] 已更新 $env_file"
-}
-
-configure_openclaw_mcp() {
-  local mcp_url="$1"
-  local token="$2"
-  local base_url="$3"
-
-  if ! command -v openclaw >/dev/null 2>&1; then
-    warn "未找到 OpenClaw CLI，跳过 OpenClaw MCP 配置。"
-    return 1
-  fi
-
-  local config_json
-  config_json="$(python3 - "$mcp_url" <<'PY'
-import json
-import sys
-
-print(json.dumps({
-    "url": sys.argv[1],
-    "transport": "streamable-http",
-    "headers": {"Authorization": "GRJWT ${RAINBOND_JWT}"},
-}, separators=(",", ":")))
-PY
-)"
-
-  write_openclaw_env "$token" "$base_url"
-  backup_file "$HOME/.openclaw/openclaw.json"
-  if ! openclaw mcp set rainbond "$config_json" >/dev/null; then
-    return 1
-  fi
-  if ! openclaw mcp doctor rainbond --probe >/dev/null; then
-    return 1
-  fi
-  openclaw mcp reload >/dev/null 2>&1 || true
-  log "[configure] 已配置 OpenClaw MCP"
-}
-
-configure_pi_mcp() {
-  local source_file="$SCRIPT_DIR/pi/rainskills-mcp.ts"
-  local destination_dir="$HOME/.pi/agent/extensions"
-  local destination_file="$destination_dir/rainskills-mcp.ts"
-
-  if ! command -v pi >/dev/null 2>&1; then
-    warn "未找到 Pi Agent CLI，跳过 Pi MCP Extension 配置。"
-    return 1
-  fi
-  if [[ ! -f "$source_file" ]]; then
-    warn "安装包中缺少 Pi MCP Extension：$source_file"
-    return 1
-  fi
-
-  mkdir -p "$destination_dir"
-  if [[ -f "$destination_file" ]] && cmp -s "$source_file" "$destination_file"; then
-    log "[skip] Pi MCP Extension 已是最新"
-    return 0
-  fi
-
-  backup_file "$destination_file"
-  local temporary_file
-  temporary_file="$(mktemp "${destination_file}.tmp.XXXXXX")"
-  cp "$source_file" "$temporary_file"
-  chmod 644 "$temporary_file"
-  mv "$temporary_file" "$destination_file"
-  log "[configure] 已配置 Pi MCP Extension"
-}
-
-openclaw_install_is_managed() {
-  local env_file="$HOME/.openclaw/.env"
-  [[ -f "$env_file" ]] || return 1
-  grep -Fqx '# >>> rainbond skills mcp >>>' "$env_file" && \
-    grep -Fqx '# <<< rainbond skills mcp <<<' "$env_file"
-}
-
-pi_extension_is_installed() {
-  [[ -f "$HOME/.pi/agent/extensions/rainskills-mcp.ts" ]]
-}
-
 validate_mcp_connectivity() {
   local mcp_url="$1"
   local token="$2"
@@ -2357,16 +2235,14 @@ do_refresh() {
   base_url="$(normalize_rainbond_url "$base_url_input")"
   confirm_insecure_http_if_needed "$base_url"
 
-  local token generic_mcp_url codex_mcp_url claude_mcp_url openclaw_mcp_url pi_mcp_url
+  local token generic_mcp_url codex_mcp_url claude_mcp_url
   local migrate_codex=0 migrate_claude=0
-  local validate_codex=0 validate_claude=0 validate_openclaw=0 validate_pi=0
+  local validate_codex=0 validate_claude=0
   obtain_rainbond_token "$base_url" "$DEPLOYMENT_MODE_INPUT"
   token="$OBTAINED_RAINBOND_TOKEN"
   generic_mcp_url="${base_url}/console/mcp/query"
   codex_mcp_url="${base_url}/console/mcp/rainskills/codex/query"
   claude_mcp_url="${base_url}/console/mcp/rainskills/claude-code/query"
-  openclaw_mcp_url="${base_url}/console/mcp/rainskills/openclaw/query"
-  pi_mcp_url="${base_url}/console/mcp/rainskills/pi/query"
 
   if codex_config_matches "$generic_mcp_url"; then
     migrate_codex=1
@@ -2380,25 +2256,15 @@ do_refresh() {
   elif claude_config_matches "$claude_mcp_url"; then
     validate_claude=1
   fi
-  if openclaw_install_is_managed; then
-    validate_openclaw=1
-  fi
-  if pi_extension_is_installed; then
-    validate_pi=1
-  fi
-  if (( validate_codex == 0 && validate_claude == 0 && validate_openclaw == 0 && validate_pi == 0 )); then
+  if (( validate_codex == 0 && validate_claude == 0 )); then
     validate_codex=1
   fi
 
-  local client_count=$((validate_codex + validate_claude + validate_openclaw + validate_pi))
+  local client_count=$((validate_codex + validate_claude))
   if (( client_count > 1 )); then
     RAINSKILLS_INSTALL_CLIENT="all"
   elif (( validate_claude == 1 )); then
     RAINSKILLS_INSTALL_CLIENT="claude_code"
-  elif (( validate_openclaw == 1 )); then
-    RAINSKILLS_INSTALL_CLIENT="openclaw"
-  elif (( validate_pi == 1 )); then
-    RAINSKILLS_INSTALL_CLIENT="pi"
   else
     RAINSKILLS_INSTALL_CLIENT="codex"
   fi
@@ -2411,14 +2277,6 @@ do_refresh() {
   fi
   if (( validate_claude == 1 )); then
     validate_mcp_connectivity "$claude_mcp_url" "$token"
-    token="$VALIDATED_TOKEN"
-  fi
-  if (( validate_openclaw == 1 )); then
-    validate_mcp_connectivity "$openclaw_mcp_url" "$token"
-    token="$VALIDATED_TOKEN"
-  fi
-  if (( validate_pi == 1 )); then
-    validate_mcp_connectivity "$pi_mcp_url" "$token"
     token="$VALIDATED_TOKEN"
   fi
 
@@ -2435,23 +2293,10 @@ do_refresh() {
     migrate_claude_mcp_if_generic "$generic_mcp_url" "$claude_mcp_url" \
       || die "Claude MCP 专用地址迁移失败"
   fi
-  if (( validate_openclaw == 1 )); then
-    write_openclaw_env "$token" "$base_url"
-    if command -v openclaw >/dev/null 2>&1; then
-      openclaw mcp reload >/dev/null 2>&1 || true
-    fi
-  fi
-
   log ""
   log "JWT 刷新完成。脚本管理的旧通用 MCP 地址已按需迁移到 RainSkills 专用地址。"
   if (( validate_codex == 1 || validate_claude == 1 )); then
     log "请重启 Claude Code 或 Codex 让新 JWT 生效（它们在启动时一次性读取 RAINBOND_JWT）。"
-  fi
-  if (( validate_openclaw == 1 )); then
-    log "OpenClaw 当前 CLI 已请求 MCP 热加载；独立 Gateway / Agent 进程需在对应进程中重新加载配置或重启。"
-  fi
-  if (( validate_pi == 1 )); then
-    log "请在 Pi Agent 中执行 /reload 读取新凭据。"
   fi
   if [[ -n "$ACTIVE_SHELL_RC" ]]; then
     log "如果想立刻在当前终端使用，请执行：source ${ACTIVE_SHELL_RC}"
@@ -2509,15 +2354,13 @@ configure_mcp() {
   base_url="$(normalize_rainbond_url "$base_url_input")"
   confirm_insecure_http_if_needed "$base_url"
 
-  local token codex_mcp_url claude_mcp_url openclaw_mcp_url pi_mcp_url
+  local token codex_mcp_url claude_mcp_url
   obtain_rainbond_token "$base_url" "$DEPLOYMENT_MODE_INPUT"
   token="$OBTAINED_RAINBOND_TOKEN"
   RAINSKILLS_INSTALL_CLIENT="$(rainskills_install_client_for_target "$TARGET")"
   record_rainskills_authorization "$base_url" "$token"
   codex_mcp_url="${base_url}/console/mcp/rainskills/codex/query"
   claude_mcp_url="${base_url}/console/mcp/rainskills/claude-code/query"
-  openclaw_mcp_url="${base_url}/console/mcp/rainskills/openclaw/query"
-  pi_mcp_url="${base_url}/console/mcp/rainskills/pi/query"
 
   set_rainskills_failure_context "verification" "mcp_verification_failed"
   case "$TARGET" in
@@ -2529,22 +2372,10 @@ configure_mcp() {
       validate_mcp_connectivity "$claude_mcp_url" "$token"
       token="$VALIDATED_TOKEN"
       ;;
-    openclaw)
-      validate_mcp_connectivity "$openclaw_mcp_url" "$token"
-      token="$VALIDATED_TOKEN"
-      ;;
-    pi)
-      validate_mcp_connectivity "$pi_mcp_url" "$token"
-      token="$VALIDATED_TOKEN"
-      ;;
     all)
       validate_mcp_connectivity "$codex_mcp_url" "$token"
       token="$VALIDATED_TOKEN"
       validate_mcp_connectivity "$claude_mcp_url" "$token"
-      token="$VALIDATED_TOKEN"
-      validate_mcp_connectivity "$openclaw_mcp_url" "$token"
-      token="$VALIDATED_TOKEN"
-      validate_mcp_connectivity "$pi_mcp_url" "$token"
       token="$VALIDATED_TOKEN"
       ;;
   esac
@@ -2563,17 +2394,9 @@ configure_mcp() {
     claude)
       configure_claude_mcp "$claude_mcp_url" && configured=1 || true
       ;;
-    openclaw)
-      configure_openclaw_mcp "$openclaw_mcp_url" "$token" "$base_url" && configured=1 || true
-      ;;
-    pi)
-      configure_pi_mcp && configured=1 || true
-      ;;
     all)
       configure_codex_mcp "$codex_mcp_url" && configured=$((configured + 1)) || true
       configure_claude_mcp "$claude_mcp_url" && configured=$((configured + 1)) || true
-      configure_openclaw_mcp "$openclaw_mcp_url" "$token" "$base_url" && configured=$((configured + 1)) || true
-      configure_pi_mcp && configured=$((configured + 1)) || true
       ;;
   esac
 
@@ -2638,14 +2461,8 @@ main() {
     claude)
       log "请重新加载 shell 环境并重启 Claude Code 以加载新技能和 MCP。"
       ;;
-    openclaw)
-      log "OpenClaw 当前 CLI 已请求 MCP 热加载；如使用独立 Gateway / Agent 进程，请在对应进程中重新加载配置或重启。"
-      ;;
-    pi)
-      log "请在 Pi Agent 中执行 /reload，新 Skill 和 Rainbond MCP 会立即加载。"
-      ;;
     all)
-      log "请重启 Codex / Claude Code；在 Pi Agent 中执行 /reload。OpenClaw 当前 CLI 已请求 MCP 热加载；独立 Gateway / Agent 进程需重新加载配置或重启。"
+      log "请重启 Codex / Claude Code 以加载新技能和 MCP。"
       ;;
   esac
 }

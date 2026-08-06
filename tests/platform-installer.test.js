@@ -717,6 +717,13 @@ test("onboarding state is schema checked and must be a protected regular file", 
     state
   );
 
+  fs.writeFileSync(statePath, `${JSON.stringify({ ...state, target: "openclaw" })}\n`, { mode: 0o600 });
+  assert.throws(
+    () => readOnboardingState(statePath, state.operation_id, stateStore),
+    /安装目标无效/
+  );
+  fs.writeFileSync(statePath, `${JSON.stringify(state)}\n`, { mode: 0o600 });
+
   fs.chmodSync(statePath, 0o644);
   assert.throws(() => readOnboardingState(statePath, state.operation_id, stateStore), /0600/);
   fs.chmodSync(statePath, 0o600);

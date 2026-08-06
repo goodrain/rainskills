@@ -41,7 +41,8 @@ test("repository exposes one complete Rainskills marketplace entry", () => {
   assert.match(skill, /install\.sh/);
   assert.match(skill, /every bundled `rainbond-\*` Skill as an independent Skill/i);
   assert.match(skill, /Do not ask the user to choose only one/i);
-  assert.match(skill, /OpenClaw=`openclaw`, Pi Agent=`pi`/);
+  assert.match(skill, /Codex=`codex` or Claude Code=`claude`/);
+  assert.match(skill, /does not support OpenClaw or Pi Agent/);
   assert.match(skill, /attached interactive terminal/i);
   assert.match(skill, /RAINSKILLS_USER_INPUT_REQUIRED/);
   assert.match(skill, /rainskills\.next-action\.v1/);
@@ -225,8 +226,8 @@ test("README documents one-product installation and updates for each adapter", (
   assert.match(readme, /npx skills update rainskills/);
   assert.match(readme, /codex plugin marketplace upgrade goodrain/);
   assert.match(readme, /\/plugin update rainskills@goodrain/);
-  assert.match(readme, /OpenClaw/);
-  assert.match(readme, /Pi Agent/);
-  assert.match(readme, /pi install npm:rainskills/);
+  assert.match(readme, /支持 Codex 和 Claude Code/);
+  assert.match(readme, /不支持 OpenClaw 或 Pi Agent 安装/);
+  assert.doesNotMatch(readme, /npx --yes rainskills (openclaw|pi)/);
   assert.match(readme, /只会看到一个.*Rainskills/s);
 });
