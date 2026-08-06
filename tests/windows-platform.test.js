@@ -1416,37 +1416,76 @@ test("WSL forwards the fixed guest address through Docker and verifies Console o
   assert.doesNotMatch(verifyRainbond, /http:\/\/\$GUEST_ADDRESS:7070\//);
 });
 
-test("PowerShell starts a persistent managed WSL keepalive task", () => {
+test("PowerShell keeps WSL alive through the protected helper instead of a direct scheduled wsl.exe action", () => {
   const source = readNormalizedSource(powershellPath);
   const registerMaintenance = source.match(/function Register-NetworkMaintenance\(\$Request, \$Manifest\) \{[\s\S]*?\n\}\n\nfunction Test-ExpectedPortProxy/)?.[0];
   const assertKeepalive = source.match(/function Assert-WslKeepaliveTask\(\$Request\) \{[\s\S]*?\n\}\n\nfunction Test-ExpectedPortProxy/)?.[0];
-  const waitForKeepalive = source.match(/function Wait-ScheduledTaskRunning\([^\n]+\) \{[\s\S]*?\n\}\n\nfunction Register-NetworkMaintenance/)?.[0];
+  const invokeKeepalive = source.match(/function Invoke-WslKeepalive\(\$Request\) \{[\s\S]*?\n\}\n\nfunction Invoke-ProvisionRainbond/)?.[0];
+  const waitForKeepalive = source.match(/function Wait-ScheduledTaskRunning\([\s\S]*?\n\}\n\nfunction Register-NetworkMaintenance/)?.[0];
   const taskContract = source.match(/function Get-ScheduledTaskContractMismatches\([^\n]+\) \{[\s\S]*?\n\}\n\nfunction Assert-ScheduledTaskContract/)?.[0];
   const finalize = source.match(/function Invoke-Finalize\(\$Request\) \{[\s\S]*?\n\}\n\nfunction Invoke-PrepareWsl/)?.[0];
+  const validateSet = source.match(/\[ValidateSet\([^\n]+\)\]/)?.[0];
+  const machineAllowlist = source.match(/\$machineActions = @\([^\n]+\)/)?.[0];
+  const dispatch = source.match(/switch \(\$Action\) \{[\s\S]*?default \{ throw "Unsupported fixed action" \}\n  \}/)?.[0];
   assert(registerMaintenance, "Register-NetworkMaintenance must remain a standalone fixed helper");
   assert(assertKeepalive, "Assert-WslKeepaliveTask must remain a standalone fixed helper");
+  assert(invokeKeepalive, "persistent WSL ownership must remain a standalone fixed helper action");
   assert(waitForKeepalive, "managed keepalive startup must have a bounded running-state check");
   assert(taskContract, "scheduled task metadata must be normalized in one fixed helper");
   assert(finalize, "Invoke-Finalize must remain a standalone fixed action");
   assert.match(registerMaintenance, /RainSkills-Keepalive-\$\(\$Request\.installation_id\)/);
-  assert.match(registerMaintenance, /wsl\.exe/);
-  assert.match(registerMaintenance, /-d[\s\S]*Rainbond[\s\S]*\/bin\/sleep[\s\S]*infinity/);
+  assert.match(registerMaintenance, /WindowsPowerShell\\v1\.0\\powershell\.exe/);
+  assert.match(registerMaintenance, /-Action WslKeepalive/);
+  assert.match(registerMaintenance, /request-\$keepaliveNonce\.json/);
+  assert.match(registerMaintenance, /result-\$keepaliveNonce\.json/);
+  assert.doesNotMatch(registerMaintenance, /New-ScheduledTaskAction[\s\S]*?-Execute "\$env:SystemRoot\\System32\\wsl\.exe"/);
+  assert.match(registerMaintenance, /Get-ScheduledTaskContractMismatches/);
+  assert.match(registerMaintenance, /\$reuseKeepalive/);
+  assert.match(registerMaintenance, /Stop-ScheduledTask/);
+  assert(
+    registerMaintenance.indexOf("Get-ScheduledTaskContractMismatches") <
+      registerMaintenance.indexOf("Register-VerifiedTask $keepaliveTaskName"),
+    "an already-running verified wrapper must be reused before replacing the task definition"
+  );
   assert.match(registerMaintenance, /New-ScheduledTaskSettingsSet[\s\S]*ExecutionTimeLimit[\s\S]*Zero/);
   assert.match(registerMaintenance, /AllowStartIfOnBatteries/);
   assert.match(registerMaintenance, /DontStopIfGoingOnBatteries/);
   assert.match(registerMaintenance, /StartWhenAvailable/);
   assert.match(registerMaintenance, /New-ScheduledTaskPrincipal[^\n]*RunLevel Highest/);
   assert.match(registerMaintenance, /Start-ScheduledTask[\s\S]*keepalive/);
-  assert.match(registerMaintenance, /Wait-ScheduledTaskRunning/);
+  assert.match(registerMaintenance, /Wait-ScheduledTaskRunning \$keepaliveTaskName 15 \$keepaliveResult/);
   assert.match(waitForKeepalive, /Get-ScheduledTaskInfo/);
   assert.match(waitForKeepalive, /State[\s\S]*Running/);
+  assert.match(waitForKeepalive, /runtimeLeaseReady/);
+  assert.match(waitForKeepalive, /failureMessage/);
   assert.match(waitForKeepalive, /LastTaskResult/);
   assert.match(waitForKeepalive, /throw/);
+  assert(
+    waitForKeepalive.indexOf('$readiness.status -eq "error"') <
+      waitForKeepalive.indexOf('[string]$task.State -eq "Running"'),
+    "a completed wrapper failure must be reported even after the scheduled task returns to Ready"
+  );
+  assert.match(invokeKeepalive, /Start-WslRuntimeLease/);
+  assert.match(invokeKeepalive, /Remove-Item -LiteralPath \$ResultPath/);
+  assert(
+    invokeKeepalive.indexOf("Remove-Item -LiteralPath $ResultPath") <
+      invokeKeepalive.indexOf("Start-WslRuntimeLease"),
+    "each keepalive launch must clear stale readiness before starting a new WSL lease"
+  );
+  assert.match(invokeKeepalive, /Write-ActionResult[\s\S]*runtimeLeaseReady\s*=\s*\$true/);
+  assert.match(invokeKeepalive, /WaitForExit\(\)/);
+  assert.match(invokeKeepalive, /exited unexpectedly/);
   assert.match(taskContract, /Convert-IdentityToSid/);
   assert.match(source, /function Normalize-ScheduledTaskExecutable[\s\S]*ExpandEnvironmentVariables/);
   assert.match(taskContract, /OrdinalIgnoreCase/);
   assert.match(assertKeepalive, /Assert-ScheduledTaskContract/);
+  assert.match(assertKeepalive, /WindowsPowerShell\\v1\.0\\powershell\.exe/);
+  assert.match(assertKeepalive, /-Action WslKeepalive/);
+  assert.match(assertKeepalive, /Wait-ScheduledTaskRunning \$taskName 15 \$keepaliveResult/);
   assert.match(source, /read-back mismatch: \$\(\$mismatches -join/);
+  assert.match(validateSet, /"WslKeepalive"/);
+  assert.match(machineAllowlist, /"WslKeepalive"/);
+  assert.match(dispatch, /"WslKeepalive" \{ \$facts = Invoke-WslKeepalive \$request \}/);
   assert.doesNotMatch(finalize, /RainSkills-Keepalive|RainSkills-Network/);
 });
 

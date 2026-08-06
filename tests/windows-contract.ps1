@@ -28,6 +28,7 @@ $platformAst = [System.Management.Automation.Language.Parser]::ParseFile(
 
 foreach ($functionName in @(
   "Convert-IdentityToSid",
+  "Get-PropertyValue",
   "Get-MachineRoot",
   "Assert-ManagedMachineRoot",
   "Set-MachineItemAcl",
@@ -271,6 +272,36 @@ try {
   }
   if ($keepaliveFailure -notmatch "state=Ready" -or $keepaliveFailure -notmatch "LastTaskResult=267009") {
     throw "Managed keepalive task failure did not include concrete task diagnostics: $keepaliveFailure"
+  }
+
+  $readinessRoot = Join-Path ([IO.Path]::GetTempPath()) ("rainskills-keepalive-contract-" + [Guid]::NewGuid().ToString("N"))
+  [void](New-Item -ItemType Directory -Path $readinessRoot)
+  try {
+    $readinessPath = Join-Path $readinessRoot "result.json"
+    [IO.File]::WriteAllText($readinessPath, (@{
+      schema = "rainskills.windows-result.v1"
+      action = "WslKeepalive"
+      operation_id = "11111111-1111-4111-8111-111111111111"
+      installation_id = "22222222-2222-4222-8222-222222222222"
+      nonce = ("a" * 64)
+      status = "error"
+      facts = @{ failureMessage = "simulated wrapped WSL failure" }
+    } | ConvertTo-Json -Depth 4), [Text.UTF8Encoding]::new($false))
+    $readinessRequest = [pscustomobject]@{
+      operation_id = "11111111-1111-4111-8111-111111111111"
+      installation_id = "22222222-2222-4222-8222-222222222222"
+    }
+    $wrappedFailure = $null
+    try {
+      [void](Wait-ScheduledTaskRunning "RainSkills-Keepalive-contract" 0 $readinessPath $readinessRequest ("a" * 64))
+    } catch {
+      $wrappedFailure = $_.Exception.Message
+    }
+    if ($wrappedFailure -notmatch "simulated wrapped WSL failure") {
+      throw "Managed keepalive wrapper failure was hidden by task state: $wrappedFailure"
+    }
+  } finally {
+    Remove-Item -LiteralPath $readinessRoot -Recurse -Force -ErrorAction SilentlyContinue
   }
 } finally {
   Remove-Item Function:\Get-ScheduledTask -ErrorAction SilentlyContinue

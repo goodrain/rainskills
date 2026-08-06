@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
   [Parameter(Mandatory = $true)]
-  [ValidateSet("Preflight", "InspectState", "ProtectState", "PrepareWsl", "ProvisionRainbond", "ConvergeInstalledPlatform", "InstallMachineBundle", "EnableWsl", "UpdateWsl", "VerifyWsl", "RegisterResume", "RegisterFinalize", "RequestReboot", "Finalize", "ImportDistro", "PrepareRuntime", "ConfigureNetwork", "VerifyNetwork", "PrepareDocker", "InstallRainbond", "VerifyDeployment")]
+  [ValidateSet("Preflight", "InspectState", "ProtectState", "PrepareWsl", "ProvisionRainbond", "ConvergeInstalledPlatform", "InstallMachineBundle", "EnableWsl", "UpdateWsl", "VerifyWsl", "RegisterResume", "RegisterFinalize", "RequestReboot", "Finalize", "ImportDistro", "PrepareRuntime", "ConfigureNetwork", "VerifyNetwork", "PrepareDocker", "InstallRainbond", "VerifyDeployment", "WslKeepalive")]
   [string]$Action,
 
   [string]$RequestPath = "",
@@ -1358,24 +1358,64 @@ function Assert-ScheduledTaskContract($Task, [string]$ExpectedExecutable, [strin
   }
 }
 
-function Wait-ScheduledTaskRunning([string]$TaskName, [int]$TimeoutSeconds = 15) {
+function Wait-ScheduledTaskRunning(
+  [string]$TaskName,
+  [int]$TimeoutSeconds = 15,
+  [string]$ReadinessResultPath = "",
+  $Request = $null,
+  [string]$ReadinessNonce = ""
+) {
   $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
   $task = $null
+  $readinessState = "not-required"
   do {
     $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-    if ($null -ne $task -and [string]$task.State -eq "Running") { return $task }
+    $runtimeLeaseReady = $false
+    if (-not [string]::IsNullOrWhiteSpace($ReadinessResultPath)) {
+      $readinessState = "missing"
+      if (Test-Path -LiteralPath $ReadinessResultPath -PathType Leaf) {
+        $readinessInfo = Get-Item -LiteralPath $ReadinessResultPath -Force
+        if ($readinessInfo.PSIsContainer -or ($readinessInfo.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+          throw "Managed WSL keepalive readiness result must be a regular non-reparse file"
+        }
+        $readiness = Get-Content -LiteralPath $ReadinessResultPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($readiness.schema -ne "rainskills.windows-result.v1" -or
+            $readiness.action -ne "WslKeepalive" -or
+            $readiness.operation_id -ne $Request.operation_id -or
+            $readiness.installation_id -ne $Request.installation_id -or
+            $readiness.nonce -ne $ReadinessNonce) {
+          throw "Managed WSL keepalive readiness result identity mismatch"
+        }
+        if ($readiness.status -eq "error") {
+          $failureMessage = ConvertTo-SafeDiagnosticLine ([string](Get-PropertyValue $readiness.facts "failureMessage" "Unknown WSL keepalive failure")) 500
+          throw "Managed WSL keepalive task failed: $failureMessage"
+        }
+        if ($readiness.status -eq "ok" -and
+            [bool](Get-PropertyValue $readiness.facts "runtimeLeaseReady" $false)) {
+          $runtimeLeaseReady = $true
+          $readinessState = "ready"
+        } else {
+          $readinessState = "not-ready"
+        }
+      }
+    }
+    if ($null -ne $task -and [string]$task.State -eq "Running" -and
+        ([string]::IsNullOrWhiteSpace($ReadinessResultPath) -or $runtimeLeaseReady)) {
+      return $task
+    }
     Start-Sleep -Milliseconds 250
   } while ([DateTime]::UtcNow -lt $deadline)
 
   $state = if ($null -eq $task) { "missing" } else { [string]$task.State }
   $info = Get-ScheduledTaskInfo -TaskName $TaskName -ErrorAction SilentlyContinue
   $lastResult = if ($null -eq $info) { "unavailable" } else { [string]$info.LastTaskResult }
-  throw "Managed WSL keepalive task did not enter Running state: state=$state, LastTaskResult=$lastResult"
+  throw "Managed WSL keepalive task did not become ready: state=$state, readiness=$readinessState, LastTaskResult=$lastResult"
 }
 
 function Register-NetworkMaintenance($Request, $Manifest) {
   $machineRoot = Get-MachineRoot $Request
   $machineHelper = Join-Path $machineRoot "windows-platform.ps1"
+  $powershellPath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
   $nonce = [string]$Manifest.maintenance_nonce
   $maintenanceRequest = Join-Path $machineRoot "request-$nonce.json"
   $maintenanceResult = Join-Path $machineRoot "result-$nonce.json"
@@ -1395,10 +1435,25 @@ function Register-NetworkMaintenance($Request, $Manifest) {
     }
   }
   [IO.File]::WriteAllText($maintenanceRequest, (($requestValue | ConvertTo-Json -Depth 12) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+
+  $keepaliveNonce = [string]$Manifest.keepalive_nonce
+  $keepaliveRequest = Join-Path $machineRoot "request-$keepaliveNonce.json"
+  $keepaliveResult = Join-Path $machineRoot "result-$keepaliveNonce.json"
+  $keepaliveRequestValue = [ordered]@{
+    schema = "rainskills.windows-request.v1"
+    action = "WslKeepalive"
+    operation_id = $Request.operation_id
+    installation_id = $Request.installation_id
+    nonce = $keepaliveNonce
+    user_sid = $Request.user_sid
+    policy = $Request.policy
+    payload = [ordered]@{ runtime_lease = $true }
+  }
+  [IO.File]::WriteAllText($keepaliveRequest, (($keepaliveRequestValue | ConvertTo-Json -Depth 12) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
   Set-MachineRootAcl $machineRoot $Request.user_sid
   $arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $machineHelper +
     '" -Action ConfigureNetwork -RequestPath "' + $maintenanceRequest + '" -ResultPath "' + $maintenanceResult + '"'
-  $taskAction = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -Argument $arguments
+  $taskAction = New-ScheduledTaskAction -Execute $powershellPath -Argument $arguments
   $trigger = New-ScheduledTaskTrigger -AtLogOn -User $Request.user_sid
   $trigger.Delay = "PT10S"
   $principal = New-ScheduledTaskPrincipal -UserId $Request.user_sid -LogonType Interactive -RunLevel Highest
@@ -1406,9 +1461,9 @@ function Register-NetworkMaintenance($Request, $Manifest) {
   Register-VerifiedTask $networkTaskName $taskAction $trigger $principal
 
   $keepaliveTaskName = "RainSkills-Keepalive-$($Request.installation_id)"
-  $keepaliveAction = New-ScheduledTaskAction `
-    -Execute "$env:SystemRoot\System32\wsl.exe" `
-    -Argument '-d "Rainbond" -u root --exec /bin/sleep infinity'
+  $keepaliveArguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $machineHelper +
+    '" -Action WslKeepalive -RequestPath "' + $keepaliveRequest + '" -ResultPath "' + $keepaliveResult + '"'
+  $keepaliveAction = New-ScheduledTaskAction -Execute $powershellPath -Argument $keepaliveArguments
   $keepaliveTrigger = New-ScheduledTaskTrigger -AtLogOn -User $Request.user_sid
   $keepaliveTrigger.Delay = "PT20S"
   $keepalivePrincipal = New-ScheduledTaskPrincipal -UserId $Request.user_sid -LogonType Interactive -RunLevel Highest
@@ -1420,19 +1475,52 @@ function Register-NetworkMaintenance($Request, $Manifest) {
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
     -StartWhenAvailable
-  Register-VerifiedTask $keepaliveTaskName $keepaliveAction $keepaliveTrigger $keepalivePrincipal $keepaliveSettings
-  Start-ScheduledTask -TaskName $keepaliveTaskName
-  [void](Wait-ScheduledTaskRunning $keepaliveTaskName)
+  $reuseKeepalive = $false
+  $existingKeepalive = Get-ScheduledTask -TaskName $keepaliveTaskName -ErrorAction SilentlyContinue
+  if ($null -ne $existingKeepalive) {
+    $keepaliveMismatches = @(Get-ScheduledTaskContractMismatches $existingKeepalive $powershellPath $keepaliveArguments $Request.user_sid "Highest")
+    if ($keepaliveMismatches.Count -eq 0 -and [string]$existingKeepalive.State -eq "Running") {
+      try {
+        [void](Wait-ScheduledTaskRunning $keepaliveTaskName 1 $keepaliveResult $Request $keepaliveNonce)
+        $reuseKeepalive = $true
+      } catch {
+        $reuseKeepalive = $false
+      }
+    }
+    if (-not $reuseKeepalive -and [string]$existingKeepalive.State -eq "Running") {
+      Stop-ScheduledTask -TaskName $keepaliveTaskName -ErrorAction SilentlyContinue
+    }
+  }
+  if (-not $reuseKeepalive) {
+    if (Test-Path -LiteralPath $keepaliveResult) {
+      $keepaliveResultInfo = Get-Item -LiteralPath $keepaliveResult -Force
+      if ($keepaliveResultInfo.PSIsContainer -or ($keepaliveResultInfo.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        throw "Managed WSL keepalive result must be a regular non-reparse file"
+      }
+      Remove-Item -LiteralPath $keepaliveResult -Force
+    }
+    Register-VerifiedTask $keepaliveTaskName $keepaliveAction $keepaliveTrigger $keepalivePrincipal $keepaliveSettings
+    Start-ScheduledTask -TaskName $keepaliveTaskName
+    [void](Wait-ScheduledTaskRunning $keepaliveTaskName 15 $keepaliveResult $Request $keepaliveNonce)
+  }
   return [ordered]@{ network = $networkTaskName; keepalive = $keepaliveTaskName }
 }
 
 function Assert-WslKeepaliveTask($Request) {
+  Assert-NetworkManifestDigest $Request
+  $manifest = Get-Content -LiteralPath (Get-NetworkManifestPath $Request) -Raw -Encoding UTF8 | ConvertFrom-Json
   $taskName = "RainSkills-Keepalive-$($Request.installation_id)"
   $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-  $expectedExecutable = "$env:SystemRoot\System32\wsl.exe"
-  $expectedArguments = '-d "Rainbond" -u root --exec /bin/sleep infinity'
+  $machineRoot = Get-MachineRoot $Request
+  $machineHelper = Join-Path $machineRoot "windows-platform.ps1"
+  $keepaliveNonce = [string]$manifest.keepalive_nonce
+  $keepaliveRequest = Join-Path $machineRoot "request-$keepaliveNonce.json"
+  $keepaliveResult = Join-Path $machineRoot "result-$keepaliveNonce.json"
+  $expectedExecutable = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+  $expectedArguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $machineHelper +
+    '" -Action WslKeepalive -RequestPath "' + $keepaliveRequest + '" -ResultPath "' + $keepaliveResult + '"'
   Assert-ScheduledTaskContract $task $expectedExecutable $expectedArguments $Request.user_sid "Highest" "Managed WSL keepalive task"
-  [void](Wait-ScheduledTaskRunning $taskName)
+  [void](Wait-ScheduledTaskRunning $taskName 15 $keepaliveResult $Request $keepaliveNonce)
   return $taskName
 }
 
@@ -1537,6 +1625,8 @@ function Invoke-ConfigureNetwork($Request) {
   if (-not (Test-ExpectedPortProxy $tuples $guestAddress $ports)) { throw "Managed portproxy read-back mismatch" }
   $maintenanceNonce = if ($existing) { [string](Get-PropertyValue $existing "maintenance_nonce") } else { "" }
   if ([string]::IsNullOrWhiteSpace($maintenanceNonce)) { $maintenanceNonce = New-SecureNonce }
+  $keepaliveNonce = if ($existing) { [string](Get-PropertyValue $existing "keepalive_nonce") } else { "" }
+  if ([string]::IsNullOrWhiteSpace($keepaliveNonce)) { $keepaliveNonce = New-SecureNonce }
   $manifest = [ordered]@{
     schema = "rainskills.windows-managed-network.v1"
     operation_id = $Request.operation_id
@@ -1548,6 +1638,7 @@ function Invoke-ConfigureNetwork($Request) {
     guest_address = $guestAddress
     portproxy = @($tuples | Where-Object { $ports -contains $_.listenPort })
     maintenance_nonce = $maintenanceNonce
+    keepalive_nonce = $keepaliveNonce
     acl_owner = "S-1-5-32-544"
     writable_sids = @("S-1-5-18", "S-1-5-32-544")
   }
@@ -2088,6 +2179,31 @@ function Stop-WslRuntimeLease($Lease) {
   }
 }
 
+function Invoke-WslKeepalive($Request) {
+  if ((Get-ManagedDistroNames) -notcontains "Rainbond" -or
+      (Get-DistroIdentity $Request) -ne $Request.installation_id) {
+    throw "Managed Rainbond distro is unavailable for the WSL keepalive task"
+  }
+  if (Test-Path -LiteralPath $ResultPath -PathType Leaf) {
+    Remove-Item -LiteralPath $ResultPath -Force
+  }
+  $lease = Start-WslRuntimeLease
+  try {
+    Write-ActionResult $Request ([ordered]@{ runtimeLeaseReady = $true })
+    $lease.WaitForExit()
+    $exitCode = $lease.ExitCode
+    $lastLine = @((($lease.RainSkillsStderrTask.Result + "`n" + $lease.RainSkillsStdoutTask.Result) -split "`r?`n") |
+      ForEach-Object { ConvertTo-SafeDiagnosticLine ([string]$_) 240 } | Where-Object { $_ }) |
+      Select-Object -Last 1
+    if ($lastLine) {
+      throw "Rainbond WSL keepalive exited unexpectedly: exitCode=${exitCode}: $lastLine"
+    }
+    throw "Rainbond WSL keepalive exited unexpectedly: exitCode=$exitCode"
+  } finally {
+    $lease.Dispose()
+  }
+}
+
 function Invoke-ProvisionRainbond($Request) {
   $bundle = Invoke-ProvisionStage 1 7 "Updating the protected RainSkills helper" {
     try {
@@ -2197,7 +2313,7 @@ try {
   }
   $resultIdentityValidated = $true
 
-  $machineActions = @("PrepareWsl", "ProvisionRainbond", "ConvergeInstalledPlatform", "InstallMachineBundle", "EnableWsl", "UpdateWsl", "VerifyWsl", "RegisterResume", "RegisterFinalize", "RequestReboot", "Finalize", "ImportDistro", "PrepareRuntime", "ConfigureNetwork", "VerifyNetwork", "PrepareDocker", "InstallRainbond", "VerifyDeployment")
+  $machineActions = @("PrepareWsl", "ProvisionRainbond", "ConvergeInstalledPlatform", "InstallMachineBundle", "EnableWsl", "UpdateWsl", "VerifyWsl", "RegisterResume", "RegisterFinalize", "RequestReboot", "Finalize", "ImportDistro", "PrepareRuntime", "ConfigureNetwork", "VerifyNetwork", "PrepareDocker", "InstallRainbond", "VerifyDeployment", "WslKeepalive")
   if ($machineActions -contains $Action -and -not (Test-IsElevated)) {
     Invoke-ElevatedSelf
     exit 0
@@ -2239,6 +2355,7 @@ try {
     "PrepareDocker" { $facts = Invoke-PrepareDocker $request }
     "InstallRainbond" { $facts = Invoke-InstallRainbond $request }
     "VerifyDeployment" { $facts = Invoke-VerifyDeployment $request }
+    "WslKeepalive" { $facts = Invoke-WslKeepalive $request }
     default { throw "Unsupported fixed action" }
   }
   Write-ActionResult $request $facts $status
