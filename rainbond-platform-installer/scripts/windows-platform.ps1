@@ -863,6 +863,148 @@ function Convert-WindowsPathForDistro([string]$WindowsPath) {
   return $converted
 }
 
+function Format-StageElapsed([TimeSpan]$Elapsed) {
+  $totalHours = [int][Math]::Floor($Elapsed.TotalHours)
+  if ($totalHours -gt 0) {
+    return ("{0:00}:{1:00}:{2:00}" -f $totalHours, $Elapsed.Minutes, $Elapsed.Seconds)
+  }
+  return ("{0:00}:{1:00}" -f ([int][Math]::Floor($Elapsed.TotalMinutes)), $Elapsed.Seconds)
+}
+
+function Write-StageHeartbeat([int]$StageNumber, [int]$StageCount, [string]$Label, $Watch) {
+  Write-Host ("[..] {0}/{1} {2} {3}" -f $StageNumber, $StageCount, $Label, (Format-StageElapsed $Watch.Elapsed))
+}
+
+function Invoke-ProvisionStage([int]$StageNumber, [int]$StageCount, [string]$Label, $StageAction) {
+  if ($StageNumber -lt 1 -or $StageNumber -gt $StageCount -or $StageCount -ne 7) {
+    throw "Provisioning stage identity is invalid"
+  }
+  $watch = [Diagnostics.Stopwatch]::StartNew()
+  Write-Host ("[..] {0}/{1} {2} {3}" -f $StageNumber, $StageCount, $Label, (Format-StageElapsed $watch.Elapsed))
+  $result = & $StageAction
+  $watch.Stop()
+  Write-Host ("[OK] {0}/{1} {2} {3}" -f $StageNumber, $StageCount, $Label, (Format-StageElapsed $watch.Elapsed))
+  return $result
+}
+
+function ConvertTo-SafeDiagnosticLine([string]$Line, [int]$MaximumLength = 0) {
+  $safe = [string]$Line
+  $safe = [regex]::Replace($safe, "$([char]27)\[[0-?]*[ -/]*[@-~]", "")
+  $safe = $safe.Replace("`r", " ")
+  $safe = [regex]::Replace($safe, "[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]", "")
+  $safe = [regex]::Replace($safe, "(?i)(Authorization:\s*Bearer\s+)[^\s]+", '$1[REDACTED]')
+  $safe = [regex]::Replace($safe, "eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", "[REDACTED]")
+  $secretPattern = "(?i)((?:password|device[_-]?code|access[_-]?token|refresh[_-]?token)\s*[:=]\s*[`"']?)[^&\s,`"']+"
+  $safe = [regex]::Replace($safe, $secretPattern, '$1[REDACTED]')
+  $safe = $safe.Trim()
+  if ($MaximumLength -gt 0 -and $safe.Length -gt $MaximumLength) {
+    $safe = $safe.Substring(0, $MaximumLength)
+  }
+  return $safe
+}
+
+function Initialize-OperationDiagnosticLog($Request) {
+  $operationId = [string]$Request.operation_id
+  if ($operationId -notmatch "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$") {
+    throw "Diagnostic log operation id is invalid"
+  }
+  $machineRoot = Get-MachineRoot $Request
+  Assert-ManagedMachineRoot $machineRoot ([string]$Request.installation_id)
+  $machineRootFull = [IO.Path]::GetFullPath($machineRoot).TrimEnd("\")
+  $logRoot = Join-Path $machineRootFull "logs"
+  if (Test-Path -LiteralPath $logRoot) {
+    $logRootItem = Get-Item -LiteralPath $logRoot -Force
+    if (-not $logRootItem.PSIsContainer -or ($logRootItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+      throw "Diagnostic log directory must be a regular non-reparse directory"
+    }
+  } else {
+    [void][IO.Directory]::CreateDirectory($logRoot)
+  }
+  $logRootFull = [IO.Path]::GetFullPath($logRoot).TrimEnd("\")
+  if (-not $logRootFull.StartsWith($machineRootFull + "\", [StringComparison]::OrdinalIgnoreCase)) {
+    throw "Diagnostic log directory is outside the managed machine root"
+  }
+  $logPath = Join-Path $logRootFull ($operationId + ".log")
+  $logPathFull = [IO.Path]::GetFullPath($logPath)
+  if (-not [IO.Path]::GetDirectoryName($logPathFull).Equals($logRootFull, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "Diagnostic log path is outside the operation log directory"
+  }
+  if (Test-Path -LiteralPath $logPathFull) {
+    $logItem = Get-Item -LiteralPath $logPathFull -Force
+    if ($logItem.PSIsContainer -or ($logItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+      throw "Diagnostic log must be a regular non-reparse file"
+    }
+  } else {
+    $stream = [IO.File]::Open($logPathFull, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::Read)
+    $stream.Dispose()
+  }
+  Set-MachineRootAcl $machineRootFull ([string]$Request.user_sid)
+  $verifiedItem = Get-Item -LiteralPath $logPathFull -Force
+  if ($verifiedItem.PSIsContainer -or ($verifiedItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+    throw "Diagnostic log changed during ACL protection"
+  }
+  return $logPathFull
+}
+
+function Write-OperationDiagnosticLine([string]$LogPath, [string]$Line) {
+  $safeLine = ConvertTo-SafeDiagnosticLine $Line
+  if ([string]::IsNullOrWhiteSpace($safeLine)) { return }
+  $item = Get-Item -LiteralPath $LogPath -Force
+  if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+    throw "Diagnostic log is no longer a regular file"
+  }
+  [IO.File]::AppendAllText($LogPath, $safeLine + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
+}
+
+function ConvertFrom-PlatformProgressEvent([string]$Line) {
+  if ([string]::IsNullOrWhiteSpace($Line)) { return $null }
+  try {
+    $event = $Line | ConvertFrom-Json -ErrorAction Stop
+  } catch {
+    return $null
+  }
+  $requiredKeys = @("schema", "stage", "status", "timestamp")
+  $actualKeys = @($event.PSObject.Properties.Name)
+  if ($actualKeys.Count -ne $requiredKeys.Count -or
+      @($actualKeys | Where-Object { $requiredKeys -notcontains $_ }).Count -gt 0) {
+    return $null
+  }
+  if ([string]$event.schema -ne "rainskills.platform-progress.v1" -or
+      [string]$event.stage -notin @("preparing-docker", "installing-rainbond", "verifying-rainbond") -or
+      [string]$event.status -notin @("started", "heartbeat", "completed")) {
+    return $null
+  }
+  $parsedTimestamp = [DateTimeOffset]::MinValue
+  $timestampStyle = [Globalization.DateTimeStyles]::AssumeUniversal -bor [Globalization.DateTimeStyles]::AdjustToUniversal
+  if (-not [DateTimeOffset]::TryParseExact(
+      [string]$event.timestamp,
+      "yyyy-MM-dd'T'HH:mm:ss'Z'",
+      [Globalization.CultureInfo]::InvariantCulture,
+      $timestampStyle,
+      [ref]$parsedTimestamp)) {
+    return $null
+  }
+  return $event
+}
+
+function Update-PlatformProgressState($Event, [hashtable]$States) {
+  $stage = [string]$Event.stage
+  $status = [string]$Event.status
+  $current = $null
+  if ($States.ContainsKey($stage)) { $current = [string]$States[$stage] }
+  if ($status -eq "started") {
+    if ($null -ne $current) { return $false }
+    $States[$stage] = "started"
+    return $true
+  }
+  if ($status -eq "heartbeat") { return [bool]($current -eq "started") }
+  if ($status -eq "completed" -and $current -eq "started") {
+    $States[$stage] = "completed"
+    return $true
+  }
+  return $false
+}
+
 function Invoke-DistroBootstrap($Request, [string]$BootstrapAction, [string]$HostAddress = "", [string]$GuestAddress = "", [string]$InstallerPath = "", [string]$InstallerDigest = "") {
   $wslPath = Get-TrustedWslPath
   $machineRoot = Get-MachineRoot $Request
@@ -876,15 +1018,37 @@ function Invoke-DistroBootstrap($Request, [string]$BootstrapAction, [string]$Hos
   if ($GuestAddress) { $arguments += @("--guest-address", $GuestAddress) }
   if ($InstallerPath) { $arguments += @("--installer-path", $InstallerPath) }
   if ($InstallerDigest) { $arguments += @("--installer-sha256", $InstallerDigest) }
+  $diagnosticLogPath = Initialize-OperationDiagnosticLog $Request
   $lastMeaningfulOutput = ""
+  $progressStates = @{}
+  $progressWatches = @{}
+  $progressLabels = @{
+    "preparing-docker" = "Preparing Docker"
+    "installing-rainbond" = "Installing Rainbond"
+    "verifying-rainbond" = "Waiting for Rainbond readiness"
+  }
   $previousPreference = $ErrorActionPreference
   try {
     $ErrorActionPreference = "Continue"
     & $wslPath @arguments 2>&1 | ForEach-Object {
-      $line = ([string]$_).Trim()
-      Write-Host $_
-      if ($line -and $line -notmatch '^\{"schema":"rainskills\.platform-progress\.v1"') {
-        $lastMeaningfulOutput = $line
+      $line = ConvertTo-SafeDiagnosticLine ([string]$_)
+      if ($line) { Write-OperationDiagnosticLine $diagnosticLogPath $line }
+      $event = ConvertFrom-PlatformProgressEvent $line
+      if ($null -ne $event) {
+        if (Update-PlatformProgressState $event $progressStates) {
+          $stage = [string]$event.stage
+          if ([string]$event.status -eq "started") {
+            $progressWatches[$stage] = [Diagnostics.Stopwatch]::StartNew()
+          } elseif ([string]$event.status -eq "heartbeat" -and $progressWatches.ContainsKey($stage)) {
+            Write-Host ("     {0} ({1})" -f $progressLabels[$stage], (Format-StageElapsed $progressWatches[$stage].Elapsed))
+          } elseif ([string]$event.status -eq "completed" -and $progressWatches.ContainsKey($stage)) {
+            $progressWatches[$stage].Stop()
+          }
+        }
+        return
+      }
+      if ($line -and $line -notmatch 'rainskills\.platform-progress\.v1') {
+        $lastMeaningfulOutput = ConvertTo-SafeDiagnosticLine $line 240
       }
     }
     $exitCode = $LASTEXITCODE
@@ -893,9 +1057,9 @@ function Invoke-DistroBootstrap($Request, [string]$BootstrapAction, [string]$Hos
   }
   if ($exitCode -ne 0) {
     if ($lastMeaningfulOutput) {
-      throw "Managed WSL bootstrap action failed: ${BootstrapAction}: $lastMeaningfulOutput"
+      throw "Managed WSL bootstrap action failed: ${BootstrapAction}: $lastMeaningfulOutput. Diagnostic log: $diagnosticLogPath"
     }
-    throw "Managed WSL bootstrap action failed: $BootstrapAction"
+    throw "Managed WSL bootstrap action failed: $BootstrapAction. Diagnostic log: $diagnosticLogPath"
   }
 }
 
@@ -903,6 +1067,48 @@ function ConvertTo-NativeProcessArgument([string]$Value) {
   if ($Value -match '"') { throw "Native process arguments cannot contain quotes" }
   if ($Value -notmatch '\s') { return $Value }
   return '"' + $Value + '"'
+}
+
+function Invoke-WslImportWithProgress($Request, [string]$WslPath, [string]$DistroRoot, [string]$RootfsPath) {
+  $diagnosticLogPath = Initialize-OperationDiagnosticLog $Request
+  $arguments = @("--import", "Rainbond", $DistroRoot, $RootfsPath, "--version", "2")
+  $startInfo = [Diagnostics.ProcessStartInfo]::new()
+  $startInfo.FileName = $WslPath
+  $startInfo.Arguments = (($arguments | ForEach-Object { ConvertTo-NativeProcessArgument ([string]$_) }) -join " ")
+  $startInfo.UseShellExecute = $false
+  $startInfo.CreateNoWindow = $true
+  $startInfo.RedirectStandardOutput = $true
+  $startInfo.RedirectStandardError = $true
+  $process = [Diagnostics.Process]::new()
+  $process.StartInfo = $startInfo
+  $watch = [Diagnostics.Stopwatch]::StartNew()
+  try {
+    if (-not $process.Start()) { throw "wsl --import Rainbond did not start" }
+    $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+    $stderrTask = $process.StandardError.ReadToEndAsync()
+    while (-not $process.WaitForExit(10000)) {
+      Write-StageHeartbeat 2 7 "Importing the Rainbond WSL environment" $watch
+    }
+    $stdout = $stdoutTask.Result
+    $stderr = $stderrTask.Result
+    $lastMeaningfulOutput = ""
+    foreach ($rawLine in @(($stdout + "`n" + $stderr) -split "`r?`n")) {
+      $safeLine = ConvertTo-SafeDiagnosticLine ([string]$rawLine)
+      if ($safeLine) {
+        Write-OperationDiagnosticLine $diagnosticLogPath $safeLine
+        $lastMeaningfulOutput = ConvertTo-SafeDiagnosticLine $safeLine 240
+      }
+    }
+    if ($process.ExitCode -ne 0) {
+      if ($lastMeaningfulOutput) {
+        throw "wsl --import Rainbond failed: $lastMeaningfulOutput. Diagnostic log: $diagnosticLogPath"
+      }
+      throw "wsl --import Rainbond failed. Diagnostic log: $diagnosticLogPath"
+    }
+  } finally {
+    $watch.Stop()
+    $process.Dispose()
+  }
 }
 
 function Invoke-BoundedDistroBootstrap($Request, [string]$BootstrapAction, [DateTime]$Deadline) {
@@ -989,12 +1195,13 @@ function Invoke-ImportDistro($Request) {
     if (Test-Path -LiteralPath $distroRoot) { throw "Unknown existing Rainbond distro directory" }
     New-Item -ItemType Directory -Path $distroRoot -Force | Out-Null
     $wslPath = Get-TrustedWslPath
-    & $wslPath --import Rainbond $distroRoot $rootfsPath --version 2 | ForEach-Object { Write-Host $_ }
-    if ($LASTEXITCODE -ne 0) {
+    try {
+      Invoke-WslImportWithProgress $Request $wslPath $distroRoot $rootfsPath
+    } catch {
       if ((Get-ManagedDistroNames) -notcontains "Rainbond" -and (Test-Path -LiteralPath $distroRoot)) {
         Remove-Item -LiteralPath $distroRoot -Recurse -Force
       }
-      throw "wsl --import Rainbond failed"
+      throw
     }
     try {
       Invoke-DistroBootstrap $Request "PrepareRuntime"
@@ -1858,27 +2065,41 @@ function Stop-WslRuntimeLease($Lease) {
 }
 
 function Invoke-ProvisionRainbond($Request) {
-  Write-Host "[1/7] Updating the protected RainSkills helper..."
-  try {
-    $bundle = Invoke-InstallMachineBundle $Request
-  } catch {
-    throw "InstallMachineBundle failed: $($_.Exception.Message)"
+  $bundle = Invoke-ProvisionStage 1 7 "Updating the protected RainSkills helper" {
+    try {
+      Invoke-InstallMachineBundle $Request
+    } catch {
+      throw "InstallMachineBundle failed: $($_.Exception.Message)"
+    }
   }
-  Write-Host "[2/7] Importing the dedicated Rainbond WSL environment..."
   $runtimeLease = $null
   try {
-    $imported = Invoke-ImportDistro $Request
+    $imported = Invoke-ProvisionStage 2 7 "Importing the Rainbond WSL environment" {
+      Invoke-ImportDistro $Request
+    }
     $runtimeLease = Start-WslRuntimeLease
-    Write-Host "[3/7] Configuring fixed local networking..."
-    $configured = Invoke-ConfigureNetwork $Request
-    $network = Invoke-VerifyNetwork $Request
-    Write-Host "[4/7] Preparing Docker inside the Rainbond environment..."
-    $docker = Invoke-PrepareDocker $Request
-    Write-Host "[5/7] Installing Rainbond (the first image pull can take some time)..."
-    $installed = Invoke-InstallRainbond $Request
-    Write-Host "[6/7] Verifying Rainbond inside WSL..."
-    Write-Host "[7/7] Verifying Windows loopback access..."
-    $verified = Invoke-VerifyDeployment $Request
+    $networkStage = Invoke-ProvisionStage 3 7 "Configuring fixed local networking" {
+      $configuredResult = Invoke-ConfigureNetwork $Request
+      $networkResult = Invoke-VerifyNetwork $Request
+      return [ordered]@{ configured = $configuredResult; network = $networkResult }
+    }
+    $configured = $networkStage.configured
+    $network = $networkStage.network
+    $docker = Invoke-ProvisionStage 4 7 "Preparing Docker inside the Rainbond environment" {
+      Invoke-PrepareDocker $Request
+    }
+    $installed = Invoke-ProvisionStage 5 7 "Installing Rainbond" {
+      Invoke-InstallRainbond $Request
+    }
+    $verified = Invoke-ProvisionStage 6 7 "Verifying Rainbond inside WSL" {
+      Invoke-VerifyDeployment $Request
+    }
+    $verified = Invoke-ProvisionStage 7 7 "Verifying Windows loopback access" {
+      if (-not [bool]$verified.windowsConsoleReachable) {
+        throw "Rainbond Console is not reachable through Windows loopback"
+      }
+      return $verified
+    }
     return [ordered]@{
       installationId = [string]$Request.installation_id
       machineBundleVerified = [bool]$bundle.machineBundleVerified

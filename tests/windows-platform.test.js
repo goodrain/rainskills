@@ -1465,6 +1465,88 @@ test("combined Windows provisioning holds WSL across runtime and loopback verifi
   assert.match(provision, /finally[\s\S]*Stop-WslRuntimeLease/);
 });
 
+test("PowerShell renders seven ordered provisioning stages without premature completion", () => {
+  const source = readNormalizedSource(powershellPath);
+  const stageRunner = source.match(/function Invoke-ProvisionStage\([^\n]+\) \{[\s\S]*?\n\}\n\nfunction/)?.[0];
+  const provision = source.match(/function Invoke-ProvisionRainbond\(\$Request\) \{[\s\S]*?\n\}\n\n\$request =/)?.[0];
+  assert(stageRunner, "numbered Windows stages must share one progress wrapper");
+  assert(provision, "Invoke-ProvisionRainbond must remain a standalone fixed action");
+  assert.match(stageRunner, /Diagnostics\.Stopwatch/);
+  assert.match(stageRunner, /\[\.\.\][\s\S]*\$StageNumber[\s\S]*\$StageCount/);
+  assert.match(stageRunner, /\[OK\][\s\S]*\$StageNumber[\s\S]*\$StageCount/);
+  assert.match(stageRunner, /& \$StageAction/);
+  assert(
+    stageRunner.indexOf("& $StageAction") < stageRunner.indexOf("[OK]"),
+    "a stage must complete only after its action succeeds"
+  );
+  const stageOffsets = Array.from({ length: 7 }, (_, index) =>
+    provision.indexOf(`Invoke-ProvisionStage ${index + 1} 7`)
+  );
+  assert(stageOffsets.every((offset) => offset >= 0), "all seven fixed provisioning stages must be rendered");
+  assert.deepEqual(stageOffsets, [...stageOffsets].sort((left, right) => left - right));
+  assert.match(provision, /Invoke-ImportDistro[\s\S]*Start-WslRuntimeLease[\s\S]*Invoke-VerifyDeployment/);
+  assert.match(provision, /finally[\s\S]*Stop-WslRuntimeLease/);
+});
+
+test("PowerShell separates fixed progress events from protected diagnostic output", () => {
+  const source = readNormalizedSource(powershellPath);
+  const sanitizer = source.match(/function ConvertTo-SafeDiagnosticLine\([^\n]+\) \{[\s\S]*?\n\}/)?.[0];
+  const logInitializer = source.match(/function Initialize-OperationDiagnosticLog\([^\n]+\) \{[\s\S]*?\n\}/)?.[0];
+  const logWriter = source.match(/function Write-OperationDiagnosticLine\([^\n]+\) \{[\s\S]*?\n\}/)?.[0];
+  const progressParser = source.match(/function ConvertFrom-PlatformProgressEvent\([^\n]+\) \{[\s\S]*?\n\}/)?.[0];
+  const invokeBootstrap = source.match(/function Invoke-DistroBootstrap\([^\n]+\) \{[\s\S]*?\n\}\n\nfunction Get-DistroIdentity/)?.[0];
+  assert(sanitizer, "diagnostic output must have one centralized sanitizer");
+  assert(logInitializer, "each Windows operation must initialize a protected diagnostic log");
+  assert(logWriter, "every diagnostic append must enforce centralized sanitization");
+  assert(progressParser, "WSL progress JSON must be parsed by a fixed-schema helper");
+  assert(invokeBootstrap, "Invoke-DistroBootstrap must remain a standalone fixed action");
+  assert.match(sanitizer, /Authorization|Bearer/);
+  assert.match(sanitizer, /password/i);
+  assert(sanitizer.includes("device[_-]?code"));
+  assert(sanitizer.includes("access[_-]?token"));
+  assert(sanitizer.includes("refresh[_-]?token"));
+  assert.match(invokeBootstrap, /ConvertTo-SafeDiagnosticLine \$line 240/);
+  assert.match(logInitializer, /operation_id/);
+  assert.match(logInitializer, /logs/);
+  assert.match(logInitializer, /ReparsePoint/);
+  assert.match(logInitializer, /Set-MachineRootAcl/);
+  assert.match(logInitializer, /GetFullPath/);
+  assert.match(logWriter, /ConvertTo-SafeDiagnosticLine/);
+  assert.match(progressParser, /ConvertFrom-Json/);
+  assert.match(progressParser, /ErrorAction Stop/);
+  assert.match(progressParser, /rainskills\.platform-progress\.v1/);
+  assert.match(progressParser, /preparing-docker/);
+  assert.match(progressParser, /installing-rainbond/);
+  assert.match(progressParser, /verifying-rainbond/);
+  assert.match(progressParser, /started/);
+  assert.match(progressParser, /heartbeat/);
+  assert.match(progressParser, /completed/);
+  assert.match(progressParser, /timestamp/);
+  assert.match(progressParser, /PSObject\.Properties/);
+  assert.doesNotMatch(invokeBootstrap, /Write-Host \$_/);
+  assert.match(invokeBootstrap, /Diagnostic log:/);
+});
+
+test("PowerShell WSL import drains native output while reporting elapsed heartbeats", () => {
+  const source = readNormalizedSource(powershellPath);
+  const importRunner = source.match(/function Invoke-WslImportWithProgress\([^\n]+\) \{[\s\S]*?\n\}/)?.[0];
+  const importDistro = source.match(/function Invoke-ImportDistro\(\$Request\) \{[\s\S]*?\n\}\n\nfunction Invoke-PrepareRuntime/)?.[0];
+  assert(importRunner, "wsl --import must use a heartbeat-aware native process runner");
+  assert(importDistro, "Invoke-ImportDistro must remain a standalone fixed action");
+  assert.match(importRunner, /RedirectStandardOutput\s*=\s*\$true/);
+  assert.match(importRunner, /RedirectStandardError\s*=\s*\$true/);
+  assert.match(importRunner, /ReadToEndAsync\(\)/);
+  assert.match(importRunner, /WaitForExit\(10000\)/);
+  assert(
+    importRunner.indexOf("ReadToEndAsync()") < importRunner.indexOf("WaitForExit(10000)"),
+    "redirected native streams must drain before waiting for process completion"
+  );
+  assert.match(importRunner, /Write-StageHeartbeat/);
+  assert.match(importRunner, /ExitCode/);
+  assert.match(importDistro, /Invoke-WslImportWithProgress/);
+  assert.doesNotMatch(importDistro, /--import Rainbond[^\n]*\| ForEach-Object \{ Write-Host \$_ \}/);
+});
+
 test("Rainbond WSL bootstrap verifies artifacts, prepares Docker, emits heartbeats, and redacts logs", () => {
   const source = readNormalizedSource(wslBootstrapPath);
   assert.match(source, /PrepareDocker/);
@@ -1481,6 +1563,19 @@ test("Rainbond WSL bootstrap verifies artifacts, prepares Docker, emits heartbea
   assert.match(source, /password/i);
   assert.match(source, /kubectl[\s\S]*rbd-system/);
   assert.match(source, /curl[\s\S]*7070/);
+});
+
+test("Docker preparation emits heartbeats while package installation is running", () => {
+  const source = readNormalizedSource(wslBootstrapPath);
+  const prepareDocker = source.match(/prepare_docker\(\) \{[\s\S]*?\n\}\n\ninstall_rainbond\(\)/)?.[0];
+  assert(prepareDocker, "prepare_docker must remain a standalone action");
+  assert.match(prepareDocker, /apt-get update[\s\S]*&/);
+  assert.match(prepareDocker, /kill -0[\s\S]*preparing-docker heartbeat/);
+  assert.match(prepareDocker, /wait "\$[A-Za-z_]+"/);
+  assert(
+    prepareDocker.indexOf("preparing-docker heartbeat") < prepareDocker.indexOf("preparing-docker completed"),
+    "Docker completion must follow its heartbeat loop"
+  );
 });
 
 test("Rainbond WSL installation forces CPU mode and rebuilds its owned stopped container", () => {

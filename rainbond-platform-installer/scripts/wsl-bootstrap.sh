@@ -290,8 +290,30 @@ prepare_docker() {
   emit_progress preparing-docker started
   if ! command -v docker >/dev/null 2>&1; then
     export DEBIAN_FRONTEND=noninteractive
-    apt-get update
-    apt-get install -y ca-certificates curl docker.io
+    set +e
+    (
+      apt-get update &&
+        apt-get install -y ca-certificates curl docker.io
+    ) &
+    local package_pid=$!
+    (
+      while kill -0 "$package_pid" >/dev/null 2>&1; do
+        sleep 10
+        if kill -0 "$package_pid" >/dev/null 2>&1; then
+          emit_progress preparing-docker heartbeat
+        fi
+      done
+    ) &
+    local heartbeat_pid=$!
+    wait "$package_pid"
+    local package_status=$?
+    kill "$heartbeat_pid" >/dev/null 2>&1 || true
+    wait "$heartbeat_pid" 2>/dev/null || true
+    set -e
+    if [[ "$package_status" -ne 0 ]]; then
+      printf 'Docker package installation failed with exit code %s\n' "$package_status" >&2
+      exit "$package_status"
+    fi
   fi
   systemctl enable docker >/dev/null
   systemctl start docker
