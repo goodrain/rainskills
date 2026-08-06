@@ -198,7 +198,7 @@ AI 必须把 `argv` 数组作为参数传回同一个 `rainskills` 命令，不�
 - 独立验证 Rainbond 容器、K3s、`rbd-system` 组件和 Console
 - 自动执行 `npx rainskills resume --onboarding-id <id>`，继续浏览器授权
 
-平台安装器会先识别当前设备，并统一提供“安装到本地”和“安装到 Linux 服务器”。回车默认安装到本地；Windows 本地路径由固定安装器自动准备 WSL2，用户不需要输入 WSL 命令。远程连接优先使用已有的 SSH Key；需要密码时由系统 SSH 在终端读取一次并复用连接，Rainskills 不会保存密码或私钥。
+平台安装器会先识别当前设备，并统一提供“安装到本地”和“安装到 Linux 服务器”。回车默认安装到本地；Windows 本地路径由固定安装器自动准备 WSL2，用户不需要输入 WSL 命令。远程连接优先使用已有的 SSH Key；需要密码时由系统 SSH 在终端读取，Linux/macOS 会复用临时连接，Windows 自带 OpenSSH 可能在后续步骤再次请求密码，Rainskills 不会保存密码或私钥。
 
 当前支持单机版，包括本机和远程 Linux 安装，以及 Windows 本地预览；不支持多节点、高可用、离线安装或自动清理已有容器和端口冲突。
 

@@ -30,7 +30,7 @@ Do not use it to deploy an application to an existing Rainbond. Route those requ
 - On Windows, show `安装到本地` and `安装到 Linux 服务器`; pressing Enter selects local. Local Windows is a preview path backed by a dedicated WSL2 distribution and the fixed `local-windows` helper.
 - Do not ask the user to understand or enter WSL commands. Show the read-only checks first, then explain UAC, downloads, host networking, and a possible Windows reboot before requesting confirmation.
 - Let the fixed helper request UAC. If Windows must reboot, preserve the checkpoint and use only the verified resume task or exact printed resume command.
-- Remote Linux accepts an existing `user@host` value or SSH config alias. Keep the terminal attached while the helper invokes the system `ssh` client; OpenSSH may ask once for host-key confirmation and an SSH password, then Rainskills reuses that connection.
+- Remote Linux accepts an existing `user@host` value or SSH config alias. Keep the terminal attached while the helper invokes the system `ssh` client; OpenSSH may ask for host-key confirmation and an SSH password. Linux/macOS reuse a temporary control connection; Windows OpenSSH does not support ControlMaster, so later steps may ask for the password again.
 - The SSH password is read only by the system `ssh` client and Rainskills will not save it. Never ask the user to provide passwords, private keys, JWTs, Tokens, or other credentials in chat.
 - For `--console-host`, accept an IP or DNS name, not a URL, port, path, credentials, or shell text. Pass it as one argv value; never concatenate a shell command.
 - Never stop occupied services, remove an existing Rainbond container, delete data, or bypass artifact verification.
