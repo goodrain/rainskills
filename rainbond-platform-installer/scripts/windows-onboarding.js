@@ -3,6 +3,7 @@
 
 const crypto = require("node:crypto");
 const fs = require("node:fs");
+const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 const readline = require("node:readline/promises");
@@ -23,6 +24,30 @@ const {
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CONTROL_MODES = new Set(["windows-native", "wsl", "posix"]);
+
+function isLocalHttpUrl(value) {
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "http:") return false;
+
+  const hostname = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (hostname === "localhost" || hostname.endsWith(".localhost")) return true;
+  if (net.isIP(hostname) === 6) {
+    return hostname === "::1" || hostname.startsWith("fc") || hostname.startsWith("fd");
+  }
+  if (net.isIP(hostname) !== 4) return false;
+
+  const octets = hostname.split(".").map(Number);
+  return octets[0] === 10
+    || octets[0] === 127
+    || (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31)
+    || (octets[0] === 192 && octets[1] === 168)
+    || (octets[0] === 169 && octets[1] === 254);
+}
 
 function requireValue(argv, index, option) {
   if (index + 1 >= argv.length || argv[index + 1].startsWith("--")) {
@@ -503,13 +528,13 @@ async function main(argv, dependencies = {}) {
   if (!["http:", "https:"].includes(parsedBase.protocol)) {
     throw new Error("Rainbond Console 地址必须使用 HTTP 或 HTTPS");
   }
-  if (parsedBase.protocol === "http:" && !options.allowInsecureHttp) {
-    throw new Error("默认禁用明文 HTTP；如需继续请添加 --allow-insecure-http");
-  }
   parsedBase.pathname = parsedBase.pathname.replace(/\/$/, "");
   parsedBase.search = "";
   parsedBase.hash = "";
   const normalizedBase = parsedBase.toString().replace(/\/$/, "");
+  if (parsedBase.protocol === "http:" && !options.allowInsecureHttp && !isLocalHttpUrl(normalizedBase)) {
+    throw new Error("默认禁用明文 HTTP；如需继续请添加 --allow-insecure-http");
+  }
   const configure = dependencies.authorizeAndConfigure || authorizeAndConfigure;
   await configure({
     target,
@@ -537,6 +562,7 @@ module.exports = {
   main,
   parseWindowsInstallerArgs,
   resolveDeployment,
+  isLocalHttpUrl,
 };
 
 if (require.main === module) {

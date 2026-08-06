@@ -266,9 +266,10 @@ npx --yes rainskills all --no-browser
 RAINSKILLS_NO_BROWSER=1 npx --yes rainskills all
 ```
 
-Device Flow 默认要求 HTTPS。私有环境只有显式使用 `--allow-insecure-http` 才能
-继续，终端和浏览器授权页都会提示长期凭证可能被截获；该模式仅限可信内网临时
-使用。CI 或完全非交互环境仍应通过 `--token` / `RAINBOND_JWT` 提供已有凭证。
+Device Flow 默认要求 HTTPS。Windows 本地安装使用的 loopback 或受管私网 Console
+地址会自动允许 HTTP，不再要求额外参数；其他私有环境只有显式使用
+`--allow-insecure-http` 才能继续，终端和浏览器授权页都会提示长期凭证可能被截获。
+CI 或完全非交互环境仍应通过 `--token` / `RAINBOND_JWT` 提供已有凭证。
 
 私有化平台升级时，应先发布包含 `/#/device` 的 Rainbond UI，再执行 Console 数据库
 迁移，最后设置 `RAINBOND_MCP_DEVICE_FLOW_ENABLED=true`。平台有固定外部地址时同时

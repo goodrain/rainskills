@@ -791,3 +791,49 @@ test("native deployment selection preserves Cloud, private URL, and no-platform 
     needsPlatform: true,
   });
 });
+
+test("native Windows onboarding accepts local HTTP Console URLs without an opt-in flag", async () => {
+  const { isLocalHttpUrl, main } = require(windowsOnboardingPath);
+  assert.equal(isLocalHttpUrl("http://127.0.0.1:7070"), true);
+  assert.equal(isLocalHttpUrl("http://172.31.255.2:7070"), true);
+  assert.equal(isLocalHttpUrl("http://rainbond.example.com:7070"), false);
+  assert.equal(isLocalHttpUrl("https://127.0.0.1:7070"), false);
+  const home = temporaryHome();
+  const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-package-local-http-"));
+  writeSkill(packageRoot, "rainbond-test");
+  fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ version: "0.1.0-test" }));
+  const calls = [];
+
+  const result = await main(["codex", "--rainbond-url", "http://127.0.0.1:7070"], {
+    home,
+    packageRoot,
+    authorizeAndConfigure(options) {
+      calls.push(options);
+      return { status: "configured" };
+    },
+    logger() {},
+  });
+
+  assert.equal(result.status, "configured");
+  assert.equal(calls[0].baseUrl, "http://127.0.0.1:7070");
+});
+
+test("native Windows onboarding still protects public HTTP Console URLs", async () => {
+  const { main } = require(windowsOnboardingPath);
+  const home = temporaryHome();
+  const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-package-public-http-"));
+  writeSkill(packageRoot, "rainbond-test");
+  fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ version: "0.1.0-test" }));
+
+  await assert.rejects(
+    main(["codex", "--rainbond-url", "http://rainbond.example.com:7070"], {
+      home,
+      packageRoot,
+      authorizeAndConfigure() {
+        throw new Error("authorization should not start");
+      },
+      logger() {},
+    }),
+    /默认禁用明文 HTTP/
+  );
+});
