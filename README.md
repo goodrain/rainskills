@@ -238,6 +238,8 @@ AI 应先把检测结果和系统变更展示给用户；用户明确同意后�
 
 上报字段只包含安装尝试 ID、`eid`、客户端类型、安装或刷新动作、阶段和状态。不会上报 JWT、账号、密码、用户名、邮箱、Rainbond 地址、原始错误信息或本地代码。统计请求在后台执行；统计服务不可用、超时或企业信息读取失败都不会改变原安装结果。
 
+平台安装器还会按步骤记录固定字段的生命周期事件（预检、确认、WSL/运行时准备、Rainbond 部署、Console 验证、授权、MCP 配置、恢复和中断）。事件先写入本机受保护的 `~/.rainbond/rainskills/telemetry/events.jsonl`，再尽力发送到 `https://log.rainbond.com/api/rainskills/lifecycle-events`。发送失败不会阻塞安装；事件不包含 JWT、密码、完整 URL、原始错误文本或命令输出。应用部署统计仍由 Rainbond Console 的现有 MCP 链路记录，不由 Rainskills 重复上报。
+
 #### 浏览器登录是怎么发生的
 
 安装器默认使用设备授权流程。终端显示八位授权码和 Rainbond 授权地址，并在

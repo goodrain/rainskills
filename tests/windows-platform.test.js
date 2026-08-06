@@ -59,6 +59,14 @@ test("PowerShell source assertions treat CRLF and LF identically", () => {
   assert.equal(normalizeLineEndings("first\r\nsecond\r\n"), "first\nsecond\n");
 });
 
+test("Windows lifecycle telemetry stays in the outer Node process and carries the persisted attempt", () => {
+  const source = fs.readFileSync(platformInstallerPath, "utf8");
+  assert.match(source, /createLifecycleTelemetry/);
+  assert.match(source, /RAINSKILLS_INSTALL_ATTEMPT_ID: resumeState\.install_attempt_id/);
+  assert.match(source, /lifecycleTransportForState\(state\)/);
+  assert.doesNotMatch(readNormalizedSource(powershellPath), /lifecycle-event|log\.rainbond\.com/);
+});
+
 function passingFacts(overrides = {}) {
   return {
     productType: "workstation",

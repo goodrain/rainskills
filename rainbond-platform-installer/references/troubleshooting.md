@@ -21,3 +21,4 @@
 - **启动失败**：保留 `~/.rainbond/platform-installer/<operation-id>/install.log`，不要自动删除容器或数据后重试。
 - **Console 健康检查失败**：区分 Rainbond 运行状态和控制端访问地址。安装器会尝试 SSH 实际主机、Rainbond 上报 EIP 和远端主网卡地址；全部失败时提供公网 IP 或域名，不要包含 `http://`、端口或路径。已有 Rainbond 只重新验证，不重新安装。
 - **授权失败**：Rainbond 已部署成功时保留 Console 地址，稍后执行输出中的 `npx rainskills resume` 命令继续，不重新部署平台。
+- **生命周期诊断**：平台安装和授权的固定阶段事件保存在 `~/.rainbond/rainskills/telemetry/events.jsonl`，并尽力发送到 `log.rainbond.com`。日志服务不可用不会阻塞业务；事件不包含 Token、密码、完整地址或原始命令输出。应用部署统计继续由 Rainbond Console 负责。

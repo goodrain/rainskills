@@ -22,6 +22,7 @@ const {
   validateWindowsStageTransition,
   verifyRecoveryBundle,
 } = require("./windows-platform.js");
+const { createLifecycleTelemetry } = require("./telemetry.js");
 
 const packageManifest = require("../../package.json");
 const POLICY = require("../references/installation-policy.json");
@@ -1201,11 +1202,15 @@ function createPlatformState(operationId, paths) {
     version: 1,
     operation_id: operationId,
     installation_id: crypto.randomUUID(),
+    install_attempt_id: crypto.randomUUID(),
     package_version: packageManifest.version,
     updated_at: now(),
     stage: "target-selection",
     status: "pending",
     control_platform: process.platform,
+    control_mode: null,
+    install_client: "unknown",
+    install_action: "install",
     target_kind: null,
     host: null,
     ssh_port: null,
@@ -1251,6 +1256,95 @@ function appendEvent(paths, state, stage, status, extra = {}) {
   fs.chmodSync(paths.events, 0o600);
   state.last_sequence = sequence;
   atomicWriteJson(paths.state, state);
+  const telemetry = activeOperation?.telemetry;
+  if (telemetry) {
+    activeOperation.stageStartedAt ||= {};
+    if (status === "started") activeOperation.stageStartedAt[stage] = Date.now();
+    const stageStartedAt = activeOperation.stageStartedAt[stage];
+    const durationMs = status !== "started" && Number.isFinite(stageStartedAt)
+      ? Math.max(0, Date.now() - stageStartedAt)
+      : null;
+    telemetry.record({
+      phase: null,
+      lifecycle_phase: lifecyclePhaseForStage(stage),
+      step: lifecycleStepForStage(stage),
+      lifecycle_action: lifecycleActionForStage(stage),
+      lifecycle_status: lifecycleStatusForProgress(status),
+      status: null,
+      error_code: status === "failed" ? lifecycleErrorCodeForStage(stage) : null,
+      error_stage: status === "failed" ? lifecyclePhaseForStage(stage) : null,
+      reason_code: status === "failed" ? lifecycleErrorCodeForStage(stage) : null,
+      blocked_reason: status === "waiting_user" ? lifecycleBlockedReasonForStage(stage) : null,
+      retryable: status === "waiting_user" || status === "progress",
+      duration_ms: durationMs,
+      transport: lifecycleTransportForState(state),
+      sequence,
+    });
+    if (["completed", "failed", "interrupted", "skipped"].includes(status)) {
+      delete activeOperation.stageStartedAt[stage];
+    }
+  }
+}
+
+const LIFECYCLE_STAGE_MAP = {
+  "target-selection": ["target_selection", "select_target", "preflight"],
+  preflight: ["preflight", "inspect_host", "preflight"],
+  "awaiting-confirmation": ["confirmation", "confirm_install", "preflight"],
+  "enabling-wsl": ["prepare_wsl", "enable_wsl", "prepare_wsl"],
+  "reboot-required": ["prepare_wsl", "request_reboot", "request_reboot"],
+  "downloading-rootfs": ["rootfs_download", "download_rootfs", "download_rootfs"],
+  "importing-distro": ["import_distro", "import_distro", "import_distro"],
+  "preparing-runtime": ["prepare_runtime", "prepare_runtime", "prepare_runtime"],
+  "installing-rainbond": ["install_rainbond", "install_rainbond", "install_rainbond"],
+  "configuring-windows-access": ["configure_network", "configure_network", "configure_network"],
+  verifying: ["verify_console", "verify_console", "verify_deployment"],
+  downloading: ["rootfs_download", "download_rootfs", "preflight"],
+  starting: ["install_rainbond", "install_rainbond", "install_rainbond"],
+  "ssh-authentication": ["preflight", "inspect_host", "preflight"],
+  "platform-ready": ["completed", "finalize", "finalize"],
+};
+
+function lifecycleStageEntry(stage) {
+  return LIFECYCLE_STAGE_MAP[stage] || ["bootstrap", "resume", null];
+}
+
+function lifecyclePhaseForStage(stage) { return lifecycleStageEntry(stage)[0]; }
+function lifecycleStepForStage(stage) { return lifecycleStageEntry(stage)[1]; }
+function lifecycleActionForStage(stage) { return lifecycleStageEntry(stage)[2]; }
+
+function lifecycleStatusForProgress(status) {
+  if (status === "completed") return "completed";
+  if (status === "waiting_user") return "blocked";
+  if (status === "failed") return "failed";
+  if (status === "interrupted") return "interrupted";
+  if (status === "skipped") return "skipped";
+  return "started";
+}
+
+function lifecycleBlockedReasonForStage(stage) {
+  if (stage === "reboot-required") return "awaiting_reboot";
+  if (stage === "awaiting-confirmation") return "awaiting_user_confirmation";
+  if (stage === "ssh-authentication") return "ssh_password_prompt";
+  if (stage === "verifying") return "manual_console_input";
+  return "unknown";
+}
+
+function lifecycleErrorCodeForStage(stage) {
+  if (stage === "preflight" || stage === "awaiting-confirmation") return "preflight_blocked";
+  if (stage === "downloading" || stage === "downloading-rootfs") return "download_failed";
+  if (stage === "ssh-authentication") return "ssh_auth_failed";
+  if (stage === "enabling-wsl" || stage === "reboot-required") return "wsl_not_ready";
+  if (stage === "preparing-runtime") return "docker_not_ready";
+  if (stage === "installing-rainbond" || stage === "starting") return "rainbond_deploy_failed";
+  if (stage === "verifying" || stage === "platform-ready") return "console_unreachable";
+  return "unknown";
+}
+
+function lifecycleTransportForState(state) {
+  if (state.target_kind === "remote-linux") return "ssh";
+  if (state.control_mode === "windows-native") return "powershell";
+  if (state.control_mode === "wsl") return "wsl";
+  return "direct";
 }
 
 function updateOnboarding(state, values) {
@@ -2323,6 +2417,8 @@ async function runResume(onboardingId, {
   const paths = pathsResolver(onboardingId);
   let windowsContext = null;
   let runtimeLease = null;
+  let resumeState = null;
+  let resumeTelemetry = null;
   try {
     if (onboarding.platform_state_path) {
       if (path.resolve(onboarding.platform_state_path) !== path.resolve(paths.state)) {
@@ -2330,12 +2426,33 @@ async function runResume(onboardingId, {
       }
       ensurePrivateDirectory(paths.root);
       assertFilesSafe(paths);
-      const state = platformStateReader(paths.state, onboardingId);
-      if (state.target_kind === "local-windows") {
-        if (state.stage !== "platform-ready") {
-          throw new Error(`当前 Windows 平台阶段不能恢复授权：${state.stage}`);
+      resumeState = platformStateReader(paths.state, onboardingId);
+      resumeTelemetry = createLifecycleTelemetry({
+        context: {
+          install_attempt_id: resumeState.install_attempt_id || onboarding.install_attempt_id || onboarding.operation_id,
+          operation_id: resumeState.operation_id,
+          installation_id: resumeState.installation_id,
+          package_version: packageManifest.version,
+          platform: process.platform,
+          control_mode: resumeState.control_mode || onboarding.control_mode || "posix",
+          target: resumeState.target_kind,
+          client: resumeState.install_client || onboarding.target || "unknown",
+          action: resumeState.install_action || "install",
+          eid: resumeState.eid,
+        },
+      });
+      resumeTelemetry.record({
+        lifecycle_phase: "resume",
+        step: "resume",
+        lifecycle_action: "resume",
+        lifecycle_status: "started",
+        transport: lifecycleTransportForState(resumeState),
+      });
+      if (resumeState.target_kind === "local-windows") {
+        if (resumeState.stage !== "platform-ready") {
+          throw new Error(`当前 Windows 平台阶段不能恢复授权：${resumeState.stage}`);
         }
-        if (!UUID_PATTERN.test(state.installation_id || "")) {
+        if (!UUID_PATTERN.test(resumeState.installation_id || "")) {
           throw new Error("Windows 平台安装状态缺少有效的 installation id");
         }
         write("\n正在启动 Rainbond WSL，Console 就绪后将直接继续授权。\n");
@@ -2346,7 +2463,7 @@ async function runResume(onboardingId, {
           consoleUrl: onboarding.console_url,
           lease: runtimeLease,
         });
-        windowsContext = { installationId: state.installation_id };
+        windowsContext = { installationId: resumeState.installation_id };
       }
     }
 
@@ -2357,7 +2474,20 @@ async function runResume(onboardingId, {
     const result = await attachedRunner(
       invocation.executable,
       invocation.args,
-      { env: process.env },
+      {
+        env: resumeState
+          ? {
+            ...process.env,
+            RAINSKILLS_INSTALL_ATTEMPT_ID: resumeState.install_attempt_id || onboarding.install_attempt_id || onboarding.operation_id,
+            RAINSKILLS_TELEMETRY_OPERATION_ID: resumeState.operation_id,
+            RAINSKILLS_TELEMETRY_INSTALLATION_ID: resumeState.installation_id,
+            RAINSKILLS_PACKAGE_VERSION: packageManifest.version,
+            RAINSKILLS_TELEMETRY_TARGET: resumeState.target_kind,
+            RAINSKILLS_TELEMETRY_CONTROL_MODE: resumeState.control_mode || onboarding.control_mode || "posix",
+            RAINSKILLS_TELEMETRY_CLIENT: resumeState.install_client || onboarding.target || "unknown",
+          }
+          : { ...process.env },
+      },
       null
     );
     if (result.signal) throw new Error(`授权流程被信号 ${result.signal} 中断`);
@@ -2375,7 +2505,27 @@ async function runResume(onboardingId, {
       });
     }
     onboardingUpdater(onboarding, { stage: "configured" });
+    resumeTelemetry?.record({
+      lifecycle_phase: "resume",
+      step: "finalize",
+      lifecycle_action: "finalize",
+      lifecycle_status: "completed",
+      transport: resumeState ? lifecycleTransportForState(resumeState) : null,
+    });
     write("\nRainSkills 已连接到新部署的 Rainbond。\n");
+  } catch (error) {
+    resumeTelemetry?.record({
+      lifecycle_phase: "resume",
+      step: "resume",
+      lifecycle_action: "resume",
+      lifecycle_status: "failed",
+      error_code: "authorization_failed",
+      error_stage: "resume",
+      reason_code: "authorization_failed",
+      retryable: true,
+      transport: resumeState ? lifecycleTransportForState(resumeState) : null,
+    });
+    throw error;
   } finally {
     runtimeLease?.stop();
   }
@@ -2425,6 +2575,13 @@ async function runInstallOperation(options) {
   if (!UUID_PATTERN.test(state.installation_id || "")) {
     state = { ...state, installation_id: crypto.randomUUID() };
   }
+  state = {
+    ...state,
+    install_attempt_id: state.install_attempt_id || onboarding.install_attempt_id || onboarding.operation_id || crypto.randomUUID(),
+    control_mode: state.control_mode || onboarding.control_mode || "posix",
+    install_client: state.install_client || onboarding.target || "unknown",
+    install_action: state.install_action || "install",
+  };
   const configuredRainbondImage = requestedRainbondImage(options, state);
   if (state.rainbond_image && configuredRainbondImage && state.rainbond_image !== configuredRainbondImage) {
     throw new Error("当前 onboarding 已绑定另一个 Rainbond 镜像，请使用原镜像继续或清理后重新安装");
@@ -2433,7 +2590,7 @@ async function runInstallOperation(options) {
     state = { ...state, rainbond_image: configuredRainbondImage };
   }
   atomicWriteJson(paths.state, state);
-  activeOperation = { paths, state, onboardingId: options.onboardingId };
+  activeOperation = { paths, state, onboardingId: options.onboardingId, telemetry: null, stageStartedAt: {} };
 
   const savedTarget = state.target_kind ? {
     kind: state.target_kind,
@@ -2463,6 +2620,27 @@ async function runInstallOperation(options) {
     remote_workspace: remoteTarget ? remoteWorkspacePath(options.onboardingId) : null,
   });
   activeOperation.state = state;
+  activeOperation.telemetry = createLifecycleTelemetry({
+    context: {
+      install_attempt_id: state.install_attempt_id,
+      operation_id: state.operation_id,
+      installation_id: state.installation_id,
+      package_version: packageManifest.version,
+      platform: process.platform,
+      control_mode: state.control_mode,
+      target: state.target_kind,
+      client: state.install_client,
+      action: state.install_action,
+      eid: state.eid,
+    },
+  });
+  activeOperation.telemetry.record({
+    lifecycle_phase: "target_selection",
+    step: "select_target",
+    lifecycle_action: "preflight",
+    lifecycle_status: "completed",
+    transport: lifecycleTransportForState(state),
+  });
 
   const isWindowsLocal = target.kind === "local-windows";
   const windowsAdapter = isWindowsLocal

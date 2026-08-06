@@ -56,7 +56,8 @@ Windows 的管理员 PowerShell/WSL 动作只返回固定结构化事实和错�
   "platform": "darwin|linux|win32",
   "control_mode": "posix|wsl|windows-native",
   "target": "local-linux|local-macos|local-windows|remote-linux",
-  "client": "codex|claude_code|pi|unknown",
+  "client": "codex|claude_code|both|unknown",
+  "eid": "enterprise-id-or-null",
   "phase": "started|authorized|configured|failed|null",
   "lifecycle_phase": "preflight",
   "step": "resource_check",
@@ -105,7 +106,7 @@ Windows 的管理员 PowerShell/WSL 动作只返回固定结构化事实和错�
 
 ### 5.2 远程上报
 
-- 目标固定为 `https://log.rainbond.com` 下的 RainSkills 安装统计接口；默认沿用现有 `/api/rainskills/installations` 接口，保留旧摘要字段并增加事件白名单字段；
+- 目标固定为 `https://log.rainbond.com/api/rainskills/lifecycle-events`；这是独立于现有 `/api/rainskills/installations` 和 `/api/rainskills/deployments` 的生命周期事件接口，避免改变旧汇总接口的唯一键、字段校验和写入语义。服务端先部署新路由，再发布客户端；在旧服务尚未升级时，客户端只对明确的生命周期路由 `404` 或 schema 不兼容 `400/415/422` 投影到旧安装摘要接口，不对超时、连接失败或 `5xx` fallback；
 - 使用短连接、短超时和有限重试；单事件请求总预算不超过 5 秒，发送在后台执行，不等待服务响应，也不向 stdout/stderr 注入网络错误；
 - DNS 失败、连接失败、超时、4xx、5xx、TLS 错误和服务返回非法响应都归类为 `telemetry_delivery_failed`，只保留本地待发送事件，不改变安装、授权、配置或子进程的退出码；
 - 本地目录不可写、磁盘空间不足、队列损坏或后台 sender 启动失败也只产生本地 best-effort 诊断，不能覆盖原始业务错误或把成功改成失败；
@@ -113,11 +114,9 @@ Windows 的管理员 PowerShell/WSL 动作只返回固定结构化事实和错�
 - 后续 RainSkills 执行时尽力补发未发送事件，使用 `event_id` 幂等；过期（7 天）或超过 10 MB/1000 条上限的事件自动丢弃并写入本地丢弃计数；
 - 发送器不继承 Token、密码或完整环境变量，且不把请求内容写入错误日志。
 
-每次请求发送单个 JSON 事件，事件包含 `schema`、`event_id`、`install_attempt_id`、生命周期字段以及现有兼容摘要字段。顶层 `action` 始终是旧的 `install/refresh` 值，顶层 `phase` 始终是旧的 `started/authorized/configured/failed` 值，顶层 `status` 始终是旧的 `started/success/failure` 值；新的生命周期动作、阶段和状态只放在 `lifecycle_action`、`lifecycle_phase`、`lifecycle_status`。旧服务即使忽略未知字段，也不会把 `preflight`、`completed` 或 `blocked` 误读为旧字段值。服务端 rollout 必须为 `event_id` 建立唯一约束或幂等键：同一事件重复 POST 必须返回 2xx 且只计数一次。客户端不能依赖响应正文。
+每次请求发送单个 JSON 事件，事件包含 `schema`、`event_id`、`install_attempt_id`、生命周期字段以及兼容摘要字段。新接口只接受 `rainskills.lifecycle-event.v1`，服务端为 `event_id` 建立唯一约束：同一事件重复 POST 必须返回 2xx 且只写入一次。客户端不能依赖响应正文；网络不确定时只重试相同 JSON 和相同 `event_id`。如果新路由明确返回 `404/400/415/422`，客户端才把同一事件投影为旧字段集合发送到 `/api/rainskills/installations` 一次；旧 fallback 同样使用相同 `install_attempt_id`，但不写入 lifecycle 专属字段。现有 `install.sh` 的旧摘要上报继续调用 `/api/rainskills/installations`，两条链路互不覆盖。
 
-兼容 rollout 分两步：新服务先接受事件 schema 并按 `event_id` 去重；若服务明确返回 schema 不兼容的 400/415/422（带固定错误码或响应头），客户端才把事件投影为旧字段集合（`install_attempt_id`、`eid`、`install_client`、`action`、`phase`、`status`、`failure_stage`、`failure_category`）发送一次 legacy 请求。映射固定为：`lifecycle_status=started` → `phase=started,status=started`；`lifecycle_phase=authorize_device_flow|authorize_legacy` 且 `lifecycle_status=completed` → `phase=authorized,status=success`；`lifecycle_phase=configure_mcp` 且 `lifecycle_status=completed` → `phase=configured,status=success`；`lifecycle_status=failed|blocked|interrupted` → `phase=failed,status=failure`，`failure_stage=error_stage`，`failure_category=error_code|blocked_reason|interrupted`；其他完成阶段保留 `phase=started,status=started`，不伪造授权或配置成功。`eid`、`install_client` 和顶层 `action` 沿用本次安装上下文；直接平台安装默认 `action=install`，`refresh` 仅来自 `install.sh refresh`。
-
-DNS 失败、连接超时、TLS 错误、5xx 或响应丢失属于不确定投递结果，只允许重试相同 JSON 和相同 `event_id`，禁止切换到 legacy 请求；旧服务必须通过 `Idempotency-Key: event_id` 或已部署的唯一键避免重复。若明确 schema 不兼容后 legacy 请求也失败，只保留本地队列。固定 JSON golden/contract 测试覆盖新服务、旧服务忽略未知字段、旧服务明确拒绝未知字段、每个阶段到旧四类摘要的映射、网络重试和重复 `event_id`。
+固定 JSON golden/contract 测试覆盖新接口、严格字段校验、重复 `event_id`、网络重试和本地队列；现有 `/api/rainskills/installations` 与 `/api/rainskills/deployments` 的回归测试保持原样。
 
 `install_attempt_id` 在首次 `install.sh` 启动时生成并写入 onboarding 状态；`platform install`、`resume`、重启后继续和 SIGINT 后恢复都沿用该 ID。直接执行没有 onboarding 状态的 `platform install` 时生成新的 ID。每个操作目录另有 `operation_id`，事件通过 `operation_id`、`installation_id`、`parent_event_id` 和单调递增 `sequence` 还原阶段顺序；恢复运行使用 `resumed_from` 指向上一次未完成操作的最后事件，不重新创建 install attempt。
 

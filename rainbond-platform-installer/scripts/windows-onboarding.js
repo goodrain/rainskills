@@ -21,6 +21,7 @@ const {
   persistWindowsEnvironment,
   validateMcp,
 } = require("./windows-client-config.js");
+const { createLifecycleTelemetry } = require("./telemetry.js");
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CONTROL_MODES = new Set(["windows-native", "wsl", "posix"]);
@@ -330,9 +331,32 @@ async function authorizeAndConfigure({
   sleep,
   now,
   spawnImpl,
+  telemetryFactory = createLifecycleTelemetry,
 }) {
+  const telemetry = telemetryFactory({
+    context: {
+      install_attempt_id: process.env.RAINSKILLS_INSTALL_ATTEMPT_ID || crypto.randomUUID(),
+      operation_id: process.env.RAINSKILLS_TELEMETRY_OPERATION_ID,
+      installation_id: process.env.RAINSKILLS_TELEMETRY_INSTALLATION_ID,
+      package_version: process.env.RAINSKILLS_PACKAGE_VERSION,
+      platform: "win32",
+      control_mode: process.env.RAINSKILLS_TELEMETRY_CONTROL_MODE || "windows-native",
+      target: process.env.RAINSKILLS_TELEMETRY_TARGET || "local-windows",
+      client: target,
+      action: "install",
+    },
+  });
   const browserOpener = noBrowser ? async () => {} : openBrowser;
   let token;
+  let authorizationMethod = "device_flow";
+  telemetry.record({
+    lifecycle_phase: "authorize_device_flow",
+    step: "device_code",
+    lifecycle_action: "authorize",
+    lifecycle_status: "started",
+    auth_method: "device_flow",
+    transport: "powershell",
+  });
   try {
     token = await authorizeWithDeviceFlowImpl({
       baseUrl,
@@ -344,12 +368,60 @@ async function authorizeAndConfigure({
       sleep,
     });
   } catch (error) {
-    if (error.code !== "DEVICE_FLOW_UNSUPPORTED") throw error;
+    if (error.code !== "DEVICE_FLOW_UNSUPPORTED") {
+      telemetry.record({
+        lifecycle_phase: "authorize_device_flow",
+        step: "device_code",
+        lifecycle_action: "authorize",
+        lifecycle_status: "failed",
+        error_code: "authorization_failed",
+        error_stage: "authorize_device_flow",
+        reason_code: "authorization_failed",
+        auth_method: "device_flow",
+        transport: "powershell",
+      });
+      throw error;
+    }
+    authorizationMethod = "browser_loopback";
+    telemetry.record({
+      lifecycle_phase: "authorize_device_flow",
+      step: "device_code",
+      lifecycle_action: "authorize",
+      lifecycle_status: "skipped",
+      auth_method: "device_flow",
+      transport: "powershell",
+    });
+    telemetry.record({
+      lifecycle_phase: "authorize_legacy",
+      step: "legacy_callback",
+      lifecycle_action: "authorize",
+      lifecycle_status: "started",
+      auth_method: "browser_loopback",
+      transport: "powershell",
+    });
     token = await authorizeWithLoopbackImpl({
       baseUrl,
       openBrowser: browserOpener,
       logger,
       signal,
+    });
+    telemetry.record({
+      lifecycle_phase: "authorize_legacy",
+      step: "legacy_callback",
+      lifecycle_action: "authorize",
+      lifecycle_status: "completed",
+      auth_method: "browser_loopback",
+      transport: "powershell",
+    });
+  }
+  if (authorizationMethod === "device_flow") {
+    telemetry.record({
+      lifecycle_phase: "authorize_device_flow",
+      step: "device_code",
+      lifecycle_action: "authorize",
+      lifecycle_status: "completed",
+      auth_method: "device_flow",
+      transport: "powershell",
     });
   }
 
@@ -362,11 +434,67 @@ async function authorizeAndConfigure({
   }
   if (endpoints.length === 0) throw new Error("安装目标无效");
   for (const url of endpoints) {
-    const validation = await validateMcpImpl({ fetchImpl, token, url });
-    token = validation.token;
+    telemetry.record({
+      lifecycle_phase: "configure_mcp",
+      step: "verify_mcp",
+      lifecycle_action: "configure_mcp",
+      lifecycle_status: "started",
+      auth_method: authorizationMethod,
+      transport: "powershell",
+    });
+    try {
+      const validation = await validateMcpImpl({ fetchImpl, token, url });
+      token = validation.token;
+    } catch (error) {
+      telemetry.record({
+        lifecycle_phase: "configure_mcp",
+        step: "verify_mcp",
+        lifecycle_action: "configure_mcp",
+        lifecycle_status: "failed",
+        error_code: "mcp_verification_failed",
+        error_stage: "configure_mcp",
+        reason_code: "mcp_verification_failed",
+        retryable: true,
+        auth_method: authorizationMethod,
+        transport: "powershell",
+      });
+      throw error;
+    }
+    telemetry.record({
+      lifecycle_phase: "configure_mcp",
+      step: "verify_mcp",
+      lifecycle_action: "configure_mcp",
+      lifecycle_status: "completed",
+      auth_method: authorizationMethod,
+      transport: "powershell",
+    });
   }
-  persistWindowsEnvironmentImpl({ baseUrl, spawnImpl, token });
-  configureSelectedClientsImpl({ baseUrl, spawnImpl, target, token });
+  try {
+    persistWindowsEnvironmentImpl({ baseUrl, spawnImpl, token });
+    configureSelectedClientsImpl({ baseUrl, spawnImpl, target, token });
+  } catch (error) {
+    telemetry.record({
+      lifecycle_phase: "configure_mcp",
+      step: "configure_mcp",
+      lifecycle_action: "configure_mcp",
+      lifecycle_status: "failed",
+      error_code: "configuration_failed",
+      error_stage: "configure_mcp",
+      reason_code: "configuration_failed",
+      retryable: true,
+      auth_method: authorizationMethod,
+      transport: "powershell",
+    });
+    throw error;
+  }
+  telemetry.record({
+    lifecycle_phase: "configure_mcp",
+    step: "configure_mcp",
+    lifecycle_action: "configure_mcp",
+    lifecycle_status: "completed",
+    auth_method: authorizationMethod,
+    transport: "powershell",
+  });
   return { status: "configured" };
 }
 

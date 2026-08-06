@@ -153,13 +153,15 @@ ACTIVE_SHELL_RC=""
 VALIDATED_TOKEN=""
 OBTAINED_RAINBOND_TOKEN=""
 RAINSKILLS_INSTALL_REPORT_URL="https://log.rainbond.com/api/rainskills/installations"
-RAINSKILLS_INSTALL_ATTEMPT_ID=""
+RAINSKILLS_LIFECYCLE_REPORT_URL="https://log.rainbond.com/api/rainskills/lifecycle-events"
+RAINSKILLS_INSTALL_ATTEMPT_ID="${RAINSKILLS_INSTALL_ATTEMPT_ID:-}"
 RAINSKILLS_INSTALL_EID=""
 RAINSKILLS_INSTALL_CLIENT="unknown"
 RAINSKILLS_INSTALL_ACTION="install"
 RAINSKILLS_INSTALL_FAILURE_STAGE="bootstrap"
 RAINSKILLS_INSTALL_FAILURE_CATEGORY="invalid_arguments"
 RAINSKILLS_INSTALL_TERMINAL_REPORTED=0
+RAINSKILLS_TELEMETRY_SEQUENCE=0
 RAINSKILLS_BROWSER_LOGIN_SERVER_PID=""
 RAINSKILLS_BROWSER_LOGIN_READER_PID=""
 RAINSKILLS_BROWSER_LOGIN_RESULT_FILE=""
@@ -311,9 +313,154 @@ PY
   ) &
 }
 
+rainskills_telemetry_target() {
+  if [[ -n "${RAINSKILLS_TELEMETRY_TARGET:-}" ]]; then
+    printf '%s\n' "$RAINSKILLS_TELEMETRY_TARGET"
+  elif [[ "$(uname -s 2>/dev/null || true)" == "Darwin" ]]; then
+    printf 'local-macos\n'
+  else
+    printf 'local-linux\n'
+  fi
+}
+
+rainskills_telemetry_platform() {
+  case "$(uname -s 2>/dev/null || true)" in
+    Darwin) printf 'darwin\n' ;;
+    *) printf 'linux\n' ;;
+  esac
+}
+
+rainskills_telemetry_failure_phase() {
+  case "${RAINSKILLS_TELEMETRY_ERROR_STAGE:-bootstrap}" in
+    skill_installation|bootstrap) printf 'bootstrap\n' ;;
+    download) printf 'rootfs_download\n' ;;
+    authorization) printf 'authorize_legacy\n' ;;
+    verification) printf 'verify_console\n' ;;
+    configuration) printf 'configure_mcp\n' ;;
+    *) printf 'bootstrap\n' ;;
+  esac
+}
+
+rainskills_telemetry_error_code() {
+  case "${RAINSKILLS_INSTALL_FAILURE_CATEGORY:-unknown}" in
+    invalid_arguments) printf 'invalid_arguments\n' ;;
+    tarball_unavailable|download_failed) printf 'download_failed\n' ;;
+    authorization_failed) printf 'authorization_failed\n' ;;
+    mcp_verification_failed) printf 'mcp_verification_failed\n' ;;
+    mcp_configuration_failed|skill_installation_failed) printf 'configuration_failed\n' ;;
+    network_unreachable) printf 'network_unreachable\n' ;;
+    *) printf 'unknown\n' ;;
+  esac
+}
+
+report_rainskills_lifecycle_event() {
+  local lifecycle_phase="$1"
+  local step="$2"
+  local lifecycle_action="$3"
+  local lifecycle_status="$4"
+  local error_code="${5:-}"
+  local blocked_reason="${6:-}"
+  local auth_method="${7:-}"
+
+  [[ -n "$RAINSKILLS_INSTALL_ATTEMPT_ID" ]] || return 0
+  command -v python3 >/dev/null 2>&1 || return 0
+  RAINSKILLS_TELEMETRY_SEQUENCE=$((RAINSKILLS_TELEMETRY_SEQUENCE + 1))
+
+  local payload telemetry_dir
+  telemetry_dir="${RAINSKILLS_TELEMETRY_DIR:-${HOME:-/tmp}/.rainbond/rainskills/telemetry}"
+  payload="$({
+    python3 - \
+      "$RAINSKILLS_INSTALL_ATTEMPT_ID" \
+      "${RAINSKILLS_TELEMETRY_OPERATION_ID:-}" \
+      "${RAINSKILLS_TELEMETRY_INSTALLATION_ID:-}" \
+      "${RAINSKILLS_TELEMETRY_CLIENT:-$RAINSKILLS_INSTALL_CLIENT}" \
+      "${RAINSKILLS_TELEMETRY_CONTROL_MODE:-posix}" \
+      "$(rainskills_telemetry_target)" \
+      "$(rainskills_telemetry_platform)" \
+      "$RAINSKILLS_INSTALL_ACTION" \
+      "$RAINSKILLS_TELEMETRY_SEQUENCE" \
+      "$lifecycle_phase" \
+      "$step" \
+      "$lifecycle_action" \
+      "$lifecycle_status" \
+      "$error_code" \
+      "$blocked_reason" \
+      "$auth_method" \
+      "$RAINSKILLS_INSTALL_EID" \
+      "$RAINSKILLS_LIFECYCLE_REPORT_URL" \
+      "$telemetry_dir" <<'PY'
+import datetime
+import json
+import os
+import sys
+import uuid
+
+(attempt, operation, installation, client, control_mode, target, platform, action,
+ sequence, phase, step, lifecycle_action, status, error_code, blocked_reason,
+ auth_method, eid, report_url, telemetry_dir) = sys.argv[1:]
+event = {
+    "schema": "rainskills.lifecycle-event.v1",
+    "event_id": str(uuid.uuid4()),
+    "install_attempt_id": attempt,
+    "operation_id": operation or None,
+    "installation_id": installation or None,
+    "parent_event_id": None,
+    "sequence": int(sequence),
+    "attempt": 1,
+    "resumed_from": None,
+    "package_version": os.environ.get("RAINSKILLS_PACKAGE_VERSION") or None,
+    "platform": platform,
+    "control_mode": control_mode,
+    "target": target,
+    "client": client if client in {"codex", "claude_code", "both", "unknown"} else "unknown",
+    "eid": eid or None,
+    "phase": None,
+    "lifecycle_phase": phase,
+    "step": step,
+    "action": action if action in {"install", "refresh"} else "install",
+    "lifecycle_action": lifecycle_action or None,
+    "status": None,
+    "lifecycle_status": status,
+    "duration_ms": None,
+    "error_code": error_code or None,
+    "error_stage": phase if error_code else None,
+    "reason_code": error_code or None,
+    "blocked_reason": blocked_reason or None,
+    "interrupt_signal": None,
+    "transport": "ssh" if target == "remote-linux" else ("wsl" if control_mode == "wsl" else ("powershell" if control_mode == "windows-native" else "direct")),
+    "auth_method": auth_method or None,
+    "retryable": status in {"blocked", "started"},
+    "exit_code": None,
+    "http_status": None,
+    "created_at": datetime.datetime.utcnow().isoformat(timespec="milliseconds") + "Z",
+}
+try:
+    os.makedirs(telemetry_dir, mode=0o700, exist_ok=True)
+    os.chmod(telemetry_dir, 0o700)
+    event_path = os.path.join(telemetry_dir, "events.jsonl")
+    with open(event_path, "a", encoding="utf-8") as stream:
+        stream.write(json.dumps(event, separators=(",", ":")) + "\n")
+    os.chmod(event_path, 0o600)
+except Exception:
+    pass
+print(json.dumps(event, separators=(",", ":")))
+PY
+  } 2>/dev/null || true)"
+  [[ -n "$payload" ]] || return 0
+  (
+    curl --silent --show-error --connect-timeout 2 --max-time 3 \
+      -X POST "$RAINSKILLS_LIFECYCLE_REPORT_URL" \
+      -H 'Content-Type: application/json' \
+      -H "Idempotency-Key: $(python3 -c 'import json,sys; print(json.load(sys.stdin)["event_id"])' <<<"$payload")" \
+      --data-binary "$payload" >/dev/null 2>&1 || true
+  ) &
+}
+
 initialize_rainskills_installation_reporting() {
   local arg target=""
-  RAINSKILLS_INSTALL_ATTEMPT_ID="$(new_rainskills_install_attempt_id)"
+  if [[ -z "$RAINSKILLS_INSTALL_ATTEMPT_ID" ]]; then
+    RAINSKILLS_INSTALL_ATTEMPT_ID="$(new_rainskills_install_attempt_id)"
+  fi
   for arg in "$@"; do
     case "$arg" in
       refresh)
@@ -325,6 +472,7 @@ initialize_rainskills_installation_reporting() {
     esac
   done
   RAINSKILLS_INSTALL_CLIENT="$(rainskills_install_client_for_target "$target")"
+  report_rainskills_lifecycle_event "bootstrap" "resume" "resume" "started"
   report_rainskills_installation "started" "started"
 }
 
@@ -410,12 +558,14 @@ record_rainskills_authorization() {
   eid="$(resolve_rainskills_enterprise_id "$base_url" "$token" || true)"
   [[ -n "$eid" ]] || return 0
   RAINSKILLS_INSTALL_EID="$eid"
+  report_rainskills_lifecycle_event "authorize_legacy" "legacy_callback" "authorize" "completed" "" "" "browser_loopback"
   report_rainskills_installation "authorized" "success"
 }
 
 set_rainskills_failure_context() {
   RAINSKILLS_INSTALL_FAILURE_STAGE="$1"
   RAINSKILLS_INSTALL_FAILURE_CATEGORY="$2"
+  RAINSKILLS_TELEMETRY_ERROR_STAGE="$1"
 }
 
 report_unhandled_rainskills_installation_failure() {
@@ -424,6 +574,12 @@ report_unhandled_rainskills_installation_failure() {
         "${BASH_SUBSHELL:-0}" -eq 0 && \
         "$RAINSKILLS_INSTALL_TERMINAL_REPORTED" -eq 0 ]]; then
     RAINSKILLS_INSTALL_TERMINAL_REPORTED=1
+    report_rainskills_lifecycle_event \
+      "$(rainskills_telemetry_failure_phase)" \
+      "resume" \
+      "resume" \
+      "failed" \
+      "$(rainskills_telemetry_error_code)"
     report_rainskills_installation \
       "failed" \
       "failure" \
@@ -2194,6 +2350,7 @@ read_cached_rainbond_url() {
 
 do_refresh() {
   set_rainskills_failure_context "authorization" "authorization_failed"
+  report_rainskills_lifecycle_event "authorize_legacy" "legacy_callback" "authorize" "started" "" "" "browser_loopback"
   ensure_python3
 
   # Refresh exists because the cached JWT is broken; ignore inherited tokens
@@ -2285,6 +2442,7 @@ do_refresh() {
   configure_shell_autoload
 
   set_rainskills_failure_context "configuration" "mcp_configuration_failed"
+  report_rainskills_lifecycle_event "configure_mcp" "configure_mcp" "configure_mcp" "started"
   if (( migrate_codex == 1 )); then
     migrate_codex_mcp_if_generic "$generic_mcp_url" "$codex_mcp_url" \
       || die "Codex MCP 专用地址迁移失败"
@@ -2302,6 +2460,7 @@ do_refresh() {
     log "如果想立刻在当前终端使用，请执行：source ${ACTIVE_SHELL_RC}"
   fi
   RAINSKILLS_INSTALL_TERMINAL_REPORTED=1
+  report_rainskills_lifecycle_event "configure_mcp" "configure_mcp" "configure_mcp" "completed"
   report_rainskills_installation "configured" "success"
 }
 
@@ -2316,6 +2475,7 @@ configure_mcp() {
   fi
 
   set_rainskills_failure_context "authorization" "authorization_failed"
+  report_rainskills_lifecycle_event "authorize_legacy" "legacy_callback" "authorize" "started" "" "" "browser_loopback"
   ensure_python3
   resolve_deployment_mode
 
@@ -2386,6 +2546,7 @@ configure_mcp() {
   configure_shell_autoload
 
   set_rainskills_failure_context "configuration" "mcp_configuration_failed"
+  report_rainskills_lifecycle_event "configure_mcp" "configure_mcp" "configure_mcp" "started"
   local configured=0
   case "$TARGET" in
     codex)
@@ -2402,6 +2563,7 @@ configure_mcp() {
 
   (( configured > 0 )) || die "所选平台都未能完成 MCP 配置。"
   RAINSKILLS_INSTALL_TERMINAL_REPORTED=1
+  report_rainskills_lifecycle_event "configure_mcp" "configure_mcp" "configure_mcp" "completed"
   report_rainskills_installation "configured" "success"
 
   if [[ -n "$ACTIVE_SHELL_RC" ]]; then

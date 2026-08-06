@@ -685,6 +685,8 @@ test("Windows MCP validation and client configuration keep JWT out of argv", asy
 
 test("native authorization orchestration falls back from Device Flow and configures clients", async () => {
   const { authorizeAndConfigure } = require(windowsOnboardingPath);
+  const { createLifecycleTelemetry } = require(path.join(repoRoot, "rainbond-platform-installer", "scripts", "telemetry.js"));
+  const telemetryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-windows-telemetry-"));
   const calls = [];
   const result = await authorizeAndConfigure({
     target: "codex",
@@ -706,11 +708,24 @@ test("native authorization orchestration falls back from Device Flow and configu
       calls.push({ kind: "configure", ...options });
     },
     openBrowser() {},
+    telemetryFactory(context) {
+      return createLifecycleTelemetry({
+        ...context,
+        directory: telemetryDirectory,
+        fetchImpl: async () => ({ ok: true, status: 200 }),
+      });
+    },
   });
 
   assert.deepEqual(result, { status: "configured" });
   assert.equal(calls[0].url, "https://rainbond.example.com/console/mcp/rainskills/codex/query");
   assert.equal(calls.at(-1).token, "renewed.payload.signature");
+  const events = fs.readFileSync(path.join(telemetryDirectory, "events.jsonl"), "utf8")
+    .trim().split("\n").map((line) => JSON.parse(line));
+  assert.ok(events.some((event) => event.lifecycle_phase === "authorize_legacy" && event.lifecycle_status === "completed"));
+  assert.ok(events.some((event) => event.lifecycle_phase === "configure_mcp" && event.lifecycle_status === "completed"));
+  assert.equal(new Set(events.map((event) => event.install_attempt_id)).size, 1);
+  assert.doesNotMatch(fs.readFileSync(path.join(telemetryDirectory, "events.jsonl"), "utf8"), /header\.payload\.signature/);
 });
 
 test("native main completes an explicit SaaS configuration", async () => {

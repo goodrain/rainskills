@@ -987,7 +987,7 @@ PY
 }
 
 test_installer_reports_installation_lifecycle() {
-  local tmpdir report_file
+  local tmpdir report_file telemetry_file
   tmpdir="$(mktemp -d)"
   trap 'rm -rf "$tmpdir"' RETURN
   mkdir -p "$tmpdir/home" "$tmpdir/logs"
@@ -998,6 +998,8 @@ test_installer_reports_installation_lifecycle() {
 
   report_file="$tmpdir/logs/install-report.log"
   wait_for_file_line_count "$report_file" "3"
+  telemetry_file="$tmpdir/home/.rainbond/rainskills/telemetry/events.jsonl"
+  wait_for_file_line_count "$telemetry_file" "5"
   python3 - "$report_file" <<'PY'
 import json
 import sys
@@ -1038,6 +1040,20 @@ raw = open(sys.argv[1], encoding="utf-8").read()
 for secret_marker in ("GRJWT", "Authorization", ".signature", "secret-password"):
     if secret_marker in raw:
         raise SystemExit("installation report leaked secret marker: {}".format(secret_marker))
+PY
+  python3 - "$telemetry_file" <<'PY'
+import json
+import sys
+
+records = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8") if line.strip()]
+if not records or records[0]["schema"] != "rainskills.lifecycle-event.v1":
+    raise SystemExit("missing lifecycle schema")
+if len({record["install_attempt_id"] for record in records}) != 1:
+    raise SystemExit("lifecycle events must share one attempt id")
+if any("Bearer" in open(sys.argv[1], encoding="utf-8").read() for _ in [0]):
+    raise SystemExit("lifecycle events leaked authorization data")
+if not any(record["lifecycle_phase"] == "configure_mcp" and record["lifecycle_status"] == "completed" for record in records):
+    raise SystemExit("missing configure lifecycle completion")
 PY
 }
 
