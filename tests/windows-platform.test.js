@@ -1420,23 +1420,49 @@ test("PowerShell starts a persistent managed WSL keepalive task", () => {
   const source = readNormalizedSource(powershellPath);
   const registerMaintenance = source.match(/function Register-NetworkMaintenance\(\$Request, \$Manifest\) \{[\s\S]*?\n\}\n\nfunction Test-ExpectedPortProxy/)?.[0];
   const assertKeepalive = source.match(/function Assert-WslKeepaliveTask\(\$Request\) \{[\s\S]*?\n\}\n\nfunction Test-ExpectedPortProxy/)?.[0];
+  const waitForKeepalive = source.match(/function Wait-ScheduledTaskRunning\([^\n]+\) \{[\s\S]*?\n\}\n\nfunction Register-NetworkMaintenance/)?.[0];
   const taskContract = source.match(/function Get-ScheduledTaskContractMismatches\([^\n]+\) \{[\s\S]*?\n\}\n\nfunction Assert-ScheduledTaskContract/)?.[0];
   const finalize = source.match(/function Invoke-Finalize\(\$Request\) \{[\s\S]*?\n\}\n\nfunction Invoke-PrepareWsl/)?.[0];
   assert(registerMaintenance, "Register-NetworkMaintenance must remain a standalone fixed helper");
   assert(assertKeepalive, "Assert-WslKeepaliveTask must remain a standalone fixed helper");
+  assert(waitForKeepalive, "managed keepalive startup must have a bounded running-state check");
   assert(taskContract, "scheduled task metadata must be normalized in one fixed helper");
   assert(finalize, "Invoke-Finalize must remain a standalone fixed action");
   assert.match(registerMaintenance, /RainSkills-Keepalive-\$\(\$Request\.installation_id\)/);
   assert.match(registerMaintenance, /wsl\.exe/);
   assert.match(registerMaintenance, /-d[\s\S]*Rainbond[\s\S]*\/bin\/sleep[\s\S]*infinity/);
   assert.match(registerMaintenance, /New-ScheduledTaskSettingsSet[\s\S]*ExecutionTimeLimit[\s\S]*Zero/);
+  assert.match(registerMaintenance, /AllowStartIfOnBatteries/);
+  assert.match(registerMaintenance, /DontStopIfGoingOnBatteries/);
+  assert.match(registerMaintenance, /StartWhenAvailable/);
+  assert.match(registerMaintenance, /New-ScheduledTaskPrincipal[^\n]*RunLevel Highest/);
   assert.match(registerMaintenance, /Start-ScheduledTask[\s\S]*keepalive/);
+  assert.match(registerMaintenance, /Wait-ScheduledTaskRunning/);
+  assert.match(waitForKeepalive, /Get-ScheduledTaskInfo/);
+  assert.match(waitForKeepalive, /State[\s\S]*Running/);
+  assert.match(waitForKeepalive, /LastTaskResult/);
+  assert.match(waitForKeepalive, /throw/);
   assert.match(taskContract, /Convert-IdentityToSid/);
   assert.match(source, /function Normalize-ScheduledTaskExecutable[\s\S]*ExpandEnvironmentVariables/);
   assert.match(taskContract, /OrdinalIgnoreCase/);
   assert.match(assertKeepalive, /Assert-ScheduledTaskContract/);
   assert.match(source, /read-back mismatch: \$\(\$mismatches -join/);
   assert.doesNotMatch(finalize, /RainSkills-Keepalive|RainSkills-Network/);
+});
+
+test("combined Windows provisioning holds WSL across runtime and loopback verification", () => {
+  const source = readNormalizedSource(powershellPath);
+  const startLease = source.match(/function Start-WslRuntimeLease\(\) \{[\s\S]*?\n\}\n\nfunction Stop-WslRuntimeLease/)?.[0];
+  const stopLease = source.match(/function Stop-WslRuntimeLease\([^\n]+\) \{[\s\S]*?\n\}/)?.[0];
+  const provision = source.match(/function Invoke-ProvisionRainbond\(\$Request\) \{[\s\S]*?\n\}\n\n\$request =/)?.[0];
+  assert(startLease, "fresh provisioning must have an installer-owned WSL runtime lease");
+  assert(stopLease, "fresh provisioning must release its temporary WSL runtime lease");
+  assert(provision, "Invoke-ProvisionRainbond must remain a standalone fixed action");
+  assert.match(startLease, /Get-TrustedWslPath/);
+  assert.match(startLease, /\/bin\/sleep[\s\S]*infinity/);
+  assert.match(startLease, /HasExited/);
+  assert.match(provision, /Invoke-ImportDistro[\s\S]*Start-WslRuntimeLease[\s\S]*Invoke-VerifyDeployment/);
+  assert.match(provision, /finally[\s\S]*Stop-WslRuntimeLease/);
 });
 
 test("Rainbond WSL bootstrap verifies artifacts, prepares Docker, emits heartbeats, and redacts logs", () => {

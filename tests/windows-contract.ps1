@@ -43,6 +43,71 @@ try {
   Remove-Item Function:\Invoke-WebRequest
 }
 
+$keepaliveWaitAst = $platformAst.Find({
+  param($node)
+  $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+    $node.Name -eq "Wait-ScheduledTaskRunning"
+}, $true)
+if ($null -eq $keepaliveWaitAst) { throw "Wait-ScheduledTaskRunning function is missing" }
+. ([ScriptBlock]::Create($keepaliveWaitAst.Extent.Text))
+
+$keepaliveSettings = New-ScheduledTaskSettingsSet `
+  -ExecutionTimeLimit ([TimeSpan]::Zero) `
+  -RestartCount 3 `
+  -RestartInterval (New-TimeSpan -Minutes 1) `
+  -MultipleInstances IgnoreNew `
+  -AllowStartIfOnBatteries `
+  -DontStopIfGoingOnBatteries `
+  -StartWhenAvailable
+if ($keepaliveSettings.DisallowStartIfOnBatteries -or
+    $keepaliveSettings.StopIfGoingOnBatteries -or
+    -not $keepaliveSettings.StartWhenAvailable) {
+  throw "Managed keepalive task power settings are incompatible with Windows PowerShell 5.1"
+}
+
+$script:keepalivePollCount = 0
+function Get-ScheduledTask {
+  [CmdletBinding()]
+  param([string]$TaskName)
+  $script:keepalivePollCount += 1
+  return [pscustomobject]@{ State = if ($script:keepalivePollCount -ge 2) { "Running" } else { "Ready" } }
+}
+function Get-ScheduledTaskInfo {
+  [CmdletBinding()]
+  param([string]$TaskName)
+  return [pscustomobject]@{ LastTaskResult = 267009 }
+}
+function Start-Sleep {
+  [CmdletBinding()]
+  param([int]$Milliseconds)
+}
+try {
+  $runningTask = Wait-ScheduledTaskRunning "RainSkills-Keepalive-contract" 1
+  if ($runningTask.State -ne "Running" -or $script:keepalivePollCount -ne 2) {
+    throw "Managed keepalive task running-state polling contract failed"
+  }
+
+  $script:keepalivePollCount = 0
+  function Get-ScheduledTask {
+    [CmdletBinding()]
+    param([string]$TaskName)
+    return [pscustomobject]@{ State = "Ready" }
+  }
+  $keepaliveFailure = $null
+  try {
+    [void](Wait-ScheduledTaskRunning "RainSkills-Keepalive-contract" 0)
+  } catch {
+    $keepaliveFailure = $_.Exception.Message
+  }
+  if ($keepaliveFailure -notmatch "state=Ready" -or $keepaliveFailure -notmatch "LastTaskResult=267009") {
+    throw "Managed keepalive task failure did not include concrete task diagnostics: $keepaliveFailure"
+  }
+} finally {
+  Remove-Item Function:\Get-ScheduledTask -ErrorAction SilentlyContinue
+  Remove-Item Function:\Get-ScheduledTaskInfo -ErrorAction SilentlyContinue
+  Remove-Item Function:\Start-Sleep -ErrorAction SilentlyContinue
+}
+
 $leaseWriterAst = $platformAst.Find({
   param($node)
   $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and

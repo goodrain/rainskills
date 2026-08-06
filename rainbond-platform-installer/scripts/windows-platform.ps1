@@ -1151,6 +1151,21 @@ function Assert-ScheduledTaskContract($Task, [string]$ExpectedExecutable, [strin
   }
 }
 
+function Wait-ScheduledTaskRunning([string]$TaskName, [int]$TimeoutSeconds = 15) {
+  $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+  $task = $null
+  do {
+    $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    if ($null -ne $task -and [string]$task.State -eq "Running") { return $task }
+    Start-Sleep -Milliseconds 250
+  } while ([DateTime]::UtcNow -lt $deadline)
+
+  $state = if ($null -eq $task) { "missing" } else { [string]$task.State }
+  $info = Get-ScheduledTaskInfo -TaskName $TaskName -ErrorAction SilentlyContinue
+  $lastResult = if ($null -eq $info) { "unavailable" } else { [string]$info.LastTaskResult }
+  throw "Managed WSL keepalive task did not enter Running state: state=$state, LastTaskResult=$lastResult"
+}
+
 function Register-NetworkMaintenance($Request, $Manifest) {
   $machineRoot = Get-MachineRoot $Request
   $machineHelper = Join-Path $machineRoot "windows-platform.ps1"
@@ -1189,14 +1204,18 @@ function Register-NetworkMaintenance($Request, $Manifest) {
     -Argument '-d "Rainbond" -u root --exec /bin/sleep infinity'
   $keepaliveTrigger = New-ScheduledTaskTrigger -AtLogOn -User $Request.user_sid
   $keepaliveTrigger.Delay = "PT20S"
-  $keepalivePrincipal = New-ScheduledTaskPrincipal -UserId $Request.user_sid -LogonType Interactive
+  $keepalivePrincipal = New-ScheduledTaskPrincipal -UserId $Request.user_sid -LogonType Interactive -RunLevel Highest
   $keepaliveSettings = New-ScheduledTaskSettingsSet `
     -ExecutionTimeLimit ([TimeSpan]::Zero) `
     -RestartCount 3 `
     -RestartInterval (New-TimeSpan -Minutes 1) `
-    -MultipleInstances IgnoreNew
+    -MultipleInstances IgnoreNew `
+    -AllowStartIfOnBatteries `
+    -DontStopIfGoingOnBatteries `
+    -StartWhenAvailable
   Register-VerifiedTask $keepaliveTaskName $keepaliveAction $keepaliveTrigger $keepalivePrincipal $keepaliveSettings
   Start-ScheduledTask -TaskName $keepaliveTaskName
+  [void](Wait-ScheduledTaskRunning $keepaliveTaskName)
   return [ordered]@{ network = $networkTaskName; keepalive = $keepaliveTaskName }
 }
 
@@ -1205,7 +1224,8 @@ function Assert-WslKeepaliveTask($Request) {
   $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
   $expectedExecutable = "$env:SystemRoot\System32\wsl.exe"
   $expectedArguments = '-d "Rainbond" -u root --exec /bin/sleep infinity'
-  Assert-ScheduledTaskContract $task $expectedExecutable $expectedArguments $Request.user_sid "Limited" "Managed WSL keepalive task"
+  Assert-ScheduledTaskContract $task $expectedExecutable $expectedArguments $Request.user_sid "Highest" "Managed WSL keepalive task"
+  [void](Wait-ScheduledTaskRunning $taskName)
   return $taskName
 }
 
@@ -1811,6 +1831,32 @@ function Invoke-ConvergeInstalledPlatform($Request) {
   }
 }
 
+function Start-WslRuntimeLease() {
+  $wslPath = Get-TrustedWslPath
+  $process = Start-Process -FilePath $wslPath `
+    -ArgumentList '-d "Rainbond" -u root --exec /bin/sleep infinity' `
+    -WindowStyle Hidden -PassThru
+  Start-Sleep -Seconds 1
+  $process.Refresh()
+  if ($process.HasExited) {
+    throw "Rainbond WSL runtime lease exited during startup: exitCode=$($process.ExitCode)"
+  }
+  return $process
+}
+
+function Stop-WslRuntimeLease($Lease) {
+  if ($null -eq $Lease) { return }
+  try {
+    $Lease.Refresh()
+    if (-not $Lease.HasExited) {
+      Stop-Process -Id $Lease.Id -Force -ErrorAction SilentlyContinue
+      [void]$Lease.WaitForExit(5000)
+    }
+  } catch {
+    # The permanent keepalive task owns the distro after provisioning finishes.
+  }
+}
+
 function Invoke-ProvisionRainbond($Request) {
   Write-Host "[1/7] Updating the protected RainSkills helper..."
   try {
@@ -1819,38 +1865,44 @@ function Invoke-ProvisionRainbond($Request) {
     throw "InstallMachineBundle failed: $($_.Exception.Message)"
   }
   Write-Host "[2/7] Importing the dedicated Rainbond WSL environment..."
-  $imported = Invoke-ImportDistro $Request
-  Write-Host "[3/7] Configuring fixed local networking..."
-  $configured = Invoke-ConfigureNetwork $Request
-  $network = Invoke-VerifyNetwork $Request
-  Write-Host "[4/7] Preparing Docker inside the Rainbond environment..."
-  $docker = Invoke-PrepareDocker $Request
-  Write-Host "[5/7] Installing Rainbond (the first image pull can take some time)..."
-  $installed = Invoke-InstallRainbond $Request
-  Write-Host "[6/7] Verifying Rainbond inside WSL..."
-  Write-Host "[7/7] Verifying Windows loopback access..."
-  $verified = Invoke-VerifyDeployment $Request
-  return [ordered]@{
-    installationId = [string]$Request.installation_id
-    machineBundleVerified = [bool]$bundle.machineBundleVerified
-    distroIdentityVerified = [bool]$imported.distroIdentityVerified
-    systemdReady = [bool]$imported.systemdReady
-    networkGateReady = [bool]$docker.networkGateReady
-    dockerReady = [bool]$docker.dockerReady
-    rainbondRuntimeVerified = [bool]$installed.rainbondRuntimeVerified
-    networkManifestVerified = [bool]($configured.networkManifestVerified -and $network.networkManifestVerified)
-    portproxyVerified = [bool]$network.portproxyVerified
-    containerRunning = [bool]$verified.containerRunning
-    nodeReady = [bool]$verified.nodeReady
-    componentsReady = [bool]$verified.componentsReady
-    wslConsoleReachable = [bool]$verified.wslConsoleReachable
-    windowsConsoleReachable = [bool]$verified.windowsConsoleReachable
-    portsListening = $verified.portsListening
-    subnet = [string]$network.subnet
-    hostAddress = [string]$network.hostAddress
-    guestAddress = [string]$verified.guestAddress
-    windowsConsoleUrl = [string]$verified.windowsConsoleUrl
-    controlConsoleUrl = [string]$verified.controlConsoleUrl
+  $runtimeLease = $null
+  try {
+    $imported = Invoke-ImportDistro $Request
+    $runtimeLease = Start-WslRuntimeLease
+    Write-Host "[3/7] Configuring fixed local networking..."
+    $configured = Invoke-ConfigureNetwork $Request
+    $network = Invoke-VerifyNetwork $Request
+    Write-Host "[4/7] Preparing Docker inside the Rainbond environment..."
+    $docker = Invoke-PrepareDocker $Request
+    Write-Host "[5/7] Installing Rainbond (the first image pull can take some time)..."
+    $installed = Invoke-InstallRainbond $Request
+    Write-Host "[6/7] Verifying Rainbond inside WSL..."
+    Write-Host "[7/7] Verifying Windows loopback access..."
+    $verified = Invoke-VerifyDeployment $Request
+    return [ordered]@{
+      installationId = [string]$Request.installation_id
+      machineBundleVerified = [bool]$bundle.machineBundleVerified
+      distroIdentityVerified = [bool]$imported.distroIdentityVerified
+      systemdReady = [bool]$imported.systemdReady
+      networkGateReady = [bool]$docker.networkGateReady
+      dockerReady = [bool]$docker.dockerReady
+      rainbondRuntimeVerified = [bool]$installed.rainbondRuntimeVerified
+      networkManifestVerified = [bool]($configured.networkManifestVerified -and $network.networkManifestVerified)
+      portproxyVerified = [bool]$network.portproxyVerified
+      containerRunning = [bool]$verified.containerRunning
+      nodeReady = [bool]$verified.nodeReady
+      componentsReady = [bool]$verified.componentsReady
+      wslConsoleReachable = [bool]$verified.wslConsoleReachable
+      windowsConsoleReachable = [bool]$verified.windowsConsoleReachable
+      portsListening = $verified.portsListening
+      subnet = [string]$network.subnet
+      hostAddress = [string]$network.hostAddress
+      guestAddress = [string]$verified.guestAddress
+      windowsConsoleUrl = [string]$verified.windowsConsoleUrl
+      controlConsoleUrl = [string]$verified.controlConsoleUrl
+    }
+  } finally {
+    Stop-WslRuntimeLease $runtimeLease
   }
 }
 
