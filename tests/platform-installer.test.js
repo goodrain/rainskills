@@ -1077,6 +1077,54 @@ test("SSH session falls back to one native interactive authentication and reuses
   assert.equal(fs.existsSync(tempDirectory), false);
 });
 
+test("Windows SSH authentication does not request unsupported ControlMaster sockets", async () => {
+  const { establishSshSession } = require(platformInstallerPath);
+  const attachedCalls = [];
+  const session = await establishSshSession(
+    { host: "root@192.168.1.20", port: 22 },
+    {
+      platform: "win32",
+      interactive: true,
+      runner: () => ({
+        status: 255,
+        stdout: "",
+        stderr: "Permission denied (publickey,password).",
+      }),
+      attachedRunner: async (command, args, options) => {
+        attachedCalls.push({ command, args, options });
+        return { code: 0, signal: null };
+      },
+      createTempDirectory: () => assert.fail("Windows must not create a ControlMaster socket"),
+      write: () => {},
+    }
+  );
+
+  assert.equal(session.controlPath, null);
+  assert.equal(session.multiplexed, false);
+  assert.equal(session.interactive, true);
+  assert.equal(attachedCalls.length, 1);
+  assert(!attachedCalls[0].args.includes("ControlMaster=yes"));
+  assert(!attachedCalls[0].args.some((argument) => argument.startsWith("ControlPath=")));
+});
+
+test("interactive SSH commands inherit terminal input without piping scripts to stdin", () => {
+  const { runCommand } = require(platformInstallerPath);
+  let receivedOptions;
+  const result = runCommand(
+    "ssh",
+    ["root@example.com", "true"],
+    { interactive: true, input: "must-not-be-piped" },
+    (command, args, options) => {
+      receivedOptions = { command, args, options };
+      return { status: 0, stdout: "", stderr: "" };
+    }
+  );
+
+  assert.equal(result.status, 0);
+  assert.deepEqual(receivedOptions.options.stdio, ["inherit", "pipe", "inherit"]);
+  assert.equal(Object.hasOwn(receivedOptions.options, "input"), false);
+});
+
 test("SSH authentication pauses cleanly when no interactive terminal is available", async () => {
   const { establishSshSession } = require(platformInstallerPath);
   const output = [];
@@ -1403,6 +1451,29 @@ test("remote preparation creates a protected workspace and copies the verified a
   );
 });
 
+test("Windows remote preparation keeps SSH and SCP password prompts attached", () => {
+  const { prepareRemoteInstaller } = require(platformInstallerPath);
+  const calls = [];
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  const runner = (command, args, options) => {
+    calls.push({ command, args, options });
+    return { status: 0, stdout: "", stderr: "" };
+  };
+
+  prepareRemoteInstaller(
+    { host: "rainbond-prod", port: 2202 },
+    operationId,
+    "C:\\tmp\\rainbond-install.sh",
+    runner,
+    { interactive: true }
+  );
+
+  assert.equal(calls[0].options.interactive, true);
+  assert.equal(calls[0].options.input, undefined);
+  assert(calls[1].args.includes("BatchMode=no"));
+  assert.equal(calls[1].options.interactive, true);
+});
+
 test("remote installer invocation verifies the transferred digest and Bash syntax", () => {
   const { remoteInstallerInvocation } = require(platformInstallerPath);
   const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
@@ -1431,6 +1502,27 @@ test("remote installer invocation verifies the transferred digest and Bash synta
   assert.match(invocation.input, /trap .*INT TERM HUP/);
   assert.match(invocation.input, /setsid/);
   assert(invocation.args.includes(`ControlPath=${session.controlPath}`));
+});
+
+test("Windows remote installer invocation keeps SSH authentication on the terminal", () => {
+  const { remoteInstallerInvocation } = require(platformInstallerPath);
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  const digest = "b".repeat(64);
+  const invocation = remoteInstallerInvocation(
+    { host: "root@192.168.1.20", port: 22 },
+    operationId,
+    digest,
+    "192.168.1.20",
+    { interactive: true }
+  );
+
+  assert.equal(invocation.interactive, true);
+  assert.equal(invocation.input, undefined);
+  assert.deepEqual(invocation.args.slice(-2, -1), ["-lc"]);
+  assert.match(invocation.args.at(-1), /base64 -d \| bash -s/);
+  assert(invocation.args.at(-1).includes(operationId));
+  assert(invocation.args.at(-1).includes(digest));
+  assert(!invocation.args.includes("ControlMaster=yes"));
 });
 
 test("remote verification requires a running container, Ready node, and healthy components", () => {

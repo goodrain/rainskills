@@ -202,8 +202,12 @@ function runCommand(command, args, options = {}, syncRunner = spawnSync) {
   const spawnOptions = {
     encoding: "utf8",
     env: options.env || process.env,
-    input: options.input,
   };
+  if (options.interactive) {
+    spawnOptions.stdio = ["inherit", "pipe", "inherit"];
+  } else {
+    spawnOptions.input = options.input;
+  }
   const timeout = options.timeout === undefined ? 10000 : options.timeout;
   if (timeout !== null) spawnOptions.timeout = timeout;
   return syncRunner(command, args, spawnOptions);
@@ -280,6 +284,7 @@ function closeSshSession(session, runner = runCommand) {
 }
 
 async function establishSshSession(target, {
+  platform = process.platform,
   interactive = process.stdin.isTTY && process.stdout.isTTY,
   runner = runCommand,
   attachedRunner = spawnAttached,
@@ -312,6 +317,34 @@ async function establishSshSession(target, {
     return null;
   }
 
+  if (platform === "win32") {
+    write("\nWindows 自带 OpenSSH 不支持 ControlMaster 连接复用；后续远程步骤会继续由系统 SSH 读取认证，可能再次请求密码。\n");
+    const result = await attachedRunner(
+      "ssh",
+      [
+        "-o", "BatchMode=no",
+        "-o", "ConnectTimeout=10",
+        "-p", String(normalized.port),
+        normalized.host,
+        "true",
+      ],
+      { env: process.env, interactive: true },
+      null
+    );
+    if (result.signal || result.code !== 0) {
+      if (result.signal) throw new Error(`SSH 认证被信号 ${result.signal} 中断`);
+      throw new Error(`SSH 认证未完成，无法连接 ${normalized.host}`);
+    }
+    return {
+      target: normalized,
+      controlPath: null,
+      tempDirectory: null,
+      multiplexed: false,
+      interactive: true,
+      closed: false,
+    };
+  }
+
   const tempDirectory = createTempDirectory();
   fs.chmodSync(tempDirectory, 0o700);
   const controlPath = path.join(tempDirectory, "control");
@@ -342,6 +375,7 @@ async function establishSshSession(target, {
     controlPath,
     tempDirectory,
     multiplexed: true,
+    interactive: false,
     closed: false,
   };
 }
@@ -553,12 +587,41 @@ async function resolveRemoteConsole({
 
 function sshArgs(target, session = null) {
   return [
-    "-o", "BatchMode=yes",
+    "-o", `BatchMode=${session?.interactive ? "no" : "yes"}`,
     "-o", "ConnectTimeout=10",
     ...sshSessionOptions(session),
     "-p", String(target.port),
     target.host,
   ];
+}
+
+function shellQuote(value) {
+  return `'${String(value).replace(/'/g, "'\\''")}'`;
+}
+
+function remoteScriptInvocationArgs(script, scriptArgs = []) {
+  const encoded = Buffer.from(script, "utf8").toString("base64");
+  const argumentsText = scriptArgs.map(shellQuote).join(" ");
+  const command = `printf '%s' '${encoded}' | base64 -d | bash -s --${argumentsText ? ` ${argumentsText}` : ""}`;
+  return [
+    "bash",
+    "-lc",
+    shellQuote(command),
+  ];
+}
+
+function remoteScriptInvocation(target, session, script, scriptArgs = [], options = {}) {
+  const normalized = normalizeRemoteTarget(target.host, target.port);
+  if (session?.interactive) {
+    return {
+      args: [...sshArgs(normalized, session), ...remoteScriptInvocationArgs(script, scriptArgs)],
+      options: { ...options, interactive: true },
+    };
+  }
+  return {
+    args: [...sshArgs(normalized, session), "bash", "-s", "--", ...scriptArgs],
+    options: { ...options, input: script },
+  };
 }
 
 async function selectInstallTarget({
@@ -704,10 +767,14 @@ function parseKeyValueOutput(output) {
 
 function inspectRemoteSystem(target, runner = runCommand, session = null) {
   const normalized = normalizeRemoteTarget(target.host, target.port);
-  const result = runner("ssh", [...sshArgs(normalized, session), "bash", "-s"], {
-    timeout: 30000,
-    input: REMOTE_INSPECTION_SCRIPT,
-  });
+  const invocation = remoteScriptInvocation(
+    normalized,
+    session,
+    REMOTE_INSPECTION_SCRIPT,
+    [],
+    { timeout: 30000 }
+  );
+  const result = runner("ssh", invocation.args, invocation.options);
   if (result.error) throw new Error(`无法启动 SSH：${result.error.message}`);
   if (result.status !== 0) {
     const detail = String(result.stderr || result.stdout || "连接失败").trim();
@@ -764,20 +831,24 @@ function prepareRemoteInstaller(target, operationId, installerPath, runner = run
     'chmod 700 "$HOME/.rainbond" "$HOME/.rainbond/platform-installer" "$workspace"',
     "",
   ].join("\n");
-  const prepare = runner("ssh", [...sshArgs(normalized, session), "bash", "-s", "--", operationId], {
-    timeout: 30000,
-    input: prepareScript,
-  });
+  const prepareInvocation = remoteScriptInvocation(
+    normalized,
+    session,
+    prepareScript,
+    [operationId],
+    { timeout: 30000 }
+  );
+  const prepare = runner("ssh", prepareInvocation.args, prepareInvocation.options);
   assertCommandResult(prepare, `无法在 ${normalized.host} 创建安装目录`);
 
   const copy = runner("scp", [
-    "-o", "BatchMode=yes",
+    "-o", `BatchMode=${session?.interactive ? "no" : "yes"}`,
     "-o", "ConnectTimeout=10",
     ...sshSessionOptions(session),
     "-P", String(normalized.port),
     installerPath,
     `${normalized.host}:${workspace}/rainbond-install.sh`,
-  ], { timeout: 120000 });
+  ], session?.interactive ? { timeout: 120000, interactive: true } : { timeout: 120000 });
   assertCommandResult(copy, `无法把官方安装脚本传输到 ${normalized.host}`);
   return workspace;
 }
@@ -842,10 +913,17 @@ function remoteInstallerInvocation(target, operationId, digest, primaryIp = "", 
   if (!/^[a-f0-9]{64}$/.test(digest || "")) throw new Error("安装脚本 SHA-256 无效");
   const eip = String(primaryIp || "").trim();
   if (eip && !/^[A-Za-z0-9_.:-]+$/.test(eip)) throw new Error("远程服务器地址无效");
+  const invocation = remoteScriptInvocation(
+    normalized,
+    session,
+    REMOTE_INSTALL_SCRIPT,
+    [workspace, digest, eip],
+  );
   return {
     command: "ssh",
-    args: [...sshArgs(normalized, session), "bash", "-s", "--", workspace, digest, eip],
-    input: REMOTE_INSTALL_SCRIPT,
+    args: invocation.args,
+    input: invocation.options.input,
+    interactive: invocation.options.interactive || false,
   };
 }
 
@@ -871,10 +949,14 @@ const REMOTE_VERIFICATION_SCRIPT = [
 
 function verifyRemoteRainbond(target, fallbackHost, runner = runCommand, session = null) {
   const normalized = normalizeRemoteTarget(target.host, target.port);
-  const result = runner("ssh", [...sshArgs(normalized, session), "bash", "-s"], {
-    timeout: 30000,
-    input: REMOTE_VERIFICATION_SCRIPT,
-  });
+  const invocation = remoteScriptInvocation(
+    normalized,
+    session,
+    REMOTE_VERIFICATION_SCRIPT,
+    [],
+    { timeout: 30000 }
+  );
+  const result = runner("ssh", invocation.args, invocation.options);
   assertCommandResult(result, `无法验证 ${normalized.host} 上的 Rainbond`);
   const values = parseKeyValueOutput(result.stdout);
   if (values.CONTAINER_STATE !== "true") throw new Error("rainbond 容器未处于运行状态");
@@ -2640,7 +2722,11 @@ async function runInstallOperation(options) {
       result = await spawnAttached(
         invocation.command,
         invocation.args,
-        { env: process.env, input: invocation.input },
+        {
+          env: process.env,
+          input: invocation.input,
+          interactive: invocation.interactive,
+        },
         paths.log
       );
     } else {

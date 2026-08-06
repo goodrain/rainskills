@@ -11,7 +11,7 @@
 - 最低资源：4 核 CPU、8 GB 内存、50 GB 可用磁盘。
 - 安装前端口 `80`、`443`、`7070` 必须空闲。
 
-远程 Linux 只接受 `user@host` 或 `~/.ssh/config` 主机别名，使用系统 `ssh` / `scp`。安装器先尝试已有的非交互认证；需要时由 OpenSSH 在附着终端中确认主机指纹并读取一次 SSH 密码，然后通过临时控制连接复用认证。Rainskills 不接收或保存密码、私钥，也不支持多节点、高可用、离线安装、已有 Kubernetes 或自动清理冲突环境。
+远程 Linux 只接受 `user@host` 或 `~/.ssh/config` 主机别名，使用系统 `ssh` / `scp`。安装器先尝试已有的非交互认证；需要时由 OpenSSH 在附着终端中确认主机指纹并读取 SSH 密码。Linux/macOS 通过临时控制连接复用认证；Windows 自带 OpenSSH 不支持 ControlMaster，后续步骤会保持终端附着并可能再次请求密码。Rainskills 不接收或保存密码、私钥，也不支持多节点、高可用、离线安装、已有 Kubernetes 或自动清理冲突环境。
 
 远程安装使用 `ssh -G` 解析的实际主机作为新平台 EIP，不再优先使用 `hostname -I` 的首个内网地址。完成后从控制端依次验证显式 Console 主机、SSH 实际主机、SSH 字面主机、Rainbond 上报 EIP 和远端主网卡地址，保存第一个可访问的 `http://<host>:7070`。手动补充只接受 IP 或 DNS 域名。
 
