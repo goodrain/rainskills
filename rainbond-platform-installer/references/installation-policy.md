@@ -8,7 +8,7 @@
 - Linux `x64` / `arm64`：可安装到当前设备，也可通过 SSH 安装到其他 Linux 服务器，回车默认当前设备。
 - macOS `x64` / `arm64`：优先推荐远程 Linux，也可安装到当前 Mac；本机安装依赖 OrbStack，准备时间通常更长。
 - Windows：可选择“安装到本地”或“安装到 Linux 服务器”。本地路径目前为 preview，只支持 Windows 10 build 19041+ / Windows 11 x64 工作站。
-- 推荐资源：4 核 CPU、8 GB 内存、50 GB 可用磁盘；预检最低门槛为 2 核 CPU、4 GB 内存、10 GB 可用磁盘。低于推荐值时会提示风险但继续安装，最终以 Rainbond 实际部署验证为准。
+- 推荐资源：4 核 CPU、8 GB 内存、50 GB 可用磁盘；预检最低门槛为 2 核 CPU、4 GB 内存、30 GB 可用磁盘。低于推荐值时会提示风险但继续安装，最终以 Rainbond 实际部署验证为准。
 - 安装前端口 `80`、`443`、`7070` 必须空闲。
 
 远程 Linux 只接受 `user@host` 或 `~/.ssh/config` 主机别名，使用系统 `ssh` / `scp`。安装器先尝试已有的非交互认证；需要时由 OpenSSH 在附着终端中确认主机指纹并读取 SSH 密码。Linux/macOS 通过临时控制连接复用认证；Windows 自带 OpenSSH 不支持 ControlMaster，后续步骤会保持终端附着并可能再次请求密码。Rainskills 不接收或保存密码、私钥，也不支持多节点、高可用、离线安装、已有 Kubernetes 或自动清理冲突环境。

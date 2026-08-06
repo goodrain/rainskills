@@ -321,7 +321,7 @@ test("Windows preflight assessment explains every unsupported condition", () => 
     uacEnabled: false,
     cpuCores: 1,
     memoryBytes: 3 * 1024 ** 3,
-    diskBytes: 9 * 1024 ** 3,
+    diskBytes: 29 * 1024 ** 3,
     virtualizationEnabled: false,
     wslInstalled: true,
     wslNetworkingMode: "mirrored",
@@ -349,7 +349,7 @@ test("Windows preflight assessment explains every unsupported condition", () => 
   assert.match(blockers, /UAC/);
   assert.match(blockers, /最低.*2 核/);
   assert.match(blockers, /最低.*4 GB/);
-  assert.match(blockers, /最低.*10 GB/);
+  assert.match(blockers, /最低.*30 GB/);
   assert.match(blockers, /虚拟化/);
   assert.match(blockers, /NAT/);
   assert.match(blockers, /80.*7070/);
@@ -364,7 +364,7 @@ test("Windows preflight allows below-recommended resources with warnings", () =>
   const assessment = evaluateWindowsPreflight(passingFacts({
     cpuCores: 2,
     memoryBytes: 4 * 1024 ** 3,
-    diskBytes: 10 * 1024 ** 3,
+    diskBytes: 30 * 1024 ** 3,
   }), policy, USER_SID);
 
   assert.equal(assessment.ok, true);

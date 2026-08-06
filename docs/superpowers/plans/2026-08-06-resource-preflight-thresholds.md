@@ -4,7 +4,7 @@
 
 **Goal:** Separate the recommended Rainbond resource profile from the hard preflight floor so smaller supported machines can continue installation with an explicit warning.
 
-**Architecture:** Upgrade the policy contract to v2 and keep the policy JSON as the source of truth with `recommended` values of 4 CPU/8 GiB/50 GiB and hard `minimums` of 2 CPU/4 GiB/10 GiB. Memory and disk are stored as bytes using 1024³ GiB units, and exact threshold values pass. Both generic and Windows assessments will return resource warnings below `recommended` and blockers below `minimums`; existing non-resource blockers and final deployment verification remain unchanged.
+**Architecture:** Upgrade the policy contract to v2 and keep the policy JSON as the source of truth with `recommended` values of 4 CPU/8 GiB/50 GiB and hard `minimums` of 2 CPU/4 GiB/30 GiB. Memory and disk are stored as bytes using 1024³ GiB units, and exact threshold values pass. Both generic and Windows assessments will return resource warnings below `recommended` and blockers below `minimums`; existing non-resource blockers and final deployment verification remain unchanged.
 
 **Tech Stack:** Node.js CommonJS, JSON policy, Node test runner, npm build/package scripts.
 
@@ -18,7 +18,7 @@
 
 - [ ] **Step 1: Add generic preflight cases for recommended, warning, and minimum-floor resources**
 
-Assert that 4/8/50 has no resource warning, 2/4/10 passes with resource warnings, and values below 2/4/10 still produce the matching blocker. Keep the existing port and privilege blockers in the below-floor fixture, and cover the generic evaluator used by remote Linux targets.
+Assert that 4/8/50 has no resource warning, 2/4/30 passes with resource warnings, and values below 2/4/30 still produce the matching blocker. Keep the existing port and privilege blockers in the below-floor fixture, and cover the generic evaluator used by remote Linux targets.
 
 - [ ] **Step 2: Add Windows preflight cases for the same three resource states**
 
@@ -61,7 +61,7 @@ For both generic and Windows output, show a concise warning that installation co
 
 - [ ] **Step 5: Update policy documentation**
 
-Describe 4/8/50 as recommended, 2/4/10 as the preflight floor, and explain that lower-than-recommended installations may be slow or have limited capacity. Cover both local and remote Linux targets and the Windows local preview path.
+Describe 4/8/50 as recommended, 2/4/30 as the preflight floor, and explain that lower-than-recommended installations may be slow or have limited capacity. Cover both local and remote Linux targets and the Windows local preview path.
 
 ### Task 3: Verify, package, and deliver
 

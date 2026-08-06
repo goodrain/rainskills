@@ -8,7 +8,7 @@
   "minimums": {
     "cpu_cores": 2,
     "memory_bytes": 4294967296,
-    "disk_bytes": 10737418240
+    "disk_bytes": 32212254720
   },
   "required_ports": [80, 443, 7070],
   "supported_control_platforms": ["linux", "darwin", "win32"],
