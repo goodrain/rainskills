@@ -64,7 +64,7 @@ Windows 的管理员 PowerShell/WSL 动作只返回固定结构化事实和错�
   "status": "started|completed|blocked|failed|interrupted|skipped",
   "duration_ms": 1234,
   "error_code": "containerd_not_ready",
-  "error_stage": "verify_deployment",
+  "error_stage": "verify_console",
   "reason_code": "containerd_not_ready",
   "blocked_reason": "awaiting_user_confirmation-or-null",
   "interrupt_signal": "SIGINT-or-null",
