@@ -1460,6 +1460,12 @@ test("combined Windows provisioning holds WSL across runtime and loopback verifi
   assert(provision, "Invoke-ProvisionRainbond must remain a standalone fixed action");
   assert.match(startLease, /Get-TrustedWslPath/);
   assert.match(startLease, /\/bin\/sleep[\s\S]*infinity/);
+  assert.match(startLease, /Diagnostics\.ProcessStartInfo/);
+  assert.match(startLease, /UseShellExecute\s*=\s*\$false/);
+  assert.match(startLease, /CreateNoWindow\s*=\s*\$true/);
+  assert.match(startLease, /RedirectStandardError\s*=\s*\$true/);
+  assert.match(startLease, /ReadToEndAsync\(\)/);
+  assert.doesNotMatch(startLease, /Start-Process/);
   assert.match(startLease, /HasExited/);
   assert.match(provision, /Invoke-ImportDistro[\s\S]*Start-WslRuntimeLease[\s\S]*Invoke-VerifyDeployment/);
   assert.match(provision, /finally[\s\S]*Stop-WslRuntimeLease/);

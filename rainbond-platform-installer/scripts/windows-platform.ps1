@@ -2040,14 +2040,37 @@ function Invoke-ConvergeInstalledPlatform($Request) {
 
 function Start-WslRuntimeLease() {
   $wslPath = Get-TrustedWslPath
-  $process = Start-Process -FilePath $wslPath `
-    -ArgumentList '-d "Rainbond" -u root --exec /bin/sleep infinity' `
-    -WindowStyle Hidden -PassThru
+  $arguments = @("-d", "Rainbond", "-u", "root", "--exec", "/bin/sleep", "infinity")
+  $startInfo = [Diagnostics.ProcessStartInfo]::new()
+  $startInfo.FileName = $wslPath
+  $startInfo.Arguments = (($arguments | ForEach-Object { ConvertTo-NativeProcessArgument ([string]$_) }) -join " ")
+  $startInfo.UseShellExecute = $false
+  $startInfo.CreateNoWindow = $true
+  $startInfo.RedirectStandardOutput = $true
+  $startInfo.RedirectStandardError = $true
+  $process = [Diagnostics.Process]::new()
+  $process.StartInfo = $startInfo
+  if (-not $process.Start()) {
+    $process.Dispose()
+    throw "Rainbond WSL runtime lease did not start"
+  }
+  $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+  $stderrTask = $process.StandardError.ReadToEndAsync()
   Start-Sleep -Seconds 1
   $process.Refresh()
   if ($process.HasExited) {
-    throw "Rainbond WSL runtime lease exited during startup: exitCode=$($process.ExitCode)"
+    $lastLine = @((($stderrTask.Result + "`n" + $stdoutTask.Result) -split "`r?`n") |
+      ForEach-Object { ConvertTo-SafeDiagnosticLine ([string]$_) 240 } | Where-Object { $_ }) |
+      Select-Object -Last 1
+    $exitCode = $process.ExitCode
+    $process.Dispose()
+    if ($lastLine) {
+      throw "Rainbond WSL runtime lease exited during startup: exitCode=${exitCode}: $lastLine"
+    }
+    throw "Rainbond WSL runtime lease exited during startup: exitCode=$exitCode"
   }
+  $process | Add-Member -NotePropertyName RainSkillsStdoutTask -NotePropertyValue $stdoutTask
+  $process | Add-Member -NotePropertyName RainSkillsStderrTask -NotePropertyValue $stderrTask
   return $process
 }
 
@@ -2059,6 +2082,7 @@ function Stop-WslRuntimeLease($Lease) {
       Stop-Process -Id $Lease.Id -Force -ErrorAction SilentlyContinue
       [void]$Lease.WaitForExit(5000)
     }
+    $Lease.Dispose()
   } catch {
     # The permanent keepalive task owns the distro after provisioning finishes.
   }
