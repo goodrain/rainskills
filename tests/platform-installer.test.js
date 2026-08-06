@@ -827,7 +827,7 @@ test("onboarding state is schema checked and must be a protected regular file", 
   assert.throws(() => readOnboardingState(symlinkPath, state.operation_id, stateStore), /符号链接/);
 });
 
-test("preflight enforces the versioned single-node resource baseline", () => {
+test("preflight treats below-recommended resources as advisory", () => {
   const { evaluatePreflight } = require(platformInstallerPath);
   const passing = evaluatePreflight({
     platform: "linux",
@@ -845,14 +845,33 @@ test("preflight enforces the versioned single-node resource baseline", () => {
   });
   assert.equal(passing.ok, true);
   assert.deepEqual(passing.blockers, []);
+  assert.deepEqual(passing.warnings, []);
   assert.match(passing.effects.join("\n"), /Docker/);
 
-  const failing = evaluatePreflight({
+  const advisory = evaluatePreflight({
     platform: "linux",
     arch: "x64",
     cpuCores: 2,
     memoryBytes: 4 * 1024 ** 3,
-    diskBytes: 20 * 1024 ** 3,
+    diskBytes: 10 * 1024 ** 3,
+    occupiedPorts: [],
+    hasPrivilege: true,
+    hasDocker: true,
+    hasRainbond: false,
+    hasOrbStack: false,
+    firewall: "active",
+    swapEnabled: true,
+  });
+  assert.equal(advisory.ok, true);
+  assert.deepEqual(advisory.blockers, []);
+  assert.match(advisory.warnings.join("\n"), /低于推荐配置/);
+
+  const failing = evaluatePreflight({
+    platform: "linux",
+    arch: "x64",
+    cpuCores: 1,
+    memoryBytes: 3 * 1024 ** 3,
+    diskBytes: 9 * 1024 ** 3,
     occupiedPorts: [80, 7070],
     hasPrivilege: false,
     hasDocker: true,
@@ -862,9 +881,9 @@ test("preflight enforces the versioned single-node resource baseline", () => {
     swapEnabled: true,
   });
   assert.equal(failing.ok, false);
-  assert.match(failing.blockers.join("\n"), /4 核/);
-  assert.match(failing.blockers.join("\n"), /8 GB/);
-  assert.match(failing.blockers.join("\n"), /50 GB/);
+  assert.match(failing.blockers.join("\n"), /最低.*2 核/);
+  assert.match(failing.blockers.join("\n"), /最低.*4 GB/);
+  assert.match(failing.blockers.join("\n"), /最低.*10 GB/);
   assert.match(failing.blockers.join("\n"), /80.*7070/);
   assert.match(failing.blockers.join("\n"), /root.*sudo -n/);
 });
@@ -1695,9 +1714,13 @@ test("skill routes platform setup but excludes application delivery", () => {
 
 test("official installer policy trusts only the fixed HTTPS origin and bounds mutable content", () => {
   const { POLICY } = require(platformInstallerPath);
-  assert.equal(POLICY.minimums.cpu_cores, 4);
-  assert.equal(POLICY.minimums.memory_bytes, 8 * 1024 ** 3);
-  assert.equal(POLICY.minimums.disk_bytes, 50 * 1024 ** 3);
+  assert.equal(POLICY.schema, "rainskills.platform-installation-policy.v2");
+  assert.equal(POLICY.recommended.cpu_cores, 4);
+  assert.equal(POLICY.recommended.memory_bytes, 8 * 1024 ** 3);
+  assert.equal(POLICY.recommended.disk_bytes, 50 * 1024 ** 3);
+  assert.equal(POLICY.minimums.cpu_cores, 2);
+  assert.equal(POLICY.minimums.memory_bytes, 4 * 1024 ** 3);
+  assert.equal(POLICY.minimums.disk_bytes, 10 * 1024 ** 3);
   assert.deepEqual(POLICY.required_ports, [80, 443, 7070]);
   assert.equal(POLICY.installer.url, "https://get.rainbond.com/");
   assert.deepEqual(POLICY.installer.allowed_origins, ["https://get.rainbond.com"]);
