@@ -319,9 +319,9 @@ test("Windows preflight assessment explains every unsupported condition", () => 
     currentUserSid: "S-1-5-21-other",
     isAdministrator: false,
     uacEnabled: false,
-    cpuCores: 2,
-    memoryBytes: 4 * 1024 ** 3,
-    diskBytes: 20 * 1024 ** 3,
+    cpuCores: 1,
+    memoryBytes: 3 * 1024 ** 3,
+    diskBytes: 9 * 1024 ** 3,
     virtualizationEnabled: false,
     wslInstalled: true,
     wslNetworkingMode: "mirrored",
@@ -347,9 +347,9 @@ test("Windows preflight assessment explains every unsupported condition", () => 
   assert.match(blockers, /当前用户 SID/);
   assert.match(blockers, /Administrators/);
   assert.match(blockers, /UAC/);
-  assert.match(blockers, /4 核/);
-  assert.match(blockers, /8 GB/);
-  assert.match(blockers, /50 GB/);
+  assert.match(blockers, /最低.*2 核/);
+  assert.match(blockers, /最低.*4 GB/);
+  assert.match(blockers, /最低.*10 GB/);
   assert.match(blockers, /虚拟化/);
   assert.match(blockers, /NAT/);
   assert.match(blockers, /80.*7070/);
@@ -357,6 +357,19 @@ test("Windows preflight assessment explains every unsupported condition", () => 
   assert.match(blockers, /可用.*\/30/);
   assert.match(blockers, /无法访问/);
   assert.match(blockers, /未获准的跳转来源/);
+});
+
+test("Windows preflight allows below-recommended resources with warnings", () => {
+  const { evaluateWindowsPreflight } = require(windowsPlatformPath);
+  const assessment = evaluateWindowsPreflight(passingFacts({
+    cpuCores: 2,
+    memoryBytes: 4 * 1024 ** 3,
+    diskBytes: 10 * 1024 ** 3,
+  }), policy, USER_SID);
+
+  assert.equal(assessment.ok, true);
+  assert.deepEqual(assessment.blockers, []);
+  assert.match(assessment.warnings.join("\n"), /低于推荐配置/);
 });
 
 test("passing Windows preflight lists the exact user-visible effects", () => {

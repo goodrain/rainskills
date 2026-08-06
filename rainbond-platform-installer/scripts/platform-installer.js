@@ -1106,17 +1106,31 @@ function gibibytes(bytes) {
 
 function evaluatePreflight(facts) {
   const blockers = [];
+  const warnings = [];
   const effects = [];
   const minimums = POLICY.minimums;
+  const recommended = POLICY.recommended;
   if (!POLICY.supported_platforms.includes(facts.platform)) {
     blockers.push(`不支持当前系统 ${facts.platform}，首版仅支持 Linux 和 macOS`);
   }
   if (!POLICY.supported_architectures.includes(facts.arch)) {
     blockers.push(`不支持当前架构 ${facts.arch}，仅支持 x64 和 arm64`);
   }
-  if (facts.cpuCores < minimums.cpu_cores) blockers.push(`CPU 至少需要 ${minimums.cpu_cores} 核，当前 ${facts.cpuCores} 核`);
-  if (facts.memoryBytes < minimums.memory_bytes) blockers.push(`内存至少需要 8 GB，当前 ${gibibytes(facts.memoryBytes).toFixed(1)} GB`);
-  if (facts.diskBytes < minimums.disk_bytes) blockers.push(`可用磁盘至少需要 50 GB，当前 ${gibibytes(facts.diskBytes).toFixed(1)} GB`);
+  if (facts.cpuCores < minimums.cpu_cores) {
+    blockers.push(`CPU 最低需要 ${minimums.cpu_cores} 核，当前 ${facts.cpuCores} 核`);
+  } else if (facts.cpuCores < recommended.cpu_cores) {
+    warnings.push(`CPU ${facts.cpuCores} 核低于推荐配置 ${recommended.cpu_cores} 核`);
+  }
+  if (facts.memoryBytes < minimums.memory_bytes) {
+    blockers.push(`内存最低需要 ${gibibytes(minimums.memory_bytes).toFixed(0)} GB，当前 ${gibibytes(facts.memoryBytes).toFixed(1)} GB`);
+  } else if (facts.memoryBytes < recommended.memory_bytes) {
+    warnings.push(`内存 ${gibibytes(facts.memoryBytes).toFixed(1)} GB 低于推荐配置 ${gibibytes(recommended.memory_bytes).toFixed(0)} GB`);
+  }
+  if (facts.diskBytes < minimums.disk_bytes) {
+    blockers.push(`可用磁盘最低需要 ${gibibytes(minimums.disk_bytes).toFixed(0)} GB，当前 ${gibibytes(facts.diskBytes).toFixed(1)} GB`);
+  } else if (facts.diskBytes < recommended.disk_bytes) {
+    warnings.push(`可用磁盘 ${gibibytes(facts.diskBytes).toFixed(1)} GB 低于推荐配置 ${gibibytes(recommended.disk_bytes).toFixed(0)} GB`);
+  }
   if (facts.occupiedPorts.length > 0) blockers.push(`端口 ${facts.occupiedPorts.join("、")} 已被占用`);
   if (facts.platform === "linux" && !facts.hasPrivilege) blockers.push("Linux 安装需要 root 或已配置可用的 sudo -n 权限");
   if (facts.hasRainbond) blockers.push("检测到已有 rainbond 容器，请返回并选择“已经有，填写平台地址”");
@@ -1133,7 +1147,7 @@ function evaluatePreflight(facts) {
   }
   effects.push("启动 privileged rainbond 容器并写入持久化数据");
 
-  return { ok: blockers.length === 0, blockers, effects };
+  return { ok: blockers.length === 0, blockers, warnings, effects };
 }
 
 function extractConsoleUrl(output) {
@@ -1625,6 +1639,10 @@ function printPreflight(facts, assessment, target) {
     for (const blocker of assessment.blockers) process.stdout.write(`- ${blocker}\n`);
     return;
   }
+  if (assessment.warnings?.length) {
+    process.stdout.write("\n资源低于推荐配置，仍会继续安装；最终以 Rainbond 实际部署验证结果为准：\n");
+    for (const warning of assessment.warnings) process.stdout.write(`- ${warning}\n`);
+  }
   process.stdout.write("\n确认后将执行：\n");
   for (const effect of assessment.effects) process.stdout.write(`- ${effect}\n`);
 }
@@ -1636,6 +1654,10 @@ function printWindowsPreflight(facts, assessment) {
     process.stdout.write("\n需要先处理：\n");
     for (const blocker of assessment.blockers) process.stdout.write(`- ${blocker}\n`);
     return;
+  }
+  if (assessment.warnings?.length) {
+    process.stdout.write("\n资源低于推荐配置，仍会继续安装；最终以 Rainbond 实际部署验证结果为准：\n");
+    for (const warning of assessment.warnings) process.stdout.write(`- ${warning}\n`);
   }
   process.stdout.write("\n确认后将执行：\n");
   for (const effect of assessment.effects) process.stdout.write(`- ${effect}\n`);
