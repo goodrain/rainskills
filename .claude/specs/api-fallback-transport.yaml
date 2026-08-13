@@ -1,0 +1,351 @@
+meta:
+  name: api-fallback-transport
+  version: "1.0"
+  status: design-review
+  implementation_started: false
+  repo: "/Users/guox/Desktop/Project/rainskills + /Users/guox/Desktop/Project/rainbond-console"
+  branch: "codex/api-fallback-transport"
+  design_doc: "docs/plans/2026-08-12-api-fallback-transport-design.md"
+  skill_contract: "docs/plans/2026-08-13-skill-transport-contract.md"
+
+scope:
+  in:
+    - "Use native MCP when the current session exposes the required rainbond_* tool."
+    - "Use a local stateless Node bridge when MCP is unavailable but local command execution exists."
+    - "Reuse MCPQueryService as the sole catalog, executor, permission boundary, and error contract."
+    - "Discover schemas on demand and install one stable bridge on POSIX and Windows."
+    - "Enforce Rainskills hidden-tool policy at execution time."
+  out:
+    - "A REST endpoint per Rainbond tool."
+    - "A local catalog cache, capability-id registry, catalog push, or database migration."
+    - "Automatic cross-transport failover or retry of writes."
+    - "Universal support for clients without MCP, local commands, or HTTP-function support."
+    - "JWT scope, audience, or all-client authentication migration."
+
+decisions:
+  catalog: "rainbond-console MCPQueryService.list_tools only"
+  executor: "rainbond-console MCPQueryService.call_tool only"
+  api_protocol: "Existing authenticated stateless MCP HTTP JSON-RPC"
+  api_endpoint: "/console/mcp/rainskills/api/query"
+  api_invocation: {deploy_origin: rainskills, deploy_client: api}
+  bridge_path_posix: "$HOME/.rainbond/bin/rainskills-tools.js"
+  bridge_path_windows: "%USERPROFILE%\\.rainbond\\bin\\rainskills-tools.js"
+  selection: "If the session exposes any rainbond_* tool, select MCP; only a session with zero Rainbond tools may probe API; lock once for the workflow"
+  retry: "Never change transport after an authentication, network, timeout, protocol, or business error"
+  catalog_cache: "None; cache at most one schema in the active agent context"
+  compatibility: "Dedicated endpoint 404 means Console upgrade required; no generic endpoint fallback"
+  bridge_timeout_ms: 180000
+  compact_list_shape: "Tool name strings only; description and inputSchema are describe-only"
+  default_install_semantics: "Preserve current MCP registration and verification failure behavior"
+  api_install_semantics: "Explicit --api-only reuses codex|claude|all|--dest targeting, installs skills and bridge, authorizes, validates the API endpoint, and does not edit MCP client configuration"
+  skip_mcp_semantics: "Preserve historical skill-copy-only behavior; it is not API-only mode"
+  shared_skill_policy: "Maintain one policy under rainbond-app-assistant and rely on the existing official full-suite installation contract; do not add generated copies"
+
+protocol_contract:
+  headers:
+    Authorization: "GRJWT <jwt>"
+    Content-Type: "application/json"
+    Accept: "application/json"
+    MCP-Protocol-Version: "2025-03-26"
+  methods:
+    - name: tools/list
+      params: {}
+      result: "result.tools"
+    - name: tools/call
+      params: {name: "string", arguments: "object"}
+      result: "result.structuredContent"
+  cli:
+    - "status"
+    - "list [--prefix <prefix>]"
+    - "describe <tool-name>"
+    - "call <tool-name> --input <json-file|->"
+  output:
+    status: "status and tool_count only"
+    list: "tool name strings only"
+    describe: "one tool name, description, and inputSchema"
+    call: "structuredContent only"
+  exit_codes:
+    0: success
+    2: cli_or_input_error
+    3: configuration_or_authentication_error
+    4: network_timeout_endpoint_or_protocol_error
+    5: tool_not_found_validation_or_business_error
+  secret_rules:
+    - "No --token argument."
+    - "Read only RAINBOND_URL and RAINBOND_JWT from the process environment or managed mcp.env."
+    - "Never execute mcp.env as shell code."
+    - "Never print Authorization, JWT, or complete tool arguments."
+
+quality_gates:
+  console_related: "pytest console/tests/mcp_deployment_invocation_test.py console/tests/mcp_query_view_test.py console/tests/mcp_query_service_test.py console/tests/mcp_query_error_contract_test.py -q"
+  console_full: "make format && make check && pytest"
+  rainskills_related: "node --test tests/api-bridge.test.js tests/npx-launcher.test.js tests/transport-resolution.test.js"
+  rainskills_full: "npm test"
+  compatibility: "Run the check-api-compat checklist for endpoint, headers, methods, arguments, structuredContent, errors, and invocation marker."
+
+sprints:
+  - id: sprint-0
+    name: Design approval and baselines
+    commits: []
+    tasks:
+      - id: task-0.1
+        name: Freeze the cross-repository contract
+        status: in_progress
+        files:
+          modify:
+            - path: "docs/plans/2026-08-12-api-fallback-transport-design.md"
+            - path: ".claude/specs/api-fallback-transport.yaml"
+        steps:
+          - action: review
+            description: "Approve scope, architecture, protocol, transport state machine, failure semantics, compatibility matrix, rollout, and rollback."
+            expect: "No production or test code changes before approval"
+        acceptance:
+          - "The four user concerns map to explicit design decisions and tests."
+          - "All non-goals and client adaptation limits are accepted."
+      - id: task-0.2
+        name: Capture clean test baselines
+        status: pending
+        files: {}
+        steps:
+          - action: verify
+            description: Run the related and full suites in both repositories before implementation.
+            run: "Use quality_gates.console_related, quality_gates.console_full, and quality_gates.rainskills_full"
+            expect: "Existing failures are recorded separately from feature failures"
+        acceptance:
+          - "Baseline command, revision, date, exit code, and failure summary are saved in the implementation log."
+
+  - id: sprint-1
+    name: Console execution boundary
+    commits:
+      - id: commit-1
+        message: "fix: enforce rainskills tool visibility"
+        tasks: [task-1.1]
+    tasks:
+      - id: task-1.1
+        name: Add API invocation route and execution guard
+        status: pending
+        files:
+          modify:
+            - path: "/Users/guox/Desktop/Project/rainbond-console/console/urls/__init__.py"
+              lines: "207-216"
+            - path: "/Users/guox/Desktop/Project/rainbond-console/console/services/mcp_query_service.py"
+              lines: "271-375"
+            - path: "/Users/guox/Desktop/Project/rainbond-console/console/tests/mcp_deployment_invocation_test.py"
+              lines: "177-188"
+            - path: "/Users/guox/Desktop/Project/rainbond-console/console/tests/mcp_query_service_test.py"
+              lines: "28-80"
+        steps:
+          - action: write-test
+            description: Add failing URL-resolution and hidden-tool execution tests.
+            run: "pytest console/tests/mcp_deployment_invocation_test.py console/tests/mcp_query_service_test.py -q"
+            expect: "FAIL before implementation"
+          - action: implement
+            description: Register the API client route and reject hidden tools from call_tool during a Rainskills invocation.
+            run: "pytest console/tests/mcp_deployment_invocation_test.py console/tests/mcp_query_service_test.py -q"
+            expect: "PASS"
+          - action: regression
+            description: Prove generic MCP can still call server-local package tools and authenticated sessionless list/call behavior is unchanged.
+            run: "pytest console/tests/mcp_query_view_test.py console/tests/mcp_query_service_test.py -q"
+            expect: "PASS"
+          - action: review
+            description: Review the change for API design, Django patterns, authentication boundaries, and secret-safe logging.
+            expect: "No duplicate view, registry, permission layer, or business handler"
+        acceptance:
+          - cmd: "make check"
+            expect: "PASS"
+          - cmd: "pytest console/tests/mcp_deployment_invocation_test.py console/tests/mcp_query_service_test.py -q"
+            expect: "PASS"
+
+  - id: sprint-2
+    name: Rainskills stateless bridge
+    commits:
+      - id: commit-2
+        message: "feat: add api fallback bridge"
+        tasks: [task-2.1, task-2.2]
+    tasks:
+      - id: task-2.1
+        name: Add the stateless API bridge
+        status: pending
+        files:
+          create:
+            - path: "bin/rainskills-tools.js"
+            - path: "tests/api-bridge.test.js"
+          modify:
+            - path: "bin/rainskills.js"
+              lines: "19-60"
+            - path: "package.json"
+              lines: "56-72"
+        steps:
+          - action: write-test
+            description: Cover config parsing, live describe filtering, structured call output, errors, and launcher routing.
+            run: "node --test tests/api-bridge.test.js tests/npx-launcher.test.js"
+            expect: "FAIL before implementation"
+          - action: implement
+            description: Implement status/list/describe/call using authenticated JSON-RPC without accepting token arguments.
+            run: "node --test tests/api-bridge.test.js tests/npx-launcher.test.js"
+            expect: "PASS"
+          - action: harden
+            description: Add fixed timeout, protocol validation, stable exit codes, secret redaction, and structuredContent-only success output.
+            run: "node --test tests/api-bridge.test.js"
+            expect: "PASS"
+        acceptance:
+          - cmd: "node --test tests/api-bridge.test.js tests/npx-launcher.test.js"
+            expect: "PASS"
+          - "No production dependency is added."
+          - "Bridge does not accept token, URL-token, query-token, or body-token input."
+          - "Dedicated endpoint 404 does not fall back to /console/mcp/query."
+      - id: task-2.2
+        name: Package the bridge and measure context size
+        status: pending
+        files:
+          modify:
+            - path: "tests/npm-package.test.js"
+            - path: "tests/api-bridge.test.js"
+        steps:
+          - action: write-test
+            description: Require the packed artifact to contain the bridge and add reproducible catalog serialization-size measurements.
+            run: "node --test tests/npm-package.test.js tests/api-bridge.test.js"
+            expect: "FAIL before implementation"
+          - action: implement
+            description: Keep package files explicit and report full-catalog, compact-list, one-schema, and structured-result bytes.
+            run: "node --test tests/npm-package.test.js tests/api-bridge.test.js"
+            expect: "PASS"
+        acceptance:
+          - cmd: "npm run test:package"
+            expect: "PASS"
+          - "The measurement uses bytes and ratios, not invented model-token counts."
+  - id: sprint-3
+    name: Bridge installation and skill adaptation
+    commits:
+      - id: commit-3
+        message: "feat: install api fallback transport"
+        tasks: [task-3.1, task-3.2]
+    tasks:
+      - id: task-3.1
+        name: Install the stable bridge on POSIX and Windows
+        status: pending
+        files:
+          modify:
+            - path: "install.sh"
+              lines: "main installation flow around 2413"
+            - path: "rainbond-platform-installer/scripts/windows-onboarding.js"
+              lines: "main installation flow around 458"
+            - path: "tests/install.sh.test"
+            - path: "tests/windows-onboarding.test.js"
+            - path: "tests/windows-platform.test.js"
+            - path: "README.md"
+            - path: "SKILL.md"
+        steps:
+          - action: write-test
+            description: Cover first install, update, force, historical skip-mcp/custom-dest behavior, explicit --api-only with every target form, conflicting flags, permissions, ACL/reparse-point safety, Node absence, and cleanup on failure.
+            run: "npm run test:installer && npm run test:windows"
+            expect: "FAIL before implementation"
+          - action: implement
+            description: Atomically copy the version-matched bridge and add an explicit --api-only flag without changing default MCP failure, refresh, skip-mcp, or custom-dest-alone semantics.
+            run: "npm run test:installer && npm run test:windows"
+            expect: "PASS"
+        acceptance:
+          - "Normal installs provide a stable local bridge without requiring npx at runtime."
+          - "custom-dest remains a pure skill-copy mode and documents that API fallback is not installed."
+          - "skip-mcp remains a skill-copy-only compatibility mode and is not an alias for --api-only."
+          - "Default installation still fails when selected MCP client registration fails, even if the bridge exists."
+          - "Explicit --api-only authorizes, writes managed config, validates the dedicated endpoint, and never edits MCP client configuration."
+          - "--api-only reuses codex, claude, all, and custom destination selection; it does not introduce a second target-selection implementation."
+          - "--api-only and --skip-mcp are rejected when combined."
+          - "API mode fails clearly when Node.js 18+ is unavailable; no second bridge implementation is added."
+          - "refresh changes authentication only."
+      - id: task-3.2
+        name: Replace MCP-only preflight with one deterministic dual-transport policy
+        status: pending
+        files:
+          create:
+            - path: "rainbond-app-assistant/references/transport-resolution.md"
+            - path: "tests/transport-resolution.test.js"
+          modify:
+            - path: "rainbond-app-assistant/SKILL.md"
+            - path: "rainbond-app-version-assistant/SKILL.md"
+            - path: "rainbond-delivery-verifier/SKILL.md"
+            - path: "rainbond-env-sync/SKILL.md"
+            - path: "rainbond-fullstack-bootstrap/SKILL.md"
+            - path: "rainbond-fullstack-troubleshooter/SKILL.md"
+            - path: "rainbond-project-init/SKILL.md"
+            - path: "rainbond-template-installer/SKILL.md"
+        steps:
+          - action: write-test
+            description: Require all eight business skills, and only those skills, to resolve the one shared policy in the official full-suite installation layout; reject missing references and the old MCP-only preflight.
+            run: "node --test tests/transport-resolution.test.js"
+            expect: "FAIL before implementation"
+          - action: implement
+            description: Replace the top-level MCP probe with any-Rainbond-tool presence selection, add short inherited entry rules that point to one shared reference, and define one API probe only for zero-tool sessions, workflow locking, no cross-transport retry, and unknown-write-result recovery.
+            run: "node --test tests/transport-resolution.test.js"
+            expect: "PASS"
+          - action: evaluate
+            description: Run routing fixtures for MCP success, MCP 401, MCP timeout, missing MCP plus API success, missing both, API 401, API endpoint 404, schema drift, and unknown write outcome.
+            run: "python3 tests/run_skill_routing_evals.py && node --test tests/transport-resolution.test.js"
+            expect: "Every scenario chooses exactly one expected state: mcp, api, or unavailable"
+        acceptance:
+          - "Root installer and platform-installer skills remain uncoupled."
+          - "Every business skill reference resolves after POSIX, Windows, custom-dest, update, and force installations."
+          - "Official installers continue to install the complete skill suite; unsupported manual single-skill copies do not promise API fallback."
+          - "No reference generation or synchronization script is added."
+          - "The top-level skill no longer treats rainbond_query_enterprises as a mandatory universal probe."
+          - "An exposed MCP tool that returns 401, 403, timeout, network, or business failure never triggers an API probe."
+          - "A session exposing any rainbond_* tool remains on MCP even when the particular required tool is absent; API cannot bypass MCP visibility."
+          - "Lower-level skills reuse an upstream transport decision and do not probe again."
+          - "API list output is name-only and schemas are loaded only through describe."
+          - "Package upload, deployment, troubleshooting, snapshot, publish, and rollback business sequences remain unchanged."
+
+  - id: sprint-4
+    name: Cross-repository verification
+    commits: []
+    tasks:
+      - id: task-4.1
+        name: Verify shared protocol compatibility
+        status: pending
+        files: {}
+        steps:
+          - action: verify
+            description: Confirm endpoint, authentication header, JSON-RPC methods, client marker and result/error shapes match.
+            run: "npm test && pytest console/tests/mcp_deployment_invocation_test.py console/tests/mcp_query_view_test.py console/tests/mcp_query_service_test.py -q"
+            expect: "PASS"
+          - action: verify
+            description: Exercise the end-to-end matrix for MCP available, API available, neither available, expired token, old Console, catalog mutation, and unknown write outcome.
+            expect: "Behavior matches the design matrix and no cross-transport duplicate write occurs"
+          - action: review
+            description: Run security, Django, API, and cross-repository compatibility reviews before commit completion.
+            expect: "No unresolved high-severity finding"
+        acceptance:
+          - cmd: "npm test"
+            expect: "PASS"
+          - cmd: "make format && make check && pytest"
+            expect: "PASS in rainbond-console"
+          - "The bridge 180-second deadline safely exceeds the server's 120-second bounded wait contract."
+          - "Default, api, skip-mcp, custom-dest, refresh, and Node-missing installation modes match their documented semantics."
+
+rollout:
+  order:
+    - "Release rainbond-console first."
+    - "Verify existing Codex and Claude MCP paths."
+    - "Release rainskills with the bridge and policy."
+    - "Canary API fallback on a client without loaded MCP."
+    - "Expand after telemetry and failure review."
+  observe:
+    - "api invocation count"
+    - "401 and 403 rate"
+    - "dedicated endpoint 404 rate"
+    - "timeouts and unknown write outcomes"
+    - "tool business-error rate"
+  rollback:
+    - "Rollback rainskills first so skills stop selecting API."
+    - "Keep the execution-time hidden-tool guard unless a separate security review approves its rollback."
+    - "No database or catalog data rollback is required."
+
+definition_of_done:
+  - "MCP-present workflows make no bridge call."
+  - "API workflows do not inject the full catalog into persistent context."
+  - "Tool additions, schema changes, and deletions are visible on the next list/describe."
+  - "Catalog and execution have no second source of truth."
+  - "No write automatically retries through another transport."
+  - "API and MCP share the same server-side authorization."
+  - "Old/new compatibility behavior is automated and documented."
+  - "Both repositories pass their full verification gates."
