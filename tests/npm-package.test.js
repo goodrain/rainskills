@@ -111,8 +111,10 @@ test("packed artifact contains the installer and all skills but no development f
     "windows-auth.js",
     "windows-browser.ps1",
     "windows-client-config.js",
+    "windows-read-user-environment.ps1",
     "windows-platform.js",
     "windows-platform.ps1",
+    "runtime-credentials.js",
     "wsl-bootstrap.sh",
   ]) {
     assert(filePaths.has(`rainbond-platform-installer/scripts/${runtimeFile}`), `${runtimeFile} is missing`);

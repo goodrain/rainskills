@@ -347,6 +347,7 @@ async function authorizeAndConfigure({
   now,
   spawnImpl,
   telemetryFactory = createLifecycleTelemetry,
+  onConfiguredCredential = () => {},
 }) {
   const telemetry = telemetryFactory({
     context: {
@@ -510,6 +511,7 @@ async function authorizeAndConfigure({
     auth_method: authorizationMethod,
     transport: "powershell",
   });
+  await onConfiguredCredential(token);
   return { status: "configured" };
 }
 

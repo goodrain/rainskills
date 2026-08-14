@@ -2304,22 +2304,40 @@ async function installWindowsRainbond({ adapter, onboarding, options, paths, sta
 }
 
 function resumeInvocationForOnboarding(onboarding, execPath = process.execPath) {
+  assertOperationId(onboarding.operation_id);
+  const intent = validateIntent(onboarding.intent);
   const args = [
+    path.resolve(__dirname, "..", "..", "bin", "rainskills.js"),
+    "runtime",
+    "connect",
     onboarding.target,
-    "--self-hosted",
     "--rainbond-url",
     onboarding.console_url,
   ];
   if (onboarding.console_url.startsWith("http://")) args.push("--allow-insecure-http");
-  if (onboarding.control_mode === "windows-native") {
-    return {
-      executable: execPath,
-      args: [path.resolve(__dirname, "windows-onboarding.js"), ...args],
-    };
-  }
+  args.push(
+    "--onboarding-id",
+    onboarding.operation_id,
+    "--intent-json",
+    JSON.stringify(intent)
+  );
   return {
-    executable: "bash",
-    args: [path.resolve(__dirname, "..", "..", "install.sh"), ...args],
+    executable: execPath,
+    args,
+  };
+}
+
+function intentResumeInvocationForOnboarding(onboarding, execPath = process.execPath) {
+  assertOperationId(onboarding.operation_id);
+  return {
+    executable: execPath,
+    args: [
+      path.resolve(__dirname, "..", "..", "bin", "rainskills.js"),
+      "intent",
+      "resume",
+      "--onboarding-id",
+      onboarding.operation_id,
+    ],
   };
 }
 
@@ -2408,6 +2426,10 @@ async function runResume(onboardingId, {
   consoleReadiness = waitForWindowsConsole,
   onboardingUpdater = updateOnboarding,
   invocationBuilder = resumeInvocationForOnboarding,
+  intentInvocationBuilder = intentResumeInvocationForOnboarding,
+  credentialReader = require("./runtime-credentials.js").readRuntimeCredential,
+  environment = process.env,
+  credentialHome = environment.USERPROFILE || environment.HOME || os.homedir(),
   attachedRunner = spawnAttached,
   write = (value) => process.stdout.write(value),
 } = {}) {
@@ -2473,31 +2495,58 @@ async function runResume(onboardingId, {
 
     onboarding = onboardingUpdater(onboarding, { stage: "authorizing" });
     const invocation = invocationBuilder(onboarding);
+    const resumeEnvironment = resumeState
+      ? {
+        ...environment,
+        RAINSKILLS_INSTALL_ATTEMPT_ID: resumeState.install_attempt_id || onboarding.install_attempt_id || onboarding.operation_id,
+        RAINSKILLS_TELEMETRY_OPERATION_ID: resumeState.operation_id,
+        RAINSKILLS_TELEMETRY_INSTALLATION_ID: resumeState.installation_id,
+        RAINSKILLS_PACKAGE_VERSION: packageManifest.version,
+        RAINSKILLS_TELEMETRY_TARGET: resumeState.target_kind,
+        RAINSKILLS_TELEMETRY_CONTROL_MODE: resumeState.control_mode || onboarding.control_mode || "posix",
+        RAINSKILLS_TELEMETRY_CLIENT: resumeState.install_client || onboarding.target || "unknown",
+      }
+      : { ...environment };
 
     write("\n正在恢复 RainSkills 授权流程，将在浏览器中完成登录和授权。\n");
     const result = await attachedRunner(
       invocation.executable,
       invocation.args,
-      {
-        env: resumeState
-          ? {
-            ...process.env,
-            RAINSKILLS_INSTALL_ATTEMPT_ID: resumeState.install_attempt_id || onboarding.install_attempt_id || onboarding.operation_id,
-            RAINSKILLS_TELEMETRY_OPERATION_ID: resumeState.operation_id,
-            RAINSKILLS_TELEMETRY_INSTALLATION_ID: resumeState.installation_id,
-            RAINSKILLS_PACKAGE_VERSION: packageManifest.version,
-            RAINSKILLS_TELEMETRY_TARGET: resumeState.target_kind,
-            RAINSKILLS_TELEMETRY_CONTROL_MODE: resumeState.control_mode || onboarding.control_mode || "posix",
-            RAINSKILLS_TELEMETRY_CLIENT: resumeState.install_client || onboarding.target || "unknown",
-          }
-          : { ...process.env },
-      },
+      { env: resumeEnvironment },
       null
     );
     if (result.signal) throw new Error(`授权流程被信号 ${result.signal} 中断`);
     if (result.code !== 0) {
       write(`\nRainbond 已部署，授权尚未完成。稍后继续：\n  npx rainskills@${packageManifest.version} resume --onboarding-id ${onboardingId}\n`);
       throw new Error(`RainSkills 授权流程退出码为 ${result.code}`);
+    }
+    let latestCredential;
+    try {
+      latestCredential = await credentialReader({
+        expectedOrigin: onboarding.console_url,
+        home: credentialHome,
+        platform: onboarding.control_mode === "windows-native" ? "win32" : process.platform,
+      });
+    } catch {
+      write(`\n运行环境已连接，但无法安全读取最新凭据。稍后继续：\n  npx rainskills@${packageManifest.version} resume --onboarding-id ${onboardingId}\n`);
+      throw new Error("无法安全读取与当前 Rainbond origin 匹配的最新运行凭据");
+    }
+    const intentEnvironment = {
+      ...resumeEnvironment,
+      RAINBOND_JWT: latestCredential.token,
+      RAINBOND_URL: latestCredential.origin,
+    };
+    const intentInvocation = intentInvocationBuilder(onboarding);
+    const intentResult = await attachedRunner(
+      intentInvocation.executable,
+      intentInvocation.args,
+      { env: intentEnvironment },
+      null
+    );
+    if (intentResult.signal || intentResult.code !== 0) {
+      write(`\n运行环境已连接，原始操作尚未恢复。稍后继续：\n  npx rainskills@${packageManifest.version} resume --onboarding-id ${onboardingId}\n`);
+      if (intentResult.signal) throw new Error(`原始 intent 恢复流程被信号 ${intentResult.signal} 中断`);
+      throw new Error(`原始 intent 恢复流程退出码为 ${intentResult.code}`);
     }
     if (windowsContext) {
       const adapter = windowsAdapterFactory(onboarding);
@@ -3077,6 +3126,7 @@ module.exports = {
   evaluatePreflight,
   extractConsoleUrl,
   inspectRemoteSystem,
+  intentResumeInvocationForOnboarding,
   normalizeConsoleHost,
   normalizeRainbondImage,
   normalizeRemoteTarget,

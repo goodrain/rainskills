@@ -7,6 +7,8 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const test = require("node:test");
 
+const { createPortableSecureStateStore } = require("./helpers/portable-secure-state.js");
+
 const repoRoot = path.resolve(__dirname, "..");
 const launcherPath = path.join(repoRoot, "bin", "rainskills.js");
 const platformInstallerPath = path.join(
@@ -138,21 +140,17 @@ test("platform dispatch rejects existing-app intent before driver side effects",
   assert.deepEqual(calls, []);
 });
 
-test("platform resume selects native Node or POSIX Bash from onboarding control mode", () => {
+test("platform resume uses the fixed runtime connect launcher on every control mode", () => {
   const {
     controlHostPlatform,
     resumeInvocationForOnboarding,
   } = require(platformInstallerPath);
-  const windowsOnboardingPath = path.join(
-    repoRoot,
-    "rainbond-platform-installer",
-    "scripts",
-    "windows-onboarding.js"
-  );
-  const installScriptPath = path.join(repoRoot, "install.sh");
+  const launcherPath = path.join(repoRoot, "bin", "rainskills.js");
   const base = {
     target: "codex",
     console_url: "http://127.0.0.1:7070",
+    operation_id: "1d6754d6-6fb3-4bda-9a04-15c2d261d178",
+    intent: { type: "deploy", project_root: "/workspace/app", source_kind: "local" },
   };
 
   assert.deepEqual(resumeInvocationForOnboarding({
@@ -161,26 +159,20 @@ test("platform resume selects native Node or POSIX Bash from onboarding control 
   }, "/fake/node"), {
     executable: "/fake/node",
     args: [
-      windowsOnboardingPath,
-      "codex",
-      "--self-hosted",
-      "--rainbond-url",
-      "http://127.0.0.1:7070",
-      "--allow-insecure-http",
+      launcherPath, "runtime", "connect", "codex", "--rainbond-url",
+      "http://127.0.0.1:7070", "--allow-insecure-http", "--onboarding-id",
+      base.operation_id, "--intent-json", JSON.stringify(base.intent),
     ],
   });
   assert.deepEqual(resumeInvocationForOnboarding({
     ...base,
     control_mode: "posix",
   }, "/fake/node"), {
-    executable: "bash",
+    executable: "/fake/node",
     args: [
-      installScriptPath,
-      "codex",
-      "--self-hosted",
-      "--rainbond-url",
-      "http://127.0.0.1:7070",
-      "--allow-insecure-http",
+      launcherPath, "runtime", "connect", "codex", "--rainbond-url",
+      "http://127.0.0.1:7070", "--allow-insecure-http", "--onboarding-id",
+      base.operation_id, "--intent-json", JSON.stringify(base.intent),
     ],
   });
   assert.equal(controlHostPlatform({ control_mode: "wsl", control_distro: "Ubuntu" }, "linux"), "win32");
@@ -194,14 +186,11 @@ test("platform resume selects native Node or POSIX Bash from onboarding control 
     console_url: "http://172.31.253.2:7070",
     display_console_url: "http://127.0.0.1:7070",
   }, "/fake/node"), {
-    executable: "bash",
+    executable: "/fake/node",
     args: [
-      installScriptPath,
-      "codex",
-      "--self-hosted",
-      "--rainbond-url",
-      "http://172.31.253.2:7070",
-      "--allow-insecure-http",
+      launcherPath, "runtime", "connect", "codex", "--rainbond-url",
+      "http://172.31.253.2:7070", "--allow-insecure-http", "--onboarding-id",
+      base.operation_id, "--intent-json", JSON.stringify(base.intent),
     ],
   });
 });
@@ -600,8 +589,12 @@ test("authorization resume keeps Windows WSL alive, waits for Console, then fina
         return { ...onboarding, ...values };
       },
       invocationBuilder: () => ({ executable: "node", args: ["authorize.js"] }),
-      attachedRunner: async () => {
-        events.push({ type: "spawn" });
+      credentialReader: () => ({
+        token: "nextHeader.nextPayload.nextSignature",
+        origin: "http://127.0.0.1:7070",
+      }),
+      attachedRunner: async (executable, args) => {
+        events.push({ type: "spawn", executable, args });
         return { code: 0, signal: null };
       },
       write() {},
@@ -612,16 +605,78 @@ test("authorization resume keeps Windows WSL alive, waits for Console, then fina
       "console-ready",
       "authorizing",
       "spawn",
+      "spawn",
       "finalize",
       "configured",
       "stop-wsl-lease",
     ], `resume stage ${stage}`);
-    assert.deepEqual(events[4].options, {
+    assert.deepEqual(events[4], {
+      type: "spawn",
+      executable: process.execPath,
+      args: [
+        path.join(repoRoot, "bin", "rainskills.js"),
+        "intent", "resume", "--onboarding-id", operationId,
+      ],
+    });
+    assert.deepEqual(events[5].options, {
       operationId,
       installationId,
       payload: { status: "success" },
     });
   }
+});
+
+test("platform resume keeps recovery state when fixed intent continuation fails", async () => {
+  const { runResume } = require(platformInstallerPath);
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  const updates = [];
+  const output = [];
+  let runs = 0;
+  let finalized = false;
+
+  await assert.rejects(runResume(operationId, {
+    onboardingPath: () => "/protected/onboarding.json",
+    ensurePrivateDirectory() {},
+    onboardingReader: () => ({
+      operation_id: operationId,
+      target: "codex",
+      deployment_mode: "self-hosted",
+      stage: "platform-ready",
+      console_url: "http://127.0.0.1:7070",
+      platform_state_path: "/protected/state.json",
+      control_mode: "windows-native",
+    }),
+    pathsResolver: () => ({ root: "/protected", state: "/protected/state.json" }),
+    assertFilesSafe() {},
+    platformStateReader: () => ({
+      operation_id: operationId,
+      installation_id: "f1805132-20ad-4a20-9f88-43fe41e50813",
+      target_kind: "local-windows",
+      stage: "platform-ready",
+    }),
+    windowsAdapterFactory: () => ({
+      async finalize() { finalized = true; },
+    }),
+    windowsRuntimeLease: async () => ({ stop() {} }),
+    consoleReadiness: async () => {},
+    onboardingUpdater(onboarding, values) {
+      updates.push(values.stage);
+      return { ...onboarding, ...values };
+    },
+    invocationBuilder: () => ({ executable: "node", args: ["connect.js"] }),
+    credentialReader: () => ({
+      token: "nextHeader.nextPayload.nextSignature",
+      origin: "http://127.0.0.1:7070",
+    }),
+    attachedRunner: async () => ({ code: runs++ === 0 ? 0 : 31, signal: null }),
+    write(value) { output.push(value); },
+  }), /intent|恢复|退出码.*31/i);
+
+  assert.deepEqual(updates, ["authorizing"]);
+  assert.equal(finalized, false);
+  assert.match(output.join(""), new RegExp(
+    `npx rainskills@[^ ]+ resume --onboarding-id ${operationId}`
+  ));
 });
 
 test("failed Windows authorization releases the WSL lease, preserves recovery tasks, and leaves non-Windows unchanged", async () => {
@@ -643,6 +698,10 @@ test("failed Windows authorization releases the WSL lease, preserves recovery ta
     assertFilesSafe() {},
     onboardingUpdater: (onboarding, values) => ({ ...onboarding, ...values }),
     invocationBuilder: () => ({ executable: "node", args: ["authorize.js"] }),
+    credentialReader: () => ({
+      token: "nextHeader.nextPayload.nextSignature",
+      origin: "http://127.0.0.1:7070",
+    }),
     write() {},
   };
 
@@ -691,6 +750,125 @@ test("failed Windows authorization releases the WSL lease, preserves recovery ta
   });
   assert.equal(adapterCreated, false);
   assert.equal(leaseCreated, false);
+});
+
+test("POSIX platform resume reloads the persisted credential before the intent child", async () => {
+  const { runResume } = require(platformInstallerPath);
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-resume-credential-posix-"));
+  const origin = "http://10.0.0.8:7070";
+  const oldJwt = "oldHeader.oldPayload.oldSignature";
+  const nextJwt = "nextHeader.nextPayload.nextSignature";
+  const expectedPath = path.join(home, "expected-credential.txt");
+  fs.writeFileSync(expectedPath, nextJwt, { mode: 0o600 });
+  const stages = [];
+
+  await runResume(operationId, {
+    onboardingPath: () => "/protected/onboarding.json",
+    ensurePrivateDirectory() {},
+    onboardingReader: () => ({
+      operation_id: operationId,
+      target: "codex",
+      deployment_mode: "self-hosted",
+      stage: "platform-ready",
+      console_url: origin,
+      control_mode: "posix",
+    }),
+    onboardingUpdater(onboarding, values) {
+      stages.push(values.stage);
+      return { ...onboarding, ...values };
+    },
+    environment: {
+      HOME: home,
+      PATH: process.env.PATH,
+      RAINBOND_JWT: oldJwt,
+      TEST_NEXT_JWT: nextJwt,
+      TEST_EXPECTED_ORIGIN: origin,
+    },
+    credentialHome: home,
+    invocationBuilder: () => ({
+      executable: process.execPath,
+      args: ["-e", [
+        "const fs = require('node:fs'); const path = require('node:path');",
+        "const dir = path.join(process.env.HOME, '.rainbond');",
+        "fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); fs.chmodSync(dir, 0o700);",
+        "const next = fs.readFileSync(process.argv[1], 'utf8');",
+        "const body = `export RAINBOND_JWT='${next}'\\nexport RAINBOND_URL='${process.argv[2]}'\\n`;",
+        "fs.writeFileSync(path.join(dir, 'mcp.env'), body, { mode: 0o600 });",
+        "fs.chmodSync(path.join(dir, 'mcp.env'), 0o600);",
+      ].join("\n"), expectedPath, origin],
+    }),
+    intentInvocationBuilder: () => ({
+      executable: process.execPath,
+      args: ["-e", [
+        "const fs = require('node:fs');",
+        "process.exit(process.env.RAINBOND_JWT === fs.readFileSync(process.argv[1], 'utf8') ? 0 : 41);",
+      ].join("\n"), expectedPath],
+    }),
+    write() {},
+  });
+
+  assert.deepEqual(stages, ["authorizing", "configured"]);
+});
+
+test("Windows platform resume reloads the user credential through a silent helper before intent", async () => {
+  const { runResume } = require(platformInstallerPath);
+  const { readWindowsRuntimeCredential } = require(path.join(
+    repoRoot, "rainbond-platform-installer", "scripts", "runtime-credentials.js"
+  ));
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-resume-credential-windows-"));
+  const origin = "https://rainbond.example.com";
+  const nextJwt = "nextHeader.nextPayload.nextSignature";
+  const stateStore = createPortableSecureStateStore(home);
+  const expectedPath = path.join(home, "expected-credential.txt");
+  fs.writeFileSync(expectedPath, nextJwt, { mode: 0o600 });
+
+  await runResume(operationId, {
+    onboardingPath: () => "/protected/onboarding.json",
+    ensurePrivateDirectory() {},
+    onboardingReader: () => ({
+      operation_id: operationId,
+      target: "codex",
+      deployment_mode: "self-hosted",
+      stage: "platform-ready",
+      console_url: origin,
+      control_mode: "windows-native",
+    }),
+    onboardingUpdater: (onboarding, values) => ({ ...onboarding, ...values }),
+    environment: {
+      PATH: process.env.PATH,
+      RAINBOND_JWT: "oldHeader.oldPayload.oldSignature",
+      TEST_NEXT_JWT: nextJwt,
+    },
+    invocationBuilder: () => ({ executable: process.execPath, args: ["-e", "process.exit(0)"] }),
+    credentialReader({ expectedOrigin }) {
+      return readWindowsRuntimeCredential({
+        home,
+        expectedOrigin,
+        stateStore,
+        spawnImpl(command, args, options) {
+          return spawnSync(process.execPath, ["-e", [
+            "const fs = require('node:fs');",
+            "fs.writeFileSync(process.env.RAINSKILLS_CREDENTIAL_OUTPUT_PATH, JSON.stringify({",
+            "token: fs.readFileSync(process.argv[1], 'utf8'), origin: process.argv[2]",
+            "}));",
+          ].join("\n"), expectedPath, origin], {
+            env: { RAINSKILLS_CREDENTIAL_OUTPUT_PATH: options.env.RAINSKILLS_CREDENTIAL_OUTPUT_PATH },
+            stdio: "ignore",
+          });
+        },
+      });
+    },
+    intentInvocationBuilder: () => ({
+      executable: process.execPath,
+      args: ["-e", [
+        "const fs = require('node:fs');",
+        "process.exit(process.env.RAINBOND_JWT === fs.readFileSync(process.argv[1], 'utf8') ? 0 : 42);",
+      ].join("\n"), expectedPath],
+    }),
+    write() {},
+  });
 });
 
 test("authorization resume waits only for Windows Console before authorizing and fresh completion has no second finalize", () => {

@@ -114,7 +114,18 @@ should_skip_bootstrap_for_refresh() {
   return 1
 }
 
-if should_skip_bootstrap_for_refresh "$@"; then
+is_runtime_connect_invocation() {
+  [[ "${1:-}" == "connect" ]]
+}
+
+if is_runtime_connect_invocation "$@"; then
+  [[ "${RAINSKILLS_RUNTIME_CONNECT_COMPLETION:-0}" == "1" ]] \
+    && [[ "${RAINSKILLS_RUNTIME_OPERATION_ID:-}" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$ ]] \
+    || bootstrap_die "runtime connect 必须通过 Rainskills Node 入口执行。"
+  SCRIPT_DIR="$(resolve_script_dir)"
+  [[ -n "$SCRIPT_DIR" && -f "$SCRIPT_DIR/bin/rainskills.js" ]] \
+    || bootstrap_die "runtime connect 缺少受信任的 Rainskills Node 入口。"
+elif should_skip_bootstrap_for_refresh "$@"; then
   SCRIPT_DIR=""
 else
   bootstrap_download_if_needed "$@"
@@ -484,6 +495,9 @@ initialize_rainskills_installation_reporting() {
       refresh)
         RAINSKILLS_INSTALL_ACTION="refresh"
         ;;
+      connect)
+        RAINSKILLS_INSTALL_ACTION="connect"
+        ;;
       codex|claude|all)
         target="$arg"
         ;;
@@ -770,6 +784,10 @@ parse_args() {
         ACTION="refresh"
         shift
         ;;
+      connect)
+        ACTION="connect"
+        shift
+        ;;
       claude|codex|all)
         TARGET="$1"
         shift
@@ -841,6 +859,109 @@ parse_args() {
         ;;
     esac
   done
+}
+
+valid_runtime_operation_id() {
+  [[ "${1:-}" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$ ]]
+}
+
+assert_internal_connect_entry() {
+  [[ "${1:-}" == "connect" ]] || return 0
+  if [[ "${RAINSKILLS_RUNTIME_CONNECT_COMPLETION:-0}" != "1" ]] \
+    || ! valid_runtime_operation_id "${RAINSKILLS_RUNTIME_OPERATION_ID:-}"; then
+    printf '错误：runtime connect 必须通过 Rainskills Node 入口执行。\n' >&2
+    return 1
+  fi
+
+  shift
+  local target="" environment_kind="" console_origin="" mode=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      codex|claude|all)
+        [[ -z "$target" ]] || return 1
+        target="$1"
+        shift
+        ;;
+      --saas)
+        [[ -z "$mode" ]] || return 1
+        mode="saas"
+        environment_kind="saas"
+        console_origin="$SAAS_DEFAULT_URL"
+        shift
+        ;;
+      --self-hosted)
+        [[ -z "$mode" ]] || return 1
+        mode="self-hosted"
+        environment_kind="private"
+        shift
+        ;;
+      --rainbond-url)
+        [[ $# -ge 2 && -z "$console_origin" ]] || return 1
+        console_origin="$2"
+        shift 2
+        ;;
+      --allow-insecure-http)
+        shift
+        ;;
+      --non-interactive)
+        shift
+        ;;
+      *)
+        return 1
+        ;;
+    esac
+  done
+  [[ -n "$target" && -n "$environment_kind" && -n "$console_origin" ]] || return 1
+  if [[ "$mode" == "saas" ]]; then
+    [[ "$console_origin" == "$SAAS_DEFAULT_URL" ]] || return 1
+  else
+    assert_canonical_runtime_console_origin "$console_origin" || return 1
+  fi
+  node "$SCRIPT_DIR/bin/rainskills.js" runtime assert-connect \
+    --onboarding-id "$RAINSKILLS_RUNTIME_OPERATION_ID" \
+    --target "$target" \
+    --environment-kind "$environment_kind" \
+    --console-origin "$console_origin" >/dev/null 2>&1 \
+    || {
+      printf '错误：runtime connect 内部门禁验证失败。\n' >&2
+      return 1
+    }
+}
+
+assert_canonical_runtime_console_origin() {
+  local value="$1"
+  python3 - "$value" <<'PY' >/dev/null 2>&1
+import sys
+from urllib.parse import urlsplit
+
+value = sys.argv[1]
+if not value or value.strip() != value or len(value) > 2048:
+    raise SystemExit(1)
+try:
+    parsed = urlsplit(value)
+    port = parsed.port
+except Exception:
+    raise SystemExit(1)
+if (
+    parsed.scheme not in ("http", "https")
+    or not parsed.hostname
+    or parsed.username is not None
+    or parsed.password is not None
+    or parsed.path not in ("", "/")
+    or parsed.query
+    or parsed.fragment
+):
+    raise SystemExit(1)
+host = parsed.hostname.lower()
+if ":" in host:
+    host = "[{}]".format(host)
+default_port = 80 if parsed.scheme == "http" else 443
+origin = "{}://{}".format(parsed.scheme, host)
+if port is not None and port != default_port:
+    origin += ":{}".format(port)
+if value.rstrip("/") != origin:
+    raise SystemExit(1)
+PY
 }
 
 resolve_target() {
@@ -2560,7 +2681,13 @@ configure_mcp() {
 
   # Refresh this process's env for any downstream CLI behavior that resolves it.
   export RAINBOND_JWT="$token"
-  write_token_file "$token" "$base_url"
+  if [[ "$ACTION" == "connect" ]]; then
+    node "$SCRIPT_DIR/bin/rainskills.js" runtime persist-connect-credential \
+      --onboarding-id "$RAINSKILLS_RUNTIME_OPERATION_ID" >/dev/null \
+      || die "runtime connect 凭据安全写入失败。"
+  else
+    write_token_file "$token" "$base_url"
+  fi
   configure_shell_autoload
 
   set_rainskills_failure_context "configuration" "mcp_configuration_failed"
@@ -2598,6 +2725,24 @@ main() {
     return 0
   fi
 
+  if [[ "$ACTION" == "connect" ]]; then
+    [[ "${RAINSKILLS_RUNTIME_CONNECT_COMPLETION:-0}" == "1" ]] \
+      && valid_runtime_operation_id "${RAINSKILLS_RUNTIME_OPERATION_ID:-}" \
+      || die "runtime connect 必须通过 Rainskills Node 入口执行。"
+    if [[ "$DEPLOYMENT_MODE_INPUT" == "self-hosted" ]]; then
+      assert_canonical_runtime_console_origin "$RAINBOND_URL_INPUT" \
+        || die "Rainbond Console 地址必须是已经安全校验的规范 origin。"
+    fi
+    ALLOW_INSECURE_HTTP=1
+    resolve_target
+    RAINSKILLS_INSTALL_CLIENT="$(rainskills_install_client_for_target "$TARGET")"
+    configure_mcp
+    if [[ "${RAINSKILLS_RUNTIME_CONNECT_COMPLETION:-0}" == "1" ]]; then
+      node "$SCRIPT_DIR/bin/rainskills.js" runtime complete-connect \
+        --onboarding-id "$RAINSKILLS_RUNTIME_OPERATION_ID"
+    fi
+    return 0
+  fi
   resolve_target
   RAINSKILLS_INSTALL_CLIENT="$(rainskills_install_client_for_target "$TARGET")"
   set_rainskills_failure_context "skill_installation" "skill_installation_failed"
@@ -2644,6 +2789,7 @@ main() {
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  assert_internal_connect_entry "$@"
   trap 'handle_installer_signal 130' INT
   trap 'handle_installer_signal 143' TERM
   trap 'handle_installer_exit "$?"' EXIT

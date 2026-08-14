@@ -97,7 +97,29 @@ test("runtime connection follows not_started to connecting to connected for the 
   assert.equal((await manager.markConnected(connectedInput())).state, "connected");
 });
 
-test("markConnected does not overwrite a newer operation started during live probe", async () => {
+test("active connecting operation is idempotent only for identical fields and rejects competitors", () => {
+  const { createRuntimeStateManager } = require(runtimeStatePath);
+  const home = temporaryHome();
+  const manager = createRuntimeStateManager({
+    home,
+    platform: "linux",
+    liveProbe: async () => true,
+  });
+  const first = connectedInput();
+  const same = manager.startConnecting(first);
+  assert.deepEqual(manager.startConnecting(first), same);
+
+  for (const competing of [
+    { ...first, operation_id: "b7c0af4f-5dd7-41ec-9d11-583203a71483" },
+    { ...first, target_client: "claude" },
+    { ...first, console_origin: "https://other.example.com" },
+  ]) {
+    assert.throws(() => manager.startConnecting(competing), /active|connecting|进行中|另一个/i);
+    assert.deepEqual(manager.read(), same);
+  }
+});
+
+test("an active connect rejects a competitor during live probe and completes consistently", async () => {
   const { createRuntimeStateManager } = require(runtimeStatePath);
   const home = temporaryHome();
   const newer = {
@@ -106,20 +128,25 @@ test("markConnected does not overwrite a newer operation started during live pro
     operation_id: "b7c0af4f-5dd7-41ec-9d11-583203a71483",
   };
   let manager;
+  let competingError;
   manager = createRuntimeStateManager({
     home,
     stateStore: createPortableSecureStateStore(home),
     liveProbe: async () => {
-      manager.startConnecting(newer);
+      try {
+        manager.startConnecting(newer);
+      } catch (error) {
+        competingError = error;
+      }
       return true;
     },
   });
   manager.startConnecting(connectedInput());
 
-  await assert.rejects(() => manager.markConnected(connectedInput()), /changed|并发|operation/i);
-  assert.equal(manager.read().state, "connecting");
-  assert.equal(manager.read().operation_id, newer.operation_id);
-  assert.deepEqual(manager.read().intent, newer.intent);
+  assert.equal((await manager.markConnected(connectedInput())).state, "connected");
+  assert.match(competingError.message, /active|connecting|进行中|另一个/i);
+  assert.equal(manager.read().operation_id, connectedInput().operation_id);
+  assert.deepEqual(manager.read().intent, connectedInput().intent);
 });
 
 test("status does not downgrade a newer operation started during live probe", async () => {
@@ -310,6 +337,36 @@ test("renewed POSIX credential is atomically protected without runtime or output
     "",
   ].join("\n"));
   assert.equal(fs.readFileSync(manager.path, "utf8").includes(renewedToken), false);
+});
+
+test("connecting credential writer rejects symlink and unsafe existing targets", () => {
+  const { createRuntimeStateManager } = require(runtimeStatePath);
+  const token = "fixtureHeader.fixturePayload.fixtureSignature";
+  for (const unsafeTarget of ["symlink", "mode"]) {
+    const home = temporaryHome();
+    const manager = createRuntimeStateManager({ home, liveProbe: async () => true });
+    const input = connectedInput();
+    manager.startConnecting(input);
+    const credentialPath = path.join(home, ".rainbond", "mcp.env");
+    fs.mkdirSync(path.dirname(credentialPath), { recursive: true, mode: 0o700 });
+    if (unsafeTarget === "symlink") {
+      const outside = path.join(home, "outside.env");
+      fs.writeFileSync(outside, "untouched\n", { mode: 0o600 });
+      fs.symlinkSync(outside, credentialPath);
+      assert.throws(() => manager.persistConnectingCredential({
+        operationId: input.operation_id,
+        token,
+      }), /symlink|符号链接|regular|普通文件|安全|权限/i);
+      assert.equal(fs.readFileSync(outside, "utf8"), "untouched\n");
+    } else {
+      fs.writeFileSync(credentialPath, "unsafe\n", { mode: 0o644 });
+      assert.throws(() => manager.persistConnectingCredential({
+        operationId: input.operation_id,
+        token,
+      }), /0600|mode|权限|安全/i);
+      assert.equal(fs.readFileSync(credentialPath, "utf8"), "unsafe\n");
+    }
+  }
 });
 
 test("credential persistence failure makes renewal probe fail closed", async () => {

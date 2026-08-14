@@ -2,6 +2,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TEST_SUITE_REAL_NODE="$(command -v node)"
 unset RAINBOND_JWT RAINBOND_URL RAINBOND_USERNAME RAINBOND_PASSWORD
 
 fail() {
@@ -154,6 +155,63 @@ print("{}.{}.signature".format(
     b64({"sub": "demo", "exp": exp}),
 ))
 PY
+}
+
+write_connecting_runtime_state() {
+  local home="$1" operation_id="$2" target="$3" environment_kind="$4" origin="$5"
+  python3 - "$home" "$operation_id" "$target" "$environment_kind" "$origin" <<'PY'
+import json
+import os
+import sys
+
+home, operation_id, target, environment_kind, origin = sys.argv[1:]
+directory = os.path.join(home, ".rainbond", "rainskills")
+os.makedirs(directory, mode=0o700, exist_ok=True)
+os.chmod(os.path.join(home, ".rainbond"), 0o700)
+os.chmod(directory, 0o700)
+state = {
+    "schema": "rainskills.runtime-connection.v1",
+    "version": 1,
+    "state": "connecting",
+    "target_client": target,
+    "environment_kind": environment_kind,
+    "console_origin": origin,
+    "intent": {"type": "query", "operation": "summary"},
+    "operation_id": operation_id,
+    "validated_probe_at": None,
+    "created_at": "2026-08-14T00:00:00.000Z",
+    "updated_at": "2026-08-14T00:00:00.000Z",
+    "failed_step": None,
+    "retry_count": 0,
+    "retry_budget": 0,
+    "last_failure_category": None,
+}
+path = os.path.join(directory, "runtime-connection-v1.json")
+with open(path, "w", encoding="utf-8") as stream:
+    json.dump(state, stream)
+    stream.write("\n")
+os.chmod(path, 0o600)
+PY
+}
+
+make_connect_node_wrapper() {
+  local bin_dir="$1"
+  cat >"$bin_dir/node" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+case "${3:-}" in
+  assert-connect|persist-connect-credential)
+    exec "$TEST_REAL_NODE" "$@"
+    ;;
+  complete-connect)
+    printf 'runtime complete-connect\n' >> "${TEST_LOG_DIR}/node.log"
+    ;;
+  *)
+    exit 64
+    ;;
+esac
+EOF
+  chmod +x "$bin_dir/node"
 }
 
 make_fake_commands() {
@@ -399,6 +457,7 @@ run_installer() {
     TEST_FAKE_CODEX_ADD_FAIL="${TEST_FAKE_CODEX_ADD_FAIL:-}" \
     TEST_FAKE_INSTALL_REPORT_FAIL="${TEST_FAKE_INSTALL_REPORT_FAIL:-}" \
     TEST_FAKE_DETAILS_HTTP_CODE="${TEST_FAKE_DETAILS_HTTP_CODE:-}" \
+    TEST_REAL_NODE="$TEST_SUITE_REAL_NODE" \
     bash "$REPO_ROOT/install.sh" "$@"
   )
 }
@@ -1272,6 +1331,109 @@ if failed["failure_category"] != "skill_installation_failed":
 PY
 }
 
+test_public_connect_action_is_rejected_before_url_or_configuration_side_effects() {
+  local tmpdir output_file
+  tmpdir="$(mktemp -d)"
+  trap 'rm -rf "$tmpdir"' RETURN
+  mkdir -p "$tmpdir/home" "$tmpdir/logs" "$tmpdir/bin"
+  make_fake_commands "$tmpdir/bin"
+  output_file="$tmpdir/connect.out"
+
+  set +e
+  run_installer "$tmpdir" connect codex --non-interactive \
+    --rainbond-url 'https://user@example.invalid/path?value=fixture#fragment' \
+    --token 'fixture' >"$output_file" 2>&1
+  local result_code=$?
+  set -e
+
+  [[ "$result_code" -ne 0 ]] || fail "expected public install.sh connect to be rejected"
+  assert_file_not_exists "$tmpdir/home/.rainbond/mcp.env"
+  assert_file_not_exists "$tmpdir/home/.codex/config.toml"
+  assert_file_not_exists "$tmpdir/home/.codex/skills"
+  assert_file_not_exists "$tmpdir/logs/curl.log"
+  assert_not_contains "$output_file" "user@example.invalid"
+  assert_not_contains "$output_file" "value=fixture"
+}
+
+test_forged_internal_connect_marker_is_rejected_before_all_side_effects() {
+  local tmpdir output_file operation_id
+  tmpdir="$(mktemp -d)"
+  trap 'rm -rf "$tmpdir"' RETURN
+  mkdir -p "$tmpdir/home" "$tmpdir/logs" "$tmpdir/bin"
+  make_fake_commands "$tmpdir/bin"
+  ln -s "$(command -v node)" "$tmpdir/bin/node"
+  output_file="$tmpdir/connect.out"
+  operation_id="1d6754d6-6fb3-4bda-9a04-15c2d261d178"
+
+  set +e
+  RAINSKILLS_RUNTIME_CONNECT_COMPLETION=1 \
+  RAINSKILLS_RUNTIME_OPERATION_ID="$operation_id" \
+    run_installer "$tmpdir" connect codex --self-hosted \
+      --rainbond-url https://console.example.com >"$output_file" 2>&1
+  local result_code=$?
+  set -e
+
+  [[ "$result_code" -ne 0 ]] || fail "expected forged internal connect marker to fail"
+  assert_file_not_exists "$tmpdir/home/.rainbond/mcp.env"
+  assert_file_not_exists "$tmpdir/home/.codex/config.toml"
+  assert_file_not_exists "$tmpdir/logs/curl.log"
+}
+
+test_internal_connect_rejects_state_origin_mismatch_before_all_side_effects() {
+  local tmpdir output_file operation_id
+  tmpdir="$(mktemp -d)"
+  trap 'rm -rf "$tmpdir"' RETURN
+  mkdir -p "$tmpdir/home" "$tmpdir/logs" "$tmpdir/bin"
+  make_fake_commands "$tmpdir/bin"
+  ln -s "$(command -v node)" "$tmpdir/bin/node"
+  output_file="$tmpdir/connect.out"
+  operation_id="1d6754d6-6fb3-4bda-9a04-15c2d261d178"
+  write_connecting_runtime_state "$tmpdir/home" "$operation_id" codex private \
+    https://console.example.com
+
+  set +e
+  RAINSKILLS_RUNTIME_CONNECT_COMPLETION=1 \
+  RAINSKILLS_RUNTIME_OPERATION_ID="$operation_id" \
+    run_installer "$tmpdir" connect codex --self-hosted \
+      --rainbond-url https://other.example.com >"$output_file" 2>&1
+  local result_code=$?
+  set -e
+
+  [[ "$result_code" -ne 0 ]] || fail "expected runtime state origin mismatch to fail"
+  assert_file_not_exists "$tmpdir/home/.rainbond/mcp.env"
+  assert_file_not_exists "$tmpdir/home/.codex/config.toml"
+  assert_file_not_exists "$tmpdir/logs/curl.log"
+  assert_not_contains "$output_file" "other.example.com"
+}
+
+test_internal_connect_action_accepts_inspected_loopback_and_private_http_only() {
+  local origin tmpdir token output_file operation_id
+  operation_id="1d6754d6-6fb3-4bda-9a04-15c2d261d178"
+  token="$(make_test_jwt 1893456000)"
+  for origin in http://127.0.0.1:7070 http://10.0.0.8:7070; do
+    tmpdir="$(mktemp -d)"
+    mkdir -p "$tmpdir/home" "$tmpdir/logs" "$tmpdir/bin"
+    make_fake_commands "$tmpdir/bin"
+    make_connect_node_wrapper "$tmpdir/bin"
+    write_connecting_runtime_state "$tmpdir/home" "$operation_id" codex private "$origin"
+    output_file="$tmpdir/connect.out"
+
+    RAINSKILLS_RUNTIME_CONNECT_COMPLETION=1 \
+    RAINSKILLS_RUNTIME_OPERATION_ID="$operation_id" \
+    RAINBOND_URL="$origin" \
+    RAINBOND_JWT="$token" \
+      run_installer "$tmpdir" connect codex --self-hosted \
+        --rainbond-url "$origin" --non-interactive >"$output_file" 2>&1
+
+    assert_file_exists "$tmpdir/home/.rainbond/mcp.env"
+    assert_file_exists "$tmpdir/home/.codex/config.toml"
+    assert_file_not_exists "$tmpdir/home/.codex/skills"
+    assert_contains "$tmpdir/logs/node.log" "runtime complete-connect"
+    assert_not_contains "$output_file" "默认禁用明文 HTTP"
+    rm -rf "$tmpdir"
+  done
+}
+
 test_noninteractive_http_requires_explicit_opt_in
 test_posix_clients_openclaw_and_pi_are_rejected
 test_default_install_is_skills_only
@@ -1290,6 +1452,10 @@ test_installer_reports_installation_lifecycle
 test_installation_reporting_failures_do_not_block_installation
 test_enterprise_lookup_failure_does_not_block_installation
 test_unhandled_skill_installation_failure_is_reported
+test_public_connect_action_is_rejected_before_url_or_configuration_side_effects
+test_forged_internal_connect_marker_is_rejected_before_all_side_effects
+test_internal_connect_rejects_state_origin_mismatch_before_all_side_effects
+test_internal_connect_action_accepts_inspected_loopback_and_private_http_only
 test_installer_configures_both_platforms_and_shell_autoload
 test_dedicated_mcp_url_input_is_normalized_to_console_base
 

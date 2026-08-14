@@ -336,12 +336,22 @@ function createRuntimeStateManager({
   function startConnecting(input) {
     return withRuntimeStateLock(() => {
       const prior = read();
+      const fields = connectionFields(input);
+      if (prior.state === "connecting") {
+        const identical = prior.operation_id === fields.operation_id
+          && prior.target_client === fields.target_client
+          && prior.environment_kind === fields.environment_kind
+          && prior.console_origin === fields.console_origin
+          && isDeepStrictEqual(prior.intent, fields.intent);
+        if (identical) return prior;
+        throw new Error("另一个 runtime connecting operation 正在进行中");
+      }
       const timestamp = now();
       return writeStateUnlocked({
         schema: RUNTIME_SCHEMA,
         version: 1,
         state: "connecting",
-        ...connectionFields(input),
+        ...fields,
         validated_probe_at: null,
         created_at: prior.created_at || timestamp,
         updated_at: timestamp,
@@ -350,6 +360,21 @@ function createRuntimeStateManager({
         retry_budget: 0,
         last_failure_category: null,
       });
+    });
+  }
+
+  function persistConnectingCredential({ operationId, token }) {
+    if (!UUID_PATTERN.test(operationId || "")) throw new Error("operation_id 无效");
+    if (typeof token !== "string" || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(token)) {
+      throw new Error("runtime credential 无效");
+    }
+    return withRuntimeStateLock(() => {
+      const current = read();
+      if (current.state !== "connecting" || current.operation_id !== operationId) {
+        throw new Error("runtime credential 与 connecting operation 不匹配");
+      }
+      writeCredential({ token, baseUrl: current.console_origin });
+      return { persisted: true };
     });
   }
 
@@ -461,7 +486,7 @@ function createRuntimeStateManager({
     };
   }
 
-  return { markConnected, path: statePath, read, startConnecting, status };
+  return { markConnected, path: statePath, persistConnectingCredential, read, startConnecting, status };
 }
 
 module.exports = {

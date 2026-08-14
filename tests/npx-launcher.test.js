@@ -188,6 +188,391 @@ test("launcher handles runtime status in-process without spawning a shell", asyn
   });
 });
 
+test("runtime connect parses fixed validated argv and rejects mixed environment choices", () => {
+  const { parseRuntimeConnectArgs } = require(launcherPath);
+  const intent = {
+    type: "deploy",
+    project_root: "/workspace/app",
+    source_kind: "local",
+  };
+
+  assert.deepEqual(parseRuntimeConnectArgs([
+    "runtime", "connect", "codex", "--saas", "--intent-json", JSON.stringify(intent),
+  ]), {
+    targetClient: "codex",
+    environmentChoice: "saas",
+    rainbondUrl: "",
+    allowInsecureHttp: false,
+    onboardingId: "",
+    intent,
+  });
+  assert.throws(() => parseRuntimeConnectArgs([
+    "runtime", "connect", "all", "--saas", "--rainbond-url", "https://rainbond.example.com",
+    "--intent-json", JSON.stringify(intent),
+  ]), /互斥|只能选择|环境/i);
+  assert.throws(() => parseRuntimeConnectArgs([
+    "runtime", "connect", "all", "--install-private", "--intent-json",
+    JSON.stringify({ type: "query", operation: "summary" }),
+  ]), /existing|已有|现有/i);
+  assert.throws(() => parseRuntimeConnectArgs([
+    "runtime", "connect", "all", "--saas", "--intent-json", '{"type":"deploy","token":"secret"}',
+  ]), /凭据|字段|intent/i);
+});
+
+test("runtime connector child receives only an explicit environment allowlist", () => {
+  const { runtimeChildEnvironment } = require(launcherPath);
+  const childEnvironment = runtimeChildEnvironment({
+    HOME: "/home/demo",
+    PATH: "/usr/bin",
+    RAINBOND_JWT: "test-credential-value",
+    HTTPS_PROXY: "http://proxy.internal:3128",
+    DATABASE_PASSWORD: "must-not-cross-boundary",
+    NODE_OPTIONS: "--require=/tmp/untrusted.js",
+  }, {
+    RAINSKILLS_RUNTIME_OPERATION_ID: "1d6754d6-6fb3-4bda-9a04-15c2d261d178",
+  });
+
+  assert.deepEqual(Object.keys(childEnvironment).sort(), [
+    "HOME", "HTTPS_PROXY", "PATH", "RAINSKILLS_RUNTIME_OPERATION_ID",
+  ]);
+});
+
+test("runtime connector forwards inherited credential only as an exact origin-bound pair", () => {
+  const { runtimeChildEnvironment } = require(launcherPath);
+  const expectedOrigin = "https://new.example.com";
+  const matching = runtimeChildEnvironment({
+    RAINBOND_JWT: "fixtureHeader.fixturePayload.fixtureSignature",
+    RAINBOND_URL: expectedOrigin,
+  }, {}, expectedOrigin);
+  assert.deepEqual(Object.keys(matching).sort(), ["RAINBOND_JWT", "RAINBOND_URL"]);
+
+  for (const source of [
+    { RAINBOND_JWT: "fixtureHeader.fixturePayload.fixtureSignature" },
+    { RAINBOND_URL: expectedOrigin },
+    {
+      RAINBOND_JWT: "fixtureHeader.fixturePayload.fixtureSignature",
+      RAINBOND_URL: "https://old.example.com",
+    },
+    {
+      RAINBOND_JWT: "fixtureHeader.fixturePayload.fixtureSignature",
+      RAINBOND_URL: "https://new.example.com/path",
+    },
+  ]) {
+    const child = runtimeChildEnvironment(source, {}, expectedOrigin);
+    assert.equal(Object.hasOwn(child, "RAINBOND_JWT"), false);
+    assert.equal(Object.hasOwn(child, "RAINBOND_URL"), false);
+  }
+});
+
+test("runtime assert-connect gate requires the exact protected connecting state", async () => {
+  const { runBuiltin } = require(launcherPath);
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  const current = {
+    state: "connecting",
+    operation_id: operationId,
+    target_client: "codex",
+    environment_kind: "private",
+    console_origin: "https://console.example.com",
+  };
+  const exact = [
+    "runtime", "assert-connect", "--onboarding-id", operationId,
+    "--target", "codex", "--environment-kind", "private",
+    "--console-origin", "https://console.example.com",
+  ];
+  assert.equal(await runBuiltin(exact, {
+    runtimeStateManager: { read: () => current },
+    write() { throw new Error("gate must be silent"); },
+  }), true);
+
+  for (const args of [
+    exact.slice(0, -1).concat("https://other.example.com"),
+    exact.map((value) => value === "codex" ? "claude" : value),
+    exact.map((value) => value === operationId
+      ? "b7c0af4f-5dd7-41ec-9d11-583203a71483" : value),
+  ]) {
+    await assert.rejects(() => runBuiltin(args, {
+      runtimeStateManager: { read: () => current },
+      write() { throw new Error("gate must be silent"); },
+    }), /connecting|operation|匹配|门禁/i);
+  }
+});
+
+test("runtime persist-connect-credential binds the env credential to connecting state", async () => {
+  const { runBuiltin } = require(launcherPath);
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  const persisted = [];
+  const args = ["runtime", "persist-connect-credential", "--onboarding-id", operationId];
+  const manager = {
+    read: () => ({
+      state: "connecting",
+      operation_id: operationId,
+      target_client: "codex",
+      environment_kind: "private",
+      console_origin: "https://console.example.com",
+    }),
+  };
+  await runBuiltin(args, {
+    runtimeStateManager: manager,
+    credentialEnvironment: { RAINBOND_JWT: "fixtureHeader.fixturePayload.fixtureSignature" },
+    credentialPersister: (credential) => persisted.push(credential),
+    write() { throw new Error("writer must be silent"); },
+  });
+  assert.equal(persisted.length, 1);
+  assert.equal(persisted[0].baseUrl, "https://console.example.com");
+
+  await assert.rejects(() => runBuiltin([
+    "runtime", "persist-connect-credential", "--onboarding-id",
+    "b7c0af4f-5dd7-41ec-9d11-583203a71483",
+  ], {
+    runtimeStateManager: manager,
+    credentialEnvironment: { RAINBOND_JWT: "fixtureHeader.fixturePayload.fixtureSignature" },
+    credentialPersister: (credential) => persisted.push(credential),
+  }), /connecting|operation|匹配/i);
+  assert.equal(persisted.length, 1);
+});
+
+test("runtime connect uses fixed POSIX argv and marks connected only after the live probe", async () => {
+  const { runBuiltin } = require(launcherPath);
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  const events = [];
+  const intent = { type: "query", operation: "summary" };
+
+  await runBuiltin([
+    "runtime", "connect", "all", "--rainbond-url", "http://10.0.0.8:7070",
+    "--allow-insecure-http", "--onboarding-id", operationId,
+    "--intent-json", JSON.stringify(intent),
+  ], {
+    control: { mode: "posix", hostPlatform: "linux", controlPlatform: "linux" },
+    originInspector: async () => ({
+      origin: "http://10.0.0.8:7070",
+      httpConfirmationRequired: true,
+      pendingRedirectOrigin: null,
+    }),
+    runtimeStateManager: {
+      startConnecting(input) { events.push(["connecting", input]); },
+      async markConnected(input) { events.push(["connected", input]); },
+    },
+    async connectionRunner(invocation) {
+      events.push(["run", invocation]);
+      return { code: 0, completesRuntimeState: false };
+    },
+    write() {},
+  });
+
+  assert.equal(events[0][0], "connecting");
+  assert.deepEqual(events[1], ["run", {
+    executable: "bash",
+    args: [
+      path.join(repoRoot, "install.sh"), "connect", "all", "--self-hosted",
+      "--rainbond-url", "http://10.0.0.8:7070", "--allow-insecure-http",
+    ],
+  }]);
+  assert.equal(events[2][0], "connected");
+  assert.deepEqual(events[2][1], events[0][1]);
+});
+
+test("POSIX runtime connect without an inherited token keeps browser authorization interactive", () => {
+  const { runtimeChildEnvironment, runtimeConnectionInvocation } = require(launcherPath);
+  const origin = "https://console.example.com";
+  const invocation = runtimeConnectionInvocation({
+    targetClient: "codex",
+    environmentChoice: "private-existing",
+    allowInsecureHttp: false,
+  }, origin);
+  assert.deepEqual(invocation.args, [
+    path.join(repoRoot, "install.sh"), "connect", "codex", "--self-hosted",
+    "--rainbond-url", origin,
+  ]);
+  assert.equal(invocation.args.includes("--non-interactive"), false);
+  const environment = runtimeChildEnvironment({}, {
+    RAINSKILLS_RUNTIME_CONNECT_COMPLETION: "1",
+    RAINSKILLS_RUNTIME_OPERATION_ID: "1d6754d6-6fb3-4bda-9a04-15c2d261d178",
+  }, origin);
+  assert.equal(Object.hasOwn(environment, "RAINBOND_JWT"), false);
+  assert.equal(Object.hasOwn(environment, "RAINBOND_URL"), false);
+});
+
+test("runtime connect does not write connected when authorization or live probe fails", async () => {
+  const { runBuiltin } = require(launcherPath);
+  let connected = 0;
+  const args = [
+    "runtime", "connect", "codex", "--saas", "--intent-json",
+    JSON.stringify({ type: "deploy", project_root: "/workspace/app", source_kind: "local" }),
+  ];
+
+  await assert.rejects(() => runBuiltin(args, {
+    control: { mode: "posix" },
+    originInspector: async () => ({
+      origin: "https://run.rainbond.com",
+      httpConfirmationRequired: false,
+      pendingRedirectOrigin: null,
+    }),
+    runtimeStateManager: {
+      startConnecting() {},
+      async markConnected() { connected += 1; },
+    },
+    connectionRunner: async () => ({ code: 9 }),
+    write() {},
+  }), /连接|退出码|授权/i);
+  assert.equal(connected, 0);
+
+  await assert.rejects(() => runBuiltin(args, {
+    control: { mode: "posix" },
+    originInspector: async () => ({
+      origin: "https://run.rainbond.com",
+      httpConfirmationRequired: false,
+      pendingRedirectOrigin: null,
+    }),
+    runtimeStateManager: {
+      startConnecting() {},
+      async markConnected() {
+        connected += 1;
+        throw new Error("live probe failed");
+      },
+    },
+    connectionRunner: async () => ({ code: 0, completesRuntimeState: false }),
+    write() {},
+  }), /probe/i);
+  assert.equal(connected, 1);
+});
+
+test("failed runtime connect returns a fixed same-operation retry action that resumes", async () => {
+  const { runBuiltin } = require(launcherPath);
+  const { createRuntimeStateManager } = require(path.join(
+    repoRoot, "rainbond-platform-installer", "scripts", "runtime-state.js"
+  ));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-connect-retry-"));
+  const manager = createRuntimeStateManager({ home, liveProbe: async () => true });
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  const intent = { type: "query", operation: "summary" };
+  const initialArgs = [
+    "runtime", "connect", "codex", "--rainbond-url", "https://console.example.com",
+    "--onboarding-id", operationId, "--intent-json", JSON.stringify(intent),
+  ];
+  let output = "";
+  let attempts = 0;
+  const dependencies = {
+    runtimeStateManager: manager,
+    originInspector: async () => ({
+      origin: "https://console.example.com",
+      httpConfirmationRequired: false,
+      pendingRedirectOrigin: null,
+    }),
+    connectionRunner: async () => {
+      attempts += 1;
+      return { code: attempts === 1 ? 9 : 0, completesRuntimeState: false };
+    },
+    write(value) { output += value; },
+  };
+
+  await assert.rejects(() => runBuiltin(initialArgs, dependencies), /连接|授权/i);
+  const retry = JSON.parse(output.trim());
+  assert.deepEqual(retry, {
+    schema: "rainskills.next-action.v1",
+    action: "retry-runtime-connect",
+    onboarding_id: operationId,
+    argv: initialArgs,
+  });
+  assert.equal(manager.read().state, "connecting");
+
+  await assert.rejects(() => runBuiltin(initialArgs.map((value) => value === operationId
+    ? "b7c0af4f-5dd7-41ec-9d11-583203a71483" : value), {
+    ...dependencies,
+    write() { throw new Error("competing operation must not receive a retry action"); },
+  }), /active|connecting|进行中|另一个/i);
+  assert.equal(attempts, 1);
+
+  output = "";
+  assert.equal(await runBuiltin(retry.argv, dependencies), true);
+  assert.equal(attempts, 2);
+  assert.equal(manager.read().state, "connected");
+  assert.equal(manager.read().operation_id, operationId);
+});
+
+test("a competing runtime connect has zero authorization or configuration side effects", async () => {
+  const { runBuiltin } = require(launcherPath);
+  const { createRuntimeStateManager } = require(path.join(
+    repoRoot, "rainbond-platform-installer", "scripts", "runtime-state.js"
+  ));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-connect-lease-"));
+  const manager = createRuntimeStateManager({ home, liveProbe: async () => true });
+  const first = {
+    target_client: "codex",
+    environment_kind: "private",
+    console_origin: "https://console.example.com",
+    intent: { type: "query", operation: "summary" },
+    operation_id: "1d6754d6-6fb3-4bda-9a04-15c2d261d178",
+  };
+  manager.startConnecting(first);
+  let sideEffects = 0;
+
+  await assert.rejects(() => runBuiltin([
+    "runtime", "connect", "codex", "--rainbond-url", "https://console.example.com",
+    "--onboarding-id", "b7c0af4f-5dd7-41ec-9d11-583203a71483",
+    "--intent-json", JSON.stringify(first.intent),
+  ], {
+    runtimeStateManager: manager,
+    originInspector: async () => ({
+      origin: first.console_origin,
+      httpConfirmationRequired: false,
+      pendingRedirectOrigin: null,
+    }),
+    connectionRunner: async () => {
+      sideEffects += 1;
+      return { code: 0, completesRuntimeState: false };
+    },
+  }), /active|connecting|进行中|另一个/i);
+
+  assert.equal(sideEffects, 0);
+  assert.equal(manager.read().operation_id, first.operation_id);
+  assert.equal((await manager.markConnected(first)).state, "connected");
+  assert.equal(manager.read().operation_id, first.operation_id);
+});
+
+test("runtime connect schedules a new private platform without connecting or authorizing", async () => {
+  const { runBuiltin } = require(launcherPath);
+  const calls = [];
+  let output = "";
+
+  await runBuiltin([
+    "runtime", "connect", "claude", "--install-private", "--intent-json",
+    JSON.stringify({
+      type: "template-install",
+      template_id: "wordpress",
+      install_scope: "new-app",
+    }),
+  ], {
+    control: { mode: "posix", hostPlatform: "linux", controlPlatform: "linux" },
+    runtimeStateManager: {
+      startConnecting() { throw new Error("must not connect"); },
+    },
+    privateInstallerScheduler(input) {
+      calls.push(input);
+      return {
+        schema: "rainskills.next-action.v1",
+        action: "install-platform",
+        onboarding_id: input.operationId,
+        argv: ["platform", "install", "--onboarding-id", input.operationId],
+      };
+    },
+    write(value) { output += value; },
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].target, "claude");
+  assert.deepEqual(calls[0].intent, {
+    type: "template-install",
+    template_id: "wordpress",
+    install_scope: "new-app",
+  });
+  assert.deepEqual(JSON.parse(output), {
+    schema: "rainskills.next-action.v1",
+    action: "install-platform",
+    onboarding_id: calls[0].operationId,
+    argv: ["platform", "install", "--onboarding-id", calls[0].operationId],
+  });
+});
+
 test("intent resume rejects a legacy awaiting-platform checkpoint without usable runtime state", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-intent-resume-"));
   const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";

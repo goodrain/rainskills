@@ -780,6 +780,7 @@ test("native authorization orchestration falls back from Device Flow and configu
   const { createLifecycleTelemetry } = require(path.join(repoRoot, "rainbond-platform-installer", "scripts", "telemetry.js"));
   const telemetryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-windows-telemetry-"));
   const calls = [];
+  let configuredCredential = "";
   const result = await authorizeAndConfigure({
     target: "codex",
     baseUrl: "https://rainbond.example.com",
@@ -799,6 +800,9 @@ test("native authorization orchestration falls back from Device Flow and configu
     configureSelectedClientsImpl(options) {
       calls.push({ kind: "configure", ...options });
     },
+    onConfiguredCredential(value) {
+      configuredCredential = value;
+    },
     openBrowser() {},
     telemetryFactory(context) {
       return createLifecycleTelemetry({
@@ -810,6 +814,7 @@ test("native authorization orchestration falls back from Device Flow and configu
   });
 
   assert.deepEqual(result, { status: "configured" });
+  assert.equal(configuredCredential, "renewed.payload.signature");
   assert.equal(calls[0].url, "https://rainbond.example.com/console/mcp/rainskills/codex/query");
   assert.equal(calls.at(-1).token, "renewed.payload.signature");
   const events = fs.readFileSync(path.join(telemetryDirectory, "events.jsonl"), "utf8")
