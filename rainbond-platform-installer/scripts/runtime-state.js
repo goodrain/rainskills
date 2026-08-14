@@ -337,6 +337,12 @@ function createRuntimeStateManager({
     return withRuntimeStateLock(() => {
       const prior = read();
       const fields = connectionFields(input);
+      if (prior.operation_id === fields.operation_id && prior.last_failure_category !== null) {
+        if (prior.last_failure_category === "permission-denied") {
+          throw new Error("permission denied 不允许重新授权");
+        }
+        throw new Error("凭据失效恢复必须使用受保护的 runtime reconnect 重试门禁");
+      }
       if (prior.state === "connecting") {
         const identical = prior.operation_id === fields.operation_id
           && prior.target_client === fields.target_client
@@ -486,7 +492,138 @@ function createRuntimeStateManager({
     };
   }
 
-  return { markConnected, path: statePath, persistConnectingCredential, read, startConnecting, status };
+  function assertMatchingOperation(current, operationId) {
+    if (!UUID_PATTERN.test(operationId || "")) throw new Error("operation_id 无效");
+    if (current.state === "not_started" || current.operation_id !== operationId) {
+      throw new Error("runtime operation_id 与参数不匹配");
+    }
+    if (!current.intent) throw new Error("runtime state 缺少 validated intent");
+  }
+
+  function recordFailure({ operationId, step, reason } = {}) {
+    if (!FAILURE_CATEGORIES.has(reason)) throw new Error("runtime failure reason 无效");
+    return withRuntimeStateLock(() => {
+      const current = read();
+      assertMatchingOperation(current, operationId);
+      const fixedSteps = INTENT_DEFINITIONS[current.intent.type].steps;
+      if (!fixedSteps.includes(step)) throw new Error("runtime failure step 不是 intent 的固定步骤");
+
+      if (
+        reason === "credential-expired"
+        && current.state === "connecting"
+        && current.last_failure_category === reason
+        && current.failed_step === step
+        && current.retry_count === 0
+        && current.retry_budget === 1
+      ) {
+        return current;
+      }
+      if (current.state !== "connected") {
+        throw new Error("只有 connected runtime 才能记录业务操作失败");
+      }
+
+      const credentialExpired = reason === "credential-expired";
+      const retryBudget = credentialExpired && current.retry_count === 0 ? 1 : 0;
+      return writeStateUnlocked({
+        ...current,
+        state: credentialExpired ? "connecting" : "connected",
+        validated_probe_at: credentialExpired ? null : current.validated_probe_at,
+        failed_step: step,
+        retry_budget: retryBudget,
+        last_failure_category: reason,
+        updated_at: now(),
+      });
+    });
+  }
+
+  function reconnectInput(operationId) {
+    return withRuntimeStateLock(() => {
+      const current = read();
+      assertMatchingOperation(current, operationId);
+      if (current.last_failure_category === "permission-denied") {
+        throw new Error("permission denied 不允许重新授权或重试");
+      }
+      if (
+        current.state !== "connecting"
+        || current.last_failure_category !== "credential-expired"
+        || current.retry_budget !== 1
+        || current.retry_count !== 0
+      ) {
+        throw new Error("runtime credential retry budget 已用尽或尚未记录凭据失效");
+      }
+      return connectionFields(current);
+    });
+  }
+
+  async function withReconnectLease(operationId, action) {
+    if (!UUID_PATTERN.test(operationId || "")) throw new Error("operation_id 无效");
+    if (typeof action !== "function") throw new Error("runtime reconnect action 无效");
+    let lease;
+    try {
+      lease = stateStore.acquireOperationLock({ operationId });
+    } catch {
+      throw new Error("该 runtime reconnect 正在运行；请稍后重试");
+    }
+    try {
+      const connection = reconnectInput(operationId);
+      return await action(connection);
+    } finally {
+      lease.release();
+    }
+  }
+
+  function assertContinuationEligible(operationId) {
+    return withRuntimeStateLock(() => {
+      const current = read();
+      assertMatchingOperation(current, operationId);
+      if (current.state !== "connected") throw new Error("runtime 尚未 connected，不能恢复 intent");
+      if (current.last_failure_category === "permission-denied") {
+        throw new Error("permission denied：当前操作没有权限，不能自动重试");
+      }
+      if (
+        current.last_failure_category === "credential-expired"
+        && (current.retry_budget !== 1 || current.retry_count !== 0)
+      ) {
+        throw new Error("runtime credential retry budget 已用尽");
+      }
+      return current;
+    });
+  }
+
+  function prepareContinuation(operationId) {
+    return withRuntimeStateLock(() => {
+      const current = read();
+      assertMatchingOperation(current, operationId);
+      if (current.state !== "connected") throw new Error("runtime 尚未 connected，不能恢复 intent");
+      if (current.last_failure_category === "permission-denied") {
+        throw new Error("permission denied：当前操作没有权限，不能自动重试");
+      }
+      if (current.last_failure_category !== "credential-expired") return current;
+      if (current.retry_budget !== 1 || current.retry_count !== 0) {
+        throw new Error("runtime credential retry budget 已用尽");
+      }
+      return writeStateUnlocked({
+        ...current,
+        retry_count: current.retry_count + 1,
+        retry_budget: 0,
+        updated_at: now(),
+      });
+    });
+  }
+
+  return {
+    markConnected,
+    path: statePath,
+    persistConnectingCredential,
+    assertContinuationEligible,
+    prepareContinuation,
+    read,
+    reconnectInput,
+    recordFailure,
+    startConnecting,
+    status,
+    withReconnectLease,
+  };
 }
 
 module.exports = {

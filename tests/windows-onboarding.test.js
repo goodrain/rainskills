@@ -177,6 +177,35 @@ test("operation locks reject live owners and reclaim proven stale owners", () =>
   assert.equal(fs.existsSync(second.path), false);
 });
 
+test("operation lock publication never leaves a final lock when owner persistence crashes", () => {
+  const home = temporaryHome();
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  const store = createPortableSecureStateStore(home, {
+    pid: 101,
+    processIdentity: "process-101",
+    isProcessAlive: () => false,
+  });
+  const originalWriteFileSync = fs.writeFileSync;
+  let injected = false;
+  fs.writeFileSync = function writeFileSyncWithCrash(target, ...args) {
+    if (!injected && typeof target === "number") {
+      injected = true;
+      throw new Error("simulated owner persistence crash");
+    }
+    return originalWriteFileSync.call(this, target, ...args);
+  };
+  try {
+    assert.throws(() => store.acquireOperationLock({ operationId }), /simulated/i);
+  } finally {
+    fs.writeFileSync = originalWriteFileSync;
+  }
+
+  const finalLock = path.join(home, ".rainbond", "rainskills-locks", `${operationId}.lock`);
+  assert.equal(fs.existsSync(finalLock), false);
+  const recovered = store.acquireOperationLock({ operationId });
+  recovered.release();
+});
+
 test("Windows argument parsing rejects unknown input before installation", () => {
   const { parseWindowsInstallerArgs, destinationsForTarget } = require(windowsOnboardingPath);
   const home = temporaryHome();

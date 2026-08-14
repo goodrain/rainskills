@@ -691,13 +691,492 @@ test("intent resume requires connected usable state and matching operation", asy
   };
 
   for (const runtimeStateManager of [
-    { status: async () => ({ state: "connecting", usable: false }), read: () => baseState },
-    { status: async () => ({ state: "connected", usable: false }), read: () => baseState },
-    { status: async () => ({ state: "connected", usable: true }), read: () => ({ ...baseState, operation_id: otherOperationId }) },
-    { status: async () => ({ state: "connected", usable: true }), read: () => ({ ...baseState, intent: null }) },
+    {
+      status: async () => ({ state: "connecting", usable: false }),
+      read: () => baseState,
+      assertContinuationEligible: () => baseState,
+      prepareContinuation: () => baseState,
+    },
+    {
+      status: async () => ({ state: "connected", usable: false }),
+      read: () => baseState,
+      assertContinuationEligible: () => baseState,
+      prepareContinuation: () => baseState,
+    },
+    {
+      status: async () => ({ state: "connected", usable: true }),
+      read: () => ({ ...baseState, operation_id: otherOperationId }),
+      assertContinuationEligible() { throw new Error("runtime operation mismatch"); },
+      prepareContinuation() { throw new Error("runtime operation mismatch"); },
+    },
+    {
+      status: async () => ({ state: "connected", usable: true }),
+      read: () => ({ ...baseState, intent: null }),
+      assertContinuationEligible() { throw new Error("runtime intent missing"); },
+      prepareContinuation() { throw new Error("runtime intent missing"); },
+    },
   ]) {
     await assert.rejects(() => runBuiltin([
       "intent", "resume", "--onboarding-id", operationId,
     ], { runtimeStateManager }), /runtime|operation|intent|usable|连接/i);
+  }
+});
+
+test("runtime record-failure accepts only the fixed operation, step, and reason argv", async () => {
+  const { runBuiltin } = require(launcherPath);
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  const calls = [];
+  assert.equal(await runBuiltin([
+    "runtime", "record-failure", "--onboarding-id", operationId,
+    "--step", "read", "--reason", "credential-expired",
+  ], {
+    runtimeStateManager: {
+      recordFailure(value) { calls.push(value); return { last_failure_category: value.reason }; },
+    },
+    write(value) { calls.push(JSON.parse(value)); },
+  }), true);
+  assert.deepEqual(calls[0], {
+    operationId,
+    step: "read",
+    reason: "credential-expired",
+  });
+  assert.equal(calls[1].failure_category, "credential-expired");
+  assert.equal(calls[1].retry_available, false);
+
+  for (const args of [
+    ["runtime", "record-failure", "--onboarding-id", "not-a-uuid", "--step", "read", "--reason", "credential-expired"],
+    ["runtime", "record-failure", "--onboarding-id", operationId, "--step", "read", "--reason", "invalid_token"],
+    ["runtime", "record-failure", "--onboarding-id", operationId, "--step", "read", "--reason", "permission-denied", "--extra"],
+  ]) {
+    await assert.rejects(() => runBuiltin(args, {
+      runtimeStateManager: { recordFailure() { throw new Error("must not be called"); } },
+    }), /参数|reason|原因|operation|onboarding/i);
+  }
+});
+
+test("runtime reconnect reauthorizes the exact protected connection and live-probes it", async () => {
+  const { runBuiltin } = require(launcherPath);
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  const intent = { type: "query", operation: "summary", app_id: "app-1" };
+  const connection = {
+    target_client: "all",
+    environment_kind: "private",
+    console_origin: "https://console.example.com",
+    intent,
+    operation_id: operationId,
+  };
+  const events = [];
+  let current = { ...connection, state: "connecting", retry_budget: 1, retry_count: 0 };
+  let output = "";
+  await runBuiltin(["runtime", "reconnect", "--onboarding-id", operationId], {
+    runtimeStateManager: {
+      async withReconnectLease(id, action) {
+        assert.equal(id, operationId);
+        return action(this.reconnectInput(id));
+      },
+      reconnectInput(id) { events.push(["read", id]); return connection; },
+      read() { return current; },
+      async markConnected(input) {
+        events.push(["probe", input]);
+        current = { ...current, state: "connected" };
+      },
+    },
+    originInspector: async (origin) => ({
+      origin,
+      httpConfirmationRequired: false,
+      pendingRedirectOrigin: null,
+    }),
+    async connectionRunner(invocation, context) {
+      events.push(["authorize", invocation, context.origin, context.options]);
+      return { code: 0, completesRuntimeState: false };
+    },
+    write(value) { output += value; },
+  });
+
+  assert.deepEqual(events.map(([event]) => event), ["read", "authorize", "probe"]);
+  assert.equal(events[1][1].args.includes("--rainbond-url"), true);
+  assert.equal(events[1][1].args.includes("https://console.example.com"), true);
+  assert.equal(JSON.stringify(events).includes("token"), false);
+  assert.deepEqual(JSON.parse(output), {
+    schema: "rainskills.runtime-reconnect-result.v1",
+    state: "connected",
+    onboarding_id: operationId,
+    environment_kind: "private",
+  });
+});
+
+test("runtime reconnect completion rejects drift in any protected connection field", async () => {
+  const { runBuiltin } = require(launcherPath);
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  const connection = {
+    target_client: "codex",
+    environment_kind: "private",
+    console_origin: "https://console.example.com",
+    intent: { type: "query", operation: "summary" },
+    operation_id: operationId,
+  };
+  for (const drift of [
+    { target_client: "claude" },
+    { environment_kind: "saas" },
+    { console_origin: "https://other.example.com" },
+    { intent: { type: "query", operation: "logs" } },
+  ]) {
+    let output = "";
+    await assert.rejects(() => runBuiltin([
+      "runtime", "reconnect", "--onboarding-id", operationId,
+    ], {
+      runtimeStateManager: {
+        async withReconnectLease(_id, action) { return action(connection); },
+        reconnectInput: () => connection,
+        read: () => ({ ...connection, ...drift, state: "connected" }),
+      },
+      originInspector: async (origin) => ({ origin, httpConfirmationRequired: false, pendingRedirectOrigin: null }),
+      connectionRunner: async () => ({ code: 0, completesRuntimeState: true }),
+      write(value) { output += value; },
+    }), /重新授权失败|reconnect|重连/i);
+    assert.equal(output.trim().split("\n").length, 1);
+    assert.equal(JSON.parse(output).action, "retry-runtime-reconnect");
+  }
+});
+
+test("concurrent runtime reconnect holds one authorization lease", async () => {
+  const { runBuiltin } = require(launcherPath);
+  const { createRuntimeStateManager } = require(path.join(
+    repoRoot,
+    "rainbond-platform-installer",
+    "scripts",
+    "runtime-state.js"
+  ));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-reconnect-race-"));
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  const input = {
+    target_client: "codex",
+    environment_kind: "saas",
+    console_origin: "https://run.rainbond.com",
+    intent: { type: "query", operation: "summary" },
+    operation_id: operationId,
+  };
+  const bootstrap = createRuntimeStateManager({ home, liveProbe: async () => true });
+  bootstrap.startConnecting(input);
+  await bootstrap.markConnected(input);
+  bootstrap.recordFailure({ operationId, step: "read", reason: "credential-expired" });
+  const firstManager = createRuntimeStateManager({ home, liveProbe: async () => true });
+  const secondManager = createRuntimeStateManager({ home, liveProbe: async () => true });
+  let releaseFirst;
+  let authorizations = 0;
+  const first = runBuiltin(["runtime", "reconnect", "--onboarding-id", operationId], {
+    runtimeStateManager: firstManager,
+    originInspector: async (origin) => ({ origin, httpConfirmationRequired: false, pendingRedirectOrigin: null }),
+    connectionRunner: async (_invocation, context) => {
+      authorizations += 1;
+      await new Promise((resolve) => { releaseFirst = resolve; });
+      await context.completeWithCredential("fixtureHeader.fixturePayload.fixtureSignature");
+      return { code: 0, completesRuntimeState: true };
+    },
+    write() {},
+  });
+  while (!releaseFirst) await new Promise((resolve) => setImmediate(resolve));
+  await assert.rejects(() => runBuiltin([
+    "runtime", "reconnect", "--onboarding-id", operationId,
+  ], {
+    runtimeStateManager: secondManager,
+    originInspector: async (origin) => ({ origin, httpConfirmationRequired: false, pendingRedirectOrigin: null }),
+    connectionRunner: async () => { authorizations += 1; return { code: 1 }; },
+    write() {},
+  }), /运行|稍后|lock|锁|正在/i);
+  assert.equal(authorizations, 1);
+  releaseFirst();
+  await first;
+});
+
+test("an old runtime connect action cannot bypass an exhausted credential retry", async () => {
+  const { runBuiltin } = require(launcherPath);
+  const { createRuntimeStateManager } = require(path.join(
+    repoRoot,
+    "rainbond-platform-installer",
+    "scripts",
+    "runtime-state.js"
+  ));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-retry-bypass-"));
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  const intent = { type: "query", operation: "summary" };
+  const input = {
+    target_client: "codex",
+    environment_kind: "saas",
+    console_origin: "https://run.rainbond.com",
+    intent,
+    operation_id: operationId,
+  };
+  const manager = createRuntimeStateManager({ home, liveProbe: async () => true });
+  manager.startConnecting(input);
+  await manager.markConnected(input);
+  manager.recordFailure({ operationId, step: "read", reason: "credential-expired" });
+  await manager.markConnected(input);
+  manager.prepareContinuation(operationId);
+  manager.recordFailure({ operationId, step: "read", reason: "credential-expired" });
+
+  let authorizations = 0;
+  await assert.rejects(() => runBuiltin([
+    "runtime", "connect", "codex", "--saas", "--onboarding-id", operationId,
+    "--intent-json", JSON.stringify(intent),
+  ], {
+    runtimeStateManager: manager,
+    originInspector: async () => ({
+      origin: "https://run.rainbond.com",
+      httpConfirmationRequired: false,
+      pendingRedirectOrigin: null,
+    }),
+    connectionRunner: async () => { authorizations += 1; return { code: 0 }; },
+    write() {},
+  }), /retry|重试|credential|凭据|reconnect|重连/i);
+  assert.equal(authorizations, 0);
+});
+
+test("runtime reconnect rejects operation drift and permission failures before authorization", async () => {
+  const { runBuiltin } = require(launcherPath);
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  for (const managerError of ["operation mismatch", "permission denied", "retry budget exhausted"]) {
+    let authorizations = 0;
+    await assert.rejects(() => runBuiltin([
+      "runtime", "reconnect", "--onboarding-id", operationId,
+    ], {
+      runtimeStateManager: {
+        async withReconnectLease(_id, action) { return action(this.reconnectInput()); },
+        reconnectInput() { throw new Error(managerError); },
+      },
+      connectionRunner: async () => { authorizations += 1; },
+    }), /operation|permission|retry/i);
+    assert.equal(authorizations, 0);
+  }
+});
+
+test("runtime reconnect failure never returns a credential from an internal error", async () => {
+  const { runBuiltin } = require(launcherPath);
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  const credential = "sensitiveHeader.sensitivePayload.sensitiveSignature";
+  let output = "";
+  let observed;
+  try {
+    await runBuiltin(["runtime", "reconnect", "--onboarding-id", operationId], {
+      runtimeStateManager: {
+        async withReconnectLease(_id, action) { return action(this.reconnectInput()); },
+        reconnectInput: () => ({
+          target_client: "codex",
+          environment_kind: "saas",
+          console_origin: "https://run.rainbond.com",
+          intent: { type: "query", operation: "summary" },
+          operation_id: operationId,
+        }),
+      },
+      originInspector: async (origin) => ({
+        origin,
+        httpConfirmationRequired: false,
+        pendingRedirectOrigin: null,
+      }),
+      connectionRunner: async () => { throw new Error(`authorization failed: ${credential}`); },
+      write(value) { output += value; },
+    });
+  } catch (error) {
+    observed = error;
+  }
+  assert.ok(observed);
+  assert.equal(observed.message.includes(credential), false);
+  assert.equal(output.includes(credential), false);
+  assert.deepEqual(JSON.parse(output).argv, [
+    "runtime", "reconnect", "--onboarding-id", operationId,
+  ]);
+});
+
+test("intent resume consumes credential retry before emitting and preserves permission errors", async () => {
+  const { runBuiltin } = require(launcherPath);
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  const runtime = {
+    state: "connected",
+    operation_id: operationId,
+    intent: { type: "query", operation: "logs", app_id: "app-1" },
+    failed_step: "read",
+    last_failure_category: "credential-expired",
+    retry_budget: 1,
+    retry_count: 0,
+  };
+  let consumed = false;
+  let output = "";
+  await runBuiltin(["intent", "resume", "--onboarding-id", operationId], {
+    runtimeStateManager: {
+      read: () => runtime,
+      assertContinuationEligible: () => runtime,
+      status: async () => ({ state: "connected", usable: true }),
+      prepareContinuation(id) {
+        assert.equal(id, operationId);
+        consumed = true;
+        return { ...runtime, retry_budget: 0, retry_count: 1 };
+      },
+    },
+    write(value) {
+      assert.equal(consumed, true);
+      output += value;
+    },
+  });
+  assert.equal(JSON.parse(output).resume_step, "read");
+
+  await assert.rejects(() => runBuiltin([
+    "intent", "resume", "--onboarding-id", operationId,
+  ], {
+    runtimeStateManager: {
+      read: () => ({ ...runtime, last_failure_category: "permission-denied", retry_budget: 0 }),
+      assertContinuationEligible() { throw new Error("permission denied"); },
+      status: async () => { throw new Error("permission must fail before probe"); },
+      prepareContinuation() { throw new Error("permission denied"); },
+    },
+  }), /permission/i);
+});
+
+test("intent resume rejects operation mismatch before live probe or credential renewal", async () => {
+  const { runBuiltin } = require(launcherPath);
+  const requestedOperation = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  let probes = 0;
+  await assert.rejects(() => runBuiltin([
+    "intent", "resume", "--onboarding-id", requestedOperation,
+  ], {
+    runtimeStateManager: {
+      assertContinuationEligible() { throw new Error("runtime operation mismatch"); },
+      status: async () => { probes += 1; return { state: "connected", usable: true }; },
+      prepareContinuation() { throw new Error("must not consume"); },
+    },
+  }), /operation|匹配/i);
+  assert.equal(probes, 0);
+});
+
+test("every intent survives separate-process credential recovery and permission denial", async () => {
+  const runtimeStateModule = path.join(
+    repoRoot,
+    "rainbond-platform-installer",
+    "scripts",
+    "runtime-state.js"
+  );
+  const cases = [
+    [{ type: "deploy", project_root: "/workspace/app", source_kind: "local" }, "build", "rainbond-app-assistant"],
+    [{ type: "create", project_root: "/workspace/app", source_kind: "git", source_url: "https://github.com/example/app.git" }, "runtime", "rainbond-app-assistant"],
+    [{ type: "template-install", template_id: "wordpress", install_scope: "new-app" }, "install", "rainbond-template-installer"],
+    [{ type: "query", operation: "logs", app_id: "app-1" }, "read", "rainbond-app-assistant"],
+    [{ type: "troubleshoot", operation: "runtime", app_id: "app-1" }, "repair", "rainbond-app-assistant"],
+    [{ type: "modify", team_id: "team-1", app_id: "app-1", operation: "env" }, "apply", "rainbond-app-assistant"],
+    [{ type: "delivery-verify", operation: "full", app_id: "app-1" }, "access", "rainbond-delivery-verifier"],
+    [{ type: "snapshot", team_id: "team-1", app_id: "app-1", operation: "create" }, "prepare", "rainbond-app-version-assistant"],
+    [{ type: "publish", team_id: "team-1", app_id: "app-1", destination: "local-library" }, "apply", "rainbond-app-version-assistant"],
+    [{ type: "rollback", team_id: "team-1", app_id: "app-1", snapshot_id: "snap-1", operation: "apply" }, "verify", "rainbond-app-version-assistant"],
+  ];
+  const driverDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-recovery-driver-"));
+  const driverPath = path.join(driverDirectory, "driver.js");
+  fs.writeFileSync(driverPath, [
+    `const fs = require(${JSON.stringify("node:fs")});`,
+    `const { runBuiltin } = require(${JSON.stringify(launcherPath)});`,
+    `const { createRuntimeStateManager } = require(${JSON.stringify(runtimeStateModule)});`,
+    "const command = process.argv.slice(2);",
+    "const manager = createRuntimeStateManager({ home: process.env.HOME, liveProbe: async () => true });",
+    "runBuiltin(command, {",
+    "  runtimeStateManager: manager,",
+    "  originInspector: async (origin) => ({ origin, httpConfirmationRequired: false, pendingRedirectOrigin: null }),",
+    "  connectionRunner: async (_invocation, context) => {",
+    "    if (process.env.RAINSKILLS_TEST_RUNNER_MARKER) fs.writeFileSync(process.env.RAINSKILLS_TEST_RUNNER_MARKER, 'called\\n');",
+    "    await context.completeWithCredential('fixtureHeader.fixturePayload.fixtureSignature');",
+    "    return { code: 0, completesRuntimeState: true };",
+    "  },",
+    "}).then((handled) => {",
+    "  if (!handled) throw new Error('unhandled command');",
+    "}).catch((error) => {",
+    "  console.error(`error: ${error.message}`);",
+    "  process.exitCode = 1;",
+    "});",
+    "",
+  ].join("\n"), { mode: 0o600 });
+
+  const runChild = (home, command, extraEnvironment = {}) => spawnSync(
+    process.execPath,
+    [driverPath, ...command],
+    {
+      encoding: "utf8",
+      env: { ...process.env, HOME: home, ...extraEnvironment },
+    }
+  );
+  const bootstrap = async (home, operationId, intent) => {
+    const { createRuntimeStateManager } = require(runtimeStateModule);
+    const manager = createRuntimeStateManager({ home, liveProbe: async () => true });
+    const input = {
+      target_client: "codex",
+      environment_kind: "saas",
+      console_origin: "https://console.rainbond.com",
+      intent,
+      operation_id: operationId,
+    };
+    manager.startConnecting(input);
+    await manager.markConnected(input);
+    return manager;
+  };
+
+  for (const [intent, failedStep, skillId] of cases) {
+    const credentialHome = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-recovery-credential-"));
+    const operationId = require("node:crypto").randomUUID();
+    const manager = await bootstrap(credentialHome, operationId, intent);
+    const record = runChild(credentialHome, [
+      "runtime", "record-failure", "--onboarding-id", operationId,
+      "--step", failedStep, "--reason", "credential-expired",
+    ]);
+    assert.equal(record.status, 0, record.stderr);
+    assert.equal(record.stdout.includes("fixtureHeader"), false);
+
+    const reconnect = runChild(credentialHome, [
+      "runtime", "reconnect", "--onboarding-id", operationId,
+    ]);
+    assert.equal(reconnect.status, 0, reconnect.stderr);
+    assert.equal(reconnect.stdout.includes("fixtureHeader"), false);
+
+    const resume = runChild(credentialHome, [
+      "intent", "resume", "--onboarding-id", operationId,
+    ]);
+    assert.equal(resume.status, 0, resume.stderr);
+    assert.deepEqual(JSON.parse(resume.stdout), {
+      schema: "rainskills.intent-continuation.v1",
+      skill_id: skillId,
+      intent,
+      resume_step: failedStep,
+    });
+    assert.equal(manager.read().retry_count, 1);
+    assert.equal(manager.read().retry_budget, 0);
+
+    const secondRecord = runChild(credentialHome, [
+      "runtime", "record-failure", "--onboarding-id", operationId,
+      "--step", failedStep, "--reason", "credential-expired",
+    ]);
+    assert.equal(secondRecord.status, 0, secondRecord.stderr);
+    const secondRetryMarker = path.join(credentialHome, "second-retry-called");
+    const secondReconnect = runChild(credentialHome, [
+      "runtime", "reconnect", "--onboarding-id", operationId,
+    ], { RAINSKILLS_TEST_RUNNER_MARKER: secondRetryMarker });
+    assert.equal(secondReconnect.status, 1);
+    assert.match(secondReconnect.stderr, /retry|重试|budget/i);
+    assert.equal(fs.existsSync(secondRetryMarker), false);
+
+    const permissionHome = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-recovery-permission-"));
+    const permissionOperationId = require("node:crypto").randomUUID();
+    await bootstrap(permissionHome, permissionOperationId, intent);
+    const permissionRecord = runChild(permissionHome, [
+      "runtime", "record-failure", "--onboarding-id", permissionOperationId,
+      "--step", failedStep, "--reason", "permission-denied",
+    ]);
+    assert.equal(permissionRecord.status, 0, permissionRecord.stderr);
+    const permissionMarker = path.join(permissionHome, "permission-retry-called");
+    const permissionReconnect = runChild(permissionHome, [
+      "runtime", "reconnect", "--onboarding-id", permissionOperationId,
+    ], { RAINSKILLS_TEST_RUNNER_MARKER: permissionMarker });
+    assert.equal(permissionReconnect.status, 1);
+    assert.match(permissionReconnect.stderr, /permission|权限/i);
+    assert.equal(fs.existsSync(permissionMarker), false);
+    const permissionResume = runChild(permissionHome, [
+      "intent", "resume", "--onboarding-id", permissionOperationId,
+    ]);
+    assert.equal(permissionResume.status, 1);
+    assert.match(permissionResume.stderr, /permission|权限/i);
+    assert.equal(permissionResume.stdout, "");
   }
 });

@@ -4,6 +4,7 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const os = require("node:os");
 const { spawn } = require("node:child_process");
+const { isDeepStrictEqual } = require("node:util");
 const {
   detectControlEnvironment,
 } = require("../rainbond-platform-installer/scripts/control-environment.js");
@@ -98,6 +99,20 @@ function assertConnectingState(current, expected) {
   }
 }
 
+function assertExactConnectedState(current, expected) {
+  if (
+    !current
+    || current.state !== "connected"
+    || current.operation_id !== expected.operation_id
+    || current.target_client !== expected.target_client
+    || current.environment_kind !== expected.environment_kind
+    || current.console_origin !== expected.console_origin
+    || !isDeepStrictEqual(current.intent, expected.intent)
+  ) {
+    throw new Error("runtime reconnect 完成状态与 protected connection 不匹配");
+  }
+}
+
 function parseRuntimeConnectArgs(args) {
   if (args[0] !== "runtime" || args[1] !== "connect") {
     throw new Error("不是 runtime connect 命令");
@@ -187,6 +202,47 @@ function runtimeConnectRetryAction(options, origin, operationId) {
   };
 }
 
+function runtimeReconnectRetryAction(operationId) {
+  return {
+    schema: "rainskills.next-action.v1",
+    action: "retry-runtime-reconnect",
+    onboarding_id: operationId,
+    argv: ["runtime", "reconnect", "--onboarding-id", operationId],
+  };
+}
+
+function parseRuntimeFailureArgs(args) {
+  if (
+    args.length !== 8
+    || args[0] !== "runtime"
+    || args[1] !== "record-failure"
+    || args[2] !== "--onboarding-id"
+    || args[4] !== "--step"
+    || args[6] !== "--reason"
+  ) {
+    throw new Error("runtime record-failure 参数无效");
+  }
+  if (!UUID_PATTERN.test(args[3] || "")) throw new Error("runtime failure onboarding operation 无效");
+  if (!args[5] || args[5].startsWith("--")) throw new Error("runtime failure step 无效");
+  if (!["credential-expired", "permission-denied"].includes(args[7])) {
+    throw new Error("runtime failure reason 无效");
+  }
+  return { operationId: args[3], step: args[5], reason: args[7] };
+}
+
+function parseRuntimeReconnectArgs(args) {
+  if (
+    args.length !== 4
+    || args[0] !== "runtime"
+    || args[1] !== "reconnect"
+    || args[2] !== "--onboarding-id"
+    || !UUID_PATTERN.test(args[3] || "")
+  ) {
+    throw new Error("runtime reconnect 参数无效");
+  }
+  return { operationId: args[3] };
+}
+
 function runAttached(executable, args, { env = process.env } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(executable, args, { env, stdio: "inherit" });
@@ -257,6 +313,86 @@ async function runBuiltin(args, {
       "../rainbond-platform-installer/scripts/runtime-state.js"
     ).createRuntimeStateManager();
     write(`${JSON.stringify(await manager.status())}\n`);
+    return true;
+  }
+  if (args[0] === "runtime" && args[1] === "record-failure") {
+    const failure = parseRuntimeFailureArgs(args);
+    const manager = runtimeStateManager || require(
+      "../rainbond-platform-installer/scripts/runtime-state.js"
+    ).createRuntimeStateManager();
+    const state = manager.recordFailure(failure);
+    write(`${JSON.stringify({
+      schema: "rainskills.runtime-failure-record.v1",
+      onboarding_id: failure.operationId,
+      failure_category: state.last_failure_category,
+      retry_available: state.retry_budget === 1,
+    })}\n`);
+    return true;
+  }
+  if (args[0] === "runtime" && args[1] === "reconnect") {
+    const { operationId } = parseRuntimeReconnectArgs(args);
+    const manager = runtimeStateManager || require(
+      "../rainbond-platform-installer/scripts/runtime-state.js"
+    ).createRuntimeStateManager();
+    const environmentKind = await manager.withReconnectLease(operationId, async (connection) => {
+      try {
+        const inspect = originInspector || require(
+          "../rainbond-platform-installer/scripts/console-origin.js"
+        ).inspectConsoleOrigin;
+        const inspection = await inspect(connection.console_origin);
+        if (inspection.pendingRedirectOrigin || inspection.origin !== connection.console_origin) {
+          throw new Error("protected Console origin 在重连检查中发生变化");
+        }
+        const options = {
+          targetClient: connection.target_client,
+          environmentChoice: connection.environment_kind === "saas" ? "saas" : "private-existing",
+          rainbondUrl: connection.console_origin,
+          allowInsecureHttp: connection.console_origin.startsWith("http://"),
+          onboardingId: operationId,
+          intent: connection.intent,
+        };
+        const invocation = runtimeConnectionInvocation(options, connection.console_origin);
+        let completedWithCredential = false;
+        const completeWithCredential = async (credential) => {
+          const priorToken = process.env.RAINBOND_JWT;
+          try {
+            process.env.RAINBOND_JWT = credential;
+            await manager.markConnected(connection);
+            completedWithCredential = true;
+          } finally {
+            if (priorToken === undefined) delete process.env.RAINBOND_JWT;
+            else process.env.RAINBOND_JWT = priorToken;
+          }
+        };
+        const result = await connectionRunner(invocation, {
+          completeWithCredential,
+          control,
+          options,
+          origin: connection.console_origin,
+          operationId,
+        });
+        if (result.signal || result.code !== 0) {
+          throw new Error("RainSkills 运行环境重新授权未完成");
+        }
+        if (result.completesRuntimeState) {
+          assertExactConnectedState(manager.read(), connection);
+        } else {
+          if (completedWithCredential) throw new Error("运行环境重连器返回了矛盾状态");
+          await manager.markConnected(connection);
+          assertExactConnectedState(manager.read(), connection);
+        }
+        return connection.environment_kind;
+      } catch {
+        write(`${JSON.stringify(runtimeReconnectRetryAction(operationId))}\n`);
+        throw new Error("RainSkills 运行环境重新授权失败");
+      }
+    });
+    write(`${JSON.stringify({
+      schema: "rainskills.runtime-reconnect-result.v1",
+      state: "connected",
+      onboarding_id: operationId,
+      environment_kind: environmentKind,
+    })}\n`);
     return true;
   }
   if (args[0] === "runtime" && args[1] === "assert-connect") {
@@ -406,14 +542,12 @@ async function runBuiltin(args, {
     const manager = runtimeStateManager || require(
       "../rainbond-platform-installer/scripts/runtime-state.js"
     ).createRuntimeStateManager();
+    manager.assertContinuationEligible(args[3]);
     const status = await manager.status();
     if (status.state !== "connected" || status.usable !== true) {
       throw new Error("runtime 尚未 connected 且通过 live probe，不能恢复 intent");
     }
-    const runtime = manager.read();
-    if (runtime.state !== "connected") throw new Error("runtime 状态已变化，不能恢复 intent");
-    if (runtime.operation_id !== args[3]) throw new Error("runtime operation_id 与参数不匹配");
-    if (!runtime.intent) throw new Error("runtime state 缺少 validated intent");
+    const runtime = manager.prepareContinuation(args[3]);
     const { createIntentContinuation } = require(
       "../rainbond-platform-installer/scripts/runtime-intents.js"
     );
@@ -532,12 +666,15 @@ async function run() {
 
 module.exports = {
   classifyNodeMajor,
+  parseRuntimeFailureArgs,
+  parseRuntimeReconnectArgs,
   parseRuntimeConnectArgs,
   resolveInvocation,
   runBuiltin,
   runtimeChildEnvironment,
   runtimeConnectRetryAction,
   runtimeConnectionInvocation,
+  runtimeReconnectRetryAction,
 };
 
 if (require.main === module) {

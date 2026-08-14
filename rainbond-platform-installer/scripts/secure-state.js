@@ -193,10 +193,44 @@ function createSecureStateStore({
     };
 
     for (;;) {
+      const candidatePath = path.join(
+        lockDirectory,
+        `.${operationId}.candidate.${pid}.${crypto.randomBytes(6).toString("hex")}`
+      );
       let fd;
+      let published = false;
       try {
-        fd = fs.openSync(lockPath, "wx", 0o600);
+        fd = fs.openSync(candidatePath, "wx", 0o600);
+        fs.writeFileSync(fd, `${JSON.stringify(owner)}\n`, "utf8");
+        fs.fsyncSync(fd);
+        fs.closeSync(fd);
+        fd = undefined;
+        harden(candidatePath, "file");
+        fs.linkSync(candidatePath, lockPath);
+        published = true;
+        harden(lockPath, "file");
+        try {
+          fs.unlinkSync(candidatePath);
+        } catch (cleanupError) {
+          if (cleanupError.code !== "ENOENT") {
+            // The complete final lock is authoritative; an orphaned candidate is harmless.
+          }
+        }
+        break;
       } catch (error) {
+        if (fd !== undefined) fs.closeSync(fd);
+        try {
+          fs.unlinkSync(candidatePath);
+        } catch (cleanupError) {
+          if (cleanupError.code !== "ENOENT") throw cleanupError;
+        }
+        if (published) {
+          try {
+            fs.unlinkSync(lockPath);
+          } catch (cleanupError) {
+            if (cleanupError.code !== "ENOENT") throw cleanupError;
+          }
+        }
         if (error.code !== "EEXIST") throw error;
         const existing = readProtectedJson(lockPath);
         if (isProcessAlive(existing.pid, existing.process_identity)) {
@@ -214,15 +248,6 @@ function createSecureStateStore({
         }
         continue;
       }
-
-      try {
-        fs.writeFileSync(fd, `${JSON.stringify(owner)}\n`, "utf8");
-        fs.fsyncSync(fd);
-      } finally {
-        fs.closeSync(fd);
-      }
-      harden(lockPath, "file");
-      break;
     }
 
     let released = false;

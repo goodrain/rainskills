@@ -632,3 +632,105 @@ test("runtime state delegates Windows protection to the secure store", () => {
   assert.equal(aclCalls.some(([operation, , kind]) => operation === "protect" && kind === "file"), true);
   assert.equal(aclCalls.some(([operation, , kind]) => operation === "inspect" && kind === "file"), true);
 });
+
+test("credential failure records one fixed retry while permission failure never retries", async () => {
+  const { createRuntimeStateManager } = require(runtimeStatePath);
+  for (const reason of ["credential-expired", "permission-denied"]) {
+    const home = temporaryHome();
+    const manager = createRuntimeStateManager({
+      home,
+      stateStore: createPortableSecureStateStore(home),
+      liveProbe: async () => true,
+    });
+    manager.startConnecting(connectedInput());
+    await manager.markConnected(connectedInput());
+
+    const failed = manager.recordFailure({
+      operationId: connectedInput().operation_id,
+      step: "read",
+      reason,
+    });
+    assert.equal(failed.failed_step, "read");
+    assert.equal(failed.last_failure_category, reason);
+    assert.equal(failed.retry_budget, reason === "credential-expired" ? 1 : 0);
+    assert.equal(failed.state, reason === "credential-expired" ? "connecting" : "connected");
+
+    if (reason === "credential-expired") {
+      assert.deepEqual(manager.reconnectInput(connectedInput().operation_id), connectedInput());
+    } else {
+      assert.throws(
+        () => manager.reconnectInput(connectedInput().operation_id),
+        /permission|权限|retry|重试/i
+      );
+      assert.throws(
+        () => manager.prepareContinuation(connectedInput().operation_id),
+        /permission|权限/i
+      );
+    }
+  }
+});
+
+test("retry continuation atomically consumes its one-shot budget before returning", async () => {
+  const { createRuntimeStateManager } = require(runtimeStatePath);
+  const home = temporaryHome();
+  const stateStore = createPortableSecureStateStore(home);
+  const input = connectedInput();
+  const manager = createRuntimeStateManager({ home, stateStore, liveProbe: async () => true });
+  manager.startConnecting(input);
+  await manager.markConnected(input);
+  manager.recordFailure({ operationId: input.operation_id, step: "read", reason: "credential-expired" });
+  await manager.markConnected(input);
+
+  const first = manager.prepareContinuation(input.operation_id);
+  assert.equal(first.retry_count, 1);
+  assert.equal(first.retry_budget, 0);
+  assert.equal(first.failed_step, "read");
+  assert.equal(manager.read().retry_count, 1);
+  const competingManager = createRuntimeStateManager({
+    home,
+    stateStore: createPortableSecureStateStore(home),
+    liveProbe: async () => true,
+  });
+  assert.throws(
+    () => competingManager.prepareContinuation(input.operation_id),
+    /retry|重试|budget|次数/i
+  );
+
+  const secondFailure = manager.recordFailure({
+    operationId: input.operation_id,
+    step: "read",
+    reason: "credential-expired",
+  });
+  assert.equal(secondFailure.retry_budget, 0);
+  assert.throws(() => manager.reconnectInput(input.operation_id), /retry|重试|budget|次数/i);
+});
+
+test("failure and continuation APIs reject unknown operation, step, and reason", async () => {
+  const { createRuntimeStateManager } = require(runtimeStatePath);
+  const home = temporaryHome();
+  const manager = createRuntimeStateManager({
+    home,
+    stateStore: createPortableSecureStateStore(home),
+    liveProbe: async () => true,
+  });
+  manager.startConnecting(connectedInput());
+  await manager.markConnected(connectedInput());
+  const otherOperation = "b7c0af4f-5dd7-41ec-9d11-583203a71483";
+
+  assert.throws(() => manager.recordFailure({
+    operationId: otherOperation,
+    step: "read",
+    reason: "credential-expired",
+  }), /operation|匹配/i);
+  assert.throws(() => manager.recordFailure({
+    operationId: connectedInput().operation_id,
+    step: "shell",
+    reason: "credential-expired",
+  }), /step|步骤|固定/i);
+  assert.throws(() => manager.recordFailure({
+    operationId: connectedInput().operation_id,
+    step: "read",
+    reason: "invalid_token",
+  }), /reason|原因|failure|失败/i);
+  assert.throws(() => manager.prepareContinuation(otherOperation), /operation|匹配/i);
+});
