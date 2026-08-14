@@ -23,6 +23,12 @@ const secureStatePath = path.join(
   "scripts",
   "secure-state.js"
 );
+const platformRoutingPath = path.join(
+  repoRoot,
+  "rainbond-platform-installer",
+  "scripts",
+  "platform-routing.js"
+);
 
 function readNormalizedSource(filePath) {
   return fs.readFileSync(filePath, "utf8").replace(/\r\n?/g, "\n");
@@ -922,6 +928,53 @@ test("platform CLI accepts an explicit Console host without accepting a URL", ()
   );
 });
 
+test("platform CLI accepts fixed location and mode flags while preserving explicit single-node targets", () => {
+  const { parseArgs } = require(platformInstallerPath);
+  const routed = parseArgs([
+    "install",
+    "--onboarding-id", "1d6754d6-6fb3-4bda-9a04-15c2d261d178",
+    "--location", "server",
+    "--mode", "host-cluster",
+  ]);
+  assert.equal(routed.location, "server");
+  assert.equal(routed.mode, "host-cluster");
+
+  const legacy = parseArgs([
+    "install",
+    "--target", "remote-linux",
+    "--ssh", "root@192.168.1.20",
+  ]);
+  assert.equal(legacy.target, "remote-linux");
+  assert.equal(legacy.location, "");
+  assert.equal(legacy.mode, "");
+  assert.equal(legacy.sshPort, null);
+  assert.throws(() => parseArgs(["install", "--location", "cluster"]), /--location/);
+  assert.throws(() => parseArgs(["install", "--mode", "automatic"]), /--mode/);
+});
+
+test("resuming a saved single-node server route preserves its SSH port when no override is supplied", async () => {
+  const { parseArgs, selectInstallTarget } = require(platformInstallerPath);
+  const options = parseArgs([
+    "install",
+    "--location", "server",
+    "--mode", "single-node",
+  ]);
+  const route = await selectInstallTarget({
+    platform: "linux",
+    options,
+    savedTarget: {
+      location: "server",
+      mode: "single-node",
+      kind: "remote-linux",
+      host: "root@192.168.1.20",
+      sshPort: 2202,
+    },
+    interactive: false,
+    write: () => {},
+  });
+  assert.equal(route.sshPort, 2202);
+});
+
 test("platform CLI accepts a complete Rainbond image override", () => {
   const { normalizeRainbondImage, parseArgs } = require(platformInstallerPath);
   const image = "registry.cn-hangzhou.aliyuncs.com/goodrain/rainbond:v6.9.7-devs";
@@ -1057,6 +1110,134 @@ test("onboarding state is schema checked and must be a protected regular file", 
   const symlinkPath = path.join(tempDir, "onboarding-link.json");
   fs.symlinkSync(statePath, symlinkPath);
   assert.throws(() => readOnboardingState(symlinkPath, state.operation_id, stateStore), /符号链接/);
+});
+
+test("platform state rejects tampered location and mode combinations", () => {
+  const { readPlatformState } = require(platformInstallerPath);
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-platform-route-state-"));
+  const stateStore = createPortableSecureStateStore(tempDir);
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  const statePath = path.join(tempDir, "state.json");
+  const state = {
+    schema: "rainskills.platform-state.v1",
+    version: 1,
+    operation_id: operationId,
+    location: "local",
+    mode: "host-cluster",
+    target_kind: "local-linux",
+  };
+  stateStore.atomicWriteJson(statePath, state);
+  assert.throws(
+    () => readPlatformState(statePath, operationId, stateStore),
+    /本地.*host-cluster|location.*mode|路由/i
+  );
+
+  stateStore.atomicWriteJson(statePath, { ...state, location: "internet", mode: "single-node" });
+  assert.throws(
+    () => readPlatformState(statePath, operationId, stateStore),
+    /路由.*无效|状态.*无效/i
+  );
+});
+
+test("persisted route tuples accept only the complete new-schema state machine", () => {
+  const { validatePersistedRouteTuple } = require(platformRoutingPath);
+  const valid = [
+    { location: null, mode: null, target_kind: null },
+    { location: "server", mode: null, target_kind: null },
+    { location: "local", mode: "single-node", target_kind: "local-linux" },
+    { location: "local", mode: "single-node", target_kind: "local-macos" },
+    { location: "local", mode: "single-node", target_kind: "local-windows" },
+    { location: "server", mode: "single-node", target_kind: "remote-linux", host: null },
+    { location: "server", mode: "host-cluster", target_kind: "host-cluster" },
+    { location: "server", mode: "existing-kubernetes", target_kind: "existing-kubernetes" },
+  ];
+  for (const state of valid) {
+    assert.equal(validatePersistedRouteTuple(state), state);
+  }
+  const legacyValid = [
+    {
+      state: { target_kind: null, host: null, ssh_port: null },
+      options: {},
+    },
+    {
+      state: { target_kind: "local-linux", host: "linux-host", ssh_port: null },
+      options: { controlPlatform: "linux" },
+    },
+    {
+      state: { target_kind: "local-macos", host: "mac-host", ssh_port: null },
+      options: { controlPlatform: "darwin" },
+    },
+    {
+      state: { target_kind: "local-windows", host: "windows-host", ssh_port: null },
+      options: { controlPlatform: "win32" },
+    },
+    {
+      state: { target_kind: "remote-linux", host: "root@server", ssh_port: 2202 },
+      options: { controlPlatform: "darwin" },
+    },
+  ];
+  for (const { state, options } of legacyValid) {
+    assert.equal(validatePersistedRouteTuple(state, options), state);
+  }
+
+  for (const { state, options } of [
+    { state: { target_kind: "evil", host: null, ssh_port: null }, options: {} },
+    { state: { target_kind: "host-cluster", host: null, ssh_port: null }, options: {} },
+    { state: { target_kind: "existing-kubernetes", host: null, ssh_port: null }, options: {} },
+    {
+      state: { target_kind: "local-macos", host: "mac-host", ssh_port: null },
+      options: { controlPlatform: "linux" },
+    },
+    {
+      state: { target_kind: "local-linux", host: "root@local-host", ssh_port: null },
+      options: { controlPlatform: "linux" },
+    },
+    {
+      state: { target_kind: "local-linux", host: "linux-host", ssh_port: 22 },
+      options: { controlPlatform: "linux" },
+    },
+    {
+      state: { target_kind: "remote-linux", host: null, ssh_port: 22 },
+      options: {},
+    },
+    {
+      state: { target_kind: "remote-linux", host: "root@server", ssh_port: 0 },
+      options: {},
+    },
+  ]) {
+    assert.throws(() => validatePersistedRouteTuple(state, options), /旧版.*状态.*无效|路由.*无效/i);
+  }
+
+  for (const state of [
+    { location: "server", mode: null, target_kind: "host-cluster" },
+    { location: "local", mode: "single-node", target_kind: "local-evil" },
+    { location: "server", mode: "single-node", target_kind: null },
+    { location: null, mode: null, target_kind: "remote-linux" },
+  ]) {
+    assert.throws(() => validatePersistedRouteTuple(state), /路由.*无效|状态.*无效/i);
+  }
+  assert.throws(() => validatePersistedRouteTuple({
+    location: "local",
+    mode: "single-node",
+    target_kind: "local-macos",
+  }, { controlPlatform: "linux" }), /控制端|本地.*目标/i);
+});
+
+test("a saved server location without a mode remains unresolved on resume", () => {
+  const { savedRouteFromState } = require(platformInstallerPath);
+  assert.deepEqual(savedRouteFromState({
+    location: "server",
+    mode: null,
+    target_kind: null,
+    host: null,
+    ssh_port: null,
+  }), {
+    location: "server",
+    mode: null,
+    kind: null,
+    host: null,
+    sshPort: null,
+  });
 });
 
 test("preflight treats below-recommended resources as advisory", () => {
@@ -1589,6 +1770,161 @@ test("remote Console selection pauses for an AI when every candidate fails witho
   assert.match(output.join(""), /--console-host/);
 });
 
+test("location is the first choice and local resolves directly without server modes", async () => {
+  const { selectPlatformRoute } = require(platformRoutingPath);
+  const output = [];
+  const questions = [];
+  const route = await selectPlatformRoute({
+    platform: "linux",
+    options: {},
+    interactive: true,
+    ask: async (question) => {
+      questions.push(question);
+      return "";
+    },
+    hostname: () => "developer-machine",
+    write: (value) => output.push(value),
+  });
+
+  assert.deepEqual(route, {
+    waiting: false,
+    location: "local",
+    mode: "single-node",
+    kind: "local-linux",
+    host: "developer-machine",
+    sshPort: null,
+  });
+  assert.equal(questions.length, 1);
+  assert.match(output.join(""), /安装到本地/);
+  assert.match(output.join(""), /安装到服务器/);
+  assert.doesNotMatch(output.join(""), /多节点|Kubernetes|host-cluster|existing-kubernetes/i);
+});
+
+test("server location reveals a separate explicit server mode choice", async () => {
+  const { selectPlatformRoute } = require(platformRoutingPath);
+  const output = [];
+  const answers = ["2", "2"];
+  const route = await selectPlatformRoute({
+    platform: "darwin",
+    options: {},
+    interactive: true,
+    ask: async () => answers.shift(),
+    write: (value) => output.push(value),
+  });
+
+  assert.deepEqual(route, {
+    waiting: false,
+    location: "server",
+    mode: "host-cluster",
+    kind: "host-cluster",
+    host: null,
+    sshPort: null,
+  });
+  assert.match(output.join(""), /快速单机安装/);
+  assert.match(output.join(""), /多节点主机集群/);
+  assert.match(output.join(""), /已有 Kubernetes 集群/);
+});
+
+test("non-interactive routing emits stable missing-input actions and never defaults", async () => {
+  const { selectPlatformRoute } = require(platformRoutingPath);
+  const locationOutput = [];
+  const missingLocation = await selectPlatformRoute({
+    platform: "linux",
+    options: {},
+    interactive: false,
+    ask: async () => assert.fail("must not prompt without a TTY"),
+    write: (value) => locationOutput.push(value),
+  });
+  assert.deepEqual(missingLocation, {
+    waiting: true,
+    missing: "location",
+    location: null,
+    mode: null,
+    kind: null,
+    host: null,
+    sshPort: null,
+  });
+  assert.match(locationOutput.join(""), /RAINSKILLS_USER_INPUT_REQUIRED:platform_install_location/);
+  assert.match(locationOutput.join(""), /--location local/);
+  assert.match(locationOutput.join(""), /--location server/);
+  assert.doesNotMatch(locationOutput.join(""), /host-cluster|existing-kubernetes|Kubernetes|多节点/i);
+
+  const modeOutput = [];
+  const missingMode = await selectPlatformRoute({
+    platform: "linux",
+    options: { location: "server" },
+    interactive: false,
+    ask: async () => assert.fail("must not prompt without a TTY"),
+    write: (value) => modeOutput.push(value),
+  });
+  assert.equal(missingMode.waiting, true);
+  assert.equal(missingMode.missing, "mode");
+  assert.equal(missingMode.location, "server");
+  assert.equal(missingMode.mode, null);
+  assert.match(modeOutput.join(""), /RAINSKILLS_USER_INPUT_REQUIRED:platform_install_server_mode/);
+  assert.match(modeOutput.join(""), /--mode single-node/);
+  assert.match(modeOutput.join(""), /--mode host-cluster/);
+  assert.match(modeOutput.join(""), /--mode existing-kubernetes/);
+});
+
+test("routing rejects invalid combinations and never infers a mode from node count", async () => {
+  const { selectPlatformRoute, validateRoutingRequest } = require(platformRoutingPath);
+  assert.throws(
+    () => validateRoutingRequest({
+      platform: "linux",
+      options: { location: "local", mode: "host-cluster" },
+    }),
+    /本地安装只能使用单机模式/i
+  );
+  assert.throws(
+    () => validateRoutingRequest({
+      platform: "linux",
+      options: { location: "local", mode: "existing-kubernetes" },
+    }),
+    /本地安装只能使用单机模式/i
+  );
+  assert.throws(
+    () => validateRoutingRequest({
+      platform: "linux",
+      options: { target: "remote-linux", location: "local" },
+    }),
+    /冲突|conflict/i
+  );
+  assert.throws(
+    () => validateRoutingRequest({
+      platform: "darwin",
+      options: { target: "local-linux" },
+    }),
+    /安装目标与当前控制端不匹配/i
+  );
+  assert.throws(
+    () => validateRoutingRequest({
+      platform: "linux",
+      options: { target: "local-linux", ssh: "root@server" },
+    }),
+    /冲突|单机服务器/i
+  );
+
+  await assert.rejects(() => selectPlatformRoute({
+    platform: "linux",
+    options: { mode: "host-cluster" },
+    interactive: true,
+    ask: async () => "1",
+    write: () => {},
+  }), /本地安装只能使用单机模式/i);
+
+  const output = [];
+  const result = await selectPlatformRoute({
+    platform: "linux",
+    options: { location: "server", nodeCount: 3 },
+    interactive: false,
+    write: (value) => output.push(value),
+  });
+  assert.equal(result.missing, "mode");
+  assert.equal(result.mode, null);
+  assert.match(output.join(""), /platform_install_server_mode/);
+});
+
 test("interactive target selection defaults Linux to local but supports another server", async () => {
   const { selectInstallTarget } = require(platformInstallerPath);
 
@@ -1603,10 +1939,17 @@ test("interactive target selection defaults Linux to local but supports another 
     },
     write: () => {},
   });
-  assert.deepEqual(local, { kind: "local-linux", host: os.hostname(), sshPort: null });
+  assert.deepEqual(local, {
+    waiting: false,
+    location: "local",
+    mode: "single-node",
+    kind: "local-linux",
+    host: os.hostname(),
+    sshPort: null,
+  });
   assert.equal(localQuestions.length, 1);
 
-  const answers = ["2", "root@192.168.1.20", "2202"];
+  const answers = ["2", "1", "root@192.168.1.20", "2202"];
   const remote = await selectInstallTarget({
     platform: "linux",
     options: {},
@@ -1615,6 +1958,9 @@ test("interactive target selection defaults Linux to local but supports another 
     write: () => {},
   });
   assert.deepEqual(remote, {
+    waiting: false,
+    location: "server",
+    mode: "single-node",
     kind: "remote-linux",
     host: "root@192.168.1.20",
     sshPort: 2202,
@@ -1634,7 +1980,7 @@ test("macOS and Windows default to local while still offering a Linux server", a
   });
   assert.equal(mac.kind, "local-macos");
   assert.match(macOutput.join(""), /安装到本地/);
-  assert.match(macOutput.join(""), /安装到 Linux 服务器/);
+  assert.match(macOutput.join(""), /安装到服务器/);
   assert.doesNotMatch(macOutput.join(""), /推荐/);
 
   const windowsOutput = [];
@@ -1647,12 +1993,15 @@ test("macOS and Windows default to local while still offering a Linux server", a
     write: (value) => windowsOutput.push(value),
   });
   assert.deepEqual(windows, {
+    waiting: false,
+    location: "local",
+    mode: "single-node",
     kind: "local-windows",
     host: os.hostname(),
     sshPort: null,
   });
   assert.match(windowsOutput.join(""), /安装到本地/);
-  assert.match(windowsOutput.join(""), /安装到 Linux 服务器/);
+  assert.match(windowsOutput.join(""), /安装到服务器/);
   assert.doesNotMatch(windowsOutput.join(""), /推荐/);
 });
 
@@ -1667,10 +2016,374 @@ test("non-interactive target selection pauses for the AI instead of choosing for
     write: (value) => output.push(value),
   });
 
-  assert.equal(selection, null);
-  assert.match(output.join(""), /RAINSKILLS_USER_INPUT_REQUIRED:platform_install_target/);
-  assert.match(output.join(""), /--target local-linux/);
-  assert.match(output.join(""), /--target remote-linux --ssh/);
+  assert.equal(selection.waiting, true);
+  assert.equal(selection.missing, "location");
+  assert.match(output.join(""), /RAINSKILLS_USER_INPUT_REQUIRED:platform_install_location/);
+  assert.match(output.join(""), /--location local/);
+  assert.match(output.join(""), /--location server/);
+});
+
+test("resolved location and mode are durable before a non-single-node driver is dispatched", async () => {
+  const { runInstallOperation } = require(platformInstallerPath);
+  const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-platform-routing-state-"));
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  const root = path.join(tempHome, ".rainbond", "platform-installer", operationId);
+  fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+  const paths = {
+    root,
+    state: path.join(root, "state.json"),
+    events: path.join(root, "events.jsonl"),
+    log: path.join(root, "install.log"),
+    installer: path.join(root, "rainbond-install.sh"),
+  };
+  const calls = [];
+  const stateStore = createPortableSecureStateStore(tempHome);
+  const writeState = (filePath, value) => stateStore.atomicWriteJson(filePath, value);
+  const updateState = (filePath, state, values) => {
+    const next = { ...state, ...values, updated_at: new Date().toISOString() };
+    writeState(filePath, next);
+    return next;
+  };
+
+  await runInstallOperation({
+    onboardingId: operationId,
+    location: "server",
+    mode: "host-cluster",
+  }, {
+    onboardingPathResolver: () => path.join(tempHome, ".rainbond", "onboarding.json"),
+    ensurePrivateDirectory: () => {},
+    onboardingReader: () => ({
+      schema: "rainskills.onboarding.v1",
+      version: 1,
+      operation_id: operationId,
+      stage: "awaiting-platform",
+      target: "codex",
+      deployment_mode: "self-hosted",
+      control_mode: "posix",
+      intent: { type: "deploy", project_root: "/workspace/app", source_kind: "local" },
+    }),
+    pathsResolver: () => paths,
+    stateWriter: writeState,
+    stateUpdater: updateState,
+    hostClusterInstaller: async ({ state }) => {
+      calls.push("host-cluster");
+      const durable = JSON.parse(fs.readFileSync(paths.state, "utf8"));
+      assert.equal(durable.location, "server");
+      assert.equal(durable.mode, "host-cluster");
+      assert.equal(state.location, "server");
+      assert.equal(state.mode, "host-cluster");
+      return { waiting: true };
+    },
+    existingKubernetesInstaller: async () => assert.fail("must not dispatch Kubernetes"),
+  });
+
+  assert.deepEqual(calls, ["host-cluster"]);
+  const state = JSON.parse(fs.readFileSync(paths.state, "utf8"));
+  assert.equal(state.stage, "mode-configuration");
+  assert.equal(state.status, "waiting_user");
+  assert.equal(state.target_kind, "host-cluster");
+});
+
+test("a conflicting saved route fails before state rewrite or driver selection", async () => {
+  const { runInstallOperation } = require(platformInstallerPath);
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-saved-route-conflict-"));
+  const paths = {
+    root,
+    state: path.join(root, "state.json"),
+    events: path.join(root, "events.jsonl"),
+    log: path.join(root, "install.log"),
+    installer: path.join(root, "rainbond-install.sh"),
+  };
+  fs.writeFileSync(paths.state, "{}\n", { mode: 0o600 });
+  const savedState = {
+    schema: "rainskills.platform-state.v1",
+    version: 1,
+    operation_id: operationId,
+    installation_id: "3d6754d6-6fb3-4bda-9a04-15c2d261d178",
+    stage: "target-selection",
+    status: "waiting_user",
+    location: "local",
+    mode: "single-node",
+    target_kind: process.platform === "darwin" ? "local-macos" : process.platform === "win32" ? "local-windows" : "local-linux",
+    host: "developer-machine",
+    ssh_port: null,
+  };
+  let writes = 0;
+
+  await assert.rejects(() => runInstallOperation({
+    onboardingId: operationId,
+    location: "server",
+    mode: "host-cluster",
+  }, {
+    onboardingPathResolver: () => path.join(root, "onboarding.json"),
+    ensurePrivateDirectory: () => {},
+    onboardingReader: () => ({
+      operation_id: operationId,
+      stage: "awaiting-platform",
+      target: "codex",
+      deployment_mode: "self-hosted",
+      control_mode: "posix",
+    }),
+    pathsResolver: () => paths,
+    platformStateReader: () => savedState,
+    stateWriter: () => { writes += 1; },
+    targetSelector: async () => assert.fail("must fail before selection"),
+  }), /已保存.*冲突|冲突.*已保存/);
+  assert.equal(writes, 0);
+  assert.equal(fs.readFileSync(paths.state, "utf8"), "{}\n");
+});
+
+test("SSH input cannot rewrite a saved local or clustered route", async () => {
+  const { runInstallOperation } = require(platformInstallerPath);
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  const cases = [
+    {
+      name: "local",
+      location: "local",
+      mode: "single-node",
+      kind: process.platform === "darwin" ? "local-macos" : process.platform === "win32" ? "local-windows" : "local-linux",
+      host: "developer-machine",
+    },
+    {
+      name: "host-cluster",
+      location: "server",
+      mode: "host-cluster",
+      kind: "host-cluster",
+      host: null,
+    },
+    {
+      name: "existing-kubernetes",
+      location: "server",
+      mode: "existing-kubernetes",
+      kind: "existing-kubernetes",
+      host: null,
+    },
+  ];
+
+  for (const route of cases) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), `rainskills-saved-${route.name}-ssh-`));
+    const paths = {
+      root,
+      state: path.join(root, "state.json"),
+      events: path.join(root, "events.jsonl"),
+      log: path.join(root, "install.log"),
+      installer: path.join(root, "rainbond-install.sh"),
+    };
+    const originalBytes = `${JSON.stringify({ route: route.name })}\n`;
+    fs.writeFileSync(paths.state, originalBytes, { mode: 0o600 });
+    let writes = 0;
+    let selections = 0;
+    let drivers = 0;
+
+    await assert.rejects(() => runInstallOperation({
+      onboardingId: operationId,
+      ssh: "root@new-server",
+      sshPort: null,
+    }, {
+      onboardingPathResolver: () => path.join(root, "onboarding.json"),
+      ensurePrivateDirectory: () => {},
+      onboardingReader: () => ({
+        operation_id: operationId,
+        stage: "awaiting-platform",
+        target: "codex",
+        deployment_mode: "self-hosted",
+        control_mode: "posix",
+      }),
+      pathsResolver: () => paths,
+      platformStateReader: () => ({
+        schema: "rainskills.platform-state.v1",
+        version: 1,
+        operation_id: operationId,
+        installation_id: "3d6754d6-6fb3-4bda-9a04-15c2d261d178",
+        stage: "target-selection",
+        status: "waiting_user",
+        location: route.location,
+        mode: route.mode,
+        target_kind: route.kind,
+        host: route.host,
+        ssh_port: null,
+      }),
+      stateWriter: () => { writes += 1; },
+      targetSelector: async () => { selections += 1; return null; },
+      hostClusterInstaller: async () => { drivers += 1; },
+      existingKubernetesInstaller: async () => { drivers += 1; },
+    }), /已保存|冲突|不能.*SSH|SSH.*不能/i, route.name);
+
+    assert.equal(writes, 0, `${route.name} must not rewrite state`);
+    assert.equal(selections, 0, `${route.name} must fail before selection`);
+    assert.equal(drivers, 0, `${route.name} must fail before driver dispatch`);
+    assert.equal(fs.readFileSync(paths.state, "utf8"), originalBytes);
+  }
+});
+
+test("unsafe raw route inputs are redacted and rejected before writes, selection, or drivers", async () => {
+  const { runInstallOperation } = require(platformInstallerPath);
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  const cases = [
+    {
+      name: "target-control",
+      sentinel: "LEAK_TARGET",
+      options: { target: "local-linux\nLEAK_TARGET", mode: "not-a-mode" },
+      state: null,
+    },
+    {
+      name: "ssh-ansi",
+      sentinel: "LEAK_ANSI",
+      options: { ssh: "root@server\u001b[31mLEAK_ANSI" },
+      state: null,
+    },
+    {
+      name: "ssh-token",
+      sentinel: "ghp_SUPERSECRET_ROUTE_TOKEN_1234567890",
+      options: { ssh: "ghp_SUPERSECRET_ROUTE_TOKEN_1234567890" },
+      state: null,
+    },
+    {
+      name: "ssh-whitelist",
+      sentinel: "LEAK_SHELL",
+      options: { ssh: "root@server;LEAK_SHELL" },
+      state: null,
+    },
+    {
+      name: "saved-host-token",
+      sentinel: "ghp_SAVED_SUPERSECRET_ROUTE_TOKEN_123456",
+      options: { location: "server", mode: "single-node" },
+      state: {
+        location: "server",
+        mode: "single-node",
+        target_kind: "remote-linux",
+        host: "ghp_SAVED_SUPERSECRET_ROUTE_TOKEN_123456",
+        ssh_port: 22,
+      },
+    },
+    {
+      name: "saved-host-whitelist",
+      sentinel: "LEAK_SAVED_SHELL",
+      options: { location: "server", mode: "single-node" },
+      state: {
+        location: "server",
+        mode: "single-node",
+        target_kind: "remote-linux",
+        host: "root@server;LEAK_SAVED_SHELL",
+        ssh_port: 22,
+      },
+    },
+    {
+      name: "invalid-waiting-tuple",
+      sentinel: "host-cluster",
+      options: {},
+      state: {
+        location: "server",
+        mode: null,
+        target_kind: "host-cluster",
+        host: null,
+        ssh_port: null,
+      },
+    },
+    {
+      name: "invalid-local-kind",
+      sentinel: "local-evil",
+      options: {},
+      state: {
+        location: "local",
+        mode: "single-node",
+        target_kind: "local-evil",
+        host: "developer-machine",
+        ssh_port: null,
+      },
+    },
+    {
+      name: "invalid-legacy-cluster",
+      sentinel: "host-cluster",
+      options: {},
+      state: {
+        target_kind: "host-cluster",
+        host: null,
+        ssh_port: null,
+      },
+    },
+    {
+      name: "invalid-legacy-wrong-local",
+      sentinel: process.platform === "darwin" ? "local-linux" : "local-macos",
+      options: {},
+      state: {
+        target_kind: process.platform === "darwin" ? "local-linux" : "local-macos",
+        host: "other-host",
+        ssh_port: null,
+      },
+    },
+    {
+      name: "invalid-legacy-remote-port",
+      sentinel: "65536",
+      options: {},
+      state: {
+        target_kind: "remote-linux",
+        host: "root@server",
+        ssh_port: 65536,
+      },
+    },
+  ];
+
+  for (const item of cases) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), `rainskills-unsafe-${item.name}-`));
+    const paths = {
+      root,
+      state: path.join(root, "state.json"),
+      events: path.join(root, "events.jsonl"),
+      log: path.join(root, "install.log"),
+      installer: path.join(root, "rainbond-install.sh"),
+    };
+    const originalBytes = item.state ? `${JSON.stringify({ preserved: item.name })}\n` : null;
+    if (originalBytes) fs.writeFileSync(paths.state, originalBytes, { mode: 0o600 });
+    const output = [];
+    let writes = 0;
+    let selections = 0;
+    let drivers = 0;
+    let failure;
+    try {
+      await runInstallOperation({ onboardingId: operationId, ...item.options }, {
+        onboardingPathResolver: () => path.join(root, "onboarding.json"),
+        ensurePrivateDirectory: () => {},
+        onboardingReader: () => ({
+          operation_id: operationId,
+          stage: "awaiting-platform",
+          target: "codex",
+          deployment_mode: "self-hosted",
+          control_mode: "posix",
+        }),
+        pathsResolver: () => paths,
+        platformStateReader: () => ({
+          schema: "rainskills.platform-state.v1",
+          version: 1,
+          operation_id: operationId,
+          installation_id: "3d6754d6-6fb3-4bda-9a04-15c2d261d178",
+          stage: "target-selection",
+          status: "waiting_user",
+          ...(item.state || {}),
+        }),
+        stateWriter: () => { writes += 1; },
+        targetSelector: async ({ write }) => {
+          selections += 1;
+          write?.(item.sentinel);
+          return null;
+        },
+        hostClusterInstaller: async () => { drivers += 1; },
+        existingKubernetesInstaller: async () => { drivers += 1; },
+      });
+      assert.fail(`${item.name} must reject unsafe input`);
+    } catch (error) {
+      failure = error;
+    }
+
+    const visible = `${failure?.message || ""}\n${output.join("")}`;
+    assert.doesNotMatch(visible, new RegExp(item.sentinel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.equal(writes, 0, `${item.name} must not rewrite state`);
+    assert.equal(selections, 0, `${item.name} must fail before selection`);
+    assert.equal(drivers, 0, `${item.name} must fail before driver dispatch`);
+    if (originalBytes) assert.equal(fs.readFileSync(paths.state, "utf8"), originalBytes);
+    else assert.equal(fs.existsSync(paths.state), false);
+  }
 });
 
 test("CLI saves target selection before preflight when the AI has no TTY", {
@@ -1708,7 +2421,7 @@ test("CLI saves target selection before preflight when the AI has no TTY", {
   );
 
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /RAINSKILLS_USER_INPUT_REQUIRED:platform_install_target/);
+  assert.match(result.stdout, /RAINSKILLS_USER_INPUT_REQUIRED:platform_install_location/);
   const platformState = JSON.parse(fs.readFileSync(
     path.join(stateDir, "platform-installer", operationId, "state.json"),
     "utf8"

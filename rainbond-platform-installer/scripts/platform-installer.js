@@ -12,6 +12,12 @@ const { spawn, spawnSync } = require("node:child_process");
 const { createSecureStateStore } = require("./secure-state.js");
 const { assertIntentCanInstallNewPlatform, validateIntent } = require("./runtime-intents.js");
 const {
+  selectPlatformRoute,
+  validatePersistedRouteTuple,
+  validateRawRoutingInputs,
+  validateRoutingRequest,
+} = require("./platform-routing.js");
+const {
   assertSafePackageVersion,
   createRecoveryBundle,
   createWindowsPlatformAdapter,
@@ -42,7 +48,7 @@ let interruptedSignal = null;
 
 function usage() {
   process.stdout.write(`Usage:
-  npx rainskills platform install --onboarding-id <id> [--target <kind>] [--ssh <target>] [--ssh-port <port>] [--console-host <host>] [--rainbond-image <image>] [--yes] [--no-resume]
+  npx rainskills platform install --onboarding-id <id> [--location <place>] [--mode <mode>] [--target <kind>] [--ssh <target>] [--ssh-port <port>] [--console-host <host>] [--rainbond-image <image>] [--yes] [--no-resume]
   npx rainskills resume --onboarding-id <id>
 
 Commands:
@@ -51,7 +57,9 @@ Commands:
 
 Options:
   --onboarding-id ID  Resume the protected RainSkills onboarding checkpoint
-  --target KIND       Use local-linux, local-macos, local-windows, or remote-linux
+  --location PLACE    Deploy to local or server
+  --mode MODE         Use single-node, host-cluster, or existing-kubernetes on a server
+  --target KIND       Backward-compatible explicit single-node target
   --ssh TARGET        Existing SSH alias or user@host for remote-linux
   --ssh-port PORT     SSH port (default: 22)
   --console-host HOST Public IP or DNS name used to reach Console on port 7070
@@ -67,9 +75,11 @@ function parseArgs(argv) {
   const result = {
     command: argv[0] || "",
     onboardingId: "",
+    location: "",
+    mode: "",
     target: "",
     ssh: "",
-    sshPort: 22,
+    sshPort: null,
     consoleHost: "",
     rainbondImage: "",
     yes: false,
@@ -80,6 +90,14 @@ function parseArgs(argv) {
     if (argument === "--onboarding-id") {
       if (!argv[index + 1]) throw new Error("--onboarding-id 需要一个值");
       result.onboardingId = argv[index + 1];
+      index += 1;
+    } else if (argument === "--location") {
+      if (!argv[index + 1]) throw new Error("--location 需要一个值");
+      result.location = argv[index + 1];
+      index += 1;
+    } else if (argument === "--mode") {
+      if (!argv[index + 1]) throw new Error("--mode 需要一个值");
+      result.mode = argv[index + 1];
       index += 1;
     } else if (argument === "--target") {
       if (!argv[index + 1]) throw new Error("--target 需要一个值");
@@ -110,6 +128,13 @@ function parseArgs(argv) {
     } else {
       throw new Error(`未知参数：${argument}`);
     }
+  }
+  validateRawRoutingInputs(result);
+  if (result.location && !["local", "server"].includes(result.location)) {
+    throw new Error("--location 只支持 local 或 server");
+  }
+  if (result.mode && !["single-node", "host-cluster", "existing-kubernetes"].includes(result.mode)) {
+    throw new Error("--mode 只支持 single-node、host-cluster 或 existing-kubernetes");
   }
   return result;
 }
@@ -168,13 +193,15 @@ function readOnboardingState(filePath, expectedOperationId, stateStore = secureS
 function readPlatformState(filePath, expectedOperationId, stateStore = secureStateStore) {
   stateStore.assertProtectedRegularFile(filePath);
   const state = JSON.parse(fs.readFileSync(filePath, "utf8"));
+  validateRawRoutingInputs({}, { host: state.host });
+  if (state.host) normalizeRemoteTarget(state.host, state.ssh_port ?? 22);
   if (state.schema !== PLATFORM_STATE_SCHEMA || state.version !== 1) {
     throw new Error("不支持的 Rainbond 平台安装状态版本");
   }
   if (state.operation_id !== expectedOperationId) {
     throw new Error("平台安装状态与 onboarding id 不匹配");
   }
-  return state;
+  return validatePersistedRouteTuple(state);
 }
 
 function atomicWriteJson(filePath, value, stateStore = secureStateStore) {
@@ -639,74 +666,17 @@ async function selectInstallTarget({
   ask,
   write = (value) => process.stdout.write(value),
 }) {
-  if (savedTarget?.kind) return savedTarget;
-
-  const choices = targetChoicesForPlatform(platform);
-  if (choices.length === 0) {
-    throw new Error(`不支持当前控制端系统 ${platform}`);
-  }
-
-  let prompt;
-  let ownsPrompt = false;
-  if (!ask && interactive) {
-    prompt = readline.createInterface({ input: process.stdin, output: process.stdout });
-    ownsPrompt = true;
-    ask = (question) => prompt.question(question);
-  }
-
-  try {
-    let requestedKind = options.target || (options.ssh ? "remote-linux" : "");
-    if (requestedKind && !choices.some((choice) => choice.value === requestedKind)) {
-      throw new Error(`当前 ${platform} 不能使用安装目标 ${requestedKind}`);
-    }
-
-    write(`\n检测到当前设备为 ${platform === "darwin" ? "macOS" : platform === "win32" ? "Windows" : "Linux"}。\n`);
-    if (!requestedKind && !interactive) {
-      write("\n[RAINSKILLS_USER_INPUT_REQUIRED:platform_install_target]\n");
-      for (const choice of choices) write(`- ${choice.label}\n`);
-      if (platform === "linux") write("选择当前设备：--target local-linux\n");
-      if (platform === "darwin") write("选择当前 Mac：--target local-macos\n");
-      if (platform === "win32") write("选择当前 Windows 设备：--target local-windows\n");
-      write("选择 Linux 服务器：--target remote-linux --ssh <user@host> [--ssh-port 22]\n");
-      return null;
-    }
-
-    if (!requestedKind) {
-      write("\n请选择 Rainbond 安装位置：\n");
-      choices.forEach((choice, index) => write(`  ${index + 1}) ${choice.label}\n`));
-      while (!requestedKind) {
-        const answer = (await ask(`请输入选项 [1-${choices.length}，回车默认 1]: `)).trim();
-        const index = answer === "" ? 0 : Number.parseInt(answer, 10) - 1;
-        if (Number.isInteger(index) && choices[index]) requestedKind = choices[index].value;
-        else write(`请输入 1 到 ${choices.length} 之间的选项。\n`);
-      }
-    }
-
-    if (requestedKind !== "remote-linux") {
-      return { kind: requestedKind, host: os.hostname(), sshPort: null };
-    }
-
-    if (!options.ssh && !interactive) {
-      write("\n[RAINSKILLS_USER_INPUT_REQUIRED:platform_install_target]\n");
-      write("请提供 Linux SSH 地址，并重新执行：--target remote-linux --ssh <user@host> [--ssh-port 22]\n");
-      return null;
-    }
-
-    let remoteHost = options.ssh || "";
-    while (!remoteHost) {
-      remoteHost = (await ask("Linux SSH 地址（例如 root@192.168.1.20 或主机别名）: ")).trim();
-      if (!remoteHost) write("SSH 地址不能为空。\n");
-    }
-    let remotePort = options.sshPort ?? 22;
-    if (!options.ssh && interactive) {
-      const answer = (await ask("SSH 端口 [回车默认 22]: ")).trim();
-      remotePort = answer || 22;
-    }
-    const remote = normalizeRemoteTarget(remoteHost, remotePort);
-    return { kind: "remote-linux", host: remote.host, sshPort: remote.port };
-  } finally {
-    if (ownsPrompt) prompt.close();
-  }
+  const route = await selectPlatformRoute({
+    platform,
+    options,
+    savedRoute: savedTarget,
+    interactive,
+    ask,
+    write,
+  });
+  if (route.waiting || route.kind !== "remote-linux") return route;
+  const remote = normalizeRemoteTarget(route.host, route.sshPort);
+  return { ...route, host: remote.host, sshPort: remote.port };
 }
 
 const REMOTE_INSPECTION_SCRIPT = String.raw`set -u
@@ -1215,6 +1185,8 @@ function createPlatformState(operationId, paths) {
     control_mode: null,
     install_client: "unknown",
     install_action: "install",
+    location: null,
+    mode: null,
     target_kind: null,
     host: null,
     ssh_port: null,
@@ -2607,16 +2579,50 @@ async function completePlatform(onboarding, state, paths, verification, noResume
   if (!noResume) await runResume(onboarding.operation_id);
 }
 
+async function waitForHostClusterConfiguration({ write = (value) => process.stdout.write(value) } = {}) {
+  write("\n[RAINSKILLS_NEXT_ACTION_REQUIRED:host_cluster_configuration]\n");
+  write("多节点主机集群模式已选择。请继续提供或生成 cluster.yaml。\n");
+  return { waiting: true };
+}
+
+async function waitForExistingKubernetesConfiguration({ write = (value) => process.stdout.write(value) } = {}) {
+  write("\n[RAINSKILLS_NEXT_ACTION_REQUIRED:existing_kubernetes_configuration]\n");
+  write("已有 Kubernetes 集群模式已选择。请继续提供目标 context 和安装参数。\n");
+  return { waiting: true };
+}
+
+function savedRouteFromState(state) {
+  if (!state.target_kind && !state.location) return null;
+  const legacyMode = ["host-cluster", "existing-kubernetes"].includes(state.target_kind)
+    ? state.target_kind
+    : "single-node";
+  return {
+    location: state.location || (state.target_kind?.startsWith("local-") ? "local" : "server"),
+    mode: state.mode ?? (state.location ? null : legacyMode),
+    kind: state.target_kind,
+    host: state.host,
+    sshPort: state.ssh_port,
+  };
+}
+
 async function runInstallOperation(options, {
   onboardingPathResolver = onboardingStatePath,
   ensurePrivateDirectory = ensurePrivateOperationDirectory,
   onboardingReader = readOnboardingState,
   pathsResolver = operationPaths,
   targetSelector = selectInstallTarget,
+  hostClusterInstaller = waitForHostClusterConfiguration,
+  existingKubernetesInstaller = waitForExistingKubernetesConfiguration,
+  platformCompleter = completePlatform,
+  stateWriter = atomicWriteJson,
+  stateUpdater = updateState,
+  platformStateReader = readPlatformState,
 } = {}) {
+  validateRawRoutingInputs(options);
+  if (options.ssh) normalizeRemoteTarget(options.ssh, options.sshPort ?? 22);
   assertOperationId(options.onboardingId);
-  ensurePrivateDirectory(path.dirname(onboardingPathResolver()));
-  let onboarding = onboardingReader(onboardingPathResolver(), options.onboardingId);
+  const onboardingPath = onboardingPathResolver();
+  let onboarding = onboardingReader(onboardingPath, options.onboardingId);
   if (!["awaiting-platform", "platform-ready", "authorizing"].includes(onboarding.stage)) {
     throw new Error(`当前 onboarding 阶段不能安装平台：${onboarding.stage}`);
   }
@@ -2627,13 +2633,21 @@ async function runInstallOperation(options, {
     if (!options.noResume) await runResume(options.onboardingId);
     return;
   }
+  const controlPlatform = controlHostPlatform(onboarding);
+  validateRoutingRequest({ platform: controlPlatform, options });
+  ensurePrivateDirectory(path.dirname(onboardingPath));
 
   const paths = pathsResolver(options.onboardingId);
   ensurePrivateDirectory(paths.root);
   assertOperationFilesSafe(paths);
   let state = fs.existsSync(paths.state)
-    ? readPlatformState(paths.state, options.onboardingId)
+    ? platformStateReader(paths.state, options.onboardingId)
     : createPlatformState(options.onboardingId, paths);
+  validateRawRoutingInputs({}, { host: state.host });
+  if (state.host) normalizeRemoteTarget(state.host, state.ssh_port ?? 22);
+  validatePersistedRouteTuple(state, { controlPlatform });
+  const savedTarget = savedRouteFromState(state);
+  validateRoutingRequest({ platform: controlPlatform, options, savedRoute: savedTarget });
   if (!UUID_PATTERN.test(state.installation_id || "")) {
     state = { ...state, installation_id: crypto.randomUUID() };
   }
@@ -2651,23 +2665,23 @@ async function runInstallOperation(options, {
   if (configuredRainbondImage && state.rainbond_image !== configuredRainbondImage) {
     state = { ...state, rainbond_image: configuredRainbondImage };
   }
-  atomicWriteJson(paths.state, state);
+  stateWriter(paths.state, state);
   activeOperation = { paths, state, onboardingId: options.onboardingId, telemetry: null, stageStartedAt: {} };
 
-  const savedTarget = state.target_kind ? {
-    kind: state.target_kind,
-    host: state.host,
-    sshPort: state.ssh_port,
-  } : null;
   const target = await targetSelector({
-    platform: controlHostPlatform(onboarding),
+    platform: controlPlatform,
     options,
     savedTarget,
   });
-  if (!target) {
-    state = updateState(paths.state, state, {
+  if (target.waiting) {
+    state = stateUpdater(paths.state, state, {
       stage: "target-selection",
       status: "waiting_user",
+      location: target.location,
+      mode: target.mode,
+      target_kind: target.kind,
+      host: target.host,
+      ssh_port: target.sshPort,
     });
     activeOperation.state = state;
     return;
@@ -2675,7 +2689,9 @@ async function runInstallOperation(options, {
   const remoteTarget = target.kind === "remote-linux"
     ? { host: target.host, port: target.sshPort }
     : null;
-  state = updateState(paths.state, state, {
+  state = stateUpdater(paths.state, state, {
+    location: target.location,
+    mode: target.mode,
     target_kind: target.kind,
     host: target.host,
     ssh_port: target.sshPort,
@@ -2703,6 +2719,28 @@ async function runInstallOperation(options, {
     lifecycle_status: "completed",
     transport: lifecycleTransportForState(state),
   });
+
+  if (target.mode === "host-cluster" || target.mode === "existing-kubernetes") {
+    state = stateUpdater(paths.state, state, {
+      stage: "mode-configuration",
+      status: "running",
+    });
+    activeOperation.state = state;
+    const driver = target.mode === "host-cluster"
+      ? hostClusterInstaller
+      : existingKubernetesInstaller;
+    const result = await driver({ onboarding, state, paths, options, target });
+    if (result?.verification) {
+      await platformCompleter(onboarding, state, paths, result.verification, options.noResume);
+      return;
+    }
+    state = stateUpdater(paths.state, state, {
+      stage: "mode-configuration",
+      status: "waiting_user",
+    });
+    activeOperation.state = state;
+    return;
+  }
 
   const isWindowsLocal = target.kind === "local-windows";
   const windowsAdapter = isWindowsLocal
@@ -3143,6 +3181,7 @@ module.exports = {
   runInstall,
   runInstallOperation,
   runResume,
+  savedRouteFromState,
   resolveRemoteConsole,
   resumeInvocationForOnboarding,
   resolveSshHostname,
