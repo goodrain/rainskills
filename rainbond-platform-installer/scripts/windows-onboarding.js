@@ -8,7 +8,6 @@ const os = require("node:os");
 const path = require("node:path");
 const readline = require("node:readline/promises");
 const { stdin, stdout } = require("node:process");
-const { detectControlEnvironment } = require("./control-environment.js");
 const { createSecureStateStore } = require("./secure-state.js");
 const { createWindowsSecureStateStore } = require("./windows-platform.js");
 const {
@@ -25,6 +24,19 @@ const { createLifecycleTelemetry } = require("./telemetry.js");
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CONTROL_MODES = new Set(["windows-native", "wsl", "posix"]);
+const CAPABILITY_SUMMARY = `Rainskills 安装完成。
+
+现在可以帮你：
+
+- 分析项目的技术栈和部署结构
+- 将当前项目或 Git 仓库部署上线
+- 通过源码、镜像或安装包部署应用
+- 分析项目结构
+- 识别技术栈
+- 从应用模板安装应用
+- 给出部署结构建议
+
+直接告诉我你想做什么即可。`;
 
 function isLocalHttpUrl(value) {
   let parsed;
@@ -600,84 +612,26 @@ async function main(argv, dependencies = {}) {
     ? [path.resolve(options.customDest)]
     : destinationsForTarget(target, home);
   const skills = discoverSkills(packageRoot);
+  const logger = dependencies.logger || ((message) => stdout.write(`${message}\n`));
   const counts = copySkills({
     skills,
     destinations,
     force: options.force,
-    logger: dependencies.logger || ((message) => stdout.write(`${message}\n`)),
-  });
-  if (options.customDest || options.skipMcp) return { status: "skills-installed", counts };
-
-  const deployment = await resolveDeployment(options, {
-    isTty: dependencies.isTty,
-    promptDeployment: dependencies.promptDeployment,
-  });
-  const logger = dependencies.logger || ((message) => stdout.write(`${message}\n`));
-  if (deployment.needsUserInput) {
-    logger("[RAINSKILLS_USER_INPUT_REQUIRED:rainbond_environment]");
-    logger("请选择 Rainbond Cloud，或选择私有化部署并提供平台地址/继续平台安装。");
-    return { status: "waiting-user", counts };
-  }
-
-  if (deployment.needsPlatform) {
-    const packageManifest = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"));
-    const runtimePlatform = dependencies.platform || process.platform;
-    const stateStore = dependencies.stateStore || (
-      runtimePlatform === "win32"
-        ? createWindowsSecureStateStore({ home, runner: dependencies.runner })
-        : createSecureStateStore({ platform: runtimePlatform, home })
-    );
-    const operationId = dependencies.operationId || crypto.randomUUID();
-    const operationLock = stateStore.acquireOperationLock({ operationId });
-    try {
-      const checkpoint = createOnboardingCheckpoint({
-        home,
-        target,
-        packageVersion: packageManifest.version,
-        control: dependencies.control || detectControlEnvironment(),
-        operationId,
-        stateStore,
-      });
-      const nextAction = createNextAction(operationId);
-      logger("");
-      logger("Rainbond 平台安装将在独立步骤中继续，前面的选择已经保存。");
-      logger("支持 Windows 本地安装，也可以安装到 Linux 服务器。");
-      logger("");
-      logger("如果由 AI 代为安装，请按下面的固定参数继续；终端用户可以直接执行：");
-      logger(`npx rainskills@${packageManifest.version} platform install --onboarding-id ${operationId}`);
-      return { status: "awaiting-platform", counts, checkpoint, nextAction };
-    } finally {
-      operationLock.release();
-    }
-  }
-
-  const baseUrl = deployment.baseUrl;
-  const parsedBase = new URL(baseUrl);
-  if (!["http:", "https:"].includes(parsedBase.protocol)) {
-    throw new Error("Rainbond Console 地址必须使用 HTTP 或 HTTPS");
-  }
-  parsedBase.pathname = parsedBase.pathname.replace(/\/$/, "");
-  parsedBase.search = "";
-  parsedBase.hash = "";
-  const normalizedBase = parsedBase.toString().replace(/\/$/, "");
-  if (parsedBase.protocol === "http:" && !options.allowInsecureHttp && !isLocalHttpUrl(normalizedBase)) {
-    throw new Error("默认禁用明文 HTTP；如需继续请添加 --allow-insecure-http");
-  }
-  const configure = dependencies.authorizeAndConfigure || authorizeAndConfigure;
-  await configure({
-    target,
-    baseUrl: normalizedBase,
-    noBrowser: options.noBrowser,
     logger,
-    ...(dependencies.authorizationDependencies || {}),
   });
-  const clientLabel = target === "codex"
-    ? "Codex"
-    : target === "claude"
-      ? "Claude Code"
-      : "Codex 和 Claude Code";
-  logger(`安装和授权已完成。请重新启动 ${clientLabel}，让新 Skills、MCP 和环境变量生效。`);
-  return { status: "configured", counts };
+  logger("");
+  logger(`安装完成。本次：${counts.installed} 项新装 / ${counts.updated} 项已更新 / ${counts.unchanged} 项已是最新 / ${counts.forced} 项强制覆盖`);
+  logger("");
+  logger(CAPABILITY_SUMMARY);
+  if (!options.customDest) {
+    const clientLabel = target === "codex"
+      ? "Codex"
+      : target === "claude"
+        ? "Claude Code"
+        : "Codex / Claude Code";
+    logger(`请重启 ${clientLabel} 以加载新技能。`);
+  }
+  return { status: "skills-installed", counts };
 }
 
 module.exports = {

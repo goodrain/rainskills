@@ -19,6 +19,31 @@ AUTH_READY_PATTERN = re.compile(rb"127\.0\.0\.1:(\d+)/cli-callback")
 MANUAL_PASTE_PATTERN = re.compile("请粘贴回调 URL 或 JWT".encode())
 
 
+def authorization_shell_argv() -> list[str]:
+    script = r'''
+source "$1/install.sh" --dest "$HOME/source-probe" --force
+trap 'handle_installer_signal 130' INT
+trap 'handle_installer_signal 143' TERM
+trap 'handle_installer_exit "$?"' EXIT
+TARGET=codex
+DEPLOYMENT_MODE_INPUT=saas
+RAINBOND_TOKEN_INPUT=""
+RAINBOND_TOKEN_FROM_FLAG=0
+RAINBOND_URL_INPUT=""
+RAINBOND_URL_FROM_FLAG=0
+SKIP_MCP=0
+NON_INTERACTIVE=0
+configure_mcp
+'''
+    return [
+        "bash",
+        "-c",
+        script,
+        "rainskills-authorization-test",
+        str(REPO_ROOT),
+    ]
+
+
 def write_executable(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
@@ -177,18 +202,7 @@ exit 0
         pid, master_fd = pty.fork()
         if pid == 0:
             os.chdir(REPO_ROOT)
-            os.execve(
-                "/bin/bash",
-                [
-                    "bash",
-                    str(REPO_ROOT / "install.sh"),
-                    "codex",
-                    "--saas",
-                    "--no-cached-token",
-                    "--force",
-                ],
-                env,
-            )
+            os.execve("/bin/bash", authorization_shell_argv(), env)
 
         status = None
         tracked_pids = [pid]
@@ -293,18 +307,7 @@ exit 0
         pid, master_fd = pty.fork()
         if pid == 0:
             os.chdir(REPO_ROOT)
-            os.execve(
-                "/bin/bash",
-                [
-                    "bash",
-                    str(REPO_ROOT / "install.sh"),
-                    "codex",
-                    "--saas",
-                    "--no-cached-token",
-                    "--force",
-                ],
-                env,
-            )
+            os.execve("/bin/bash", authorization_shell_argv(), env)
 
         output = bytearray()
         status = None

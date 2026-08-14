@@ -14,6 +14,11 @@ assert_file_exists() {
   [[ -f "$path" ]] || fail "expected file to exist: $path"
 }
 
+assert_file_not_exists() {
+  local path="$1"
+  [[ ! -e "$path" ]] || fail "did not expect path to exist: $path"
+}
+
 assert_contains() {
   local path="$1"
   local pattern="$2"
@@ -71,6 +76,37 @@ first_index = content.find(first)
 second_index = content.find(second)
 if first_index < 0 or second_index < 0 or first_index >= second_index:
     raise SystemExit("expected {!r} before {!r}".format(first, second))
+PY
+}
+
+assert_exact_capability_summary() {
+  local path="$1"
+  python3 - "$path" <<'PY'
+import sys
+
+path = sys.argv[1]
+expected = """Rainskills 安装完成。
+
+现在可以帮你：
+
+- 分析项目的技术栈和部署结构
+- 将当前项目或 Git 仓库部署上线
+- 通过源码、镜像或安装包部署应用
+- 分析项目结构
+- 识别技术栈
+- 从应用模板安装应用
+- 给出部署结构建议
+
+直接告诉我你想做什么即可。"""
+content = open(path, encoding="utf-8", errors="replace").read().replace("\r\n", "\n")
+if content.count(expected) != 1:
+    raise SystemExit("expected the approved capability summary exactly once")
+start = content.index("现在可以帮你：")
+end = content.index("直接告诉我你想做什么即可。", start)
+actual_bullets = [line for line in content[start:end].splitlines() if line.startswith("- ")]
+expected_bullets = [line for line in expected.splitlines() if line.startswith("- ")]
+if actual_bullets != expected_bullets:
+    raise SystemExit("capability list differs: {!r}".format(actual_bullets))
 PY
 }
 
@@ -367,6 +403,44 @@ run_installer() {
   )
 }
 
+run_mcp_configuration() {
+  local workdir="$1"
+  shift
+  (
+    cd "$REPO_ROOT"
+    if [[ "${TEST_RAINBOND_PASSWORD+x}" == "x" ]]; then
+      export RAINBOND_PASSWORD="$TEST_RAINBOND_PASSWORD"
+    else
+      export RAINBOND_PASSWORD="secret-password"
+    fi
+    HOME="$workdir/home" \
+    SHELL="/bin/zsh" \
+    TEST_LOG_DIR="$workdir/logs" \
+    PATH="$workdir/bin:/usr/bin:/bin" \
+    TEST_FAKE_MCP_HTTP_CODE="${TEST_FAKE_MCP_HTTP_CODE:-}" \
+    TEST_FAKE_LOGIN_TOKEN="${TEST_FAKE_LOGIN_TOKEN:-}" \
+    TEST_FAKE_RENEWED_TOKEN="${TEST_FAKE_RENEWED_TOKEN:-}" \
+    TEST_FAKE_CODEX_ADD_FAIL="${TEST_FAKE_CODEX_ADD_FAIL:-}" \
+    TEST_FAKE_INSTALL_REPORT_FAIL="${TEST_FAKE_INSTALL_REPORT_FAIL:-}" \
+    TEST_FAKE_DETAILS_HTTP_CODE="${TEST_FAKE_DETAILS_HTTP_CODE:-}" \
+      bash -s -- "$REPO_ROOT" "$@" <<'BASH'
+set -euo pipefail
+repo_root="$1"
+shift
+source "$repo_root/install.sh" --dest "$HOME/source-probe" --force
+trap 'handle_installer_signal 130' INT
+trap 'handle_installer_signal 143' TERM
+trap 'status=$?; trap - EXIT; handle_installer_exit "$status"; wait || true; exit "$status"' EXIT
+initialize_rainskills_installation_reporting "$@"
+parse_args "$@"
+resolve_target
+RAINSKILLS_INSTALL_CLIENT="$(rainskills_install_client_for_target "$TARGET")"
+configure_mcp
+wait || true
+BASH
+  )
+}
+
 run_interactive_installer_with_pty() {
   local workdir="$1"
   local output_file="$2"
@@ -405,7 +479,17 @@ env["RAINBOND_PASSWORD"] = "secret-password"
 pid, master_fd = pty.fork()
 if pid == 0:
     os.chdir(repo_root)
-    os.execvpe("bash", ["bash", os.path.join(repo_root, "install.sh"), "codex", "--force"], env)
+    script = r'''
+source "$1/install.sh" --dest "$HOME/source-probe" --force
+trap 'handle_installer_signal 130' INT
+trap 'handle_installer_signal 143' TERM
+trap 'handle_installer_exit "$?"' EXIT
+TARGET=codex
+SKIP_MCP=0
+NON_INTERACTIVE=0
+configure_mcp
+'''
+    os.execvpe("bash", ["bash", "-c", script, "rainskills-authorization-test", repo_root], env)
 
 buffer = bytearray()
 response_index = 0
@@ -541,7 +625,7 @@ test_noninteractive_http_requires_explicit_opt_in() {
   make_fake_commands "$tmpdir/bin"
 
   set +e
-  run_installer "$tmpdir" all --non-interactive --rainbond-url http://rainbond.internal --username demo >/tmp/rainbond-install-test.out 2>&1
+  run_mcp_configuration "$tmpdir" all --non-interactive --rainbond-url http://rainbond.internal --username demo >/tmp/rainbond-install-test.out 2>&1
   local rc=$?
   set -e
 
@@ -569,17 +653,75 @@ test_posix_clients_openclaw_and_pi_are_rejected() {
   done
 }
 
-test_noninteractive_without_rainbond_params_skips_mcp() {
-  local tmpdir
+test_default_install_is_skills_only() {
+  local tmpdir output_file token forbidden
   tmpdir="$(mktemp -d)"
   trap 'rm -rf "$tmpdir"' RETURN
   mkdir -p "$tmpdir/home" "$tmpdir/logs"
   make_fake_commands "$tmpdir/bin"
+  output_file="$tmpdir/install.out"
+  token="$(make_test_jwt 1893456000)"
 
-  TEST_RAINBOND_PASSWORD="" run_installer "$tmpdir" all --non-interactive --force >/tmp/rainbond-install-skip.out 2>&1
+  run_installer "$tmpdir" all --non-interactive --saas --token "$token" --force \
+    >"$output_file" 2>&1
 
-  [[ ! -f "$tmpdir/home/.rainbond/mcp.env" ]] || fail "did not expect JWT file when MCP setup is auto-skipped"
-  grep -F -- "非交互模式下未提供 Rainbond 连接信息，已跳过 MCP 配置。" /tmp/rainbond-install-skip.out >/dev/null || fail "expected auto-skip guidance"
+  assert_exact_capability_summary "$output_file"
+  for forbidden in \
+    "Rainbond Cloud" \
+    "私有" \
+    "MCP" \
+    "登录" \
+    "授权" \
+    "Rainbond Console" \
+    "rainskills.next-action.v1"; do
+    assert_not_contains "$output_file" "$forbidden"
+  done
+
+  assert_file_not_exists "$tmpdir/home/.rainbond/mcp.env"
+  assert_file_not_exists "$tmpdir/home/.rainbond/rainskills-onboarding-v1.json"
+  assert_file_not_exists "$tmpdir/home/.rainbond/platform-installer"
+  assert_file_not_exists "$tmpdir/home/.codex/config.toml"
+  assert_file_not_exists "$tmpdir/home/.claude.json"
+  assert_file_not_exists "$tmpdir/home/.zshrc"
+  assert_file_not_exists "$tmpdir/logs/codex.log"
+  assert_file_not_exists "$tmpdir/logs/claude.log"
+  if [[ -f "$tmpdir/logs/curl.log" ]]; then
+    assert_not_contains "$tmpdir/logs/curl.log" "/console/"
+  fi
+  assert_contains "$output_file" "项新装"
+  assert_contains "$output_file" "请重启 Codex / Claude Code 以加载新技能。"
+}
+
+test_posix_all_target_installs_both_skill_sets_and_preserves_force_counts() {
+  local tmpdir output_file second_output source_skill skill_count expected_new expected_unchanged
+  tmpdir="$(mktemp -d)"
+  trap 'rm -rf "$tmpdir"' RETURN
+  mkdir -p \
+    "$tmpdir/home/.codex/skills/rainbond-app-assistant" \
+    "$tmpdir/home/.claude/skills/rainbond-app-assistant" \
+    "$tmpdir/logs"
+  make_fake_commands "$tmpdir/bin"
+  printf 'old codex skill\n' > "$tmpdir/home/.codex/skills/rainbond-app-assistant/SKILL.md"
+  printf 'old claude skill\n' > "$tmpdir/home/.claude/skills/rainbond-app-assistant/SKILL.md"
+  source_skill="$REPO_ROOT/rainbond-app-assistant/SKILL.md"
+  skill_count="$(find "$REPO_ROOT" -maxdepth 1 -mindepth 1 -type d -name 'rainbond-*' | wc -l | tr -d ' ')"
+  expected_new=$(( (skill_count - 1) * 2 ))
+  expected_unchanged=$(( skill_count * 2 ))
+  output_file="$tmpdir/force.out"
+  second_output="$tmpdir/unchanged.out"
+
+  run_installer "$tmpdir" all --non-interactive --force >"$output_file" 2>&1
+
+  cmp -s "$source_skill" "$tmpdir/home/.codex/skills/rainbond-app-assistant/SKILL.md" \
+    || fail "Codex pre-existing Skill was not force-overwritten"
+  cmp -s "$source_skill" "$tmpdir/home/.claude/skills/rainbond-app-assistant/SKILL.md" \
+    || fail "Claude pre-existing Skill was not force-overwritten"
+  assert_contains "$output_file" \
+    "安装完成。本次：${expected_new} 项新装 / 0 项已更新 / 0 项已是最新 / 2 项强制覆盖"
+
+  run_installer "$tmpdir" all --non-interactive >"$second_output" 2>&1
+  assert_contains "$second_output" \
+    "安装完成。本次：0 项新装 / 0 项已更新 / ${expected_unchanged} 项已是最新 / 0 项强制覆盖"
 }
 
 test_installer_configures_both_platforms_and_shell_autoload() {
@@ -591,7 +733,7 @@ test_installer_configures_both_platforms_and_shell_autoload() {
   make_fake_commands "$tmpdir/bin"
   default_token="$(make_test_jwt 1893456000)"
 
-  run_installer "$tmpdir" all --non-interactive --rainbond-url http://rainbond.internal --username demo --allow-insecure-http --force
+  run_mcp_configuration "$tmpdir" all --non-interactive --rainbond-url http://rainbond.internal --username demo --allow-insecure-http --force
 
   assert_file_exists "$tmpdir/home/.rainbond/mcp.env"
   assert_contains "$tmpdir/home/.rainbond/mcp.env" "export RAINBOND_JWT='$default_token'"
@@ -605,13 +747,9 @@ test_installer_configures_both_platforms_and_shell_autoload() {
   assert_file_exists "$tmpdir/home/.codex/config.toml"
   assert_contains "$tmpdir/home/.codex/config.toml" "url = \"http://rainbond.internal/console/mcp/rainskills/codex/query\""
   assert_contains "$tmpdir/home/.codex/config.toml" "bearer_token_env_var = \"RAINBOND_JWT\""
-  assert_file_exists "$tmpdir/home/.codex/skills/rainbond-fullstack-bootstrap/references/source-build-parameter-guide.md"
-
   assert_file_exists "$tmpdir/home/.claude.json"
   assert_contains "$tmpdir/home/.claude.json" "\"url\": \"http://rainbond.internal/console/mcp/rainskills/claude-code/query\""
   assert_contains "$tmpdir/home/.claude.json" "\"Authorization\": \"GRJWT \${RAINBOND_JWT}\""
-  assert_file_exists "$tmpdir/home/.claude/skills/rainbond-fullstack-bootstrap/references/source-build-parameter-guide.md"
-
   assert_contains "$tmpdir/logs/curl.log" "http://rainbond.internal/console/users/login"
   assert_contains "$tmpdir/logs/curl.log" "http://rainbond.internal/console/mcp/rainskills/codex/query"
   assert_contains "$tmpdir/logs/curl.log" "http://rainbond.internal/console/mcp/rainskills/claude-code/query"
@@ -626,7 +764,7 @@ test_dedicated_mcp_url_input_is_normalized_to_console_base() {
   mkdir -p "$tmpdir/home" "$tmpdir/logs"
   make_fake_commands "$tmpdir/bin"
 
-  run_installer "$tmpdir" codex --non-interactive \
+  run_mcp_configuration "$tmpdir" codex --non-interactive \
     --rainbond-url http://rainbond.internal/console/mcp/rainskills/codex/query \
     --username demo --allow-insecure-http --force >/tmp/rainbond-install-normalize.out 2>&1
 
@@ -731,7 +869,7 @@ test_saas_mode_does_not_show_self_hosted_install_hint() {
   make_fake_commands "$tmpdir/bin"
   token="$(make_test_jwt 1893456000)"
 
-  run_installer "$tmpdir" codex --non-interactive --saas --token "$token" --force \
+  run_mcp_configuration "$tmpdir" codex --non-interactive --saas --token "$token" --force \
     >"$output_file" 2>&1
 
   assert_not_contains "$output_file" "[RAINSKILLS_USER_INPUT_REQUIRED:rainbond_console_url]"
@@ -751,7 +889,7 @@ test_expired_cached_token_reauthenticates_before_write() {
   RAINBOND_JWT="$expired_token" \
   RAINBOND_URL="http://rainbond.internal" \
   TEST_FAKE_LOGIN_TOKEN="$fresh_token" \
-    run_installer "$tmpdir" all --non-interactive --rainbond-url http://rainbond.internal --username demo --allow-insecure-http --force \
+    run_mcp_configuration "$tmpdir" all --non-interactive --rainbond-url http://rainbond.internal --username demo --allow-insecure-http --force \
     >/tmp/rainbond-install-expired-cache.out 2>&1
 
   assert_contains "$tmpdir/logs/curl.log" "http://rainbond.internal/console/users/login"
@@ -772,7 +910,7 @@ test_expiring_cached_token_reauthenticates_before_write() {
   RAINBOND_JWT="$expiring_token" \
   RAINBOND_URL="http://rainbond.internal" \
   TEST_FAKE_LOGIN_TOKEN="$fresh_token" \
-    run_installer "$tmpdir" all --non-interactive --rainbond-url http://rainbond.internal --username demo --allow-insecure-http --force \
+    run_mcp_configuration "$tmpdir" all --non-interactive --rainbond-url http://rainbond.internal --username demo --allow-insecure-http --force \
     >/tmp/rainbond-install-expiring-cache.out 2>&1
 
   assert_contains "$tmpdir/logs/curl.log" "http://rainbond.internal/console/users/login"
@@ -790,7 +928,7 @@ test_expired_flag_token_fails_without_writing_config() {
   expired_token="$(make_test_jwt 1700000000)"
 
   set +e
-  run_installer "$tmpdir" codex --non-interactive --rainbond-url http://rainbond.internal --token "$expired_token" --allow-insecure-http --force \
+  run_mcp_configuration "$tmpdir" codex --non-interactive --rainbond-url http://rainbond.internal --token "$expired_token" --allow-insecure-http --force \
     >/tmp/rainbond-install-expired-flag.out 2>&1
   local rc=$?
   set -e
@@ -825,7 +963,7 @@ test_mcp_renewed_token_is_persisted_after_validation() {
   RAINBOND_JWT="$original_token" \
   RAINBOND_URL="http://rainbond.internal" \
   TEST_FAKE_RENEWED_TOKEN="$renewed_token" \
-    run_installer "$tmpdir" codex --non-interactive --rainbond-url http://rainbond.internal --allow-insecure-http --force \
+    run_mcp_configuration "$tmpdir" codex --non-interactive --rainbond-url http://rainbond.internal --allow-insecure-http --force \
     >/tmp/rainbond-install-renewed.out 2>&1
 
   assert_contains "$tmpdir/home/.rainbond/mcp.env" "export RAINBOND_JWT='$renewed_token'"
@@ -958,7 +1096,7 @@ test_mcp_404_reports_missing_endpoint() {
   set +e
   (
     export TEST_FAKE_MCP_HTTP_CODE=404
-    run_installer "$tmpdir" codex --non-interactive --rainbond-url http://rainbond.internal --username demo --allow-insecure-http --force
+    run_mcp_configuration "$tmpdir" codex --non-interactive --rainbond-url http://rainbond.internal --username demo --allow-insecure-http --force
   ) >/tmp/rainbond-install-404.out 2>&1
   local rc=$?
   set -e
@@ -993,7 +1131,7 @@ test_installer_reports_installation_lifecycle() {
   mkdir -p "$tmpdir/home" "$tmpdir/logs"
   make_fake_commands "$tmpdir/bin"
 
-  run_installer "$tmpdir" codex --non-interactive --rainbond-url http://rainbond.internal \
+  run_mcp_configuration "$tmpdir" codex --non-interactive --rainbond-url http://rainbond.internal \
     --username demo --allow-insecure-http --force >/tmp/rainbond-install-report.out 2>&1
 
   report_file="$tmpdir/logs/install-report.log"
@@ -1065,7 +1203,7 @@ test_installation_reporting_failures_do_not_block_installation() {
   make_fake_commands "$tmpdir/bin"
 
   TEST_FAKE_INSTALL_REPORT_FAIL=1 \
-    run_installer "$tmpdir" codex --non-interactive --rainbond-url http://rainbond.internal \
+    run_mcp_configuration "$tmpdir" codex --non-interactive --rainbond-url http://rainbond.internal \
       --username demo --allow-insecure-http --force >/tmp/rainbond-install-report-failure.out 2>&1
 
   assert_file_exists "$tmpdir/home/.rainbond/mcp.env"
@@ -1081,7 +1219,7 @@ test_enterprise_lookup_failure_does_not_block_installation() {
   make_fake_commands "$tmpdir/bin"
 
   TEST_FAKE_DETAILS_HTTP_CODE=500 \
-    run_installer "$tmpdir" claude --non-interactive --rainbond-url http://rainbond.internal \
+    run_mcp_configuration "$tmpdir" claude --non-interactive --rainbond-url http://rainbond.internal \
       --username demo --allow-insecure-http --force >/tmp/rainbond-install-details-failure.out 2>&1
 
   assert_file_exists "$tmpdir/home/.rainbond/mcp.env"
@@ -1136,7 +1274,8 @@ PY
 
 test_noninteractive_http_requires_explicit_opt_in
 test_posix_clients_openclaw_and_pi_are_rejected
-test_noninteractive_without_rainbond_params_skips_mcp
+test_default_install_is_skills_only
+test_posix_all_target_installs_both_skill_sets_and_preserves_force_counts
 test_interactive_prompts_are_visible
 test_saas_mode_does_not_show_self_hosted_install_hint
 test_expired_cached_token_reauthenticates_before_write

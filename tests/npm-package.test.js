@@ -21,6 +21,19 @@ const skillNames = [
   "rainbond-project-init",
   "rainbond-template-installer",
 ];
+const approvedCapabilitySummary = `Rainskills 安装完成。
+
+现在可以帮你：
+
+- 分析项目的技术栈和部署结构
+- 将当前项目或 Git 仓库部署上线
+- 通过源码、镜像或安装包部署应用
+- 分析项目结构
+- 识别技术栈
+- 从应用模板安装应用
+- 给出部署结构建议
+
+直接告诉我你想做什么即可。`;
 
 function packPackage(destination) {
   const result = spawnSync(
@@ -166,6 +179,75 @@ test("npm exec installs from the packed skills without downloading a repository 
   assert(fs.existsSync(path.join(destination, uploadHelper)));
   const curlCalls = fs.existsSync(curlLog) ? fs.readFileSync(curlLog, "utf8") : "";
   assert(!/rainskills-(latest|[a-f0-9]+)\.tar\.gz/.test(curlCalls), curlCalls);
+});
+
+test("the packed default installer installs only Skills and prints the approved capabilities", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-skills-only-"));
+  const packDir = path.join(tempDir, "pack");
+  const home = path.join(tempDir, "home");
+  const fakeBin = path.join(tempDir, "bin");
+  const curlLog = path.join(tempDir, "curl.log");
+  fs.mkdirSync(packDir);
+  fs.mkdirSync(home);
+  fs.mkdirSync(fakeBin);
+  fs.writeFileSync(
+    path.join(fakeBin, "curl"),
+    '#!/bin/sh\nprintf "%s\\n" "$*" >> "$RAINSKILLS_CURL_LOG"\nexit 1\n',
+    { mode: 0o755 }
+  );
+
+  const packed = packPackage(packDir);
+  const result = spawnSync(
+    npmCommand,
+    [
+      "exec",
+      "--yes",
+      `--package=${packed.tarballPath}`,
+      "--",
+      "rainskills",
+      "codex",
+      "--force",
+      "--saas",
+    ],
+    {
+      cwd: tempDir,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        HOME: home,
+        PATH: `${fakeBin}${path.delimiter}${process.env.PATH || ""}`,
+        RAINBOND_JWT: "",
+        RAINBOND_PASSWORD: "",
+        RAINBOND_URL: "",
+        RAINBOND_USERNAME: "",
+        RAINSKILLS_CURL_LOG: curlLog,
+      },
+    }
+  );
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const output = `${result.stdout}\n${result.stderr}`.replace(/\r\n/g, "\n");
+  assert.equal(output.split(approvedCapabilitySummary).length - 1, 1);
+  for (const forbidden of [
+    "Rainbond Cloud",
+    "私有",
+    "MCP",
+    "登录",
+    "授权",
+    "Rainbond Console",
+    "rainskills.next-action.v1",
+  ]) {
+    assert.equal(output.includes(forbidden), false, `default install output contains ${forbidden}`);
+  }
+  assert.equal(fs.existsSync(path.join(home, ".codex", "skills", "rainbond-app-assistant", "SKILL.md")), true);
+  assert.equal(fs.existsSync(path.join(home, ".rainbond", "mcp.env")), false);
+  assert.equal(fs.existsSync(path.join(home, ".rainbond", "rainskills-onboarding-v1.json")), false);
+  assert.equal(fs.existsSync(path.join(home, ".rainbond", "platform-installer")), false);
+  assert.equal(fs.existsSync(path.join(home, ".codex", "config.toml")), false);
+  assert.equal(fs.existsSync(path.join(home, ".claude.json")), false);
+  assert.equal(fs.existsSync(path.join(home, ".zshrc")), false);
+  const curlCalls = fs.existsSync(curlLog) ? fs.readFileSync(curlLog, "utf8") : "";
+  assert.equal(curlCalls.includes("/console/"), false);
 });
 
 test("the packed artifact exposes a real npx command", () => {

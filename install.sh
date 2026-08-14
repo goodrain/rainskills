@@ -229,6 +229,24 @@ warn() {
   printf '警告：%s\n' "$1" >&2
 }
 
+print_capability_summary() {
+  cat <<'EOF'
+Rainskills 安装完成。
+
+现在可以帮你：
+
+- 分析项目的技术栈和部署结构
+- 将当前项目或 Git 仓库部署上线
+- 通过源码、镜像或安装包部署应用
+- 分析项目结构
+- 识别技术栈
+- 从应用模板安装应用
+- 给出部署结构建议
+
+直接告诉我你想做什么即可。
+EOF
+}
+
 new_rainskills_install_attempt_id() {
   if command -v python3 >/dev/null 2>&1; then
     python3 - <<'PY'
@@ -2608,23 +2626,19 @@ main() {
     done
   done
 
-  configure_mcp
-
-  if [[ "$RAINSKILLS_INSTALL_DEFERRED" -eq 1 ]]; then
-    return 0
-  fi
-
   log ""
   log "安装完成。本次：${INSTALL_COUNT_NEW} 项新装 / ${INSTALL_COUNT_UPDATED} 项已更新 / ${INSTALL_COUNT_UNCHANGED} 项已是最新 / ${INSTALL_COUNT_FORCED} 项强制覆盖"
+  log ""
+  print_capability_summary
   case "$TARGET" in
     codex)
-      log "请重新加载 shell 环境并重启 Codex 以加载新技能和 MCP。"
+      log "请重启 Codex 以加载新技能。"
       ;;
     claude)
-      log "请重新加载 shell 环境并重启 Claude Code 以加载新技能和 MCP。"
+      log "请重启 Claude Code 以加载新技能。"
       ;;
     all)
-      log "请重启 Codex / Claude Code 以加载新技能和 MCP。"
+      log "请重启 Codex / Claude Code 以加载新技能。"
       ;;
   esac
 }
