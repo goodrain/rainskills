@@ -304,10 +304,20 @@ test("native Windows checkpoint is protected and accepted by platform resume", (
     operationId,
     now: () => "2026-08-03T00:00:00.000Z",
     stateStore,
+    intent: {
+      type: "template-install",
+      template_id: "wordpress",
+      install_scope: "new-app",
+    },
   });
 
   assert.equal(checkpoint.state.control_mode, "windows-native");
   assert.equal(checkpoint.state.control_distro, null);
+  assert.deepEqual(checkpoint.state.intent, {
+    type: "template-install",
+    template_id: "wordpress",
+    install_scope: "new-app",
+  });
   assert.equal(checkpoint.state.platform_state_path, path.join(
     home,
     ".rainbond",
@@ -325,6 +335,25 @@ test("native Windows checkpoint is protected and accepted by platform resume", (
     onboarding_id: operationId,
     argv: ["platform", "install", "--onboarding-id", operationId],
   });
+
+  assert.throws(() => createOnboardingCheckpoint({
+    home,
+    target: "codex",
+    packageVersion: "0.1.0-test",
+    control: {
+      mode: "windows-native",
+      hostPlatform: "win32",
+      controlPlatform: "win32",
+    },
+    operationId,
+    stateStore,
+    intent: {
+      type: "template-install",
+      template_id: "wordpress",
+      install_scope: "existing-app",
+      app_id: "app-1",
+    },
+  }), /existing|已有|现有/i);
 });
 
 test("native main installs only Skills without selecting or configuring a runtime", async () => {

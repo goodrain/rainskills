@@ -10,6 +10,7 @@ const path = require("node:path");
 const readline = require("node:readline/promises");
 const { spawn, spawnSync } = require("node:child_process");
 const { createSecureStateStore } = require("./secure-state.js");
+const { assertIntentCanInstallNewPlatform, validateIntent } = require("./runtime-intents.js");
 const {
   assertSafePackageVersion,
   createRecoveryBundle,
@@ -157,6 +158,9 @@ function readOnboardingState(filePath, expectedOperationId, stateStore = secureS
     } else if (distro !== null && distro !== undefined) {
       throw new Error("非 WSL 状态不能包含 control_distro");
     }
+  }
+  if (state.intent !== undefined && state.intent !== null) {
+    state.intent = validateIntent(state.intent);
   }
   return state;
 }
@@ -2554,20 +2558,29 @@ async function completePlatform(onboarding, state, paths, verification, noResume
   if (!noResume) await runResume(onboarding.operation_id);
 }
 
-async function runInstallOperation(options) {
+async function runInstallOperation(options, {
+  onboardingPathResolver = onboardingStatePath,
+  ensurePrivateDirectory = ensurePrivateOperationDirectory,
+  onboardingReader = readOnboardingState,
+  pathsResolver = operationPaths,
+  targetSelector = selectInstallTarget,
+} = {}) {
   assertOperationId(options.onboardingId);
-  ensurePrivateOperationDirectory(path.dirname(onboardingStatePath()));
-  let onboarding = readOnboardingState(onboardingStatePath(), options.onboardingId);
+  ensurePrivateDirectory(path.dirname(onboardingPathResolver()));
+  let onboarding = onboardingReader(onboardingPathResolver(), options.onboardingId);
   if (!["awaiting-platform", "platform-ready", "authorizing"].includes(onboarding.stage)) {
     throw new Error(`当前 onboarding 阶段不能安装平台：${onboarding.stage}`);
+  }
+  if (onboarding.stage === "awaiting-platform" && onboarding.intent) {
+    onboarding = { ...onboarding, intent: assertIntentCanInstallNewPlatform(onboarding.intent) };
   }
   if (onboarding.stage === "platform-ready" || onboarding.stage === "authorizing") {
     if (!options.noResume) await runResume(options.onboardingId);
     return;
   }
 
-  const paths = operationPaths(options.onboardingId);
-  ensurePrivateOperationDirectory(paths.root);
+  const paths = pathsResolver(options.onboardingId);
+  ensurePrivateDirectory(paths.root);
   assertOperationFilesSafe(paths);
   let state = fs.existsSync(paths.state)
     ? readPlatformState(paths.state, options.onboardingId)
@@ -2597,7 +2610,7 @@ async function runInstallOperation(options) {
     host: state.host,
     sshPort: state.ssh_port,
   } : null;
-  const target = await selectInstallTarget({
+  const target = await targetSelector({
     platform: controlHostPlatform(onboarding),
     options,
     savedTarget,
@@ -3078,6 +3091,7 @@ module.exports = {
   useBundledInstaller,
   runCommand,
   runInstall,
+  runInstallOperation,
   runResume,
   resolveRemoteConsole,
   resumeInvocationForOnboarding,

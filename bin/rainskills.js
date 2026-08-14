@@ -6,6 +6,44 @@ const {
   detectControlEnvironment,
 } = require("../rainbond-platform-installer/scripts/control-environment.js");
 
+async function runBuiltin(args, {
+  runtimeStateManager,
+  write = (value) => process.stdout.write(value),
+} = {}) {
+  if (args[0] === "runtime" && args[1] === "status") {
+    if (args.length !== 3 || args[2] !== "--json") {
+      throw new Error("runtime status 只支持固定参数 --json");
+    }
+    const manager = runtimeStateManager || require(
+      "../rainbond-platform-installer/scripts/runtime-state.js"
+    ).createRuntimeStateManager();
+    write(`${JSON.stringify(await manager.status())}\n`);
+    return true;
+  }
+  if (args[0] === "intent" && args[1] === "resume") {
+    if (args.length !== 4 || args[2] !== "--onboarding-id" || !args[3]) {
+      throw new Error("intent resume 需要固定参数 --onboarding-id <uuid>");
+    }
+    const manager = runtimeStateManager || require(
+      "../rainbond-platform-installer/scripts/runtime-state.js"
+    ).createRuntimeStateManager();
+    const status = await manager.status();
+    if (status.state !== "connected" || status.usable !== true) {
+      throw new Error("runtime 尚未 connected 且通过 live probe，不能恢复 intent");
+    }
+    const runtime = manager.read();
+    if (runtime.state !== "connected") throw new Error("runtime 状态已变化，不能恢复 intent");
+    if (runtime.operation_id !== args[3]) throw new Error("runtime operation_id 与参数不匹配");
+    if (!runtime.intent) throw new Error("runtime state 缺少 validated intent");
+    const { createIntentContinuation } = require(
+      "../rainbond-platform-installer/scripts/runtime-intents.js"
+    );
+    write(`${JSON.stringify(createIntentContinuation(runtime.intent, runtime.failed_step || undefined))}\n`);
+    return true;
+  }
+  return false;
+}
+
 function classifyNodeMajor(major) {
   if (major < 18) {
     return "unsupported";
@@ -60,7 +98,7 @@ function resolveInvocation(args, {
   };
 }
 
-function run() {
+async function run() {
   const major = Number.parseInt(process.versions.node.split(".", 1)[0], 10);
   const support = classifyNodeMajor(major);
 
@@ -81,7 +119,9 @@ function run() {
     );
   }
 
-  const invocation = resolveInvocation(process.argv.slice(2));
+  const args = process.argv.slice(2);
+  if (await runBuiltin(args)) return;
+  const invocation = resolveInvocation(args);
   const child = spawn(invocation.executable, invocation.args, {
     env: process.env,
     stdio: "inherit",
@@ -111,8 +151,11 @@ function run() {
   });
 }
 
-module.exports = { classifyNodeMajor, resolveInvocation };
+module.exports = { classifyNodeMajor, resolveInvocation, runBuiltin };
 
 if (require.main === module) {
-  run();
+  run().catch((error) => {
+    console.error(`错误：${error.message}`);
+    process.exitCode = 1;
+  });
 }

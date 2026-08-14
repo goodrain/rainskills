@@ -9,6 +9,7 @@ const path = require("node:path");
 const readline = require("node:readline/promises");
 const { stdin, stdout } = require("node:process");
 const { createSecureStateStore } = require("./secure-state.js");
+const { assertIntentCanInstallNewPlatform } = require("./runtime-intents.js");
 const { createWindowsSecureStateStore } = require("./windows-platform.js");
 const {
   authorizeWithDeviceFlow,
@@ -283,6 +284,7 @@ function createOnboardingCheckpoint({
   operationId = crypto.randomUUID(),
   now = () => new Date().toISOString(),
   stateStore,
+  intent,
 }) {
   if (!UUID_PATTERN.test(operationId)) throw new Error("operation id 不是有效的 UUID");
   if (!["codex", "claude", "all"].includes(target)) throw new Error("安装目标无效");
@@ -313,6 +315,7 @@ function createOnboardingCheckpoint({
     ),
     console_url: null,
   };
+  if (intent !== undefined) state.intent = assertIntentCanInstallNewPlatform(intent);
   store.atomicWriteJson(checkpointPath, state);
   return { path: checkpointPath, state };
 }

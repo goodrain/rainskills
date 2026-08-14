@@ -84,6 +84,60 @@ test("launcher routes platform and resume commands to the bundled helper", () =>
   });
 });
 
+test("onboarding reads validate and canonicalize the stored intent", () => {
+  const { readOnboardingState } = require(platformInstallerPath);
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-onboarding-intent-"));
+  const stateStore = require("./helpers/portable-secure-state.js").createPortableSecureStateStore(home);
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  const statePath = path.join(home, ".rainbond", "rainskills-onboarding-v1.json");
+  stateStore.atomicWriteJson(statePath, {
+    schema: "rainskills.onboarding.v1",
+    version: 1,
+    operation_id: operationId,
+    stage: "awaiting-platform",
+    target: "codex",
+    deployment_mode: "self-hosted",
+    control_mode: "posix",
+    intent: { type: "query", operation: "summary", app_id: "app-1" },
+  });
+
+  assert.deepEqual(readOnboardingState(statePath, operationId, stateStore).intent, {
+    type: "query",
+    operation: "summary",
+    app_id: "app-1",
+  });
+
+  const unsafe = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  unsafe.intent.access_token = "must-not-be-read";
+  stateStore.atomicWriteJson(statePath, unsafe);
+  assert.throws(() => readOnboardingState(statePath, operationId, stateStore), /credential|凭据/i);
+});
+
+test("platform dispatch rejects existing-app intent before driver side effects", async () => {
+  const { runInstallOperation } = require(platformInstallerPath);
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  const calls = [];
+  const onboarding = {
+    schema: "rainskills.onboarding.v1",
+    version: 1,
+    operation_id: operationId,
+    stage: "awaiting-platform",
+    target: "codex",
+    deployment_mode: "self-hosted",
+    control_mode: "posix",
+    intent: { type: "query", operation: "summary", app_id: "app-1" },
+  };
+
+  await assert.rejects(() => runInstallOperation({ onboardingId: operationId }, {
+    onboardingPathResolver: () => "/protected/onboarding.json",
+    ensurePrivateDirectory: () => {},
+    onboardingReader: () => onboarding,
+    pathsResolver: () => { calls.push("paths"); throw new Error("must not resolve driver paths"); },
+    targetSelector: async () => { calls.push("target"); throw new Error("must not select target"); },
+  }), /existing|已有|现有/i);
+  assert.deepEqual(calls, []);
+});
+
 test("platform resume selects native Node or POSIX Bash from onboarding control mode", () => {
   const {
     controlHostPlatform,

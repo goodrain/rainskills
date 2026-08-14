@@ -59,7 +59,7 @@
     "check:marketplace": "node scripts/build-marketplace-package.mjs --check",
     "check:pi": "node scripts/build-pi-extension.mjs --check",
     "test": "npm run test:launcher && npm run test:marketplace && npm run test:pi && npm run test:telemetry && npm run test:platform && npm run test:windows && npm run test:package-upload && npm run test:package && npm run test:installer && npm run test:signal && npm run test:npx-pty",
-    "test:launcher": "node --test tests/npx-launcher.test.js",
+    "test:launcher": "node --test tests/npx-launcher.test.js tests/runtime-intents.test.js tests/runtime-state.test.js",
     "test:marketplace": "node --test tests/marketplace-entry.test.js",
     "test:pi": "npm run check:pi && node --test tests/pi-extension.test.js",
     "test:telemetry": "node --test tests/telemetry.test.js",
