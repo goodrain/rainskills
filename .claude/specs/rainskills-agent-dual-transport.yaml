@@ -1,0 +1,322 @@
+meta:
+  name: "rainskills-agent-dual-transport"
+  version: "1.0"
+  repo: "multi:/Users/guox/Desktop/Project/rainskills,/Users/guox/Desktop/Project/rainbond-agent"
+  branch: "rainskills:main; rainbond-agent:main-7.9"
+  design_doc: "docs/plans/2026-08-13-cli-only-rainskills-and-agent-skill-coordination.md"
+  invariants:
+    - "CLI profile uses only the RainSkills API endpoint /console/mcp/rainskills/api/query."
+    - "Agent embedded profile uses only session-provided Rainbond MCP tools backed by /console/mcp/query."
+    - "Transport failures never fall back across the API/MCP boundary."
+    - "CDN/cache/vendor fallback changes only the Skill content source, never the platform transport."
+
+sprints:
+  - id: sprint-1
+    name: "Publish explicit CLI and MCP artifact contracts"
+    commits:
+      - id: commit-1
+        repo: "/Users/guox/Desktop/Project/rainskills"
+        message: "feat: publish explicit cli and embedded skill profiles"
+        tasks: [task-1.1, task-1.2]
+    tasks:
+      - id: task-1.1
+        name: "Make the embedded artifact contract explicitly MCP-only"
+        status: completed
+        files:
+          modify:
+            - path: "scripts/build-skill-profile.mjs"
+              lines: "25-42,125-192,253-310"
+            - path: "tests/skill-profile-builder.test.js"
+              lines: "48-101"
+        steps:
+          - action: "write-test"
+            description: "Change the manifest expectation from the ambiguous session_tools value to the canonical MCP transport and assert the generated narrative never mentions the CLI API endpoint."
+            code: |
+              assert.deepEqual(manifest.runtime_contract, {
+                platform_transport: "mcp",
+                endpoint_class: "rainbond_agent_mcp",
+                client_workspace: "unavailable",
+                local_package_upload: "unsupported",
+                configuration_sources: ["explicit_input", "session_context", "platform_tools"],
+                unavailable_behavior: "stop_and_report",
+              });
+              assert.doesNotMatch(content, /rainskills-tools\.js|\/console\/mcp\/rainskills\/api\/query/);
+            run: "node --test tests/skill-profile-builder.test.js"
+            expect: "FAIL because the generated manifest still uses session_tools and lacks endpoint_class"
+          - action: "implement"
+            description: "Emit the explicit MCP runtime contract while preserving the existing embedded narrative and forbidden-marker checks."
+            code: |
+              const EMBEDDED_RUNTIME_CONTRACT = {
+                platform_transport: "mcp",
+                endpoint_class: "rainbond_agent_mcp",
+                client_workspace: "unavailable",
+                local_package_upload: "unsupported",
+                configuration_sources: ["explicit_input", "session_context", "platform_tools"],
+                unavailable_behavior: "stop_and_report",
+              };
+            run: "node --test tests/skill-profile-builder.test.js"
+            expect: "PASS"
+        acceptance:
+          - cmd: "node --test tests/skill-profile-builder.test.js"
+            expect: "All embedded profile tests pass"
+        references:
+          - path: "docs/plans/2026-08-13-cli-only-rainskills-and-agent-skill-coordination.md:123-143"
+            note: "Canonical CLI/API and Agent/MCP separation"
+
+      - id: task-1.2
+        name: "Publish profile and transport metadata in both channel families"
+        status: completed
+        files:
+          modify:
+            - path: ".github/workflows/release.yml"
+              lines: "82-104,293-319"
+            - path: "tests/skill-profile-builder.test.js"
+              lines: "120-134"
+        steps:
+          - action: "write-test"
+            description: "Require CLI manifests to identify profile=cli/transport=api and embedded manifests to identify profile=embedded/transport=mcp."
+            code: |
+              assert.match(workflow, /"profile": "cli"[\s\S]*"transport": "api"/);
+              assert.match(workflow, /"profile": "embedded"[\s\S]*"transport": "mcp"/);
+            run: "node --test tests/skill-profile-builder.test.js"
+            expect: "FAIL because the release manifests do not yet carry both explicit transport values"
+          - action: "implement"
+            description: "Add profile and transport fields to canary/stable manifests without changing the existing URLs or npm promotion behavior."
+            code: |
+              // CLI channel manifest fields
+              "profile": "cli",
+              "transport": "api",
+              // Embedded channel manifest fields
+              "profile": "embedded",
+              "transport": "mcp",
+            run: "node --test tests/skill-profile-builder.test.js"
+            expect: "PASS"
+        acceptance:
+          - cmd: "npm test"
+            expect: "PASS"
+        references:
+          - path: ".github/workflows/release.yml:34-172"
+            note: "Canary artifact publication"
+          - path: ".github/workflows/release.yml:293-356"
+            note: "Stable channel promotion"
+
+  - id: sprint-2
+    name: "Make rainbond-agent consume only embedded MCP artifacts"
+    commits:
+      - id: commit-2
+        repo: "/Users/guox/Desktop/Project/rainbond-agent"
+        message: "feat: load mcp-only embedded skill artifacts"
+        tasks: [task-2.1, task-2.2, task-2.3]
+    tasks:
+      - id: task-2.1
+        name: "Resolve embedded channel manifests and safe tarball URLs"
+        status: pending
+        files:
+          modify:
+            - path: "src/server/skills/skill-source.ts"
+              lines: "33-57,88-143,218-276,334-367"
+            - path: "tests/server/skills/skill-source.test.ts"
+              lines: "51-96,140-452,455-523"
+        steps:
+          - action: "write-test"
+            description: "Update the fake CDN to expose embedded manifests and assert the resolver uses manifest.tarball_url rather than the legacy hard-coded URL."
+            code: |
+              const manifestPath = `/profiles/embedded/channels/${channel}.json`;
+              const tarballPath = `/profiles/embedded/rainskills-embedded-${sha}.tar.gz`;
+              expect(cdn.hits).toContain(manifestPath);
+              expect(cdn.hits).toContain(tarballPath);
+              expect(result.profile).toBe("embedded");
+            run: "npx vitest run tests/server/skills/skill-source.test.ts"
+            expect: "FAIL against the legacy /channels and /rainskills-<sha> paths"
+          - action: "implement"
+            description: "Add the embedded profile to source types, fetch the embedded channel, validate same-origin tarball URLs, and reject profile/transport mismatches."
+            code: |
+              const SKILL_PROFILE = "embedded" as const;
+              const PLATFORM_TRANSPORT = "mcp" as const;
+              interface ChannelManifest {
+                sha: string;
+                profile: typeof SKILL_PROFILE;
+                transport: typeof PLATFORM_TRANSPORT;
+                tarball_url: string;
+                manifest_version: number;
+              }
+              const channelUrl = `${baseUrl}/profiles/${SKILL_PROFILE}/channels/${channel}.json`;
+              // Parse tarball_url with URL, require the configured CDN origin, then download it verbatim.
+            run: "npx vitest run tests/server/skills/skill-source.test.ts"
+            expect: "PASS"
+        acceptance:
+          - cmd: "npx vitest run tests/server/skills/skill-source.test.ts"
+            expect: "All source-resolution tests pass"
+        references:
+          - path: "src/server/skills/skill-source.ts:218-276"
+            note: "Legacy channel and tarball resolution to replace"
+
+      - id: task-2.2
+        name: "Isolate cache by embedded profile and validate the extracted artifact manifest"
+        status: pending
+        files:
+          modify:
+            - path: "src/server/skills/skill-source.ts"
+              lines: "13-31,236-318,370-420"
+            - path: "tests/server/skills/skill-source.test.ts"
+              lines: "140-452"
+        steps:
+          - action: "write-test"
+            description: "Require cache paths under embedded/<sha>, a profile manifest, matching source revision, and runtime_contract.platform_transport=mcp."
+            code: |
+              expect(result.rootDir).toBe(path.join(cacheDir, "embedded", sha));
+              await expect(resolveWithMissingProfileManifest()).rejects.toThrow(/profile manifest/i);
+              await expect(resolveWithCliProfile()).rejects.toThrow(/profile.*embedded/i);
+              await expect(resolveWithApiTransport()).rejects.toThrow(/transport.*mcp/i);
+            run: "npx vitest run tests/server/skills/skill-source.test.ts"
+            expect: "FAIL before cache and manifest validation are profile-aware"
+          - action: "implement"
+            description: "Move LATEST and SHA directories under the embedded cache namespace and validate rainskills-profile.json before promoting a download into cache."
+            code: |
+              interface EmbeddedProfileManifest {
+                manifest_version: number;
+                profile: "embedded";
+                source_revision: string;
+                runtime_contract: { platform_transport: "mcp" };
+              }
+              const profileCacheDir = path.join(cacheDir, "embedded");
+              // validate profile, transport, revision, and required skills before atomic rename
+            run: "npx vitest run tests/server/skills/skill-source.test.ts"
+            expect: "PASS"
+        acceptance:
+          - cmd: "npx vitest run tests/server/skills/skill-source.test.ts tests/server/skills/skill-registry-source.integration.test.ts"
+            expect: "PASS"
+        references:
+          - path: "src/server/skills/skill-source.ts:278-318"
+            note: "Legacy cache fallback and LATEST handling"
+
+      - id: task-2.3
+        name: "Expose embedded profile identity through registry and admin status"
+        status: pending
+        files:
+          modify:
+            - path: "src/server/skills/skill-registry.ts"
+              lines: "30-42,83-128"
+            - path: "src/server/admin/skills-admin.ts"
+              lines: "124-131"
+            - path: "tests/server/skills/skill-registry-source.integration.test.ts"
+              lines: "52-137"
+            - path: "tests/server/admin/skills-admin.test.ts"
+              lines: "1-170"
+        steps:
+          - action: "write-test"
+            description: "Require profile=embedded in registry source metadata and admin version/reload responses."
+            code: |
+              expect(getCurrentSkillSource().profile).toBe("embedded");
+              expect(payload.profile).toBe("embedded");
+            run: "npx vitest run tests/server/skills/skill-registry-source.integration.test.ts tests/server/admin/skills-admin.test.ts"
+            expect: "FAIL because ResolvedSkillSource has no profile field"
+          - action: "implement"
+            description: "Carry profile identity through local/CDN/fallback results and admin serialization without changing the MCP executor."
+            code: |
+              export interface ResolvedSkillSource {
+                profile: "embedded";
+                rootDir: string;
+                sha: string;
+                channel: string;
+                source: ResolvedSkillSourceKind;
+              }
+            run: "npx vitest run tests/server/skills/skill-registry-source.integration.test.ts tests/server/admin/skills-admin.test.ts"
+            expect: "PASS"
+        acceptance:
+          - cmd: "npm run build:server"
+            expect: "PASS"
+        references:
+          - path: "src/server/skills/skill-registry.ts:44-128"
+            note: "Registry initialization and reload"
+
+  - id: sprint-3
+    name: "Generate the Agent vendor fallback from the embedded profile"
+    commits:
+      - id: commit-3
+        repo: "/Users/guox/Desktop/Project/rainbond-agent"
+        message: "refactor: generate embedded skill vendor fallback"
+        tasks: [task-3.1, task-3.2]
+    tasks:
+      - id: task-3.1
+        name: "Replace rsync-and-reinject with the upstream embedded builder"
+        status: pending
+        files:
+          modify:
+            - path: "scripts/sync-rainbond-skills.mjs"
+              lines: "1-189"
+            - path: "scripts/sync-skills.sh"
+              lines: "1-118"
+          create:
+            - path: "tests/server/skills/sync-rainbond-skills.test.ts"
+        steps:
+          - action: "write-test"
+            description: "Create a fake upstream builder, set RAINBOND_SKILLS_UPSTREAM, and assert the sync command installs only a validated embedded artifact with its source revision."
+            code: |
+              const result = spawnSync(process.execPath, [syncScript], {
+                env: { ...process.env, RAINBOND_SKILLS_UPSTREAM: upstream },
+                encoding: "utf8",
+              });
+              expect(result.status).toBe(0);
+              expect(readVendorManifest()).toMatchObject({
+                profile: "embedded",
+                runtime_contract: { platform_transport: "mcp" },
+              });
+            run: "npx vitest run tests/server/skills/sync-rainbond-skills.test.ts"
+            expect: "FAIL because the current script ignores RAINBOND_SKILLS_UPSTREAM and performs raw rsync"
+          - action: "implement"
+            description: "Resolve the explicit upstream, invoke its build-skill-profile.mjs into a temporary directory, validate the manifest, then atomically rsync the complete embedded tree into skills-src/rainbond. Make sync-skills.sh delegate to this one path."
+            code: |
+              const sourceRoot = process.env.RAINBOND_SKILLS_UPSTREAM
+                ? resolve(process.env.RAINBOND_SKILLS_UPSTREAM)
+                : resolve(projectRoot, "..", "rainskills");
+              execFileSync(process.execPath, [
+                join(sourceRoot, "scripts", "build-skill-profile.mjs"),
+                "--profile", "embedded",
+                "--source-root", sourceRoot,
+                "--revision", upstreamRevision,
+                "--output", stagingRoot,
+              ]);
+              // validate manifest, then rsync stagingRoot/ to skills-src/rainbond/
+            run: "npx vitest run tests/server/skills/sync-rainbond-skills.test.ts"
+            expect: "PASS"
+        acceptance:
+          - cmd: "npx vitest run tests/server/skills/sync-rainbond-skills.test.ts"
+            expect: "PASS"
+        references:
+          - path: "scripts/sync-rainbond-skills.mjs:1-189"
+            note: "Legacy local-delta reinjection logic"
+
+      - id: task-3.2
+        name: "Refresh vendor and operational documentation"
+        status: pending
+        files:
+          modify:
+            - path: "skills-src/rainbond/**"
+              lines: "generated"
+            - path: "CLAUDE.md"
+              lines: "18-118"
+            - path: "docs/env-vars.md"
+              lines: "125-160"
+        steps:
+          - action: "implement"
+            description: "Generate vendor from the exact rainskills revision, document embedded channels/cache paths, and remove instructions that sync CLI text directly."
+            code: |
+              RAINBOND_SKILLS_UPSTREAM=/Users/guox/Desktop/Project/rainskills npm run skills:sync
+            run: "RAINBOND_SKILLS_SOURCE=local npx vitest run tests/server/skills/skill-structural-checks.test.ts tests/server/skills/skill-router.test.ts"
+            expect: "PASS"
+          - action: "verify"
+            description: "Run the complete Agent test and build gates."
+            code: |
+              npm test
+              npm run build:server
+            run: "npm test && npm run build:server"
+            expect: "PASS"
+        acceptance:
+          - cmd: "npm test"
+            expect: "PASS"
+          - cmd: "npm run build:server"
+            expect: "PASS"
+        references:
+          - path: "CLAUDE.md:84-118"
+            note: "Legacy vendor sync SOP"
