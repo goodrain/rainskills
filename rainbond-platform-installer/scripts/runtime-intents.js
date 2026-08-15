@@ -86,6 +86,34 @@ const INTENT_DEFINITIONS = deepFreeze({
     enums: { operation: ["preview", "apply"] },
     steps: ["resolve-target", "prepare", "apply", "verify"],
   },
+  "env-sync": {
+    skillId: "rainbond-env-sync",
+    required: ["project_root", "environment"],
+    optional: ["team_id", "app_id", "service_id"],
+    enums: { environment: ["preview", "production"] },
+    steps: ["resolve-target", "sync", "verify"],
+  },
+  "project-init": {
+    skillId: "rainbond-project-init",
+    required: ["project_root"],
+    optional: ["source_kind", "source_url"],
+    enums: { source_kind: ["local", "git", "image", "package"] },
+    steps: ["project-analysis", "manifest", "link"],
+  },
+  bootstrap: {
+    skillId: "rainbond-fullstack-bootstrap",
+    required: ["project_root"],
+    optional: ["team_id", "app_id", "service_id"],
+    enums: {},
+    steps: ["resolve-target", "topology", "build"],
+  },
+  "troubleshoot-phase": {
+    skillId: "rainbond-fullstack-troubleshooter",
+    required: ["operation"],
+    optional: ["team_id", "app_id", "service_id"],
+    enums: { operation: ["auto", "build", "runtime", "access"] },
+    steps: ["resolve-target", "diagnose", "repair", "verify"],
+  },
 });
 
 function assertBoundedString(value, field, maximum) {
@@ -166,10 +194,11 @@ function validateIntent(input, { pathApi = path } = {}) {
 }
 
 function isExistingAppIntent(intent) {
-  if (["query", "troubleshoot", "modify", "delivery-verify", "snapshot", "publish", "rollback"].includes(intent.type)) {
+  if (["query", "troubleshoot", "troubleshoot-phase", "env-sync", "modify", "delivery-verify", "snapshot", "publish", "rollback"].includes(intent.type)) {
     return true;
   }
   if (intent.type === "template-install") return intent.install_scope === "existing-app";
+  if (intent.type === "bootstrap") return Boolean(intent.app_id || intent.service_id);
   return ["deploy", "create"].includes(intent.type) && Boolean(intent.service_id);
 }
 

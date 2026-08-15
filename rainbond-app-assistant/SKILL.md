@@ -1,6 +1,6 @@
 ---
 name: rainbond-app-assistant
-description: "Use for any request to deploy, run, deliver, publish, or troubleshoot the current project — regardless of whether the user mentions \"Rainbond\" by name. Triggers on generic intents such as: 帮我把项目跑起来 / 部署这个项目 / 发布上线 / 看看为什么跑不起来 / 帮我交付 / 排查一下 / deploy this project / run this app / check what is blocking it. Prefer this skill when a Rainbond MCP connection is configured in the session. Handles the full lifecycle: project-init, bootstrap, troubleshooting, delivery verification, dev-to-test promotion, and code-layer handoff."
+description: "Use whenever a user asks to deploy, run, deliver, publish, inspect, repair, or troubleshoot the current project, regardless of whether a runtime or MCP connection is configured and whether Rainbond is named. Trigger phrases include: 帮我把当前项目部署到 Rainbond 上 / 帮我把这个项目跑起来 / 帮我看看当前项目卡在哪 / 如果还没初始化就先初始化，然后自动继续到应该停止的位置 / 帮我处理一下这个应用 / deploy this project / run this app / publish this app / troubleshoot this project."
 ---
 
   # Rainbond App Assistant
@@ -55,65 +55,70 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
   - 规则说明、流程说明、人类可读结论：优先中文
   - `### Structured Output` 里的对象名、字段名、enum：保持英文 canonical 形式
 
-  ## Preflight Gate（最高优先级，先于硬规则执行）
+  <!-- rainskills-runtime-gate:start -->
+  ## 运行环境门禁（最高优先级）
 
-  在读取其它 skill 文件、扫描用户项目、或调用任何业务 MCP 工具之前，必须先验证当前会话能力。
+  第一步检查 Node.js 是否存在且主版本不低于 18。Node.js 缺失或低于 18 时，只说明“Rainskills 执行组件需要 Node.js 18 或更高版本”并停止：不选择运行环境，不调用 MCP，不猜测替代命令。只有用户或 agent 明确同意后才安装或升级 Node.js，再从同一原始 intent 继续。
 
-  Step 0 — Probe MCP availability：
-  - 调用一个轻量探针，例如 `rainbond_query_enterprises`
-  - 成功：记录 enterprise / team / region 上下文，进入"硬规则"和主线流程
-  - 失败（auth / transport / timeout / not configured）：立即停止，不进入业务流程
+  固定 launcher 是 `["npx", "--yes", "rainskills@0.1.0-rc.60"]`；版本必须与本技能包 `package.json` 一致。把 launcher 与参数拼成 argv 数组直接执行，禁止使用 `rainskills@latest`，禁止拼接或执行 shell 字符串。
 
-  Preflight 失败时禁止做的事：
-  - 读取其它 reference / SKILL 文件
-  - 扫描用户项目目录、读取 `rainbond.app.json` 或 `.rainbond/local.json`
-  - 在本地生成 `Dockerfile`、`docker-compose.yml`、`manifest`、部署脚本或临时部署文档
-  - 手工编写或猜测 `~/.rainbond/mcp.env`、JWT、API token
-  - 调用任何业务 MCP 工具
+  Node.js 前置检查通过后，先执行 launcher + `["runtime", "status", "--json"]`；它必须先于项目扫描和任何业务 MCP。`not_started` 时，即使本会话历史上调用过 MCP 也不能跳过门禁。只有返回 `connected`、`usable = true` 且本次 live probe 成功，才进入业务流程；live probe 失败必须进入 reconnect。
 
-  Preflight 失败时必须给用户的动作建议，需要先区分场景：
-
-  - 如果用户机器上已存在 `~/.rainbond/mcp.env` 或 `~/.rainbond/skills/install.sh`，
-    判定为「已装过，多半是 JWT 过期 / 401 / 403」，给出 refresh 指引：
-
-    ```bash
-    bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh) refresh
-    # 或：bash ~/.rainbond/skills/install.sh refresh
-    ```
-
-    成功后按安装器输出执行客户端恢复动作：Codex / Claude Code 重启，Pi Agent 执行
-    `/reload`；OpenClaw 当前 CLI 使用安装器触发 MCP 热加载，独立 Gateway / Agent 进程需重新加载配置或重启。恢复完成后再让用户重新触发同一指令，
-    本轮不要自动重试同一个 MCP 工具调用。
-
-  - 否则视为首次安装，给完整安装命令：
-
-    ```bash
-    bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh)
-    ```
-
-    安装脚本会配置 MCP server、保存 JWT，并验证当前客户端的 RainSkills 专用 MCP 地址可用。
-    配置完成后重新触发同一指令即可。
-
-  例外：用户在同一会话里已经成功用过任意 `rainbond_*` 工具，则视为 preflight 已通过，不必每轮重探。
-
-  ## Installation Intent（高优先级）
-
-  当用户的请求本身是"帮我把 rainskills / Rainbond MCP 装上"或等价表达（含 `github.com/goodrain/rainskills` URL）时，**禁止**走以下旁路：
-
-  - 手工 `git clone` 后只复制部分 `rainbond-*` Skill
-  - 手工编写 `~/.rainbond/mcp.env`、JWT、登录回调
-  - 手工修改任一客户端配置来注册 MCP server
-
-  必须给用户一行可直接复制的命令，由仓库内 `install.sh` 接管交互式登录、JWT 获取、MCP 注册和验证：
-
-  ```bash
-  bash <(curl -fsSL https://raw.githubusercontent.com/goodrain/rainskills/main/install.sh)
+  <!-- rainskills-runtime-contract:start -->
+  ```json
+  {
+    "schema": "rainskills.skill-runtime-contract.v1",
+    "launcher": ["npx", "--yes", "rainskills@0.1.0-rc.60"],
+    "intents": {
+      "deploy": {"required": ["project_root", "source_kind"], "optional": ["source_url", "service_id"], "enums": {"source_kind": ["local", "git", "image", "package"]}},
+      "create": {"required": ["project_root", "source_kind"], "optional": ["source_url", "service_id"], "enums": {"source_kind": ["local", "git", "image", "package"]}},
+      "query": {"required": ["operation"], "optional": ["team_id", "app_id", "service_id"], "enums": {"operation": ["summary", "components", "events", "logs", "access"]}},
+      "troubleshoot": {"required": ["operation"], "optional": ["team_id", "app_id", "service_id"], "enums": {"operation": ["auto", "build", "runtime", "access"]}},
+      "modify": {"required": ["team_id", "app_id", "operation"], "optional": ["service_id"], "enums": {"operation": ["component-config", "build-source", "ports", "env", "storage", "dependency"]}}
+    },
+    "routes": {
+      "new": ["saas", "private-existing", "install-private"],
+      "existing": ["saas", "private-existing"]
+    },
+    "connect_argv": {
+      "saas": ["npx", "--yes", "rainskills@0.1.0-rc.60", "runtime", "connect", "<target>", "--saas", "--intent-json", "<intent-json>"],
+      "private-existing": ["npx", "--yes", "rainskills@0.1.0-rc.60", "runtime", "connect", "<target>", "--rainbond-url", "<rainbond-url>", "--intent-json", "<intent-json>"],
+      "install-private": ["npx", "--yes", "rainskills@0.1.0-rc.60", "runtime", "connect", "<target>", "--install-private", "--intent-json", "<intent-json>"]
+    }
+  }
   ```
+  <!-- rainskills-runtime-contract:end -->
 
-  如果用户当前会话所在仓库就是 `rainbond-skills` 本身，可建议 `./install.sh`。
-  如果用户明确要求非默认仓库位置，告诉他用环境变量 `RAINBOND_SKILLS_HOME=<path>` 前置。
+  `deploy`/`create` 含 `service_id` 时属于 existing，否则属于 new；`query`、`troubleshoot`、`modify` 始终属于 existing。意图不明确时先澄清，不执行 connect。target 只允许 `codex`、`claude`、`all`。连接前校验 intent，只执行其 scope 在契约中允许的完整 argv。只消费 schema 为 `rainskills.next-action.v1` 且完成字段校验后的 `argv` 数组。
 
-  说明给用户：脚本会安装全部独立 Skill、引导浏览器登录、写 `~/.rainbond/mcp.env`、为 Codex / Claude Code / OpenClaw / Pi Agent 配置对应 MCP，并验证专用地址。不需要 AI 手工配置其中任何一步。
+  连接或平台安装完成后，用固定 `onboarding-id` 执行 launcher + `["intent", "resume", "--onboarding-id", "<同一 onboarding-id>"]`，恢复原始 intent 和 `resume_step`，不得重新猜测动作。
+
+  业务 MCP 返回 401 时，先执行 launcher + `["runtime", "record-failure", "--onboarding-id", "<同一 onboarding-id>", "--step", "<当前固定步骤>", "--reason", "credential-expired"]`，再仅一次执行 launcher + `["runtime", "reconnect", "--onboarding-id", "<同一 onboarding-id>"]`，然后 resume 并只重试该步骤；第二次 401 立即停止。403 时执行 launcher + `["runtime", "record-failure", "--onboarding-id", "<同一 onboarding-id>", "--step", "<当前固定步骤>", "--reason", "permission-denied"]` 后停止，不得 reconnect、重新授权或自动重试，只说明缺少的权限。
+  <!-- rainskills-runtime-gate:end -->
+
+  <!-- rainskills-runtime-routing:start -->
+  ## 缺少运行环境时
+
+  ### 意图不明确
+
+  用户请求没有明确指向新应用或已有应用时，只问：“这是要部署新应用还是管理已有应用？”确认前不连接运行环境，也不展示任何环境选项。
+
+  ### 新应用
+
+  用户明确要部署新应用后，先说：
+
+  > 可以，我会帮你分析、构建、部署和验证当前项目。
+  >
+  > 不过目前还没有可用的应用运行环境。
+  >
+  > 你刚安装的 Rainskills 是 AI 部署助手，它负责分析项目并执行部署；应用实际会运行在 Rainbond 上。Rainbond 是一套应用运行和管理平台，负责源码构建、容器运行、域名访问、日志和存储等工作，你不需要了解 Kubernetes。
+
+  再让用户选择 `Rainbond Cloud`、`已有私有 Rainbond` 或`安装私有 Rainbond`。
+
+  ### 已有应用
+
+  用户明确要查询、排障、修改或验证已有应用时，使用与动作匹配的第一句话，只提供 `Rainbond Cloud` 或承载目标应用的`已有私有 Rainbond`。已有应用不得安装新平台，也不得进入 install-private。
+  <!-- rainskills-runtime-routing:end -->
 
   ## 硬规则
 

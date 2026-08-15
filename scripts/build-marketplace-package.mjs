@@ -17,7 +17,7 @@ const version = packageManifest.version;
 const repository = "https://github.com/goodrain/rainskills";
 const homepage = `${repository}#readme`;
 const description =
-  "Install and initialize the complete Rainbond skill suite as one product.";
+  "Install the complete Rainskills AI deployment skill suite as one product.";
 const keywords = [
   "rainbond",
   "codex",
@@ -63,14 +63,14 @@ const codexPlugin = {
   skills: "./skills/",
   interface: {
     displayName: "Rainskills",
-    shortDescription: "Install and connect the complete Rainbond skill suite",
+    shortDescription: "Install the complete Rainskills AI deployment skill suite",
     longDescription:
-      "Install every independent Rainskills capability, choose Rainbond Cloud or a private platform, authorize access, configure MCP, and verify the connection.",
+      "Install every independent Rainskills capability. Application runtime selection and connection happen later, only when the user requests an action that needs them.",
     developerName: "Goodrain",
     category: "Engineering",
     capabilities: ["Interactive", "Write"],
     websiteURL: "https://www.rainbond.com",
-    defaultPrompt: ["Install and initialize Rainskills for me."],
+    defaultPrompt: ["Install Rainskills for me."],
     brandColor: "#2563EB",
     screenshots: [],
   },

@@ -69,6 +69,8 @@ test("marketplace metadata presents Rainskills as one product", () => {
   assert.match(metadata, /display_name: "Rainskills"/);
   assert.match(metadata, /short_description: ".{25,64}"/);
   assert.match(metadata, /default_prompt: ".*\$rainskills.*"/);
+  assert.match(metadata, /安装.*Skill|install.*Skill/i);
+  assert.doesNotMatch(metadata, /connect.*Rainbond|initialize.*Rainbond/i);
 });
 
 test("generated marketplace package contains one version-pinned Skill", () => {
@@ -199,6 +201,11 @@ test("npm artifact includes the marketplace entry", () => {
   );
   assert.match(manifest.scripts.test, /npm run test:marketplace/);
   assert.equal(
+    manifest.scripts["test:runtime-routing"],
+    "node --test tests/runtime-onboarding-routing.test.js && python3 tests/run_skill_routing_evals.py"
+  );
+  assert.match(manifest.scripts.test, /npm run test:runtime-routing/);
+  assert.equal(
     manifest.scripts["build:marketplace"],
     "node scripts/build-marketplace-package.mjs"
   );
@@ -230,4 +237,18 @@ test("README documents one-product installation and updates for each adapter", (
   assert.match(readme, /不支持 OpenClaw 或 Pi Agent 安装/);
   assert.doesNotMatch(readme, /npx --yes rainskills (openclaw|pi)/);
   assert.match(readme, /只会看到一个.*Rainskills/s);
+  assert.match(readme, /安装完成后.*不会.*运行环境|安装完成后.*只.*Skills/s);
+});
+
+test("generated marketplace guidance installs Skills without eager runtime setup", () => {
+  const skill = read("marketplace/rainskills/skills/rainskills/SKILL.md");
+  const plugin = readJson("marketplace/rainskills/.codex-plugin/plugin.json");
+
+  assert.match(skill, /Rainskills 安装完成/);
+  assert.doesNotMatch(skill, /Stay attached until.*MCP|Report the configured.*Rainbond environment/s);
+  assert.match(plugin.description, /skill/i);
+  assert.doesNotMatch(plugin.description, /connect|authoriz|MCP/i);
+  assert.doesNotMatch(plugin.interface.longDescription, /choose Rainbond Cloud|authorize access|configure MCP/i);
+  const completion = skill.slice(skill.indexOf("## Completion Message"));
+  assert.doesNotMatch(completion, /reload|restart|重新加载|重启|下一步/i);
 });

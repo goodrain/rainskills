@@ -1,22 +1,62 @@
 ---
 name: rainbond-fullstack-bootstrap
-description: Use only when the next step is already known to be topology creation for the current project or manifest. Do not use as the first or default response to a generic current-project deployment request; route those to rainbond-app-assistant.
+description: "Use only when the user explicitly asks to create the Rainbond app and component topology for a known current project or manifest. Trigger phrases include: 只帮我创建应用和组件，不要继续排障 / create topology / bootstrap only. Do not use for a generic current-project deployment request; route that to rainbond-app-assistant."
 ---
 
 # Rainbond Fullstack Bootstrap
 
-## MCP 认证失败恢复（JWT 过期 / 401 / 403）
+<!-- rainskills-runtime-gate:start -->
+## 运行环境门禁（最高优先级）
 
-当任何 `rainbond_*` MCP 工具返回 401 / 403 / `unauthorized` / `token expired` 类认证错误时，
-禁止重装 skills，也禁止手工改 `~/.rainbond/mcp.env`。先用下面任一命令刷新 JWT：
+第一步检查 Node.js 是否存在且主版本不低于 18。Node.js 缺失或低于 18 时，只说明“Rainskills 执行组件需要 Node.js 18 或更高版本”并停止：不选择运行环境，不调用 MCP，不猜测替代命令。只有用户或 agent 明确同意后才安装或升级 Node.js，再从同一原始 intent 继续。
 
-```bash
-bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh) refresh
-# 或：bash ~/.rainbond/skills/install.sh refresh
+固定 launcher 是 `["npx", "--yes", "rainskills@0.1.0-rc.60"]`；版本必须与本技能包 `package.json` 一致。把 launcher 与参数拼成 argv 数组直接执行，禁止 `rainskills@latest` 或执行 shell 字符串。
+
+前置检查通过后先执行 launcher + `["runtime", "status", "--json"]`，先于任何业务 MCP。`not_started` 不能因历史 MCP 跳过；只有 `connected`、`usable = true` 且本次 live probe 成功才继续，探针失败必须 reconnect。
+
+<!-- rainskills-runtime-contract:start -->
+```json
+{
+  "schema": "rainskills.skill-runtime-contract.v1",
+  "launcher": ["npx", "--yes", "rainskills@0.1.0-rc.60"],
+  "intents": {
+    "bootstrap": {"required": ["project_root"], "optional": ["team_id", "app_id", "service_id"], "enums": {}}
+  },
+  "route_conditions": {
+    "new": {"app_id": "absent", "service_id": "absent"},
+    "existing": {"any_present": ["app_id", "service_id"]}
+  },
+  "routes": {
+    "new": ["saas", "private-existing", "install-private"],
+    "existing": ["saas", "private-existing"]
+  },
+  "connect_argv": {
+    "saas": ["npx", "--yes", "rainskills@0.1.0-rc.60", "runtime", "connect", "<target>", "--saas", "--intent-json", "<intent-json>"],
+    "private-existing": ["npx", "--yes", "rainskills@0.1.0-rc.60", "runtime", "connect", "<target>", "--rainbond-url", "<rainbond-url>", "--intent-json", "<intent-json>"],
+    "install-private": ["npx", "--yes", "rainskills@0.1.0-rc.60", "runtime", "connect", "<target>", "--install-private", "--intent-json", "<intent-json>"]
+  }
+}
 ```
+<!-- rainskills-runtime-contract:end -->
 
-刷新成功后按安装器输出执行客户端恢复动作：Codex / Claude Code 重启，Pi Agent 执行
-`/reload`；OpenClaw 当前 CLI 使用安装器触发 MCP 热加载，独立 Gateway / Agent 进程需重新加载配置或重启。在恢复完成前不要自动重试同一个 MCP 工具调用。
+target 只允许 `codex`、`claude`、`all`。校验 intent 后按 `route_conditions` 选择 scope：`app_id` 和 `service_id` 都没有时是 new；任一存在时是 existing。只执行该 scope 允许的完整 argv；只消费 schema 为 `rainskills.next-action.v1` 且校验后的 `argv` 数组。
+
+连接完成后用固定 `onboarding-id` 执行 launcher + `["intent", "resume", "--onboarding-id", "<同一 onboarding-id>"]`，恢复原始 intent 和 `resume_step`。401 先执行 launcher + `["runtime", "record-failure", "--onboarding-id", "<同一 onboarding-id>", "--step", "<当前固定步骤>", "--reason", "credential-expired"]`，再仅一次执行 launcher + `["runtime", "reconnect", "--onboarding-id", "<同一 onboarding-id>"]` 后 resume，只重试该步骤；第二次 401 停止。403 执行 launcher + `["runtime", "record-failure", "--onboarding-id", "<同一 onboarding-id>", "--step", "<当前固定步骤>", "--reason", "permission-denied"]` 后停止，不得 reconnect、重新授权或自动重试。
+<!-- rainskills-runtime-gate:end -->
+
+<!-- rainskills-runtime-routing:start -->
+## 缺少运行环境时
+
+先说：“可以，我会帮你创建应用和组件拓扑。不过目前还没有可用的应用运行环境。你刚安装的 Rainskills 是 AI 部署助手，它负责分析项目并执行部署；应用实际会运行在 Rainbond 上。Rainbond 是一套应用运行和管理平台，负责源码构建、容器运行、域名访问、日志和存储等工作，你不需要了解 Kubernetes。”
+
+### 新建目标
+
+intent 不含 `app_id` 和 `service_id` 时，让用户选择 `Rainbond Cloud`、`已有私有 Rainbond` 或`安装私有 Rainbond`。
+
+### 已有目标
+
+intent 含 `app_id` 或 `service_id` 时，已有应用只让用户选择 `Rainbond Cloud` 或承载目标应用的`已有私有 Rainbond`。
+<!-- rainskills-runtime-routing:end -->
 
 ## Overview
 

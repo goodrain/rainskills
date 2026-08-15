@@ -78,7 +78,7 @@ test("package metadata defines a public npx command with only the pinned YAML pa
   );
   assert.equal(
     manifest.scripts.test,
-    "npm run test:launcher && npm run test:marketplace && npm run test:pi && npm run test:telemetry && npm run test:platform && npm run test:windows && npm run test:package-upload && npm run test:package && npm run test:installer && npm run test:signal && npm run test:npx-pty"
+    "npm run test:launcher && npm run test:marketplace && npm run test:runtime-routing && npm run test:pi && npm run test:telemetry && npm run test:platform && npm run test:windows && npm run test:package-upload && npm run test:package && npm run test:installer && npm run test:signal && npm run test:npx-pty"
   );
   assert.equal(
     manifest.scripts["test:platform"],

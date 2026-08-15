@@ -92,8 +92,10 @@ bootstrap_download_if_needed() {
   chmod +x "$target_script" 2>/dev/null || true
 
   bootstrap_log "切换到 $target_script 继续执行……"
-  if [[ -r /dev/tty ]]; then
-    exec bash "$target_script" "$@" </dev/tty
+  local controlling_tty=""
+  controlling_tty="$(tty 2>/dev/null || true)"
+  if [[ "$controlling_tty" == /dev/* && -r "$controlling_tty" ]]; then
+    exec bash "$target_script" "$@" <"$controlling_tty"
   else
     exec bash "$target_script" "$@"
   fi

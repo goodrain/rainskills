@@ -23,6 +23,10 @@ const cases = [
   ["snapshot", "rainbond-app-version-assistant", { team_id: "team-1", app_id: "app-1", operation: "create" }, "resolve-target"],
   ["publish", "rainbond-app-version-assistant", { team_id: "team-1", app_id: "app-1", destination: "local-library", version: "1.2.3" }, "resolve-target"],
   ["rollback", "rainbond-app-version-assistant", { team_id: "team-1", app_id: "app-1", snapshot_id: "snapshot-1", operation: "preview" }, "resolve-target"],
+  ["env-sync", "rainbond-env-sync", { project_root: "/workspace/app", environment: "preview", app_id: "app-1" }, "resolve-target"],
+  ["project-init", "rainbond-project-init", { project_root: "/workspace/app", source_kind: "local" }, "project-analysis"],
+  ["bootstrap", "rainbond-fullstack-bootstrap", { project_root: "/workspace/app", app_id: "app-1" }, "resolve-target"],
+  ["troubleshoot-phase", "rainbond-fullstack-troubleshooter", { operation: "build", app_id: "app-1" }, "resolve-target"],
 ];
 
 test("every bounded runtime intent maps to a fixed Skill and first resume step", () => {
@@ -106,6 +110,9 @@ test("operation and destination values are closed enums", () => {
     { type: "snapshot", team_id: "team-1", app_id: "app-1", operation: "delete" },
     { type: "publish", team_id: "team-1", app_id: "app-1", destination: "arbitrary-url" },
     { type: "rollback", team_id: "team-1", app_id: "app-1", snapshot_id: "snap-1", operation: "force" },
+    { type: "env-sync", project_root: "/workspace/app", environment: "staging" },
+    { type: "project-init", project_root: "/workspace/app", source_kind: "archive" },
+    { type: "troubleshoot-phase", operation: "shell" },
   ]) {
     assert.throws(() => validateIntent(intent), /固定值|allowed/i);
   }
@@ -142,4 +149,46 @@ test("new platform setup rejects intents that require an existing app", () => {
     operation: "summary",
     app_id: "app-1",
   })), /existing|已有|现有/i);
+  assert.throws(() => assertIntentCanInstallNewPlatform(validateIntent({
+    type: "env-sync",
+    project_root: "/workspace/app",
+    environment: "production",
+  })), /existing|已有|现有/i);
+  assert.throws(() => assertIntentCanInstallNewPlatform(validateIntent({
+    type: "troubleshoot-phase",
+    operation: "runtime",
+  })), /existing|已有|现有/i);
+  assert.doesNotThrow(() => assertIntentCanInstallNewPlatform(validateIntent({
+    type: "project-init",
+    project_root: "/workspace/app",
+  })));
+  assert.doesNotThrow(() => assertIntentCanInstallNewPlatform(validateIntent({
+    type: "bootstrap",
+    project_root: "/workspace/app",
+  })));
+  assert.throws(() => assertIntentCanInstallNewPlatform(validateIntent({
+    type: "bootstrap",
+    project_root: "/workspace/app",
+    app_id: "app-1",
+  })), /existing|已有|现有/i);
+  assert.throws(() => assertIntentCanInstallNewPlatform(validateIntent({
+    type: "bootstrap",
+    project_root: "/workspace/app",
+    service_id: "service-1",
+  })), /existing|已有|现有/i);
+});
+
+test("bootstrap existing-app classification follows explicit identifier cases", () => {
+  const { isExistingAppIntent, validateIntent } = require(modulePath);
+  const cases = [
+    [{ type: "bootstrap", project_root: "/workspace/app" }, false],
+    [{ type: "bootstrap", project_root: "/workspace/app", team_id: "team-1" }, false],
+    [{ type: "bootstrap", project_root: "/workspace/app", app_id: "app-1" }, true],
+    [{ type: "bootstrap", project_root: "/workspace/app", service_id: "service-1" }, true],
+    [{ type: "bootstrap", project_root: "/workspace/app", app_id: "app-1", service_id: "service-1" }, true],
+  ];
+
+  for (const [sample, expected] of cases) {
+    assert.equal(isExistingAppIntent(validateIntent(sample)), expected, JSON.stringify(sample));
+  }
 });
