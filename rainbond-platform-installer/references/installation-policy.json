@@ -22,6 +22,28 @@
     "tested_rainbond_version": "v6.9.6-release",
     "reviewed_at": "2026-08-04"
   },
+  "roi": {
+    "allowed_origin": "https://get.rainbond.com",
+    "allowed_path_prefix": "/roi/",
+    "max_bytes": 134217728,
+    "max_redirects": 3,
+    "trust": "https-origin+published-checksum-discovery+runtime-validation",
+    "reviewed_at": "2026-08-14",
+    "artifacts": {
+      "amd64": {
+        "url": "https://get.rainbond.com/roi/roi-amd64",
+        "checksum_urls": [
+          "https://get.rainbond.com/roi/roi-amd64.sha256"
+        ]
+      },
+      "arm64": {
+        "url": "https://get.rainbond.com/roi/roi-arm64",
+        "checksum_urls": [
+          "https://get.rainbond.com/roi/roi-arm64.sha256"
+        ]
+      }
+    }
+  },
   "windows": {
     "minimum_build": 19041,
     "supported_architectures": ["x64"],

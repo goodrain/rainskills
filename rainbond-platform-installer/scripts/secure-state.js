@@ -61,7 +61,7 @@ function createSecureStateStore({
     }
   }
 
-  function inspectWindowsPath(targetPath, expectedKind) {
+  function inspectWindowsPath(targetPath, expectedKind, { externalSource = false } = {}) {
     const info = fs.lstatSync(targetPath);
     if (info.isSymbolicLink()) throw new Error(`拒绝使用 Windows reparse point：${targetPath}`);
     if (expectedKind === "file" && !info.isFile()) {
@@ -73,7 +73,7 @@ function createSecureStateStore({
     if (typeof inspectWindowsAcl !== "function" || !currentSid) {
       throw new Error("Windows 安全状态需要 ACL inspector 和当前用户 SID");
     }
-    const acl = inspectWindowsAcl(targetPath, expectedKind);
+    const acl = inspectWindowsAcl(targetPath, expectedKind, { externalSource });
     if (!acl || acl.reparsePoint) {
       throw new Error(`拒绝使用 Windows reparse point：${targetPath}`);
     }
@@ -81,12 +81,22 @@ function createSecureStateStore({
       throw new Error(`Windows 状态路径 owner 不匹配：${targetPath}`);
     }
     const allowedWriters = new Set([...WINDOWS_ALLOWED_WRITERS, currentSid.toUpperCase()]);
-    const unsafeWriter = (acl.writableSids || [])
+    if (!Array.isArray(acl.writableSids) || !Array.isArray(acl.readableSids)) {
+      throw new Error(`Windows 状态 ACL inspector 缺少读写主体信息：${targetPath}`);
+    }
+    const unsafeWriter = acl.writableSids
       .map((sid) => String(sid).toUpperCase())
       .find((sid) => !allowedWriters.has(sid));
     if (unsafeWriter) {
       throw new Error(`Windows 状态 ACL 允许 Everyone/Users 或其他普通用户写入：${targetPath}`);
     }
+    const unsafeReader = acl.readableSids
+      .map((sid) => String(sid).toUpperCase())
+      .find((sid) => !allowedWriters.has(sid));
+    if (unsafeReader) {
+      throw new Error(`Windows 状态 ACL 允许 Everyone/Users 或其他普通用户读取：${targetPath}`);
+    }
+    return acl;
   }
 
   function inspectProtectedPath(targetPath, expectedKind) {
@@ -122,6 +132,16 @@ function createSecureStateStore({
     const target = assertInsideHome(filePath, "状态文件");
     inspectProtectedPath(target, "file");
     return target;
+  }
+
+  function assertSafeExternalRegularFile(filePath) {
+    const target = path.resolve(filePath);
+    if (platform === "win32") {
+      const acl = inspectWindowsPath(target, "file", { externalSource: true });
+      return { path: target, ...acl };
+    }
+    inspectPosixPath(target, "file");
+    return { path: target };
   }
 
   function protectRegularFile(filePath) {
@@ -277,6 +297,7 @@ function createSecureStateStore({
     acquireOperationLock,
     assertInsideHome,
     assertProtectedRegularFile,
+    assertSafeExternalRegularFile,
     atomicWriteJson,
     ensurePrivateDirectory,
     protectRegularFile,

@@ -63,13 +63,16 @@
     "test:marketplace": "node --test tests/marketplace-entry.test.js",
     "test:pi": "npm run check:pi && node --test tests/pi-extension.test.js",
     "test:telemetry": "node --test tests/telemetry.test.js",
-    "test:platform": "node --test tests/platform-installer.test.js",
+    "test:platform": "node --test tests/platform-installer.test.js tests/host-cluster-installer.test.js",
     "test:windows": "node --test tests/windows-onboarding.test.js tests/windows-platform.test.js",
     "test:package-upload": "python3 tests/package_upload_helper_test.py && python3 tests/package_upload_workflow_contract_test.py && python3 rainbond-fullstack-bootstrap/scripts/run_bootstrap_evals.py",
     "test:package": "node --test tests/npm-package.test.js",
     "test:installer": "bash tests/browser_authorization_mode_test.sh && bash tests/device_authorization_flow_test.sh && python3 tests/install_test_suite_tty_test.py",
     "test:signal": "python3 tests/installer_signal_cleanup_test.py",
     "test:npx-pty": "python3 tests/npx_pty_test.py"
+  },
+  "dependencies": {
+    "yaml": "2.9.0"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",

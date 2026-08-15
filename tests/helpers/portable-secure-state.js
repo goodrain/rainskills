@@ -29,6 +29,7 @@ function createPortableSecureStateStore(home, options = {}) {
       return {
         ownerSid: currentSid,
         writableSids: [currentSid, "S-1-5-18", "S-1-5-32-544"],
+        readableSids: [currentSid, "S-1-5-18", "S-1-5-32-544"],
         reparsePoint: false,
       };
     },

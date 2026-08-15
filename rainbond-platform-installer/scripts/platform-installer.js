@@ -30,6 +30,7 @@ const {
   verifyRecoveryBundle,
 } = require("./windows-platform.js");
 const { createLifecycleTelemetry } = require("./telemetry.js");
+const { installHostCluster } = require("./host-cluster-installer.js");
 
 const packageManifest = require("../../package.json");
 const POLICY = require("../references/installation-policy.json");
@@ -41,14 +42,29 @@ const BUNDLED_INSTALLER_ENV = "RAINSKILLS_USE_BUNDLED_RAINBOND_INSTALLER";
 
 let activeChild = null;
 let activeChildDetached = false;
+const activeChildren = new Map();
 let activeRequest = null;
 let activeOperation = null;
 let activeSshSession = null;
 let interruptedSignal = null;
+let activeAbortState = null;
+
+function registerActiveChild(child, detached = false) {
+  if (!child) return () => {};
+  activeChildren.set(child, Boolean(detached));
+  activeChild = child;
+  activeChildDetached = Boolean(detached);
+  return () => {
+    activeChildren.delete(child);
+    const remaining = [...activeChildren.entries()].at(-1);
+    activeChild = remaining?.[0] || null;
+    activeChildDetached = remaining?.[1] || false;
+  };
+}
 
 function usage() {
   process.stdout.write(`Usage:
-  npx rainskills platform install --onboarding-id <id> [--location <place>] [--mode <mode>] [--target <kind>] [--ssh <target>] [--ssh-port <port>] [--console-host <host>] [--rainbond-image <image>] [--yes] [--no-resume]
+  npx rainskills platform install --onboarding-id <id> [--location <place>] [--mode <mode>] [--cluster-config <path>] [--target <kind>] [--ssh <target>] [--ssh-port <port>] [--console-host <host>] [--rainbond-image <image>] [--yes] [--no-resume]
   npx rainskills resume --onboarding-id <id>
 
 Commands:
@@ -59,6 +75,8 @@ Options:
   --onboarding-id ID  Resume the protected RainSkills onboarding checkpoint
   --location PLACE    Deploy to local or server
   --mode MODE         Use single-node, host-cluster, or existing-kubernetes on a server
+  --cluster-config PATH
+                      Import an existing ROI cluster.yaml for host-cluster mode
   --target KIND       Backward-compatible explicit single-node target
   --ssh TARGET        Existing SSH alias or user@host for remote-linux
   --ssh-port PORT     SSH port (default: 22)
@@ -77,6 +95,7 @@ function parseArgs(argv) {
     onboardingId: "",
     location: "",
     mode: "",
+    clusterConfig: "",
     target: "",
     ssh: "",
     sshPort: null,
@@ -102,6 +121,14 @@ function parseArgs(argv) {
     } else if (argument === "--target") {
       if (!argv[index + 1]) throw new Error("--target 需要一个值");
       result.target = argv[index + 1];
+      index += 1;
+    } else if (argument === "--cluster-config") {
+      if (!argv[index + 1]) throw new Error("--cluster-config 需要一个值");
+      const rawPath = argv[index + 1];
+      if (rawPath !== rawPath.trim() || /[\u0000-\u001f\u007f-\u009f]/u.test(rawPath)) {
+        throw new Error("--cluster-config 配置路径无效");
+      }
+      result.clusterConfig = path.resolve(rawPath);
       index += 1;
     } else if (argument === "--ssh") {
       if (!argv[index + 1]) throw new Error("--ssh 需要一个值");
@@ -135,6 +162,9 @@ function parseArgs(argv) {
   }
   if (result.mode && !["single-node", "host-cluster", "existing-kubernetes"].includes(result.mode)) {
     throw new Error("--mode 只支持 single-node、host-cluster 或 existing-kubernetes");
+  }
+  if (result.clusterConfig && result.mode !== "host-cluster") {
+    throw new Error("--cluster-config 只能与 --mode host-cluster 一起使用");
   }
   return result;
 }
@@ -1614,8 +1644,7 @@ function spawnAttached(command, args, options, logPath) {
         ? "inherit"
         : [input === undefined ? "inherit" : "pipe", "pipe", "pipe"],
     });
-    activeChild = child;
-    activeChildDetached = detached;
+    const unregisterChild = registerActiveChild(child, detached);
     if (input !== undefined) {
       child.stdin.end(input);
     }
@@ -1631,8 +1660,7 @@ function spawnAttached(command, args, options, logPath) {
     }
     child.on("error", (error) => {
       if (logFd !== null) fs.closeSync(logFd);
-      activeChild = null;
-      activeChildDetached = false;
+      unregisterChild();
       reject(error);
     });
     child.on("close", (code, signal) => {
@@ -1641,8 +1669,7 @@ function spawnAttached(command, args, options, logPath) {
         fs.closeSync(logFd);
         fs.chmodSync(logPath, 0o600);
       }
-      activeChild = null;
-      activeChildDetached = false;
+      unregisterChild();
       resolve({ code, signal });
     });
   });
@@ -2386,6 +2413,13 @@ async function waitForWindowsConsole({
   throw new Error(`WINDOWS_CONSOLE_UNAVAILABLE: ${consoleUrl} 在等待时间内未就绪`);
 }
 
+function assertHostOperationActive(abortState) {
+  if (!abortState?.aborted) return;
+  const error = new Error(`主机集群安装已被 ${abortState.signal || "信号"} 中断`);
+  error.code = "RAINSKILLS_HOST_INSTALL_INTERRUPTED";
+  throw error;
+}
+
 async function runResume(onboardingId, {
   onboardingPath = onboardingStatePath,
   ensurePrivateDirectory = ensurePrivateOperationDirectory,
@@ -2404,7 +2438,9 @@ async function runResume(onboardingId, {
   credentialHome = environment.USERPROFILE || environment.HOME || os.homedir(),
   attachedRunner = spawnAttached,
   write = (value) => process.stdout.write(value),
+  abortState = null,
 } = {}) {
+  assertHostOperationActive(abortState);
   assertOperationId(onboardingId);
   ensurePrivateDirectory(path.dirname(onboardingPath()));
   let onboarding = onboardingReader(onboardingPath(), onboardingId);
@@ -2454,18 +2490,23 @@ async function runResume(onboardingId, {
           throw new Error("Windows 平台安装状态缺少有效的 installation id");
         }
         write("\n正在启动 Rainbond WSL，Console 就绪后将直接继续授权。\n");
+        assertHostOperationActive(abortState);
         runtimeLease = await windowsRuntimeLease({
           controlMode: onboarding.control_mode || "windows-native",
         });
+        assertHostOperationActive(abortState);
         await consoleReadiness({
           consoleUrl: onboarding.console_url,
           lease: runtimeLease,
         });
+        assertHostOperationActive(abortState);
         windowsContext = { installationId: resumeState.installation_id };
       }
     }
 
+    assertHostOperationActive(abortState);
     onboarding = onboardingUpdater(onboarding, { stage: "authorizing" });
+    assertHostOperationActive(abortState);
     const invocation = invocationBuilder(onboarding);
     const resumeEnvironment = resumeState
       ? {
@@ -2481,12 +2522,14 @@ async function runResume(onboardingId, {
       : { ...environment };
 
     write("\n正在恢复 RainSkills 授权流程，将在浏览器中完成登录和授权。\n");
+    assertHostOperationActive(abortState);
     const result = await attachedRunner(
       invocation.executable,
       invocation.args,
       { env: resumeEnvironment },
       null
     );
+    assertHostOperationActive(abortState);
     if (result.signal) throw new Error(`授权流程被信号 ${result.signal} 中断`);
     if (result.code !== 0) {
       write(`\nRainbond 已部署，授权尚未完成。稍后继续：\n  npx rainskills@${packageManifest.version} resume --onboarding-id ${onboardingId}\n`);
@@ -2494,11 +2537,13 @@ async function runResume(onboardingId, {
     }
     let latestCredential;
     try {
+      assertHostOperationActive(abortState);
       latestCredential = await credentialReader({
         expectedOrigin: onboarding.console_url,
         home: credentialHome,
         platform: onboarding.control_mode === "windows-native" ? "win32" : process.platform,
       });
+      assertHostOperationActive(abortState);
     } catch {
       write(`\n运行环境已连接，但无法安全读取最新凭据。稍后继续：\n  npx rainskills@${packageManifest.version} resume --onboarding-id ${onboardingId}\n`);
       throw new Error("无法安全读取与当前 Rainbond origin 匹配的最新运行凭据");
@@ -2509,12 +2554,14 @@ async function runResume(onboardingId, {
       RAINBOND_URL: latestCredential.origin,
     };
     const intentInvocation = intentInvocationBuilder(onboarding);
+    assertHostOperationActive(abortState);
     const intentResult = await attachedRunner(
       intentInvocation.executable,
       intentInvocation.args,
       { env: intentEnvironment },
       null
     );
+    assertHostOperationActive(abortState);
     if (intentResult.signal || intentResult.code !== 0) {
       write(`\n运行环境已连接，原始操作尚未恢复。稍后继续：\n  npx rainskills@${packageManifest.version} resume --onboarding-id ${onboardingId}\n`);
       if (intentResult.signal) throw new Error(`原始 intent 恢复流程被信号 ${intentResult.signal} 中断`);
@@ -2523,12 +2570,15 @@ async function runResume(onboardingId, {
     if (windowsContext) {
       const adapter = windowsAdapterFactory(onboarding);
       write("\n最后会弹出一次 Windows 管理员确认，用于清理自动恢复任务。\n");
+      assertHostOperationActive(abortState);
       await adapter.finalize({
         operationId: onboardingId,
         installationId: windowsContext.installationId,
         payload: { status: "success" },
       });
+      assertHostOperationActive(abortState);
     }
+    assertHostOperationActive(abortState);
     onboardingUpdater(onboarding, { stage: "configured" });
     resumeTelemetry?.record({
       lifecycle_phase: "resume",
@@ -2556,7 +2606,8 @@ async function runResume(onboardingId, {
   }
 }
 
-async function completePlatform(onboarding, state, paths, verification, noResume) {
+async function completePlatform(onboarding, state, paths, verification, noResume, { abortState = null } = {}) {
+  assertHostOperationActive(abortState);
   const controlConsoleUrl = verification.controlConsoleUrl || verification.consoleUrl;
   state = updateState(paths.state, state, {
     stage: "platform-ready",
@@ -2565,18 +2616,22 @@ async function completePlatform(onboarding, state, paths, verification, noResume
     control_console_url: controlConsoleUrl,
     verification,
   });
+  assertHostOperationActive(abortState);
   appendEvent(paths, state, "platform-ready", "completed");
+  assertHostOperationActive(abortState);
   onboarding = updateOnboarding(onboarding, {
     stage: "platform-ready",
     platform_state_path: paths.state,
     console_url: controlConsoleUrl,
     display_console_url: verification.consoleUrl,
   });
+  assertHostOperationActive(abortState);
   activeOperation = null;
 
   const deploymentLocation = verification.location || state.host;
   process.stdout.write(`\nRainbond 部署成功\n\n部署位置：${deploymentLocation}\n运行状态：正常\nConsole 地址：${verification.consoleUrl}\n\n接下来将连接该平台并完成授权。\n`);
-  if (!noResume) await runResume(onboarding.operation_id);
+  assertHostOperationActive(abortState);
+  if (!noResume) await runResume(onboarding.operation_id, { abortState });
 }
 
 async function waitForHostClusterConfiguration({ write = (value) => process.stdout.write(value) } = {}) {
@@ -2605,13 +2660,38 @@ function savedRouteFromState(state) {
   };
 }
 
+async function runHostClusterDriver(context, {
+  installer = installHostCluster,
+  establishSession = establishSshSession,
+  closeSession = closeSshSession,
+  packageVersion = packageManifest.version,
+} = {}) {
+  const ownsAbortState = !context.abortState;
+  const abortState = context.abortState || { aborted: false, signal: null };
+  if (ownsAbortState) activeAbortState = abortState;
+  try {
+    return await installer(context, {
+      sessionFactory: (item, options) => establishSession({
+        host: `root@${item.address}`,
+        port: item.port,
+      }, options),
+      closeSession,
+      registerChild: registerActiveChild,
+      packageVersion,
+      abortState,
+    });
+  } finally {
+    if (ownsAbortState && activeAbortState === abortState) activeAbortState = null;
+  }
+}
+
 async function runInstallOperation(options, {
   onboardingPathResolver = onboardingStatePath,
   ensurePrivateDirectory = ensurePrivateOperationDirectory,
   onboardingReader = readOnboardingState,
   pathsResolver = operationPaths,
   targetSelector = selectInstallTarget,
-  hostClusterInstaller = waitForHostClusterConfiguration,
+  hostClusterInstaller = runHostClusterDriver,
   existingKubernetesInstaller = waitForExistingKubernetesConfiguration,
   platformCompleter = completePlatform,
   stateWriter = atomicWriteJson,
@@ -2729,9 +2809,29 @@ async function runInstallOperation(options, {
     const driver = target.mode === "host-cluster"
       ? hostClusterInstaller
       : existingKubernetesInstaller;
-    const result = await driver({ onboarding, state, paths, options, target });
+    const abortState = target.mode === "host-cluster" ? { aborted: false, signal: null } : null;
+    if (abortState) activeAbortState = abortState;
+    let result;
+    try {
+      result = await driver({ onboarding, state, paths, options, target, abortState });
+      if (abortState?.aborted) {
+        state = stateUpdater(paths.state, state, { status: "interrupted" });
+        activeOperation.state = state;
+        return;
+      }
+      if (result?.verification) {
+        await platformCompleter(onboarding, state, paths, result.verification, options.noResume, { abortState });
+        return;
+      }
+      if (abortState?.aborted) {
+        state = stateUpdater(paths.state, state, { status: "interrupted" });
+        activeOperation.state = state;
+        return;
+      }
+    } finally {
+      if (abortState && activeAbortState === abortState) activeAbortState = null;
+    }
     if (result?.verification) {
-      await platformCompleter(onboarding, state, paths, result.verification, options.noResume);
       return;
     }
     state = stateUpdater(paths.state, state, {
@@ -3108,14 +3208,21 @@ async function runInstall(options, {
 
 function interruptActiveOperation(signal) {
   interruptedSignal = signal;
+  if (activeAbortState) Object.assign(activeAbortState, { aborted: true, signal });
   if (activeRequest) {
     activeRequest.destroy(new Error(`下载被 ${signal} 中断`));
     activeRequest = null;
   }
-  if (activeChild?.pid) {
+  const children = activeChildren.size > 0
+    ? [...activeChildren.entries()]
+    : activeChild?.pid ? [[activeChild, activeChildDetached]] : [];
+  activeChildren.clear();
+  activeChild = null;
+  activeChildDetached = false;
+  for (const [child, detached] of children) {
     try {
-      if (activeChildDetached && process.platform !== "win32") process.kill(-activeChild.pid, signal);
-      else activeChild.kill(signal);
+      if (detached && process.platform !== "win32") process.kill(-child.pid, signal);
+      else child.kill(signal);
     } catch {
       // The child may already have exited.
     }
@@ -3170,6 +3277,7 @@ module.exports = {
   normalizeRemoteTarget,
   normalizeWindowsExecutableForControl,
   parseArgs,
+  interruptActiveOperation,
   prepareInstallerForRainbondImage,
   prepareRemoteInstaller,
   readOnboardingState,
@@ -3178,6 +3286,7 @@ module.exports = {
   remoteInstallerInvocation,
   useBundledInstaller,
   runCommand,
+  runHostClusterDriver,
   runInstall,
   runInstallOperation,
   runResume,

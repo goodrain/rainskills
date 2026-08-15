@@ -119,6 +119,7 @@ test("secure state enforces Windows owner, ACL, and reparse-point checks", () =>
         reparsePoint: false,
         ownerSid: "S-1-5-21-current",
         writableSids: ["S-1-5-18", "S-1-5-32-544", "S-1-5-21-current"],
+        readableSids: ["S-1-5-18", "S-1-5-32-544", "S-1-5-21-current"],
       });
     },
     inspectWindowsAcl(target) {
@@ -147,8 +148,16 @@ test("secure state enforces Windows owner, ACL, and reparse-point checks", () =>
     reparsePoint: false,
     ownerSid: "S-1-5-21-current",
     writableSids: ["S-1-1-0"],
+    readableSids: ["S-1-5-21-current"],
   });
   assert.throws(() => store.readProtectedJson(filePath), /Everyone|Users/i);
+  facts.set(filePath, {
+    reparsePoint: false,
+    ownerSid: "S-1-5-21-current",
+    writableSids: ["S-1-5-21-current"],
+    readableSids: ["S-1-5-21-current", "S-1-1-0"],
+  });
+  assert.throws(() => store.readProtectedJson(filePath), /读取|read|Everyone|Users/i);
 });
 
 test("operation locks reject live owners and reclaim proven stale owners", () => {

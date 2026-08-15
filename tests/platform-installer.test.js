@@ -92,6 +92,20 @@ test("launcher routes platform and resume commands to the bundled helper", () =>
   });
 });
 
+test("host cluster parser canonicalizes an explicit cluster config path", () => {
+  const { parseArgs } = require(platformInstallerPath);
+  const parsed = parseArgs([
+    "install",
+    "--onboarding-id", "1d6754d6-6fb3-4bda-9a04-15c2d261d178",
+    "--location", "server",
+    "--mode", "host-cluster",
+    "--cluster-config", "./fixtures/cluster.yaml",
+  ]);
+  assert.equal(parsed.clusterConfig, path.resolve("./fixtures/cluster.yaml"));
+  assert.throws(() => parseArgs(["install", "--cluster-config", " bad\npath "]), /cluster-config|配置路径/i);
+  assert.throws(() => parseArgs(["install", "--mode", "single-node", "--cluster-config", "./cluster.yaml"]), /cluster-config.*host-cluster|host-cluster.*cluster-config/i);
+});
+
 test("onboarding reads validate and canonicalize the stored intent", () => {
   const { readOnboardingState } = require(platformInstallerPath);
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-onboarding-intent-"));
@@ -2023,7 +2037,7 @@ test("non-interactive target selection pauses for the AI instead of choosing for
   assert.match(output.join(""), /--location server/);
 });
 
-test("resolved location and mode are durable before a non-single-node driver is dispatched", async () => {
+test("host cluster dispatch persists routing, calls only ROI, and completes verified platform", async () => {
   const { runInstallOperation } = require(platformInstallerPath);
   const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-platform-routing-state-"));
   const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
@@ -2072,16 +2086,111 @@ test("resolved location and mode are durable before a non-single-node driver is 
       assert.equal(durable.mode, "host-cluster");
       assert.equal(state.location, "server");
       assert.equal(state.mode, "host-cluster");
-      return { waiting: true };
+      return { verification: { consoleUrl: "http://10.0.0.1:7070", location: "host-cluster (2 nodes)" } };
     },
     existingKubernetesInstaller: async () => assert.fail("must not dispatch Kubernetes"),
+    platformCompleter: async (onboarding, state, durablePaths, verification, noResume) => {
+      calls.push("complete");
+      assert.equal(onboarding.operation_id, operationId);
+      assert.equal(state.mode, "host-cluster");
+      assert.equal(durablePaths.state, paths.state);
+      assert.equal(verification.consoleUrl, "http://10.0.0.1:7070");
+      assert.equal(Boolean(noResume), false);
+    },
   });
 
-  assert.deepEqual(calls, ["host-cluster"]);
+  assert.deepEqual(calls, ["host-cluster", "complete"]);
   const state = JSON.parse(fs.readFileSync(paths.state, "utf8"));
   assert.equal(state.stage, "mode-configuration");
-  assert.equal(state.status, "waiting_user");
+  assert.equal(state.status, "running");
   assert.equal(state.target_kind, "host-cluster");
+});
+
+test("production host-cluster driver injects the shared SSH session and active-child signal chain", async () => {
+  delete require.cache[require.resolve(platformInstallerPath)];
+  const { runHostClusterDriver, interruptActiveOperation } = require(platformInstallerPath);
+  const context = {
+    state: { operation_id: "1d6754d6-6fb3-4bda-9a04-15c2d261d178" },
+    options: {},
+  };
+  const established = [];
+  const closed = [];
+  const killed = [];
+  let captured;
+  const result = await runHostClusterDriver(context, {
+    installer: async (value, dependencies) => {
+      captured = dependencies;
+      const session = await dependencies.sessionFactory({ address: "10.0.0.1", port: 22 }, { interactive: true, write: () => {} });
+      dependencies.closeSession(session);
+      return { waiting: true };
+    },
+    establishSession: async (target, options) => {
+      established.push({ target, options });
+      return { target, controlPath: "/protected/control" };
+    },
+    closeSession: (session) => closed.push(session),
+    packageVersion: "0.1.0-test",
+  });
+  assert.equal(result.waiting, true);
+  assert.deepEqual(established[0].target, { host: "root@10.0.0.1", port: 22 });
+  assert.equal(established[0].options.interactive, true);
+  assert.equal(closed.length, 1);
+  assert.equal(captured.packageVersion, "0.1.0-test");
+
+  for (const signal of ["SIGINT", "SIGTERM"]) {
+    const child = { pid: 4242, kill: (received) => killed.push(received) };
+    captured.registerChild(child, false);
+    interruptActiveOperation(signal);
+  }
+  assert.deepEqual(killed, ["SIGINT", "SIGTERM"]);
+});
+
+test("host-cluster abort remains active after driver resolution and blocks platform completion", async () => {
+  delete require.cache[require.resolve(platformInstallerPath)];
+  const { runInstallOperation, interruptActiveOperation } = require(platformInstallerPath);
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-host-abort-after-driver-"));
+  const paths = {
+    root,
+    state: path.join(root, "state.json"),
+    events: path.join(root, "events.jsonl"),
+    log: path.join(root, "install.log"),
+    installer: path.join(root, "installer"),
+  };
+  let completions = 0;
+  await runInstallOperation({ onboardingId: operationId, location: "server", mode: "host-cluster" }, {
+    onboardingPathResolver: () => path.join(root, "onboarding.json"),
+    ensurePrivateDirectory: () => {},
+    onboardingReader: () => ({
+      schema: "rainskills.onboarding.v1",
+      version: 1,
+      operation_id: operationId,
+      stage: "awaiting-platform",
+      target: "codex",
+      deployment_mode: "self-hosted",
+      control_mode: "posix",
+      intent: { type: "deploy", project_root: "/workspace/app", source_kind: "local" },
+    }),
+    pathsResolver: () => paths,
+    targetSelector: async () => ({ location: "server", mode: "host-cluster", kind: "host-cluster", host: null, sshPort: null }),
+    stateWriter: (filePath, value) => fs.writeFileSync(filePath, `${JSON.stringify(value)}\n`, { mode: 0o600 }),
+    stateUpdater: (filePath, value, patch) => {
+      const updated = { ...value, ...patch };
+      fs.writeFileSync(filePath, `${JSON.stringify(updated)}\n`, { mode: 0o600 });
+      return updated;
+    },
+    hostClusterInstaller: async (context) => {
+      assert(context.abortState, "runInstallOperation must own the host abort token");
+      interruptActiveOperation("SIGINT");
+      assert.equal(context.abortState.aborted, true);
+      return { verification: { consoleUrl: "http://10.0.0.1:7070", location: "host-cluster" } };
+    },
+    platformCompleter: async () => { completions += 1; },
+  });
+  assert.equal(completions, 0);
+  const state = JSON.parse(fs.readFileSync(paths.state, "utf8"));
+  assert.equal(state.status, "interrupted");
+  assert.notEqual(state.stage, "platform-ready");
 });
 
 test("a conflicting saved route fails before state rewrite or driver selection", async () => {
