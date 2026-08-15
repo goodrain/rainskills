@@ -82,7 +82,7 @@ test("package metadata defines a public npx command with only the pinned YAML pa
   );
   assert.equal(
     manifest.scripts["test:platform"],
-    "node --test tests/platform-installer.test.js tests/host-cluster-installer.test.js"
+    "node --test tests/platform-installer.test.js tests/host-cluster-installer.test.js tests/existing-kubernetes-installer.test.js"
   );
   assert.equal(
     manifest.scripts["test:windows"],
@@ -103,6 +103,7 @@ test("packed artifact contains the installer and all skills but no development f
   assert(filePaths.has("pi/rainskills-mcp.ts"));
   assert(filePaths.has("rainbond-platform-installer/scripts/platform-installer.js"));
   assert(filePaths.has("rainbond-platform-installer/scripts/host-cluster-installer.js"));
+  assert(filePaths.has("rainbond-platform-installer/scripts/existing-kubernetes-installer.js"));
   assert(filePaths.has("rainbond-platform-installer/agents/openai.yaml"));
   assert(filePaths.has("rainbond-platform-installer/references/installation-policy.json"));
   assert(filePaths.has("rainbond-platform-installer/references/installation-policy.md"));

@@ -44,6 +44,18 @@
       }
     }
   },
+  "helm": {
+    "allowed_origin": "https://chart.rainbond.com",
+    "index_url": "https://chart.rainbond.com/index.yaml",
+    "chart_name": "rainbond/rainbond",
+    "release": "rainbond",
+    "namespace": "rbd-system",
+    "minimum_kubernetes_version": "1.24.0",
+    "max_bytes": 134217728,
+    "max_redirects": 3,
+    "trust": "https-origin+published-index-digest+local-sha256-lock",
+    "reviewed_at": "2026-08-15"
+  },
   "windows": {
     "minimum_build": 19041,
     "supported_architectures": ["x64"],

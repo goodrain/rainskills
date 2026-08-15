@@ -31,6 +31,7 @@ const {
 } = require("./windows-platform.js");
 const { createLifecycleTelemetry } = require("./telemetry.js");
 const { installHostCluster } = require("./host-cluster-installer.js");
+const { installExistingKubernetes } = require("./existing-kubernetes-installer.js");
 
 const packageManifest = require("../../package.json");
 const POLICY = require("../references/installation-policy.json");
@@ -64,7 +65,7 @@ function registerActiveChild(child, detached = false) {
 
 function usage() {
   process.stdout.write(`Usage:
-  npx rainskills platform install --onboarding-id <id> [--location <place>] [--mode <mode>] [--cluster-config <path>] [--target <kind>] [--ssh <target>] [--ssh-port <port>] [--console-host <host>] [--rainbond-image <image>] [--yes] [--no-resume]
+  npx rainskills platform install --onboarding-id <id> [--location <place>] [--mode <mode>] [--cluster-config <path>] [--kubeconfig <path>] [--kube-context <name>] [--values <path>] [--chart-version <version>] [--target <kind>] [--ssh <target>] [--ssh-port <port>] [--console-host <host>] [--rainbond-image <image>] [--yes] [--no-resume]
   npx rainskills resume --onboarding-id <id>
 
 Commands:
@@ -77,6 +78,10 @@ Options:
   --mode MODE         Use single-node, host-cluster, or existing-kubernetes on a server
   --cluster-config PATH
                       Import an existing ROI cluster.yaml for host-cluster mode
+  --kubeconfig PATH   Import kubeconfig for existing-kubernetes mode (default ~/.kube/config)
+  --kube-context NAME Explicit Kubernetes context to lock for every command
+  --values PATH       Import optional Helm values bytes into the protected operation
+  --chart-version VER Lock an exact rainbond/rainbond chart version
   --target KIND       Backward-compatible explicit single-node target
   --ssh TARGET        Existing SSH alias or user@host for remote-linux
   --ssh-port PORT     SSH port (default: 22)
@@ -96,6 +101,10 @@ function parseArgs(argv) {
     location: "",
     mode: "",
     clusterConfig: "",
+    kubeconfig: "",
+    kubeContext: "",
+    values: "",
+    chartVersion: "",
     target: "",
     ssh: "",
     sshPort: null,
@@ -134,6 +143,24 @@ function parseArgs(argv) {
       if (!argv[index + 1]) throw new Error("--ssh 需要一个值");
       result.ssh = argv[index + 1];
       index += 1;
+    } else if (["--kubeconfig", "--values"].includes(argument)) {
+      if (!argv[index + 1]) throw new Error(`${argument} 需要一个值`);
+      const rawPath = argv[index + 1];
+      if (rawPath !== rawPath.trim() || /[\u0000-\u001f\u007f-\u009f]/u.test(rawPath)) throw new Error(`${argument} 路径无效`);
+      result[argument === "--kubeconfig" ? "kubeconfig" : "values"] = path.resolve(rawPath);
+      index += 1;
+    } else if (argument === "--kube-context") {
+      if (!argv[index + 1]) throw new Error("--kube-context 需要一个值");
+      const context = argv[index + 1];
+      if (context !== context.trim() || /[\u0000-\u001f\u007f-\u009f]/u.test(context) || context.startsWith("-")) throw new Error("--kube-context 无效");
+      result.kubeContext = context;
+      index += 1;
+    } else if (argument === "--chart-version") {
+      if (!argv[index + 1]) throw new Error("--chart-version 需要一个值");
+      const version = argv[index + 1];
+      if (!/^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/.test(version)) throw new Error("--chart-version 必须是 exact semver");
+      result.chartVersion = version;
+      index += 1;
     } else if (argument === "--ssh-port") {
       if (!argv[index + 1]) throw new Error("--ssh-port 需要一个值");
       result.sshPort = argv[index + 1];
@@ -165,6 +192,9 @@ function parseArgs(argv) {
   }
   if (result.clusterConfig && result.mode !== "host-cluster") {
     throw new Error("--cluster-config 只能与 --mode host-cluster 一起使用");
+  }
+  if ((result.kubeconfig || result.kubeContext || result.values || result.chartVersion) && result.mode !== "existing-kubernetes") {
+    throw new Error("--kubeconfig、--kube-context、--values 和 --chart-version 只能与 --mode existing-kubernetes 一起使用");
   }
   return result;
 }
@@ -2685,6 +2715,22 @@ async function runHostClusterDriver(context, {
   }
 }
 
+async function runExistingKubernetesDriver(context, {
+  installer = installExistingKubernetes,
+} = {}) {
+  const ownsAbortState = !context.abortState;
+  const abortState = context.abortState || { aborted: false, signal: null };
+  if (ownsAbortState) activeAbortState = abortState;
+  try {
+    return await installer(context, {
+      registerChild: registerActiveChild,
+      abortState,
+    });
+  } finally {
+    if (ownsAbortState && activeAbortState === abortState) activeAbortState = null;
+  }
+}
+
 async function runInstallOperation(options, {
   onboardingPathResolver = onboardingStatePath,
   ensurePrivateDirectory = ensurePrivateOperationDirectory,
@@ -2692,7 +2738,7 @@ async function runInstallOperation(options, {
   pathsResolver = operationPaths,
   targetSelector = selectInstallTarget,
   hostClusterInstaller = runHostClusterDriver,
-  existingKubernetesInstaller = waitForExistingKubernetesConfiguration,
+  existingKubernetesInstaller = runExistingKubernetesDriver,
   platformCompleter = completePlatform,
   stateWriter = atomicWriteJson,
   stateUpdater = updateState,
@@ -2809,7 +2855,7 @@ async function runInstallOperation(options, {
     const driver = target.mode === "host-cluster"
       ? hostClusterInstaller
       : existingKubernetesInstaller;
-    const abortState = target.mode === "host-cluster" ? { aborted: false, signal: null } : null;
+    const abortState = { aborted: false, signal: null };
     if (abortState) activeAbortState = abortState;
     let result;
     try {
@@ -3287,6 +3333,7 @@ module.exports = {
   useBundledInstaller,
   runCommand,
   runHostClusterDriver,
+  runExistingKubernetesDriver,
   runInstall,
   runInstallOperation,
   runResume,

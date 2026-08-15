@@ -2106,6 +2106,49 @@ test("host cluster dispatch persists routing, calls only ROI, and completes veri
   assert.equal(state.target_kind, "host-cluster");
 });
 
+test("existing Kubernetes dispatch calls only Helm driver with shared abort and completes verified platform", async () => {
+  delete require.cache[require.resolve(platformInstallerPath)];
+  const { runInstallOperation } = require(platformInstallerPath);
+  const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-k8s-dispatch-"));
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  const root = path.join(tempHome, ".rainbond", "platform-installer", operationId);
+  fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+  const paths = { root, state: path.join(root, "state.json"), events: path.join(root, "events.jsonl"), log: path.join(root, "install.log"), installer: path.join(root, "installer") };
+  const stateStore = createPortableSecureStateStore(tempHome);
+  const writeState = (filePath, value) => stateStore.atomicWriteJson(filePath, value);
+  const updateState = (filePath, value, patch) => { const next = { ...value, ...patch }; writeState(filePath, next); return next; };
+  const calls = [];
+  await runInstallOperation({ onboardingId: operationId, location: "server", mode: "existing-kubernetes", kubeContext: "production" }, {
+    onboardingPathResolver: () => path.join(tempHome, "onboarding.json"), ensurePrivateDirectory: () => {},
+    onboardingReader: () => ({ schema: "rainskills.onboarding.v1", version: 1, operation_id: operationId, stage: "awaiting-platform", target: "codex", deployment_mode: "self-hosted", control_mode: "posix", intent: { type: "deploy", project_root: "/workspace/app", source_kind: "local" } }),
+    pathsResolver: () => paths, stateWriter: writeState, stateUpdater: updateState,
+    hostClusterInstaller: async () => assert.fail("must not dispatch ROI"),
+    existingKubernetesInstaller: async (context) => {
+      calls.push("helm");
+      assert(context.abortState, "existing Kubernetes must share the platform abort token");
+      assert.equal(context.options.kubeContext, "production");
+      return { verification: { consoleUrl: "http://10.0.0.20:7070", location: "existing-kubernetes" } };
+    },
+    platformCompleter: async (...args) => {
+      calls.push("complete");
+      assert.equal(args[3].consoleUrl, "http://10.0.0.20:7070");
+      assert.equal(args[5].abortState.aborted, false);
+    },
+  });
+  assert.deepEqual(calls, ["helm", "complete"]);
+});
+
+test("existing Kubernetes CLI accepts protected target inputs only in its mode", () => {
+  const { parseArgs } = require(platformInstallerPath);
+  const parsed = parseArgs(["install", "--location", "server", "--mode", "existing-kubernetes", "--kubeconfig", "./kubeconfig", "--kube-context", "production", "--values", "./values.yaml", "--chart-version", "2.17.0"]);
+  assert.equal(parsed.kubeContext, "production");
+  assert.equal(parsed.chartVersion, "2.17.0");
+  assert(path.isAbsolute(parsed.kubeconfig));
+  assert(path.isAbsolute(parsed.values));
+  assert.throws(() => parseArgs(["install", "--mode", "single-node", "--kube-context", "production"]), /existing-kubernetes/i);
+  assert.throws(() => parseArgs(["install", "--mode", "existing-kubernetes", "--kube-context", "bad\ncontext"]), /context|无效/i);
+});
+
 test("production host-cluster driver injects the shared SSH session and active-child signal chain", async () => {
   delete require.cache[require.resolve(platformInstallerPath)];
   const { runHostClusterDriver, interruptActiveOperation } = require(platformInstallerPath);
