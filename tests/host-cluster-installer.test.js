@@ -849,13 +849,13 @@ test("ROI execution transfers fixed bytes, invokes attached roi up, redacts logs
     remoteDir: "/root/.rainbond/rainskills/op-1",
     resumeArgv,
     transfer: async (input) => { transfers.push(input); return { remoteSha256: input.sha256 }; },
-    attachedRunner: async (command, args) => {
-      calls.push({ command, args });
+    attachedRunner: async (command, args, options) => {
+      calls.push({ command, args, input: options.input });
       return {
         code: 130,
         signal: "SIGINT",
-        stdout: "building\ndatabase.password: |\n  multiline-log-must-not-leak\nINFO: database: {\n  \"dsn\": \"PREFIX-LOG-MUST-NOT-LEAK\"\n}\nINFO registry status: database: {\n  \"dsn\": \"MULTI-KEY-LOG-MUST-NOT-LEAK\"\n}\nregistry password: secret",
-        stderr: "masterPassword: |\n  stderr-log-must-not-leak\nINFO: privateKey: -----BEGIN PRIVATE KEY-----\nPREFIX-PEM-LOG-MUST-NOT-LEAK\n-----END PRIVATE KEY-----",
+        stdout: "building\ndatabase.password: |\n  multiline-log-must-not-leak\nINFO: database: {\n  \"dsn\": \"PREFIX-LOG-MUST-NOT-LEAK\"\n}\nINFO registry status: database: {\n  \"dsn\": \"MULTI-KEY-LOG-MUST-NOT-LEAK\"\n}\nregistry password: secret\nAuthorization: Bearer AUTH-LOG-MUST-NOT-LEAK\nCookie: sid=COOKIE-LOG-MUST-NOT-LEAK\napi_key=API-LOG-MUST-NOT-LEAK\nGRJWT=GRJWT-LOG-MUST-NOT-LEAK\ntoken=FIRST-MULTI-LOG-MUST-NOT-LEAK secret={\n  nested: SECOND-MULTI-LOG-MUST-NOT-LEAK\n}\nCookie=COOKIE-MULTI-LOG-MUST-NOT-LEAK authorization={\n  nested: AUTH-MULTI-LOG-MUST-NOT-LEAK\n}",
+        stderr: "masterPassword: |\n  stderr-log-must-not-leak\nINFO: privateKey: -----BEGIN PRIVATE KEY-----\nPREFIX-PEM-LOG-MUST-NOT-LEAK\n-----END PRIVATE KEY-----\n-----BEGIN PRIVATE KEY-----\nNAKED-PEM-LOG-MUST-NOT-LEAK\n-----END PRIVATE KEY-----\neyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJKV1QtTE9HLU1VU1QtTk9ULUxFQUsifQ.signature123",
       };
     },
     persistState: (state) => states.push(state),
@@ -864,13 +864,19 @@ test("ROI execution transfers fixed bytes, invokes attached roi up, redacts logs
   assert.equal(result.interrupted, true);
   assert.equal(transfers.length, 2);
   assert.deepEqual(transfers.map(({ sha256: digest }) => digest), [sha256(configBytes), sha256(artifactBytes)]);
-  assert.deepEqual(calls, [{
-    command: "ssh",
-    args: ["-tt", "-o", "BatchMode=yes", "-p", "22", "root@10.0.0.1", "/root/.rainbond/rainskills/op-1/roi", "up", "-f", "/root/.rainbond/rainskills/op-1/cluster.yaml"],
-  }]);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].command, "ssh");
+  assert.deepEqual(calls[0].args.slice(-10), [
+    "bash", "-s", "--", "/root/.rainbond/rainskills/op-1",
+    "/root/.rainbond/rainskills/op-1/execution.receipt", resumeArgv[5], sha256(configBytes), sha256(artifactBytes),
+    "/root/.rainbond/rainskills/op-1/roi", "/root/.rainbond/rainskills/op-1/cluster.yaml",
+  ]);
+  assert.match(calls[0].input, /receipt_text launching/);
+  assert.match(calls[0].input, /receipt_text completed/);
+  assert.match(calls[0].input, /"\$artifact" up -f "\$config"/);
   assert.deepEqual(states.at(-1).resumeArgv, resumeArgv);
   assert.doesNotMatch(JSON.stringify(states), /secret|database|registry|password/i);
-  assert.doesNotMatch(fs.readFileSync(logPath, "utf8"), /secret|multiline-log-must-not-leak|stderr-log-must-not-leak|PREFIX-(?:LOG|PEM-LOG)|MULTI-KEY-LOG/i);
+  assert.doesNotMatch(fs.readFileSync(logPath, "utf8"), /secret|multiline-log-must-not-leak|stderr-log-must-not-leak|PREFIX-(?:LOG|PEM-LOG)|MULTI-KEY-LOG|AUTH-LOG|COOKIE-LOG|API-LOG|GRJWT-LOG|NAKED-PEM-LOG|JWT-LOG|FIRST-MULTI-LOG|SECOND-MULTI-LOG|COOKIE-MULTI-LOG|AUTH-MULTI-LOG/i);
   assert.match(fs.readFileSync(logPath, "utf8"), /\[REDACTED\]/);
   assert.match(output.join(""), /npx rainskills@0\.1\.0-rc\.60 platform install --onboarding-id/);
   assert.doesNotMatch(output.join(""), /secret|database\.password|registry password/i);
@@ -929,6 +935,139 @@ test("attached ROI runner registers the active child and streams only redacted p
   assert.match(`${stdout.join("")}\n${stderr.join("")}`, /\[REDACTED\]/);
   assert.doesNotMatch(`${stdout.join("")}\n${stderr.join("")}`, /must-not-leak|stderr-must|PEM-MUST|JSON-MUST|REGISTRY-JSON|PREFIX-(?:JSON|PEM)|MULTI-KEY-JSON/i);
   assert.match(stdout.join(""), /installing step 2/);
+});
+
+test("attached ROI runner sends only the fixed launch script through piped stdin", async () => {
+  const { spawnRedactedAttached } = moduleUnderTest();
+  const child = new EventEmitter();
+  child.pid = 4247;
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.stdin = new PassThrough();
+  child.kill = () => true;
+  const spawnOptions = [];
+  const stdin = [];
+  child.stdin.on("data", (chunk) => stdin.push(chunk));
+  const running = spawnRedactedAttached("ssh", ["fixed"], {
+    input: "fixed-launch-script",
+    spawnFn: (command, args, options) => { spawnOptions.push(options); return child; },
+    stdoutWriter: { write: () => {} }, stderrWriter: { write: () => {} },
+  });
+  child.stdout.end();
+  child.stderr.end();
+  child.emit("close", 0, null);
+  await running;
+  assert.equal(spawnOptions[0].stdio[0], "pipe");
+  assert.equal(Buffer.concat(stdin).toString("utf8"), "fixed-launch-script");
+});
+
+test("ROI streaming redaction covers auth headers, cookies, JWTs, API keys, GRJWT, and naked PEM blocks across chunks", async () => {
+  const { spawnRedactedAttached } = moduleUnderTest();
+  const child = new EventEmitter();
+  child.pid = 4243;
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.stdin = new PassThrough();
+  child.kill = () => true;
+  const stdout = [];
+  const stderr = [];
+  const running = spawnRedactedAttached("ssh", ["fixed"], {
+    spawnFn: () => child,
+    stdoutWriter: { write: (value) => stdout.push(String(value)) },
+    stderrWriter: { write: (value) => stderr.push(String(value)) },
+  });
+  child.stdout.write("installing safe step\nAuthorization: Bearer AUTH-MUST-");
+  child.stdout.write("NOT-LEAK\nCookie: sid=COOKIE-MUST-NOT-LEAK\n");
+  child.stdout.write("api_key=APIKEY-MUST-NOT-LEAK\nGRJWT=GRJWT-MUST-NOT-LEAK\n");
+  child.stdout.write("Bearer BEARER-MUST-NOT-LEAK\n");
+  child.stderr.write("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJKV1QtTVVTVC1OT1QtTEVBSyJ9.signature123\n");
+  child.stderr.write("-----BEGIN PRIVATE ");
+  child.stderr.write("KEY-----\nPEM-MUST-NOT-LEAK\n-----END PRIVATE KEY-----\n");
+  child.stdout.end();
+  child.stderr.end();
+  child.emit("close", 0, null);
+  const result = await running;
+  const visible = `${stdout.join("")}\n${stderr.join("")}\n${result.stdout}\n${result.stderr}`;
+  assert.match(visible, /installing safe step/);
+  assert.match(visible, /\[REDACTED\]/);
+  assert.doesNotMatch(visible, /AUTH-MUST|COOKIE-MUST|APIKEY-MUST|GRJWT-MUST|BEARER-MUST|JWT-MUST|PEM-MUST/i);
+});
+
+test("multi-sensitive lines redact from the earliest value while later candidates control block state", async () => {
+  const { redactInstallLog, spawnRedactedAttached } = moduleUnderTest();
+  const raw = [
+    "token=FIRST-MUST-NOT-LEAK secret={",
+    "  nested: SECOND-MUST-NOT-LEAK",
+    "}",
+    "Cookie=COOKIE-MUST-NOT-LEAK authorization={",
+    "  bearer: AUTH-BLOCK-MUST-NOT-LEAK",
+    "}",
+    "api_key=API-MUST-NOT-LEAK privateKey: |",
+    "  PRIVATE-MUST-NOT-LEAK",
+    "safe progress",
+  ].join("\n");
+  const exact = redactInstallLog(raw);
+  assert.match(exact, /token= \[REDACTED\]/);
+  assert.match(exact, /Cookie= \[REDACTED\]/);
+  assert.match(exact, /api_key= \[REDACTED\]/);
+  assert.match(exact, /safe progress/);
+  assert.doesNotMatch(exact, /FIRST-MUST|SECOND-MUST|COOKIE-MUST|AUTH-BLOCK-MUST|API-MUST|PRIVATE-MUST/i);
+
+  const child = new EventEmitter();
+  child.pid = 4246;
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.stdin = new PassThrough();
+  child.kill = () => true;
+  const visible = [];
+  const running = spawnRedactedAttached("ssh", ["fixed"], {
+    spawnFn: () => child,
+    stdoutWriter: { write: (value) => visible.push(String(value)) },
+    stderrWriter: { write: (value) => visible.push(String(value)) },
+  });
+  child.stdout.write("token=FIRST-MUST-");
+  child.stdout.write("NOT-LEAK secret={\n  nested: SECOND-MUST-");
+  child.stdout.write("NOT-LEAK\n}\nCookie=COOKIE-MUST-NOT-LEAK author");
+  child.stdout.write("ization={\n  bearer: AUTH-BLOCK-MUST-NOT-LEAK\n}\n");
+  child.stdout.write("api_key=API-MUST-NOT-LEAK privateKey: |\n  PRIVATE-MUST-");
+  child.stdout.write("NOT-LEAK\nsafe progress\n");
+  child.stdout.end();
+  child.stderr.end();
+  child.emit("close", 0, null);
+  const streamed = await running;
+  const streamedOutput = `${visible.join("")}\n${streamed.stdout}\n${streamed.stderr}`;
+  assert.match(streamedOutput, /safe progress/);
+  assert.doesNotMatch(streamedOutput, /FIRST-MUST|SECOND-MUST|COOKIE-MUST|AUTH-BLOCK-MUST|API-MUST|PRIVATE-MUST/i);
+});
+
+test("SSH and attached ROI runners kill children at a fixed output ceiling without unbounded collection", async () => {
+  const { defaultSshRunner, spawnRedactedAttached } = moduleUnderTest();
+  for (const kind of ["ssh", "attached"]) {
+    const child = new EventEmitter();
+    child.pid = kind === "ssh" ? 4244 : 4245;
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.stdin = new PassThrough();
+    const kills = [];
+    child.kill = (signal) => { kills.push(signal); return true; };
+    const visible = [];
+    const running = kind === "ssh"
+      ? defaultSshRunner("ssh", ["fixed"], { spawnFn: () => child })
+      : spawnRedactedAttached("ssh", ["fixed"], {
+        spawnFn: () => child,
+        stdoutWriter: { write: (value) => visible.push(String(value)) },
+        stderrWriter: { write: (value) => visible.push(String(value)) },
+      });
+    if (kind === "attached") child.stdout.write("useful progress\n");
+    child.stdout.write(Buffer.alloc(3 * 1024 * 1024, 0x61));
+    child.stderr.write(Buffer.alloc(3 * 1024 * 1024, 0x62));
+    await assert.rejects(running, (error) => (
+      error.code === "RAINSKILLS_CHILD_OUTPUT_LIMIT"
+      && error.message === "子进程输出超过安全上限"
+    ));
+    assert.deepEqual(kills, ["SIGKILL"], kind);
+    if (kind === "attached") assert.match(visible.join(""), /useful progress/);
+  }
 });
 
 test("read-only SSH children register for signals and preflight interruption stops before artifact or ROI", async () => {
@@ -1107,6 +1246,270 @@ test("verification children register and stage-bound aborts prevent every later 
     assert.equal(executes, abortAt === "artifact" ? 0 : 1, abortAt);
     assert.equal(verifies, 0, abortAt);
   }
+});
+
+test("an interrupted ROI execution resumes by read-only reconciliation and never runs roi up twice", async () => {
+  const { installHostCluster } = moduleUnderTest();
+  const root = tempOperation("rainskills-execute-reconcile-");
+  const home = path.join(root, "home");
+  fs.mkdirSync(home, { mode: 0o700 });
+  const stateStore = require("./helpers/portable-secure-state.js").createPortableSecureStateStore(home);
+  const source = path.join(home, "cluster.yaml");
+  fs.writeFileSync(source, YAML.stringify(cluster()), { mode: 0o600 });
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  const originalIntent = { type: "deploy", project_root: "/workspace/app", source_kind: "local" };
+  const onboarding = { operation_id: operationId, intent: structuredClone(originalIntent) };
+  const paths = { root: path.join(home, ".rainbond", "platform-installer", operationId) };
+  stateStore.ensurePrivateDirectory(paths.root);
+  let preflights = 0;
+  let downloads = 0;
+  let executions = 0;
+  let reconciliations = 0;
+  let verifications = 0;
+  const dependencies = {
+    stateStore,
+    interactive: false,
+    sessionFactory: async () => ({ controlPath: null, interactive: false }),
+    closeSession: () => {},
+    runPreflight: async () => {
+      preflights += 1;
+      if (preflights > 1) throw new Error("existing Rainbond markers must not re-enter preflight");
+      return { ok: true, blockers: [], nodes: [{ name: "node1", arch: "amd64", blockers: [] }] };
+    },
+    acquireArtifact: async ({ operationDir, persistLock }) => {
+      downloads += 1;
+      const artifactPath = path.join(operationDir, "roi");
+      const bytes = elfBinary("amd64");
+      fs.writeFileSync(artifactPath, bytes, { mode: 0o700 });
+      const lock = { finalUrl: "https://get.rainbond.com/roi/roi-amd64", version: "roi version v1", sha256: sha256(bytes), checksum: { published: false, sourceUrl: null } };
+      persistLock(lock);
+      return { path: artifactPath, ...lock };
+    },
+    execute: async ({ persistState, resumeArgv }) => {
+      executions += 1;
+      persistState({ stage: "executing", status: "interrupted", resumeArgv });
+      return { interrupted: true, signal: "SIGINT", resumeArgv };
+    },
+    reconcile: async () => {
+      reconciliations += 1;
+      return {
+        disposition: "started",
+        cluster: {
+          nodes: [{ name: "node1", ready: true }],
+          workloads: { "rbd-api": true, "rbd-gateway": true, "rbd-app-ui": true },
+          consoleUrl: "http://10.0.0.1:7070",
+        },
+      };
+    },
+    verify: async ({ inspectCluster }) => {
+      verifications += 1;
+      const clusterState = await inspectCluster();
+      assert.equal(clusterState.nodes[0].ready, true);
+      return { consoleUrl: clusterState.consoleUrl, location: "host-cluster (1 nodes)" };
+    },
+  };
+  const first = await installHostCluster({ onboarding, state: { operation_id: operationId }, paths, options: { clusterConfig: source, yes: true } }, dependencies);
+  assert.equal(first.interrupted, true);
+  assert.equal(executions, 1);
+
+  const second = await installHostCluster({ onboarding, state: { operation_id: operationId }, paths, options: { clusterConfig: source, yes: true } }, dependencies);
+  assert.equal(second.verification.consoleUrl, "http://10.0.0.1:7070");
+  assert.equal(preflights, 1);
+  assert.equal(downloads, 1);
+  assert.equal(executions, 1);
+  assert.equal(reconciliations, 1);
+  assert.equal(verifications, 1);
+  assert.deepEqual(onboarding.intent, originalIntent);
+  const driverState = stateStore.readProtectedJson(path.join(paths.root, "host-cluster", "state.json"));
+  assert.equal(driverState.stage, "completed");
+  assert.deepEqual(driverState.resumeArgv, ["npx", `rainskills@${require("../package.json").version}`, "platform", "install", "--onboarding-id", operationId]);
+});
+
+test("executing resume only reuses locked bytes after reconciliation proves ROI never started", async () => {
+  const { installHostCluster } = moduleUnderTest();
+  const root = tempOperation("rainskills-not-started-reconcile-");
+  const home = path.join(root, "home");
+  fs.mkdirSync(home, { mode: 0o700 });
+  const stateStore = require("./helpers/portable-secure-state.js").createPortableSecureStateStore(home);
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  const paths = { root: path.join(home, ".rainbond", "platform-installer", operationId) };
+  const hostRoot = path.join(paths.root, "host-cluster");
+  stateStore.ensurePrivateDirectory(hostRoot);
+  const configPath = path.join(hostRoot, "cluster.yaml");
+  const artifactPath = path.join(hostRoot, "roi");
+  const configBytes = Buffer.from(YAML.stringify(cluster()));
+  const artifactBytes = elfBinary("amd64");
+  fs.writeFileSync(configPath, configBytes, { mode: 0o600 });
+  fs.writeFileSync(artifactPath, artifactBytes, { mode: 0o700 });
+  stateStore.atomicWriteJson(path.join(hostRoot, "state.json"), {
+    schema: "rainskills.host-cluster-state.v1", version: 1, operation_id: operationId,
+    stage: "executing", status: "interrupted", config_path: configPath,
+    config_sha256: sha256(configBytes), artifact_sha256: sha256(artifactBytes),
+    artifact_final_url: "https://get.rainbond.com/roi/roi-amd64", artifact_version: "roi version v1",
+    execution_approved: true,
+  });
+  let executions = 0;
+  let preflights = 0;
+  let downloads = 0;
+  const result = await installHostCluster({
+    onboarding: { operation_id: operationId }, state: { operation_id: operationId }, paths,
+    options: { yes: true },
+  }, {
+    stateStore, interactive: false,
+    sessionFactory: async () => ({ controlPath: null, interactive: false }), closeSession: () => {},
+    runPreflight: async () => { preflights += 1; throw new Error("must not preflight"); },
+    acquireArtifact: async () => { downloads += 1; throw new Error("must not download"); },
+    reconcile: async () => ({ disposition: "not_started", ownershipVerified: true, bytesVerified: true }),
+    execute: async () => { executions += 1; return { interrupted: false }; },
+    verify: async () => ({ consoleUrl: "http://10.0.0.1:7070" }),
+  });
+  assert.equal(result.verification.consoleUrl, "http://10.0.0.1:7070");
+  assert.equal(executions, 1);
+  assert.equal(preflights, 0);
+  assert.equal(downloads, 0);
+});
+
+test("unknown host resume state reconciles read-only then blocks with the fixed resume command", async () => {
+  const { installHostCluster } = moduleUnderTest();
+  const root = tempOperation("rainskills-unknown-reconcile-");
+  const home = path.join(root, "home");
+  fs.mkdirSync(home, { mode: 0o700 });
+  const stateStore = require("./helpers/portable-secure-state.js").createPortableSecureStateStore(home);
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  const paths = { root: path.join(home, ".rainbond", "platform-installer", operationId) };
+  const hostRoot = path.join(paths.root, "host-cluster");
+  stateStore.ensurePrivateDirectory(hostRoot);
+  const configPath = path.join(hostRoot, "cluster.yaml");
+  const configBytes = Buffer.from(YAML.stringify(cluster()));
+  fs.writeFileSync(configPath, configBytes, { mode: 0o600 });
+  stateStore.atomicWriteJson(path.join(hostRoot, "state.json"), {
+    schema: "rainskills.host-cluster-state.v1", version: 1, operation_id: operationId,
+    stage: "future-stage", status: "interrupted", config_path: configPath,
+    config_sha256: sha256(configBytes),
+  });
+  const output = [];
+  let reconciliations = 0;
+  let sideEffects = 0;
+  const result = await installHostCluster({
+    onboarding: { operation_id: operationId }, state: { operation_id: operationId }, paths,
+    options: { yes: true },
+  }, {
+    stateStore, interactive: false, write: (value) => output.push(value),
+    sessionFactory: async () => ({ controlPath: null, interactive: false }), closeSession: () => {},
+    reconcile: async () => { reconciliations += 1; return { disposition: "unknown" }; },
+    runPreflight: async () => { sideEffects += 1; }, acquireArtifact: async () => { sideEffects += 1; },
+    execute: async () => { sideEffects += 1; }, verify: async () => { sideEffects += 1; },
+  });
+  assert.equal(result.waiting, true);
+  assert.equal(result.blocked, true);
+  assert.equal(reconciliations, 1);
+  assert.equal(sideEffects, 0);
+  assert.match(output.join(""), /RAINSKILLS_ACTION_REQUIRED:host_cluster_resume_blocked/);
+  assert.deepEqual(result.resumeArgv, ["npx", `rainskills@${require("../package.json").version}`, "platform", "install", "--onboarding-id", operationId]);
+});
+
+test("verifying and completed host stages only run verification and completion", async () => {
+  const { installHostCluster } = moduleUnderTest();
+  for (const stage of ["verifying", "completed"]) {
+    const root = tempOperation(`rainskills-${stage}-only-`);
+    const home = path.join(root, "home");
+    fs.mkdirSync(home, { mode: 0o700 });
+    const stateStore = require("./helpers/portable-secure-state.js").createPortableSecureStateStore(home);
+    const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+    const paths = { root: path.join(home, ".rainbond", "platform-installer", operationId) };
+    const hostRoot = path.join(paths.root, "host-cluster");
+    stateStore.ensurePrivateDirectory(hostRoot);
+    const configPath = path.join(hostRoot, "cluster.yaml");
+    const configBytes = Buffer.from(YAML.stringify(cluster()));
+    fs.writeFileSync(configPath, configBytes, { mode: 0o600 });
+    stateStore.atomicWriteJson(path.join(hostRoot, "state.json"), {
+      schema: "rainskills.host-cluster-state.v1", version: 1, operation_id: operationId,
+      stage, status: stage === "completed" ? "completed" : "running", config_path: configPath,
+      config_sha256: sha256(configBytes),
+    });
+    let verifications = 0;
+    let other = 0;
+    const result = await installHostCluster({
+      onboarding: { operation_id: operationId }, state: { operation_id: operationId }, paths, options: {},
+    }, {
+      stateStore, interactive: false,
+      sessionFactory: async () => ({ controlPath: null, interactive: false }), closeSession: () => {},
+      verify: async () => { verifications += 1; return { consoleUrl: "http://10.0.0.1:7070" }; },
+      runPreflight: async () => { other += 1; }, acquireArtifact: async () => { other += 1; },
+      execute: async () => { other += 1; }, reconcile: async () => { other += 1; },
+    });
+    assert.equal(result.verification.consoleUrl, "http://10.0.0.1:7070");
+    assert.equal(verifications, 1, stage);
+    assert.equal(other, 0, stage);
+  }
+});
+
+test("production host reconciliation verifies operation ownership and bytes before cluster health", async () => {
+  const { reconcileHostExecution } = moduleUnderTest();
+  const calls = [];
+  let inspections = 0;
+  const digestA = "a".repeat(64);
+  const digestB = "b".repeat(64);
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  const healthy = await reconcileHostExecution({
+    bootstrap: host("node1", "10.0.0.1", { bootstrap: true }),
+    remoteDir: "/root/.rainbond/rainskills/op-1",
+    operationId,
+    configSha256: digestA,
+    artifactSha256: digestB,
+    session: { controlPath: "/protected/control", interactive: false },
+    sshRunner: async (command, args, options) => {
+      calls.push({ command, args, input: options.input });
+      return { code: 0, stdout: "OWNERSHIP_VERIFIED=true\nBYTES_VERIFIED=true\nRECEIPT_PRESENT=true\nRECEIPT_PHASE=completed\nSTARTED=true\n", stderr: "" };
+    },
+    inspectCluster: async () => {
+      inspections += 1;
+      return { nodes: [{ name: "node1", ready: true }], workloads: {}, consoleUrl: "http://10.0.0.1:7070" };
+    },
+  });
+  assert.equal(healthy.disposition, "started");
+  assert.equal(inspections, 1);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].command, "ssh");
+  assert.deepEqual(calls[0].args.slice(0, 4), ["-o", "BatchMode=yes", "-o", "ControlPath=/protected/control"]);
+  assert.deepEqual(calls[0].args.slice(-10), [
+    "bash", "-s", "--", "/root/.rainbond/rainskills/op-1",
+    "/root/.rainbond/rainskills/op-1/cluster.yaml", "/root/.rainbond/rainskills/op-1/roi",
+    "/root/.rainbond/rainskills/op-1/execution.receipt", operationId, digestA, digestB,
+  ]);
+  assert.match(calls[0].input, /OWNERSHIP_VERIFIED/);
+
+  for (const started of [false, true]) {
+    const incomplete = await reconcileHostExecution({
+      bootstrap: host("node1", "10.0.0.1", { bootstrap: true }),
+      remoteDir: "/root/.rainbond/rainskills/op-1",
+      operationId,
+      configSha256: digestA,
+      artifactSha256: digestB,
+      sshRunner: async () => ({
+        code: 0,
+        stdout: `OWNERSHIP_VERIFIED=true\nBYTES_VERIFIED=true\nRECEIPT_PRESENT=true\nRECEIPT_PHASE=launching\nSTARTED=${started}\n`,
+        stderr: "",
+      }),
+      inspectCluster: async () => { inspections += 1; return {}; },
+    });
+    assert.equal(incomplete.disposition, "unknown", `launching started=${started}`);
+    assert.equal(incomplete.reason, "operation_launch_incomplete", `launching started=${started}`);
+    assert.equal(inspections, 1, "launching receipt must never adopt or inspect a cluster");
+  }
+
+  const unrelated = await reconcileHostExecution({
+    bootstrap: host("node1", "10.0.0.1", { bootstrap: true }),
+    remoteDir: "/root/.rainbond/rainskills/op-1",
+    operationId,
+    configSha256: digestA,
+    artifactSha256: digestB,
+    sshRunner: async () => ({ code: 0, stdout: "OWNERSHIP_VERIFIED=true\nBYTES_VERIFIED=true\nRECEIPT_PRESENT=false\nRECEIPT_PHASE=absent\nSTARTED=true\n", stderr: "" }),
+    inspectCluster: async () => { inspections += 1; return {}; },
+  });
+  assert.equal(unrelated.disposition, "unknown");
+  assert.equal(unrelated.reason, "external_cluster_detected_without_operation_marker");
+  assert.equal(inspections, 1, "an unrelated cluster must not be adopted or inspected as this operation");
 });
 
 test("cluster verification requires expected Ready nodes, critical workloads, and reachable Console", async () => {

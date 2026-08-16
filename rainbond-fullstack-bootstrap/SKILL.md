@@ -49,9 +49,25 @@ target 只允许 `codex`、`claude`、`all`。校验 intent 后按 `route_condit
 
 先说：“可以，我会帮你创建应用和组件拓扑。不过目前还没有可用的应用运行环境。你刚安装的 Rainskills 是 AI 部署助手，它负责分析项目并执行部署；应用实际会运行在 Rainbond 上。Rainbond 是一套应用运行和管理平台，负责源码构建、容器运行、域名访问、日志和存储等工作，你不需要了解 Kubernetes。”
 
+先根据 intent 确认 scope，确认前不展示环境选项：`app_id` 和 `service_id` 都不存在是 new scope，任一存在是 existing scope。
+
 ### 新建目标
 
-intent 不含 `app_id` 和 `service_id` 时，让用户选择 `Rainbond Cloud`、`已有私有 Rainbond` 或`安装私有 Rainbond`。
+#### 第一次选择
+
+intent 不含 `app_id` 和 `service_id` 时，请提示“请选择应用要运行的环境：”，并只显示：
+
+1) Rainbond Cloud（在线，无需安装）
+2) 私有 Rainbond（自己的环境）
+
+#### 选择私有 Rainbond 后
+
+只有用户选择私有 Rainbond 后，才继续显示：
+
+a) 连接已有私有 Rainbond
+b) 帮我安装私有 Rainbond
+
+选择 a 时执行 `private-existing` route；选择 b 时执行 `install-private` route。第一问不得并列展示已有私有和安装私有。
 
 ### 已有目标
 

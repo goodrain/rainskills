@@ -116,6 +116,22 @@ function runtimeContract(text) {
   return JSON.parse(json);
 }
 
+function assertTwoLevelNewRuntimeChoice(routing) {
+  const firstChoice = headingSection(routing, "#### 第一次选择", "#### 选择私有 Rainbond 后");
+  const privateChoice = headingSection(routing, "#### 选择私有 Rainbond 后");
+
+  assert.match(firstChoice, /请选择应用要运行的环境/);
+  assert.match(firstChoice, /1\)\s*Rainbond Cloud（在线，无需安装）/);
+  assert.match(firstChoice, /2\)\s*私有 Rainbond（自己的环境）/);
+  assert.doesNotMatch(firstChoice, /已有私有 Rainbond|安装私有 Rainbond|准备私有 Rainbond/);
+
+  assert.match(privateChoice, /选择.*私有 Rainbond.*后/s);
+  assert.match(privateChoice, /a\)\s*连接已有私有 Rainbond/);
+  assert.match(privateChoice, /b\)\s*帮我(?:安装|准备)私有 Rainbond/);
+  assert.match(privateChoice, /private-existing/);
+  assert.match(privateChoice, /install-private/);
+}
+
 const intentSamples = {
   deploy: [
     { type: "deploy", project_root: "/workspace/app", source_kind: "local" },
@@ -324,18 +340,19 @@ for (const skill of runtimeSkills) {
     assert.match(routing, /Rainskills 是 AI 部署助手/);
     assert.match(routing, /Rainbond 是一套应用运行和管理平台/);
     assert.match(routing, /不需要了解 Kubernetes/);
-    assert.match(routing, /Rainbond Cloud/);
-    assert.match(routing, /已有私有 Rainbond/);
-
     if (skill.route === "new" || skill.route === "mixed") {
-      assert.match(routing, /安装私有 Rainbond/);
+      assertTwoLevelNewRuntimeChoice(routing);
     }
     if (skill.route === "existing") {
+      assert.match(routing, /Rainbond Cloud/);
+      assert.match(routing, /已有私有 Rainbond/);
       assert.match(routing, /承载目标应用/);
       assert.match(routing, /只让用户选择.*Rainbond Cloud.*已有私有 Rainbond/s);
       assert.match(routing, /不得.*安装私有 Rainbond|不得.*新平台/s);
     }
     if (skill.route === "mixed") {
+      assert.match(routing, /先.*(?:确认|判定).*scope/s);
+      assert(routing.search(/先.*(?:确认|判定).*scope/s) < routing.indexOf("#### 第一次选择"));
       assert.match(
         routing,
         /已有应用.*(?:不得.*安装.*新|existing-app.*不得.*install-private|只(?:让用户选择|提供|连接).*Rainbond Cloud.*已有私有 Rainbond)/is
@@ -481,7 +498,7 @@ test("app assistant clarifies ambiguous app intent before runtime choices", () =
   assert.match(ambiguous, /部署新应用还是管理已有应用/);
   assert.doesNotMatch(ambiguous, /Rainbond Cloud|私有 Rainbond|install-private|runtime connect/i);
   assert.match(ambiguous, /确认前.*不.*连接运行环境/s);
-  assert.match(newApp, /Rainbond Cloud.*已有私有 Rainbond.*安装私有 Rainbond/s);
+  assertTwoLevelNewRuntimeChoice(newApp);
   assert.match(existingApp, /Rainbond Cloud.*承载目标应用.*已有私有 Rainbond/s);
   assert.match(existingApp, /不得.*install-private/s);
 });
@@ -502,6 +519,11 @@ test("README introduces runtime only after an application action and documents r
   assert.match(readme, /permission-denied.*不 reconnect/s);
   assert.match(readme, /Skills-only.*不需要 Node\.js|仅安装 Skills.*不需要 Node\.js/s);
   assert.match(readme, /首次.*需要运行环境.*Node\.js 18/s);
+  const newRuntimeChoice = headingSection(readme, "### 新应用环境选择", "### 已有应用环境选择");
+  assertTwoLevelNewRuntimeChoice(newRuntimeChoice);
+  const existingRuntimeChoice = headingSection(readme, "### 已有应用环境选择", "## 私有 Rainbond 安装");
+  assert.match(existingRuntimeChoice, /Rainbond Cloud.*承载目标应用.*已有私有 Rainbond/s);
+  assert.doesNotMatch(existingRuntimeChoice, /帮我(?:安装|准备)私有 Rainbond/);
   const privateInstall = headingSection(readme, "## 私有 Rainbond 安装", "## 更新");
   assert.doesNotMatch(privateInstall, /npx --yes rainskills platform install/);
   const platformLaunchers = [

@@ -86,7 +86,9 @@ Rainskills 安装完成。
 5. 安装私有环境时，只消费完成 schema、action、onboarding id 和参数边界校验的 `rainskills.next-action.v1.argv`；拒绝字符串命令和其他输出字段。
 6. 探针失败进入 reconnect。连接或安装完成后执行 launcher + `["intent", "resume", "--onboarding-id", "<同一 onboarding-id>"]`，恢复受保护的原始 intent 和 `resume_step`，不重新猜测用户动作。
 
-新应用场景使用以下说明，并让用户选择 Rainbond Cloud、已有私有 Rainbond 或安装私有 Rainbond：
+### 新应用环境选择
+
+新应用场景使用以下说明：
 
 > 可以，我会帮你完成应用识别、构建、部署和访问验证。
 >
@@ -94,11 +96,25 @@ Rainskills 安装完成。
 >
 > 你刚安装的 Rainskills 是 AI 部署助手，它负责分析项目并执行部署；应用实际会运行在 Rainbond 上。Rainbond 是一套应用运行和管理平台，负责源码构建、容器运行、域名访问、日志和存储等工作，你不需要了解 Kubernetes。
 >
-> 1. 使用 Rainbond Cloud：不需要安装平台，登录授权后即可部署。
-> 2. 使用已有私有 Rainbond：连接你已有的平台。
-> 3. 安装私有 Rainbond：平台和应用运行在自己的电脑、服务器或 Kubernetes 集群中。
+#### 第一次选择
 
-查询、排障、修改、交付验证、快照、发布和回滚属于已有应用操作，只能选择 Rainbond Cloud 或承载目标应用的已有私有 Rainbond，绝不安装一个空的新平台代替目标应用。每个 Skill 的第一句话应匹配当前动作，例如“验证应用交付状态和访问地址”，不要全部写成“部署当前项目”。
+第一问提示“请选择应用要运行的环境：”，并只显示：
+
+1) Rainbond Cloud（在线，无需安装）
+2) 私有 Rainbond（自己的环境）
+
+#### 选择私有 Rainbond 后
+
+只有用户选择私有 Rainbond 后，才继续显示：
+
+a) 连接已有私有 Rainbond
+b) 帮我安装私有 Rainbond
+
+不得把第二问的两项提前到第一问。选择 a 时执行 `private-existing` route；选择 b 时执行 `install-private` route。内部 runtime contract 仍保留 `saas`、`private-existing`、`install-private` 三条可执行 route。
+
+### 已有应用环境选择
+
+查询、排障、修改、交付验证、快照、发布和回滚属于已有应用操作，只让用户选择 Rainbond Cloud 或承载目标应用的已有私有 Rainbond，绝不执行 `install-private`，也不安装一个空的新平台代替目标应用。每个 Skill 的第一句话应匹配当前动作，例如“验证应用交付状态和访问地址”，不要全部写成“部署当前项目”。
 
 ### 认证与权限恢复
 

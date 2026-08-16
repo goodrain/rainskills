@@ -228,17 +228,34 @@ test("preflight blocks when read-only kubelet runtime filesystem evidence is mis
   assert(result.blockers.some(({ category }) => category === "runtime_path_unavailable"));
 });
 
-test("read-only workload conflict analysis covers hostPort, hostNetwork, Service and ingress controllers", () => {
+test("mature clusters with ordinary Ingress and ingress controllers are not false-positive blockers", () => {
   const { analyzeWorkloadConflicts } = moduleUnderTest();
   const facts = analyzeWorkloadConflicts([
+    { kind: "Ingress", metadata: { namespace: "business-a", name: "shop" }, spec: { rules: [{ host: "shop.example.com", http: { paths: [{ backend: { service: { name: "shop-api", port: { number: 8080 } } } }] } }] } },
+    { kind: "Ingress", metadata: { namespace: "business-a", name: "rainbond-blog", labels: { app: "rainbond-blog" } }, spec: { rules: [{ http: { paths: [{ backend: { service: { name: "blog", port: { number: 8080 } } } }] } }] } },
+    { kind: "Ingress", metadata: { namespace: "business-a", name: "same-name-backends" }, spec: { rules: [{ http: { paths: [
+      { backend: { service: { name: "rainbond", port: { number: 80 } } } },
+      { backend: { service: { name: "rbd-gateway", port: { number: 80 } } } },
+      { backend: { service: { name: "rbd-app-ui", port: { number: 7070 } } } },
+    ] } }] } },
+    { kind: "Pod", metadata: { namespace: "ingress", name: "nginx-ingress-controller", labels: { "app.kubernetes.io/name": "ingress-nginx" } }, spec: { containers: [{ ports: [{ containerPort: 80 }, { containerPort: 443 }] }] } },
+    { kind: "Service", metadata: { namespace: "ingress", name: "ingress-nginx-controller" }, spec: { type: "LoadBalancer", ports: [{ port: 443, nodePort: 30443 }] } },
+    { kind: "Service", metadata: { namespace: "business-b", name: "web" }, spec: { type: "NodePort", ports: [{ port: 80, nodePort: 30080 }] } },
+  ]);
+  assert.deepEqual(facts.ingressConflicts, []);
+  assert.deepEqual(facts.hostPortConflicts, []);
+});
+
+test("workload conflict analysis blocks only proven Rainbond target and entry-port conflicts", () => {
+  const { analyzeWorkloadConflicts } = moduleUnderTest();
+  const facts = analyzeWorkloadConflicts([
+    { kind: "Ingress", metadata: { namespace: "rbd-system", name: "rainbond-console" }, spec: { rules: [{ http: { paths: [{ backend: { service: { name: "rbd-app-ui", port: { number: 7070 } } } }] } }] } },
     { kind: "Pod", metadata: { namespace: "tools", name: "host-port" }, spec: { containers: [{ ports: [{ hostPort: 7070 }] }] } },
-    { kind: "Pod", metadata: { namespace: "tools", name: "host-network" }, spec: { hostNetwork: true, containers: [{ ports: [{ containerPort: 6060 }] }] } },
-    { kind: "Service", metadata: { namespace: "tools", name: "public" }, spec: { type: "LoadBalancer", ports: [{ port: 443, nodePort: 30443 }] } },
-    { kind: "Service", metadata: { namespace: "tools", name: "node-entry" }, spec: { type: "NodePort", ports: [{ port: 80, nodePort: 30080 }] } },
-    { kind: "Pod", metadata: { namespace: "ingress", name: "nginx-ingress-controller", labels: { "app.kubernetes.io/name": "ingress-nginx" } }, spec: { containers: [] } },
+    { kind: "Pod", metadata: { namespace: "ingress", name: "host-network-ingress", labels: { "app.kubernetes.io/name": "ingress-nginx" } }, spec: { hostNetwork: true, containers: [{ ports: [{ containerPort: 80 }] }] } },
+    { kind: "Service", metadata: { namespace: "tools", name: "exact-node-entry" }, spec: { type: "NodePort", ports: [{ port: 8080, nodePort: 6060 }] } },
   ]);
   assert.deepEqual(new Set(facts.hostPortConflicts.map(({ source }) => source)), new Set(["hostPort", "hostNetwork", "Service"]));
-  assert.deepEqual(new Set(facts.hostPortConflicts.filter(({ source }) => source === "Service").map(({ serviceType }) => serviceType)), new Set(["LoadBalancer", "NodePort"]));
+  assert.deepEqual(new Set(facts.hostPortConflicts.filter(({ source }) => source === "Service").map(({ serviceType }) => serviceType)), new Set(["NodePort"]));
   assert.equal(facts.ingressConflicts.length, 1);
 });
 
@@ -457,9 +474,10 @@ test("Helm install uses fixed local package and target flags", async () => {
   locked.valuesPath = protectedFile(root, "values.yaml", "x: 1\n");
   locked.valuesSha256 = digest(fs.readFileSync(locked.valuesPath));
   let invocation;
-  let identities = 0;
-  await executeHelmInstall(locked, { operationId: "op-id", runner: async (command, args) => { invocation = [command, args]; return { code: 0, stdout: "", stderr: "" }; }, assertIdentity: async () => { identities += 1; } });
+  let identities = 0; let ownershipChecks = 0;
+  await executeHelmInstall(locked, { operationId: "op-id", runner: async (command, args) => { invocation = [command, args]; return { code: 0, stdout: "", stderr: "" }; }, assertIdentity: async () => { identities += 1; }, assertOwnership: async () => { ownershipChecks += 1; } });
   assert.equal(identities, 2);
+  assert.equal(ownershipChecks, 2, "namespace ownership must be checked immediately before and after Helm side effects");
   assert.equal(invocation[0], "helm");
   assert.deepEqual(invocation[1].slice(0, 8), ["--kubeconfig", locked.kubeconfigPath, "--kube-context", "production", "install", "rainbond", locked.chartPath, "--create-namespace"]);
   assert(invocation[1].includes("rbd-system"));
@@ -692,6 +710,265 @@ test("install success and verification interruption resume owned release without
   assert.equal(completed.verification.consoleUrl, "http://10.0.0.20:7070");
   assert.equal(installCalls, 1);
   assert.equal(preflightCalls, 1);
+});
+
+async function recoverInstallBeforeRelease(mode) {
+  const { installExistingKubernetes } = moduleUnderTest();
+  const root = operationRoot(); const stateStore = fakeStore(root);
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  const source = protectedFile(root, "source-kube", "apiVersion: v1\n");
+  const chartBytes = Buffer.from("retry-owned-release-chart");
+  const abortState = { aborted: false, signal: null };
+  let namespace = null; let installCalls = 0; let releaseExists = false;
+  const runner = async (command, args) => {
+    if (command === "kubectl" && args.includes("config")) return { code: 0, stdout: JSON.stringify({ clusters: [{ cluster: { server: "https://10.0.0.10:6443" } }] }), stderr: "" };
+    if (command === "kubectl" && args.includes("kube-system")) return { code: 0, stdout: JSON.stringify({ metadata: { uid: "cluster-uid-1" } }), stderr: "" };
+    if (command === "kubectl" && args.includes("namespace") && args.includes("rbd-system")) return { code: 0, stdout: namespace ? JSON.stringify(namespace) : "", stderr: "" };
+    if (command === "kubectl" && args.includes("create")) {
+      namespace = { metadata: { name: "rbd-system", uid: "owned-namespace-uid", labels: { "app.kubernetes.io/managed-by": "rainskills" }, annotations: { "rainskills.goodrain.com/operation-id": operationId } } };
+      return { code: 0, stdout: "namespace/rbd-system created", stderr: "" };
+    }
+    if (command === "kubectl" && args.includes("crd")) return { code: 0, stdout: JSON.stringify({ items: [] }), stderr: "" };
+    if (command === "kubectl" && args.includes("api-resources")) return { code: 0, stdout: "clusterroles.rbac.authorization.k8s.io\nwidgets.example.io\n", stderr: "" };
+    if (command === "kubectl" && args.some((arg) => String(arg).includes("widgets.example.io"))) return { code: 0, stdout: JSON.stringify({ items: [] }), stderr: "" };
+    if (command === "kubectl" && args.some((arg) => String(arg).startsWith("all,"))) {
+      return { code: 0, stdout: JSON.stringify({ items: [
+        { kind: "ServiceAccount", metadata: { namespace: "rbd-system", name: "default" } },
+        { kind: "ConfigMap", metadata: { namespace: "rbd-system", name: "kube-root-ca.crt" } },
+      ] }), stderr: "" };
+    }
+    if (command === "helm" && args[4] === "list") return { code: 0, stdout: "[]", stderr: "" };
+    if (command === "helm" && args[4] === "status") {
+      if (!releaseExists) return { code: 1, stdout: "", stderr: "Error: release: not found" };
+      return { code: 0, stdout: JSON.stringify({ name: "rainbond", namespace: "rbd-system", version: 1, info: { status: "deployed", description: `rainskills-operation=${operationId}` } }), stderr: "" };
+    }
+    if (command === "helm" && args[4] === "install" && !args.includes("--dry-run")) {
+      installCalls += 1;
+      if (installCalls === 1 && mode === "signal") {
+        abortState.aborted = true; abortState.signal = "SIGINT";
+        throw Object.assign(new Error("interrupted before release"), { code: "RAINSKILLS_KUBERNETES_INTERRUPTED", signal: "SIGINT" });
+      }
+      if (installCalls === 1 && mode === "exit") return { code: 1, stdout: "", stderr: "install exited before release creation" };
+      releaseExists = true;
+    }
+    return { code: 0, stdout: "", stderr: "" };
+  };
+  const context = { state: { operation_id: operationId }, paths: { root }, options: { kubeconfig: source, kubeContext: "production", yes: true }, abortState };
+  const dependencies = {
+    stateStore, runner, interactive: false, write: () => {}, preflight: async () => ({ blockers: [] }),
+    acquireChart: async ({ operationDir }) => {
+      const chartPath = protectedFile(root, path.relative(root, path.join(operationDir, "rainbond-2.17.0.tgz")), chartBytes);
+      return { path: chartPath, sha256: digest(chartBytes), origin: "https://chart.rainbond.com", name: "rainbond/rainbond", version: "2.17.0" };
+    },
+    inspect: async () => ({ releaseReady: true, operatorReady: true, corePodsReady: true, appUiReady: true, consoleUrl: "http://10.0.0.20:7070", context: "production" }),
+    probeConsole: async () => {},
+  };
+  const first = installExistingKubernetes(context, dependencies);
+  if (mode === "signal") assert.equal((await first).interrupted, true);
+  else await assert.rejects(first, /helm install|exit 1/i);
+  let saved = JSON.parse(fs.readFileSync(path.join(root, "existing-kubernetes", "state.json"), "utf8"));
+  assert.equal(saved.install_attempt_count, 1);
+  abortState.aborted = false; abortState.signal = null;
+  const resumed = await installExistingKubernetes(context, dependencies);
+  saved = JSON.parse(fs.readFileSync(path.join(root, "existing-kubernetes", "state.json"), "utf8"));
+  assert.equal(resumed.verification.consoleUrl, "http://10.0.0.20:7070");
+  assert.equal(installCalls, 2);
+  assert.equal(saved.install_attempt_count, 2);
+  assert.equal(saved.status, "completed");
+}
+
+test("SIGINT before Helm creates a release resumes an absent release with the locked inputs", async () => {
+  await recoverInstallBeforeRelease("signal");
+});
+
+test("Helm exit before release creation resumes an absent release with a controlled retry", async () => {
+  await recoverInstallBeforeRelease("exit");
+});
+
+test("owned failed and pending Helm releases stay read-only and report an explicit recovery action", async () => {
+  const { inspectReleaseRecoveryState, assertReleaseRecoveryAction } = moduleUnderTest();
+  const root = operationRoot(); const locked = identity(root); const operationId = "op-id";
+  for (const status of ["failed", "pending-install"]) {
+    let mutations = 0;
+    const state = await inspectReleaseRecoveryState(locked, { operationId, runner: async (command, args) => {
+      if (command === "helm" && args[4] === "status") return { code: 0, stdout: JSON.stringify({ name: "rainbond", namespace: "rbd-system", version: 1, info: { status, description: `rainskills-operation=${operationId}` } }), stderr: "" };
+      mutations += 1; return { code: 0, stdout: "", stderr: "" };
+    } });
+    assert.equal(state.status, status);
+    assert.throws(() => assertReleaseRecoveryAction(state), /只读|人工|重试|恢复/i);
+    assert.equal(mutations, 0);
+  }
+});
+
+test("absent release recovery blocks when the owned namespace has residual resources", async () => {
+  const { inspectFreshRetryState } = moduleUnderTest();
+  const root = operationRoot(); const locked = identity(root);
+  const runner = async (command, args) => {
+    if (command === "helm") return { code: 0, stdout: "[]", stderr: "" };
+    if (args.includes("crd")) return { code: 0, stdout: JSON.stringify({ items: [] }), stderr: "" };
+    if (args.includes("api-resources")) return { code: 0, stdout: "clusterroles.rbac.authorization.k8s.io\n", stderr: "" };
+    if (args.some((arg) => String(arg).startsWith("clusterroles.rbac"))) return { code: 0, stdout: JSON.stringify({ items: [] }), stderr: "" };
+    return { code: 0, stdout: JSON.stringify({ items: [{ kind: "Deployment", metadata: { namespace: "rbd-system", name: "leftover" } }] }), stderr: "" };
+  };
+  await assert.rejects(() => inspectFreshRetryState(locked, { runner, assertIdentity: async () => {} }), /残留|residu|资源/i);
+  await assert.rejects(() => inspectFreshRetryState(locked, { runner: async (command, args) => {
+    if (command === "helm") return { code: 0, stdout: "[]", stderr: "" };
+    if (args.includes("crd")) return { code: 0, stdout: JSON.stringify({ items: [] }), stderr: "" };
+    if (args.includes("api-resources")) return { code: 0, stdout: "clusterroles.rbac.authorization.k8s.io\n", stderr: "" };
+    if (args.some((arg) => String(arg).startsWith("clusterroles.rbac"))) return { code: 0, stdout: JSON.stringify({ items: [] }), stderr: "" };
+    return { code: 0, stdout: "{}", stderr: "" };
+  }, assertIdentity: async () => {} }), /结构|无效|检查/i);
+});
+
+test("absent release recovery proves Rainbond cluster-scoped resources are absent", async () => {
+  const { inspectFreshRetryState } = moduleUnderTest();
+  const root = operationRoot(); const locked = identity(root);
+  const dynamicGets = [];
+  const runWithClusterItems = (items) => inspectFreshRetryState(locked, { runner: async (command, args) => {
+    if (command === "helm") return { code: 0, stdout: "[]", stderr: "" };
+    if (args.includes("crd")) return { code: 0, stdout: JSON.stringify({ items: [] }), stderr: "" };
+    if (args.includes("api-resources")) return { code: 0, stdout: "clusterroles.rbac.authorization.k8s.io\nwidgets.example.io\n", stderr: "" };
+    if (args.some((arg) => String(arg).includes("widgets.example.io"))) { dynamicGets.push(args); return { code: 0, stdout: JSON.stringify({ items }), stderr: "" }; }
+    return { code: 0, stdout: JSON.stringify({ items: [] }), stderr: "" };
+  }, assertIdentity: async () => {} });
+  await runWithClusterItems([
+    { kind: "ClusterRole", metadata: { name: "unrelated-controller", labels: { "app.kubernetes.io/instance": "other" } } },
+    { kind: "ClusterRole", metadata: { name: "rainbond-blog", labels: { "app.kubernetes.io/instance": "other" } } },
+  ]);
+  assert(dynamicGets.some((args) => args.some((arg) => String(arg).includes("widgets.example.io"))), "dynamic cluster-scoped API resources must be included in the proof");
+  await assert.rejects(() => runWithClusterItems([{ kind: "ClusterRole", metadata: { name: "rbd-operator", annotations: { "meta.helm.sh/release-name": "rainbond", "meta.helm.sh/release-namespace": "rbd-system" } } }]), /cluster|集群|残留|资源/i);
+  await assert.rejects(() => inspectFreshRetryState(locked, { runner: async (command, args) => {
+    if (command === "helm") return { code: 0, stdout: "[]", stderr: "" };
+    if (args.includes("crd")) return { code: 0, stdout: JSON.stringify({ items: [] }), stderr: "" };
+    if (args.includes("api-resources")) return { code: 0, stdout: "clusterroles.rbac.authorization.k8s.io\n", stderr: "" };
+    if (args.some((arg) => String(arg).startsWith("clusterroles.rbac"))) return { code: 0, stdout: "{}", stderr: "" };
+    return { code: 0, stdout: JSON.stringify({ items: [] }), stderr: "" };
+  }, assertIdentity: async () => {} }), /结构|无效|检查/i);
+});
+
+test("fresh retry checks namespace ownership around every residue read and once after completion", async () => {
+  const { inspectFreshRetryState } = moduleUnderTest();
+  const root = operationRoot(); const locked = identity(root);
+  let ownershipChecks = 0; let commands = 0;
+  await inspectFreshRetryState(locked, { runner: async (command, args) => {
+    commands += 1;
+    if (command === "helm") return { code: 0, stdout: "[]", stderr: "" };
+    if (args.includes("api-resources")) return { code: 0, stdout: "clusterroles.rbac.authorization.k8s.io\n", stderr: "" };
+    return { code: 0, stdout: JSON.stringify({ items: [] }), stderr: "" };
+  }, assertIdentity: async () => {}, assertOwnership: async () => { ownershipChecks += 1; } });
+  assert.equal(commands, 5);
+  assert.equal(ownershipChecks, commands * 2 + 1);
+});
+
+async function attemptedRecoveryFixture({ releaseStatus, residue = [], clusterResidue = [], installSucceeded = false, attemptCount = 1, releaseOwner = "same", replaceNamespaceAfterResidueRead = false }) {
+  const { installExistingKubernetes } = moduleUnderTest();
+  const root = operationRoot(); const stateStore = fakeStore(root);
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  const operationDir = path.join(root, "existing-kubernetes");
+  fs.mkdirSync(operationDir, { recursive: true, mode: 0o700 });
+  const kubeconfigPath = protectedFile(root, "existing-kubernetes/kubeconfig", "apiVersion: v1\n");
+  const chartPath = protectedFile(root, "existing-kubernetes/rainbond-2.17.0.tgz", "locked-chart\n");
+  let namespace = { metadata: { name: "rbd-system", uid: "owned-namespace-uid", labels: { "app.kubernetes.io/managed-by": "rainskills" }, annotations: { "rainskills.goodrain.com/operation-id": operationId } } };
+  stateStore.atomicWriteJson(path.join(operationDir, "state.json"), {
+    schema: "rainskills.existing-kubernetes-state.v1", version: 1, operation_id: operationId,
+    stage: "install", status: "interrupted", kubeconfig_path: kubeconfigPath, kubeconfig_sha256: digest(fs.readFileSync(kubeconfigPath)),
+    values_path: null, values_sha256: null, context: "production", api_origin: "https://10.0.0.10:6443", cluster_uid: "cluster-uid-1",
+    chart_path: chartPath, chart_partial_path: null, chart_origin: "https://chart.rainbond.com", chart_name: "rainbond/rainbond", chart_version: "2.17.0", chart_sha256: digest(fs.readFileSync(chartPath)),
+    installation_confirmed: true, namespace_uid: "owned-namespace-uid", namespace_owner_operation_id: operationId,
+    install_attempted: true, install_succeeded: installSucceeded, install_attempt_count: attemptCount,
+    release_owner_operation_id: releaseOwner === "same" ? operationId : releaseOwner,
+  });
+  let installs = 0;
+  const runner = async (command, args) => {
+    if (command === "kubectl" && args.includes("config")) return { code: 0, stdout: JSON.stringify({ clusters: [{ cluster: { server: "https://10.0.0.10:6443" } }] }), stderr: "" };
+    if (command === "kubectl" && args.includes("kube-system")) return { code: 0, stdout: JSON.stringify({ metadata: { uid: "cluster-uid-1" } }), stderr: "" };
+    if (command === "kubectl" && args.includes("namespace")) return { code: 0, stdout: JSON.stringify(namespace), stderr: "" };
+    if (command === "kubectl" && args.includes("crd")) return { code: 0, stdout: JSON.stringify({ items: [] }), stderr: "" };
+    if (command === "kubectl" && args.includes("api-resources")) return { code: 0, stdout: "clusterroles.rbac.authorization.k8s.io\nwidgets.example.io\n", stderr: "" };
+    if (command === "kubectl" && args.some((arg) => String(arg).includes("widgets.example.io"))) return { code: 0, stdout: JSON.stringify({ items: clusterResidue }), stderr: "" };
+    if (command === "kubectl" && args.some((arg) => String(arg).startsWith("all,"))) {
+      if (replaceNamespaceAfterResidueRead) namespace = { metadata: { name: "rbd-system", uid: "replacement-uid", labels: {}, annotations: {} } };
+      return { code: 0, stdout: JSON.stringify({ items: residue }), stderr: "" };
+    }
+    if (command === "helm" && args[4] === "list") return { code: 0, stdout: "[]", stderr: "" };
+    if (command === "helm" && args[4] === "status") {
+      if (releaseStatus === "absent") return { code: 1, stdout: "", stderr: "Error: release: not found" };
+      return { code: 0, stdout: JSON.stringify({ name: "rainbond", namespace: "rbd-system", version: 1, info: { status: releaseStatus, description: `rainskills-operation=${operationId}` } }), stderr: "" };
+    }
+    if (command === "helm" && args[4] === "install" && !args.includes("--dry-run")) installs += 1;
+    return { code: 0, stdout: "", stderr: "" };
+  };
+  const promise = installExistingKubernetes({ state: { operation_id: operationId }, paths: { root }, options: { kubeContext: "production", yes: true }, abortState: { aborted: false, signal: null } }, {
+    stateStore, runner, write: () => {}, inspect: async () => { throw new Error("verification must not run"); }, probeConsole: async () => {},
+  });
+  return { root, stateStore, operationId, get installs() { return installs; }, promise };
+}
+
+test("high-level pending and failed release recovery remains read-only and records the recovery state", async () => {
+  for (const releaseStatus of ["pending-install", "failed"]) {
+    const fixture = await attemptedRecoveryFixture({ releaseStatus });
+    await assert.rejects(fixture.promise, /只读|人工|重试|恢复/i);
+    assert.equal(fixture.installs, 0);
+    const saved = JSON.parse(fs.readFileSync(path.join(fixture.root, "existing-kubernetes", "state.json"), "utf8"));
+    assert.equal(saved.stage, "install_recovery");
+    assert.equal(saved.status, "waiting_recovery");
+    assert.equal(saved.release_status, releaseStatus);
+  }
+});
+
+test("high-level absent release recovery refuses retry when owned namespace residue exists", async () => {
+  const fixture = await attemptedRecoveryFixture({ releaseStatus: "absent", residue: [{ kind: "Deployment", metadata: { namespace: "rbd-system", name: "leftover" } }] });
+  await assert.rejects(fixture.promise, /残留|资源|residu/i);
+  assert.equal(fixture.installs, 0);
+  const saved = JSON.parse(fs.readFileSync(path.join(fixture.root, "existing-kubernetes", "state.json"), "utf8"));
+  assert.equal(saved.stage, "install_recovery");
+  assert.equal(saved.status, "waiting_recovery");
+});
+
+test("high-level absent release recovery refuses Rainbond cluster-scoped residue", async () => {
+  const fixture = await attemptedRecoveryFixture({ releaseStatus: "absent", clusterResidue: [{ kind: "ClusterRoleBinding", metadata: { name: "rainbond-operator", labels: { "app.kubernetes.io/instance": "rainbond" } } }] });
+  await assert.rejects(fixture.promise, /cluster|集群|残留|资源/i);
+  assert.equal(fixture.installs, 0);
+});
+
+test("absent retry detects namespace replacement during residue reads before Helm install", async () => {
+  const fixture = await attemptedRecoveryFixture({ releaseStatus: "absent", replaceNamespaceAfterResidueRead: true });
+  await assert.rejects(fixture.promise, /namespace|ownership|uid|匹配|所有权/i);
+  assert.equal(fixture.installs, 0);
+});
+
+test("recovery blocks explicitly when an absent release cannot be retried safely", async () => {
+  const cases = [
+    { name: "attempt limit", options: { releaseStatus: "absent", attemptCount: 3 } },
+    { name: "previously succeeded release disappeared", options: { releaseStatus: "absent", installSucceeded: true } },
+    { name: "saved release owner mismatch", options: { releaseStatus: "absent", releaseOwner: "other-operation" } },
+  ];
+  for (const scenario of cases) {
+    const fixture = await attemptedRecoveryFixture(scenario.options);
+    await assert.rejects(fixture.promise, /重试|恢复|ownership|所有权|缺失|上限/i, scenario.name);
+    assert.equal(fixture.installs, 0, scenario.name);
+  }
+});
+
+test("a retry command that exits successfully without creating the release remains recoverably blocked", async () => {
+  const fixture = await attemptedRecoveryFixture({ releaseStatus: "absent" });
+  await assert.rejects(fixture.promise, /release|恢复|absent|缺失/i);
+  assert.equal(fixture.installs, 1);
+  const saved = JSON.parse(fs.readFileSync(path.join(fixture.root, "existing-kubernetes", "state.json"), "utf8"));
+  assert.equal(saved.stage, "install_recovery");
+  assert.equal(saved.status, "waiting_recovery");
+});
+
+test("release recovery fails closed for an unknown status error or mismatched ownership", async () => {
+  const { inspectReleaseRecoveryState } = moduleUnderTest();
+  const root = operationRoot(); const locked = identity(root);
+  await assert.rejects(() => inspectReleaseRecoveryState(locked, { operationId: "op-id", runner: async () => ({ code: 1, stdout: "", stderr: "TLS handshake failed" }) }), /status|检查|失败|exit/i);
+  await assert.rejects(() => inspectReleaseRecoveryState(locked, { operationId: "op-id", runner: async () => ({ code: 0, stdout: JSON.stringify({ name: "rainbond", namespace: "rbd-system", version: 1, info: { status: "deployed", description: "external" } }), stderr: "" }) }), /ownership|外部|所有权/i);
+  await assert.rejects(() => inspectReleaseRecoveryState(locked, { operationId: "op-id", runner: async () => ({ code: 0, stdout: JSON.stringify({ name: "rainbond", namespace: "rbd-system", version: 1, info: { status: "pending-install\nDO_NOT_REFLECT", description: "rainskills-operation=op-id" } }), stderr: "" }) }), (error) => {
+    assert.match(error.message, /status|状态|无效/i);
+    assert.doesNotMatch(error.message, /DO_NOT_REFLECT/);
+    return true;
+  });
 });
 
 test("unknown install result refuses an unowned or mismatched Helm release", async () => {

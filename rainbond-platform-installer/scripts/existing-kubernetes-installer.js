@@ -279,11 +279,21 @@ function analyzeWorkloadConflicts(items) {
   const required = new Set([80, 443, 6060, 7070]);
   const ingressConflicts = [];
   const hostPortConflicts = [];
+  const ingressTargetsRainbond = (item) => {
+    if (String(item.metadata?.namespace || "default") !== NAMESPACE) return false;
+    const rainbondEntryServices = new Set(["rbd-app-ui", "rbd-gateway", "rainbond"]);
+    const services = [];
+    const backendName = (backend) => backend?.service?.name || backend?.serviceName || "";
+    services.push(backendName(item.spec?.defaultBackend || item.spec?.backend));
+    for (const rule of item.spec?.rules || []) {
+      for (const route of rule.http?.paths || []) services.push(backendName(route.backend));
+    }
+    return services.some((name) => rainbondEntryServices.has(String(name)));
+  };
   for (const item of items || []) {
     const name = String(item.metadata?.name || "");
     const namespace = String(item.metadata?.namespace || "default");
-    const labels = JSON.stringify(item.metadata?.labels || {});
-    if (item.kind === "Ingress" || /ingress/i.test(name) || /ingress/i.test(labels)) {
+    if (item.kind === "Ingress" && ingressTargetsRainbond(item)) {
       ingressConflicts.push({ kind: item.kind, namespace, name });
     }
     if (item.kind === "Pod") {
@@ -294,9 +304,9 @@ function analyzeWorkloadConflicts(items) {
         }
       }
     }
-    if (item.kind === "Service" && ["NodePort", "LoadBalancer"].includes(item.spec?.type)) {
+    if (item.kind === "Service" && item.spec?.type === "NodePort") {
       for (const port of item.spec?.ports || []) {
-        if (required.has(Number(port.port)) || required.has(Number(port.nodePort))) {
+        if (required.has(Number(port.nodePort))) {
           hostPortConflicts.push({ source: "Service", serviceType: item.spec.type, namespace, name, port: Number(port.port), nodePort: Number(port.nodePort || 0) });
         }
       }
@@ -624,13 +634,15 @@ async function confirmHelmInstall({ summary, yes = false, interactive = process.
   return { accepted: false };
 }
 
-async function executeHelmInstall(lock, { operationId, runner = runCommand, assertIdentity = () => assertClusterIdentity(lock, { runner }) } = {}) {
+async function executeHelmInstall(lock, { operationId, runner = runCommand, assertIdentity = () => assertClusterIdentity(lock, { runner }), assertOwnership = async () => {} } = {}) {
   await assertIdentity();
   const values = lock.valuesPath ? ["--values", lock.valuesPath] : [];
   const ownership = String(operationId || "");
   if (!ownership || /[\u0000-\u001f\u007f]/u.test(ownership)) throw new Error("Helm install 缺少安全 operation ownership");
   const args = [...helmArgs(lock), "install", RELEASE, lock.chartPath, "--create-namespace", "-n", NAMESPACE, "--description", `rainskills-operation=${ownership}`, ...values];
+  await assertOwnership();
   assertCommandSucceeded(await runner("helm", args), "helm install");
+  await assertOwnership();
   await assertIdentity();
   return { command: "helm", args };
 }
@@ -734,16 +746,88 @@ async function claimNamespaceForInstall(lock, {
   return ownership;
 }
 
-async function inspectOwnedRelease(lock, { operationId, expectedRevision = null, runner = runCommand } = {}) {
-  const result = parseJsonOutput(await runner("helm", [...helmArgs(lock), "status", RELEASE, "-n", NAMESPACE, "-o", "json"]), "检查 Helm release ownership");
+async function inspectReleaseRecoveryState(lock, { operationId, runner = runCommand } = {}) {
+  const commandResult = await runner("helm", [...helmArgs(lock), "status", RELEASE, "-n", NAMESPACE, "-o", "json"]);
+  const code = commandResult?.code ?? commandResult?.status ?? 0;
+  if (code !== 0) {
+    if (/release(?::|\s)+(?:\"?rainbond\"?\s+)?not found|release not found/i.test(String(commandResult?.stderr || ""))) {
+      return { presence: "absent", status: "absent", revision: null };
+    }
+    throw new Error(`检查 Helm release status 失败（exit ${code}）`);
+  }
+  const result = parseJsonOutput(commandResult, "检查 Helm release ownership");
   const revision = Number(result.version);
   const owned = result.name === RELEASE
     && result.namespace === NAMESPACE
     && result.info?.description === `rainskills-operation=${operationId}`;
   if (!owned) throw new Error("Helm release ownership 不属于当前 operation，可能是外部资源，拒绝覆盖");
-  if (result.info?.status !== "deployed" || !Number.isInteger(revision) || revision < 1) throw new Error("当前 operation 的 Helm release 尚未稳定 deployed");
-  if (expectedRevision !== null && Number(expectedRevision) !== revision) throw new Error("Helm release revision 与恢复状态不匹配");
-  return { revision, status: result.info.status, description: result.info.description };
+  if (!Number.isInteger(revision) || revision < 1) throw new Error("当前 operation 的 Helm release revision 无效");
+  const status = String(result.info?.status || "unknown");
+  const allowedStatuses = new Set(["unknown", "deployed", "uninstalled", "superseded", "failed", "uninstalling", "pending-install", "pending-upgrade", "pending-rollback"]);
+  if (!allowedStatuses.has(status)) throw new Error("Helm release status 无效，拒绝恢复");
+  return { presence: "owned", revision, status, description: result.info.description };
+}
+
+function assertReleaseRecoveryAction(result) {
+  if (result.presence === "absent") return "retry";
+  if (result.presence !== "owned") throw new Error("Helm release 状态未知，拒绝恢复");
+  if (result.status === "deployed") return "verify";
+  if (String(result.status).startsWith("pending-")) {
+    throw new Error(`当前 operation 的 Helm release 为 ${result.status}；安装器仅执行只读诊断，请等待 Helm 操作结束后用固定 resume 命令重试`);
+  }
+  if (result.status === "failed") {
+    throw new Error("当前 operation 的 Helm release 为 failed；安装器仅执行只读诊断，请人工检查 helm status/history 并处理失败 release 后再用固定 resume 命令恢复");
+  }
+  throw new Error(`当前 operation 的 Helm release 状态 ${result.status} 不支持自动恢复；请人工只读诊断后重试`);
+}
+
+async function inspectFreshRetryState(lock, { runner = runCommand, assertIdentity = async () => {}, assertOwnership = async () => {} } = {}) {
+  const lockedRun = async (command, args) => {
+    await assertIdentity();
+    await assertOwnership();
+    const result = await runner(command, args);
+    await assertOwnership();
+    await assertIdentity();
+    return result;
+  };
+  const releases = parseJsonOutput(await lockedRun("helm", [...helmArgs(lock), "list", "--all", "-n", NAMESPACE, "-o", "json"]), "恢复前检查 Helm release");
+  const crds = parseJsonOutput(await lockedRun("kubectl", [...kubectlArgs(lock), "get", "crd", "-o", "json"]), "恢复前检查 Rainbond CRD");
+  const discovery = assertCommandSucceeded(await lockedRun("kubectl", [...kubectlArgs(lock), "api-resources", "--verbs=list", "--namespaced=false", "-o", "name"]), "发现集群级资源");
+  const clusterKinds = [...new Set(discovery.split(/\r?\n/u).map((value) => value.trim()).filter(Boolean))];
+  if (clusterKinds.length === 0 || clusterKinds.length > 256 || clusterKinds.some((value) => !/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/u.test(value)) || clusterKinds.join(",").length > 16 * 1024) {
+    throw new Error("集群级资源发现结果无效，无法证明恢复环境干净");
+  }
+  const clusterResources = parseJsonOutput(await lockedRun("kubectl", [...kubectlArgs(lock), "get", clusterKinds.join(","), "-o", "json"]), "恢复前检查集群级资源");
+  const resources = parseJsonOutput(await lockedRun("kubectl", [...kubectlArgs(lock), "get", "all,configmap,secret,serviceaccount,role,rolebinding,persistentvolumeclaim,networkpolicy,poddisruptionbudget,resourcequota,limitrange", "-n", NAMESPACE, "-o", "json"]), "恢复前检查 Namespace 资源");
+  if (!Array.isArray(releases) || !Array.isArray(crds.items) || !Array.isArray(clusterResources.items) || !Array.isArray(resources.items)) throw new Error("恢复前残留资源检查返回结构无效");
+  if (releases.some((item) => item.name === RELEASE)) throw new Error("恢复前发现 rainbond Helm release 残留，拒绝重试");
+  const rainbondCrds = crds.items.filter((item) => /rainbond|goodrain/i.test(item.metadata?.name || ""));
+  if (rainbondCrds.length > 0) throw new Error("恢复前发现 Rainbond CRD 残留，拒绝重试");
+  const clusterResidue = clusterResources.items.filter((item) => {
+    const metadata = item.metadata || {};
+    const labels = metadata.labels || {};
+    const annotations = metadata.annotations || {};
+    const helmOwned = annotations["meta.helm.sh/release-name"] === RELEASE
+      && annotations["meta.helm.sh/release-namespace"] === NAMESPACE;
+    const labeled = labels["app.kubernetes.io/instance"] === RELEASE
+      || labels["app.kubernetes.io/name"] === RELEASE;
+    const claimed = item.kind === "PersistentVolume" && item.spec?.claimRef?.namespace === NAMESPACE;
+    return helmOwned || labeled || claimed;
+  });
+  if (clusterResidue.length > 0) throw new Error("恢复前发现 Rainbond 集群级残留资源，拒绝自动重试");
+  const benign = (item) => (item.kind === "ServiceAccount" && item.metadata?.name === "default")
+    || (item.kind === "ConfigMap" && item.metadata?.name === "kube-root-ca.crt");
+  const residue = resources.items.filter((item) => !benign(item));
+  if (residue.length > 0) throw new Error("恢复前发现 rbd-system 残留资源，拒绝自动重试");
+  await assertOwnership();
+  return { releaseCount: 0, crdCount: 0, clusterResourceCount: 0, resourceCount: 0 };
+}
+
+async function inspectOwnedRelease(lock, { operationId, expectedRevision = null, runner = runCommand } = {}) {
+  const result = await inspectReleaseRecoveryState(lock, { operationId, runner });
+  if (assertReleaseRecoveryAction(result) !== "verify") throw new Error("当前 operation 的 Helm release 尚未稳定 deployed");
+  if (expectedRevision !== null && Number(expectedRevision) !== result.revision) throw new Error("Helm release revision 与恢复状态不匹配");
+  return result;
 }
 
 function interruptionResult(operationId, signal, stage) {
@@ -1063,10 +1147,12 @@ async function installExistingKubernetesFlow({ state, paths, options, abortState
   if (postInstallResume) {
     if (!lock.chartPath) throw new Error("post-install 恢复缺少 locked chart");
     if (saved.namespace_owner_operation_id !== state.operation_id || !saved.namespace_uid) throw new Error("post-install 恢复缺少 Namespace ownership");
+    if (saved.release_owner_operation_id && saved.release_owner_operation_id !== state.operation_id) throw new Error("post-install 恢复的 Helm release ownership 与当前 operation 不匹配");
     await assertIdentity();
-    await inspectOwnedNamespace(lock, {
+    const assertNamespaceOwnership = () => inspectOwnedNamespace(lock, {
       operationId: state.operation_id, expectedUid: saved.namespace_uid, runner, assertIdentity,
     });
+    await assertNamespaceOwnership();
     const resumedChart = await verifyAndResumeLockedChart({
       path: lock.chartPath, partialPath: lock.chartPartialPath, sha256: lock.chartSha256,
       origin: lock.chartOrigin, name: lock.chartName, version: lock.chartVersion,
@@ -1077,11 +1163,46 @@ async function installExistingKubernetesFlow({ state, paths, options, abortState
     }, { stateStore, verifyProvenance, persistLock: persistChartLock, abortState });
     Object.assign(lock, { chartPath: resumedChart.path, chartPartialPath: resumedChart.partialPath, provenanceVerified: resumedChart.provenanceVerified === true });
     validateResumeBytes(lock, stateStore);
-    const ownedRelease = await inspectOwnedRelease(lock, {
-      operationId: state.operation_id,
-      expectedRevision: saved.release_revision || null,
-      runner,
-    });
+    let ownedRelease = await inspectReleaseRecoveryState(lock, { operationId: state.operation_id, runner });
+    let recoveryAction;
+    try {
+      recoveryAction = assertReleaseRecoveryAction(ownedRelease);
+    } catch (error) {
+      persist({ stage: "install_recovery", status: "waiting_recovery", release_status: ownedRelease.status, recovery_action: "read_only_diagnosis" });
+      throw error;
+    }
+    if (recoveryAction === "retry") {
+      if (saved.install_succeeded === true || saved.release_revision) {
+        persist({ stage: "install_recovery", status: "waiting_recovery", release_status: "absent", recovery_action: "read_only_diagnosis" });
+        throw new Error("曾成功安装的 Helm release 现已缺失；拒绝自动重试，请人工只读诊断后恢复");
+      }
+      try {
+        await inspectFreshRetryState(lock, { runner, assertIdentity, assertOwnership: assertNamespaceOwnership });
+        await assertNamespaceOwnership();
+      } catch (error) {
+        persist({ stage: "install_recovery", status: "waiting_recovery", release_status: "absent", recovery_action: "remove_residue_or_restore_release" });
+        throw error;
+      }
+      const previousAttempts = Number(saved.install_attempt_count || (saved.install_attempted ? 1 : 0));
+      if (!Number.isInteger(previousAttempts) || previousAttempts < 1 || previousAttempts >= 3) {
+        persist({ stage: "install_recovery", status: "waiting_recovery", release_status: "absent", recovery_action: "manual_diagnosis_after_retry_limit" });
+        throw new Error("Helm install 已达到受控重试上限；请人工只读诊断后再决定恢复方式");
+      }
+      const nextAttempt = previousAttempts + 1;
+      await assertNamespaceOwnership();
+      persist({ stage: "install", status: "running", install_attempted: true, install_succeeded: false, install_attempt_count: nextAttempt, release_status: "absent", recovery_action: "retry_locked_inputs" });
+      await executeHelmInstall(lock, { operationId: state.operation_id, runner, assertIdentity, assertOwnership: assertNamespaceOwnership });
+      const retryStop = interrupted("install"); if (retryStop) return retryStop;
+      ownedRelease = await inspectReleaseRecoveryState(lock, { operationId: state.operation_id, runner });
+      try {
+        const result = assertReleaseRecoveryAction(ownedRelease);
+        if (result !== "verify") throw new Error("Helm install 命令完成后 release 仍缺失；请人工只读诊断后用固定 resume 命令恢复");
+      } catch (error) {
+        persist({ stage: "install_recovery", status: "waiting_recovery", release_status: ownedRelease.status, recovery_action: "read_only_diagnosis" });
+        throw error;
+      }
+    }
+    if (saved.release_revision && Number(saved.release_revision) !== ownedRelease.revision) throw new Error("Helm release revision 与恢复状态不匹配");
     persist({ stage: "verify", status: "running", install_attempted: true, install_succeeded: true, release_owner_operation_id: state.operation_id, release_revision: ownedRelease.revision, release_status: ownedRelease.status });
     const assertOperationOwnership = async () => {
       await inspectOwnedNamespace(lock, { operationId: state.operation_id, expectedUid: saved.namespace_uid, runner, assertIdentity });
@@ -1161,8 +1282,12 @@ async function installExistingKubernetesFlow({ state, paths, options, abortState
     operationDir, operationId: state.operation_id, expectedUid: saved?.namespace_uid || null,
     stateStore, runner, assertIdentity, persist,
   });
-  persist({ stage: "install", status: "running", install_attempted: true, install_succeeded: false, release_owner_operation_id: state.operation_id });
-  await executeHelmInstall(lock, { operationId: state.operation_id, runner, assertIdentity });
+  const assertNamespaceOwnership = () => inspectOwnedNamespace(lock, {
+    operationId: state.operation_id, expectedUid: namespaceOwnership.uid, runner, assertIdentity,
+  });
+  await assertNamespaceOwnership();
+  persist({ stage: "install", status: "running", install_attempted: true, install_succeeded: false, install_attempt_count: 1, release_owner_operation_id: state.operation_id });
+  await executeHelmInstall(lock, { operationId: state.operation_id, runner, assertIdentity, assertOwnership: assertNamespaceOwnership });
   const stopAfterInstall = interrupted("install"); if (stopAfterInstall) return stopAfterInstall;
   const ownedRelease = await inspectOwnedRelease(lock, { operationId: state.operation_id, runner });
   persist({ stage: "verify", status: "running", install_succeeded: true, release_revision: ownedRelease.revision, release_status: ownedRelease.status });
@@ -1221,7 +1346,10 @@ module.exports = {
   fetchBoundedHttps,
   helmArgs,
   importProtectedSource,
+  inspectFreshRetryState,
   inspectOwnedRelease,
+  inspectReleaseRecoveryState,
+  assertReleaseRecoveryAction,
   installExistingKubernetes,
   interruptionResult,
   kubectlArgs,

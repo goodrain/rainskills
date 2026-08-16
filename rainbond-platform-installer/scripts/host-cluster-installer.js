@@ -25,6 +25,8 @@ const MIN_MEMORY = 4 * 1024 ** 3;
 const MIN_DISK = 40 * 1024 ** 3;
 const REQUIRED_PORTS = [80, 443, 6060, 7070];
 const CRITICAL_WORKLOADS = ["rbd-api", "rbd-gateway", "rbd-app-ui"];
+const MAX_CHILD_OUTPUT_BYTES = 4 * 1024 * 1024;
+const CHILD_OUTPUT_LIMIT_ERROR = "子进程输出超过安全上限";
 const HOST_PREFLIGHT_SCRIPT = String.raw`set -eu
 root=false
 [ "$(id -u)" = 0 ] && root=true
@@ -101,6 +103,94 @@ final_digest="$(sha256sum -- "$final" | awk '{print $1}')"
 [ "$final_digest" = "$expected" ] || exit 75
 chmod "$mode" -- "$final"
 printf '%s\n' "$final_digest"
+`;
+const REMOTE_ROI_LAUNCH_SCRIPT = String.raw`set -eu
+directory="$1"
+receipt="$2"
+operation_id="$3"
+config_sha256="$4"
+artifact_sha256="$5"
+artifact="$6"
+config="$7"
+[ ! -L "$directory" ] && [ -d "$directory" ] && [ "$(stat -c %u -- "$directory")" = 0 ] && [ "$(stat -c %a -- "$directory")" = 700 ] \
+  && [ ! -L "$config" ] && [ -f "$config" ] && [ "$(stat -c %u -- "$config")" = 0 ] && [ "$(stat -c %a -- "$config")" = 600 ] \
+  && [ ! -L "$artifact" ] && [ -f "$artifact" ] && [ "$(stat -c %u -- "$artifact")" = 0 ] && [ "$(stat -c %a -- "$artifact")" = 700 ] || exit 81
+[ "$(sha256sum -- "$config" | awk '{print $1}')" = "$config_sha256" ] || exit 84
+[ "$(sha256sum -- "$artifact" | awk '{print $1}')" = "$artifact_sha256" ] || exit 84
+receipt_text() {
+  printf 'phase=%s\noperation_id=%s\nconfig_sha256=%s\nartifact_sha256=%s' "$1" "$operation_id" "$config_sha256" "$artifact_sha256"
+}
+verify_receipt() {
+  phase="$1"
+  [ ! -L "$receipt" ] && [ -f "$receipt" ] && [ "$(stat -c %u -- "$receipt")" = 0 ] && [ "$(stat -c %a -- "$receipt")" = 600 ] || return 1
+  [ "$(cat -- "$receipt")" = "$(receipt_text "$phase")" ] || return 1
+}
+[ ! -e "$receipt" ] && [ ! -L "$receipt" ] || exit 82
+launching="$receipt.launching.partial"
+[ ! -e "$launching" ] && [ ! -L "$launching" ] || exit 83
+umask 077
+( set -C; receipt_text launching > "$launching" ) 2>/dev/null || exit 83
+chmod 600 -- "$launching"
+mv -T -n -- "$launching" "$receipt" || true
+rm -f -- "$launching"
+verify_receipt launching || exit 82
+set +e
+"$artifact" up -f "$config"
+roi_status="$?"
+set -e
+[ "$roi_status" = 0 ] || exit "$roi_status"
+verify_receipt launching || exit 82
+completed="$receipt.completed.partial"
+[ ! -e "$completed" ] && [ ! -L "$completed" ] || exit 83
+( set -C; receipt_text completed > "$completed" ) 2>/dev/null || exit 83
+chmod 600 -- "$completed"
+mv -T -- "$completed" "$receipt"
+verify_receipt completed || exit 82
+printf 'RECEIPT_PHASE=completed\n'
+`;
+const REMOTE_RECONCILE_SCRIPT = String.raw`set -eu
+directory="$1"
+config="$2"
+artifact="$3"
+receipt="$4"
+operation_id="$5"
+expected_config="$6"
+expected_artifact="$7"
+ownership_verified=false
+bytes_verified=false
+receipt_present=false
+receipt_phase=absent
+started=false
+if [ ! -L "$directory" ] && [ -d "$directory" ] && [ "$(stat -c %u -- "$directory")" = 0 ] && [ "$(stat -c %a -- "$directory")" = 700 ] \
+  && [ ! -L "$config" ] && [ -f "$config" ] && [ "$(stat -c %u -- "$config")" = 0 ] && [ "$(stat -c %a -- "$config")" = 600 ] \
+  && [ ! -L "$artifact" ] && [ -f "$artifact" ] && [ "$(stat -c %u -- "$artifact")" = 0 ] && [ "$(stat -c %a -- "$artifact")" = 700 ]; then
+  ownership_verified=true
+  config_digest="$(sha256sum -- "$config" | awk '{print $1}')"
+  artifact_digest="$(sha256sum -- "$artifact" | awk '{print $1}')"
+  if [ "$config_digest" = "$expected_config" ] && [ "$artifact_digest" = "$expected_artifact" ]; then
+    bytes_verified=true
+  fi
+fi
+if [ -e "$receipt" ] || [ -L "$receipt" ]; then
+  receipt_present=true
+  launching="$(printf 'phase=launching\noperation_id=%s\nconfig_sha256=%s\nartifact_sha256=%s' "$operation_id" "$expected_config" "$expected_artifact")"
+  completed="$(printf 'phase=completed\noperation_id=%s\nconfig_sha256=%s\nartifact_sha256=%s' "$operation_id" "$expected_config" "$expected_artifact")"
+  if [ ! -L "$receipt" ] && [ -f "$receipt" ] && [ "$(stat -c %u -- "$receipt")" = 0 ] && [ "$(stat -c %a -- "$receipt")" = 600 ] \
+    && [ "$(cat -- "$receipt")" = "$launching" ]; then
+    receipt_phase=launching
+  elif [ ! -L "$receipt" ] && [ -f "$receipt" ] && [ "$(stat -c %u -- "$receipt")" = 0 ] && [ "$(stat -c %a -- "$receipt")" = 600 ] \
+    && [ "$(cat -- "$receipt")" = "$completed" ]; then
+    receipt_phase=completed
+  else
+    receipt_phase=invalid
+  fi
+fi
+if [ -e /etc/rancher/rke2/config.yaml ] || systemctl is-active --quiet rke2-server 2>/dev/null \
+  || { [ -d /opt/rainbond ] && find /opt/rainbond -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null | grep -q .; }; then
+  started=true
+fi
+printf 'OWNERSHIP_VERIFIED=%s\nBYTES_VERIFIED=%s\nRECEIPT_PRESENT=%s\nRECEIPT_PHASE=%s\nSTARTED=%s\n' \
+  "$ownership_verified" "$bytes_verified" "$receipt_present" "$receipt_phase" "$started"
 `;
 
 function sha256(bytes) {
@@ -513,21 +603,100 @@ function evaluateHostFacts(facts, { bootstrap = false } = {}) {
   return blockers;
 }
 
+function boundedOutputLimit(requested) {
+  const value = Number(requested);
+  if (!Number.isSafeInteger(value) || value <= 0) return MAX_CHILD_OUTPUT_BYTES;
+  return Math.min(value, MAX_CHILD_OUTPUT_BYTES);
+}
+
+function childOutputLimitError() {
+  const error = new Error(CHILD_OUTPUT_LIMIT_ERROR);
+  error.code = "RAINSKILLS_CHILD_OUTPUT_LIMIT";
+  return error;
+}
+
+function createByteCollector() {
+  const segments = [];
+  let current = null;
+  let used = 0;
+  let length = 0;
+  return {
+    append(input) {
+      const bytes = Buffer.isBuffer(input) ? input : Buffer.from(input);
+      let offset = 0;
+      while (offset < bytes.length) {
+        if (!current) current = Buffer.allocUnsafe(64 * 1024);
+        const copied = Math.min(current.length - used, bytes.length - offset);
+        bytes.copy(current, used, offset, offset + copied);
+        used += copied;
+        offset += copied;
+        length += copied;
+        if (used === current.length) {
+          segments.push(current);
+          current = null;
+          used = 0;
+        }
+      }
+    },
+    toString() {
+      const parts = current && used > 0 ? [...segments, current.subarray(0, used)] : segments;
+      return Buffer.concat(parts, length).toString("utf8");
+    },
+  };
+}
+
 function defaultSshRunner(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     const spawnFn = options.spawnFn || spawn;
     const registerChild = options.registerChild || (() => {});
     const child = spawnFn(command, args, { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
     const unregister = registerChild(child, false);
-    const stdout = [];
-    const stderr = [];
-    child.stdout.on("data", (chunk) => stdout.push(chunk));
-    child.stderr.on("data", (chunk) => stderr.push(chunk));
-    const clear = () => typeof unregister === "function" ? unregister() : registerChild(null, false);
-    child.on("error", (error) => { clear(); reject(error); });
-    child.on("close", (code, signal) => {
+    const outputLimit = boundedOutputLimit(options.maxOutputBytes);
+    const collectors = { stdout: createByteCollector(), stderr: createByteCollector() };
+    let collectedBytes = 0;
+    let settled = false;
+    let cleared = false;
+    const clear = () => {
+      if (cleared) return;
+      cleared = true;
+      if (typeof unregister === "function") unregister();
+      else registerChild(null, false);
+    };
+    const exceedLimit = () => {
+      if (settled) return;
+      settled = true;
       clear();
-      resolve({ code, signal, stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8") });
+      try { child.kill?.("SIGKILL"); } catch {}
+      reject(childOutputLimitError());
+    };
+    const collect = (name) => (chunk) => {
+      if (settled) return;
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      if (collectedBytes + bytes.length > outputLimit) {
+        exceedLimit();
+        return;
+      }
+      collectedBytes += bytes.length;
+      collectors[name].append(bytes);
+    };
+    child.stdout.on("data", collect("stdout"));
+    child.stderr.on("data", collect("stderr"));
+    child.on("error", (error) => {
+      if (settled) return;
+      settled = true;
+      clear();
+      reject(error);
+    });
+    child.on("close", (code, signal) => {
+      if (settled) return;
+      settled = true;
+      clear();
+      resolve({
+        code,
+        signal,
+        stdout: collectors.stdout.toString(),
+        stderr: collectors.stderr.toString(),
+      });
     });
     child.stdin.end(options.input || "");
   });
@@ -980,6 +1149,11 @@ function createLineRedactor() {
       if (/-----END [A-Z0-9 ]+-----/.test(line)) pemBlock = false;
       return `${line.slice(0, indent)}[REDACTED]`;
     }
+    const pemBegin = /-----BEGIN [A-Z0-9 ]+-----/.test(line);
+    if (pemBegin) {
+      if (!/-----END [A-Z0-9 ]+-----/.test(line)) pemBlock = true;
+      return `${line.slice(0, indent)}[REDACTED]`;
+    }
     if (structuredBlockIndent !== null) {
       if (!line.trim() || indent > structuredBlockIndent) return `${line.slice(0, indent)}[REDACTED]`;
       structuredBlockIndent = null;
@@ -989,7 +1163,11 @@ function createLineRedactor() {
       if (!line.trim() || indent > sensitiveBlockIndent) return `${line.slice(0, indent)}[REDACTED]`;
       sensitiveBlockIndent = null;
     }
-    const keyMatches = [...line.matchAll(/(?:password|passwd|token|secret|private.?key|credential|database|registry)/ig)];
+    if (
+      /\b(?:Bearer|Basic)\s+\S+/i.test(line)
+      || /\b[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/.test(line)
+    ) return `${line.slice(0, indent)}[REDACTED]`;
+    const keyMatches = [...line.matchAll(/(?:password|passwd|token|secret|private.?key|credential|database|registry|authorization|proxy-authorization|set-cookie|cookie|api[-_ ]?key|apikey|grjwt|jwt)/ig)];
     if (keyMatches.length === 0) return line;
     const candidates = keyMatches.map((keyMatch) => {
       const keyEnd = (keyMatch.index || 0) + keyMatch[0].length;
@@ -1003,10 +1181,12 @@ function createLineRedactor() {
       || !remainder
       || /^[|>][+-]?$/.test(remainder)
     ));
-    const selected = blockCandidate || candidates[0];
-    const separator = selected?.separator ?? -1;
+    const firstCandidate = candidates.reduce((earliest, candidate) => (
+      !earliest || candidate.separator < earliest.separator ? candidate : earliest
+    ), null);
+    const separator = firstCandidate?.separator ?? -1;
     if (separator < 0) return "[REDACTED]";
-    const remainder = selected.remainder;
+    const remainder = blockCandidate?.remainder ?? firstCandidate.remainder;
     if (/-----BEGIN [A-Z0-9 ]+-----/.test(remainder) && !/-----END [A-Z0-9 ]+-----/.test(remainder)) pemBlock = true;
     else if (/^[\[{]/.test(remainder) || /[\[{]\s*$/.test(line)) structuredBlockIndent = indent;
     else if (!remainder || /^[|>][+-]?$/.test(remainder)) sensitiveBlockIndent = indent;
@@ -1014,9 +1194,50 @@ function createLineRedactor() {
   };
 }
 
-function redactInstallLog(value) {
+function redactInstallLog(value, maxBytes = MAX_CHILD_OUTPUT_BYTES) {
+  const outputLimit = boundedOutputLimit(maxBytes);
+  const input = String(value || "");
+  if (Buffer.byteLength(input) > outputLimit) throw childOutputLimitError();
   const redactLine = createLineRedactor();
-  return String(value || "").split(/\n/).map(redactLine).join("\n");
+  const output = [];
+  let pending = "";
+  let outputBytes = 0;
+  let offset = 0;
+  while (offset <= input.length) {
+    const newline = input.indexOf("\n", offset);
+    const atEnd = newline < 0;
+    const line = input.slice(offset, atEnd ? input.length : newline);
+    const safe = `${redactLine(line)}${atEnd ? "" : "\n"}`;
+    outputBytes += Buffer.byteLength(safe);
+    if (outputBytes > outputLimit) throw childOutputLimitError();
+    pending += safe;
+    if (pending.length >= 64 * 1024) {
+      output.push(pending);
+      pending = "";
+    }
+    if (atEnd) break;
+    offset = newline + 1;
+  }
+  if (pending) output.push(pending);
+  return output.join("");
+}
+
+function protectedInstallLogBytes(execution) {
+  const rawStdout = String(execution?.stdout || "");
+  const rawStderr = String(execution?.stderr || "");
+  if (Buffer.byteLength(rawStdout) + Buffer.byteLength(rawStderr) > MAX_CHILD_OUTPUT_BYTES) {
+    throw childOutputLimitError();
+  }
+  const stdout = execution?.redacted === true ? rawStdout : redactInstallLog(rawStdout);
+  const stderr = execution?.redacted === true ? rawStderr : redactInstallLog(rawStderr);
+  const stdoutLength = Buffer.byteLength(stdout);
+  const stderrLength = Buffer.byteLength(stderr);
+  const separatorLength = stdoutLength > 0 && stderrLength > 0 ? 1 : 0;
+  if (stdoutLength + separatorLength + stderrLength > MAX_CHILD_OUTPUT_BYTES) throw childOutputLimitError();
+  const stdoutBytes = Buffer.from(stdout, "utf8");
+  const stderrBytes = Buffer.from(stderr, "utf8");
+  const separator = stdoutBytes.length > 0 && stderrBytes.length > 0 ? Buffer.from("\n") : Buffer.alloc(0);
+  return Buffer.concat([stdoutBytes, separator, stderrBytes]);
 }
 
 function assertSafeRemotePath(value) {
@@ -1030,32 +1251,71 @@ function spawnRedactedAttached(command, args, {
   registerChild = () => {},
   stdoutWriter = process.stdout,
   stderrWriter = process.stderr,
+  maxOutputBytes,
+  input,
 } = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawnFn(command, args, { stdio: ["inherit", "pipe", "pipe"] });
+    const child = spawnFn(command, args, { stdio: [input === undefined ? "inherit" : "pipe", "pipe", "pipe"] });
     let settled = false;
-    const collected = { stdout: "", stderr: "" };
+    let cleared = false;
+    let receivedBytes = 0;
+    let emittedBytes = 0;
+    const outputLimit = boundedOutputLimit(maxOutputBytes);
+    const collected = { stdout: [], stderr: [] };
+    const pending = { stdout: "", stderr: "" };
     const buffers = { stdout: "", stderr: "" };
     const redactors = { stdout: createLineRedactor(), stderr: createLineRedactor() };
+    const unregister = registerChild(child, false);
+    const clear = () => {
+      if (cleared) return;
+      cleared = true;
+      if (typeof unregister === "function") unregister();
+      else registerChild(null, false);
+    };
+    const exceedLimit = () => {
+      if (settled) return;
+      settled = true;
+      clear();
+      try { child.kill?.("SIGKILL"); } catch {}
+      reject(childOutputLimitError());
+    };
+    const emitSafe = (name, writer, safe) => {
+      const safeBytes = Buffer.byteLength(safe);
+      if (emittedBytes + safeBytes > outputLimit) {
+        exceedLimit();
+        return false;
+      }
+      emittedBytes += safeBytes;
+      pending[name] += safe;
+      if (pending[name].length >= 64 * 1024) {
+        collected[name].push(pending[name]);
+        pending[name] = "";
+      }
+      writer.write(safe);
+      return true;
+    };
     const stream = (name, writer) => (chunk) => {
+      if (settled) return;
+      const chunkBytes = Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(String(chunk));
+      if (receivedBytes + chunkBytes > outputLimit) {
+        exceedLimit();
+        return;
+      }
+      receivedBytes += chunkBytes;
       buffers[name] += String(chunk);
       let newline;
       while ((newline = buffers[name].indexOf("\n")) >= 0) {
         const safe = `${redactors[name](buffers[name].slice(0, newline))}\n`;
         buffers[name] = buffers[name].slice(newline + 1);
-        collected[name] += safe;
-        writer.write(safe);
+        if (!emitSafe(name, writer, safe)) return;
       }
     };
     const flush = (name, writer) => {
       if (!buffers[name]) return;
       const safe = redactors[name](buffers[name]);
       buffers[name] = "";
-      collected[name] += safe;
-      writer.write(safe);
+      emitSafe(name, writer, safe);
     };
-    const unregister = registerChild(child, false);
-    const clear = () => typeof unregister === "function" ? unregister() : registerChild(null, false);
     child.stdout.on("data", stream("stdout", stdoutWriter));
     child.stderr.on("data", stream("stderr", stderrWriter));
     child.on("error", (error) => {
@@ -1066,12 +1326,18 @@ function spawnRedactedAttached(command, args, {
     });
     child.on("close", (code, signal) => {
       if (settled) return;
-      settled = true;
       flush("stdout", stdoutWriter);
+      if (settled) return;
       flush("stderr", stderrWriter);
+      if (settled) return;
+      settled = true;
       clear();
-      resolve({ code, signal, stdout: collected.stdout, stderr: collected.stderr });
+      for (const name of ["stdout", "stderr"]) {
+        if (pending[name]) collected[name].push(pending[name]);
+      }
+      resolve({ code, signal, stdout: collected.stdout.join(""), stderr: collected.stderr.join(""), redacted: true });
     });
+    if (input !== undefined) child.stdin.end(input);
   });
 }
 
@@ -1160,6 +1426,7 @@ async function executeRoiInstall({
   session,
   resumeArgv,
   registerChild,
+  sshSpawn,
   write = (value) => process.stderr.write(value),
   abortState,
 }) {
@@ -1186,10 +1453,18 @@ async function executeRoiInstall({
     throw new Error("ROI 恢复命令无效");
   }
   persistState({ stage: "executing", status: "running", configSha256: configDigest, artifactSha256: artifactDigest, resumeArgv });
-  const args = ["-tt", ...sshOptionsForSession(session), "-p", String(item.port), target, remoteArtifact, "up", "-f", remoteConfig];
-  const execution = await attachedRunner("ssh", args, { registerChild });
-  const redacted = redactInstallLog(`${execution.stdout || ""}\n${execution.stderr || ""}`);
-  atomicWriteProtectedBytes(logPath, Buffer.from(redacted, "utf8"), { stateStore });
+  const remoteReceipt = path.posix.join(protectedRemoteDir, "execution.receipt");
+  const args = [
+    "-tt", ...sshOptionsForSession(session), "-p", String(item.port), target,
+    "bash", "-s", "--", protectedRemoteDir, remoteReceipt, resumeArgv[5],
+    configDigest, artifactDigest, remoteArtifact, remoteConfig,
+  ];
+  const execution = await attachedRunner("ssh", args, {
+    registerChild,
+    spawnFn: sshSpawn,
+    input: REMOTE_ROI_LAUNCH_SCRIPT,
+  });
+  atomicWriteProtectedBytes(logPath, protectedInstallLogBytes(execution), { stateStore });
   if (execution.signal || execution.code === 130) {
     persistState({ stage: "executing", status: "interrupted", configSha256: configDigest, artifactSha256: artifactDigest, resumeArgv });
     write(`\n安装已中断，状态已保留。继续时执行：\n  ${resumeArgv.join(" ")}\n`);
@@ -1199,8 +1474,87 @@ async function executeRoiInstall({
     persistState({ stage: "executing", status: "failed", configSha256: configDigest, artifactSha256: artifactDigest, resumeArgv });
     throw new Error(`ROI 主机集群安装失败，退出码 ${execution.code}`);
   }
+  if (!/^RECEIPT_PHASE=completed$/m.test(String(execution.stdout || ""))) {
+    persistState({ stage: "executing", status: "failed", configSha256: configDigest, artifactSha256: artifactDigest, resumeArgv });
+    throw new Error("ROI 已返回成功，但远端 completed receipt 验证结果缺失");
+  }
   persistState({ stage: "verifying", status: "running", configSha256: configDigest, artifactSha256: artifactDigest, resumeArgv });
   return { interrupted: false, resumeArgv };
+}
+
+async function reconcileHostExecution({
+  bootstrap,
+  remoteDir,
+  operationId,
+  configSha256,
+  artifactSha256,
+  sshRunner = defaultSshRunner,
+  inspectCluster,
+  session,
+  registerChild,
+  sshSpawn,
+  abortState,
+}) {
+  assertOperationNotAborted(abortState);
+  const expectedConfigSha256 = /^[a-f0-9]{64}$/.test(String(configSha256 || "")) ? configSha256 : "0".repeat(64);
+  const expectedArtifactSha256 = /^[a-f0-9]{64}$/.test(String(artifactSha256 || "")) ? artifactSha256 : "0".repeat(64);
+  const expectedOperationId = /^[0-9a-f-]{36}$/i.test(String(operationId || "")) ? operationId : "00000000-0000-0000-0000-000000000000";
+  const item = normalizeHost(bootstrap, 0);
+  const protectedRemoteDir = assertSafeRemotePath(remoteDir);
+  const remoteConfig = path.posix.join(protectedRemoteDir, "cluster.yaml");
+  const remoteArtifact = path.posix.join(protectedRemoteDir, "roi");
+  const remoteReceipt = path.posix.join(protectedRemoteDir, "execution.receipt");
+  const execution = await sshRunner("ssh", [
+    ...sshOptionsForSession(session), "-p", String(item.port), `root@${item.address}`,
+    "bash", "-s", "--", protectedRemoteDir, remoteConfig, remoteArtifact, remoteReceipt,
+    expectedOperationId, expectedConfigSha256, expectedArtifactSha256,
+  ], { input: REMOTE_RECONCILE_SCRIPT, registerChild, spawnFn: sshSpawn });
+  if (execution.signal) {
+    const error = new Error("bootstrap 安装恢复核对被中断");
+    error.code = "RAINSKILLS_HOST_CLUSTER_INTERRUPTED";
+    error.signal = execution.signal;
+    throw error;
+  }
+  assertOperationNotAborted(abortState);
+  if (execution.code !== 0) return { disposition: "unknown", reason: "ownership_probe_failed" };
+  const values = {};
+  for (const line of String(execution.stdout || "").split("\n")) {
+    const separator = line.indexOf("=");
+    if (separator > 0) values[line.slice(0, separator)] = line.slice(separator + 1);
+  }
+  const ownershipVerified = parseBoolean(values.OWNERSHIP_VERIFIED);
+  const bytesVerified = parseBoolean(values.BYTES_VERIFIED);
+  const receiptPresent = parseBoolean(values.RECEIPT_PRESENT);
+  const receiptPhase = String(values.RECEIPT_PHASE || "invalid");
+  const started = parseBoolean(values.STARTED);
+  if (!receiptPresent && !started && ownershipVerified && bytesVerified) {
+    return { disposition: "not_started", ownershipVerified, bytesVerified, receiptPresent, receiptPhase };
+  }
+  if (!receiptPresent && started) {
+    return { disposition: "unknown", ownershipVerified, bytesVerified, receiptPresent, receiptPhase, reason: "external_cluster_detected_without_operation_marker" };
+  }
+  if (receiptPresent && receiptPhase === "launching") {
+    return { disposition: "unknown", ownershipVerified, bytesVerified, receiptPresent, receiptPhase, reason: "operation_launch_incomplete" };
+  }
+  if (receiptPresent && receiptPhase !== "completed") {
+    return { disposition: "unknown", ownershipVerified, bytesVerified, receiptPresent, receiptPhase, reason: "operation_marker_invalid" };
+  }
+  if (!receiptPresent) return { disposition: "unknown", ownershipVerified, bytesVerified, receiptPresent, receiptPhase, reason: "remote_ownership_or_bytes_unverified" };
+  if (!ownershipVerified || !bytesVerified) {
+    return { disposition: "unknown", ownershipVerified, bytesVerified, receiptPresent, receiptPhase, reason: "operation_bytes_unverified" };
+  }
+  if (!started) {
+    return { disposition: "started_unhealthy", ownershipVerified, bytesVerified, receiptPresent, receiptPhase, reason: "completed_operation_without_cluster_health" };
+  }
+  try {
+    const cluster = await (inspectCluster || (() => inspectRemoteCluster({
+      bootstrap: item, session, registerChild, sshSpawn, abortState,
+    })))();
+    return { disposition: "started", ownershipVerified, bytesVerified, receiptPresent, receiptPhase, cluster };
+  } catch (error) {
+    if (error?.code === "RAINSKILLS_HOST_CLUSTER_INTERRUPTED") throw error;
+    return { disposition: "started_unhealthy", ownershipVerified, bytesVerified, reason: "cluster_health_unverified" };
+  }
 }
 
 async function inspectRemoteCluster({
@@ -1369,6 +1723,108 @@ async function installHostCluster({ onboarding, state, paths, options }, depende
   }
   const bootstrapSession = prepared.sessions.get(topology.bootstrap.name);
   try {
+    const verifyAndComplete = async (cluster) => {
+      persistDriverState({ stage: "verifying", status: "running", resumeArgv });
+      const verification = await (dependencies.verify || verifyHostCluster)({
+        expectedNodes: topology.hosts.map(({ name }) => name),
+        inspectCluster: cluster
+          ? async () => cluster
+          : dependencies.inspectCluster || (() => inspectRemoteCluster({
+            bootstrap: topology.bootstrap,
+            session: bootstrapSession,
+            registerChild: dependencies.registerChild,
+            abortState: dependencies.abortState,
+          })),
+        probeConsole: dependencies.probeConsole || probeConsole,
+      });
+      const afterVerification = interruptedAt("verifying");
+      if (afterVerification) return afterVerification;
+      persistDriverState({ stage: "completed", status: "completed", console_url: verification.consoleUrl, resumeArgv });
+      return { verification };
+    };
+    const blockResume = (reason) => {
+      persistDriverState({ stage: driverState.stage, status: "blocked", blocked_reason: reason, resumeArgv });
+      (dependencies.write || ((value) => process.stdout.write(value)))(
+        `\n[RAINSKILLS_ACTION_REQUIRED:host_cluster_resume_blocked]\n无法安全判断 ROI 安装是否已经启动，已停止自动重试。请核对集群状态后使用原命令继续：\n  ${resumeArgv.join(" ")}\n`
+      );
+      return { waiting: true, blocked: true, reason, resumeArgv };
+    };
+    const executeLockedArtifact = async (artifact) => {
+      const lock = {
+        configSha256,
+        artifactSha256: artifact.sha256,
+        finalUrl: artifact.finalUrl,
+        version: artifact.version,
+      };
+      validateRoiResumeLock(lock, { configPath, artifactPath: artifact.path });
+      let execution;
+      try {
+        execution = await (dependencies.execute || executeRoiInstall)({
+          bootstrap: topology.bootstrap,
+          configPath,
+          artifactPath: artifact.path,
+          logPath,
+          remoteDir: `/root/.rainbond/rainskills/${state.operation_id}`,
+          persistState: persistDriverState,
+          stateStore,
+          session: bootstrapSession,
+          registerChild: dependencies.registerChild,
+          resumeArgv,
+          write: dependencies.write,
+          abortState: dependencies.abortState,
+        });
+      } catch (error) {
+        if (error.code !== "RAINSKILLS_HOST_CLUSTER_INTERRUPTED") throw error;
+        persistDriverState({ stage: "executing", status: "interrupted", signal: error.signal || "SIGINT", resumeArgv });
+        return { waiting: true, interrupted: true, signal: error.signal || "SIGINT", resumeArgv };
+      }
+      if (execution.interrupted) {
+        return { waiting: true, interrupted: true, signal: execution.signal || "SIGINT", resumeArgv };
+      }
+      const afterExecution = interruptedAt("executing");
+      if (afterExecution) return afterExecution;
+      return verifyAndComplete();
+    };
+
+    if (["verifying", "completed"].includes(driverState.stage)) return verifyAndComplete();
+
+    const normalStages = new Set(["configuration", "preflight", "confirmation", "artifact"]);
+    if (!normalStages.has(driverState.stage)) {
+      let reconciliation;
+      try {
+        reconciliation = await (dependencies.reconcile || reconcileHostExecution)({
+          bootstrap: topology.bootstrap,
+          remoteDir: `/root/.rainbond/rainskills/${state.operation_id}`,
+          operationId: state.operation_id,
+          configSha256,
+          artifactSha256: driverState.artifact_sha256,
+          session: bootstrapSession,
+          registerChild: dependencies.registerChild,
+          abortState: dependencies.abortState,
+          inspectCluster: dependencies.inspectCluster,
+        });
+      } catch (error) {
+        if (error.code !== "RAINSKILLS_HOST_CLUSTER_INTERRUPTED") throw error;
+        persistDriverState({ stage: driverState.stage, status: "interrupted", signal: error.signal || "SIGINT", resumeArgv });
+        return { waiting: true, interrupted: true, signal: error.signal || "SIGINT", resumeArgv };
+      }
+      if (reconciliation.disposition === "started") return verifyAndComplete(reconciliation.cluster);
+      if (reconciliation.disposition !== "not_started") {
+        return blockResume(reconciliation.reason || "cluster_execution_state_unverified");
+      }
+      if (driverState.stage !== "executing" && driverState.execution_approved !== true) {
+        return blockResume("execution_approval_unverified");
+      }
+      const artifact = reuseLockedRoiArtifact({
+        state: driverState,
+        configPath,
+        artifactPath: path.join(hostRoot, "roi"),
+        stateStore,
+      });
+      if (!artifact) return blockResume("resume_lock_incomplete");
+      return executeLockedArtifact(artifact);
+    }
+
     const beforePreflight = interruptedAt("preflight");
     if (beforePreflight) return beforePreflight;
     persistDriverState({ stage: "preflight", status: "running", config_sha256: configSha256 });
@@ -1386,6 +1842,7 @@ async function installHostCluster({ onboarding, state, paths, options }, depende
       createPrompt: dependencies.createPrompt,
       write: dependencies.write,
       onAccepted: async () => {
+        persistDriverState({ execution_approved: true, resumeArgv });
         const bootstrapFacts = preflight.nodes.find(({ name }) => name === topology.bootstrap.name);
         persistDriverState({ stage: "artifact", status: "running" });
         const artifactPath = path.join(hostRoot, "roi");
@@ -1424,51 +1881,7 @@ async function installHostCluster({ onboarding, state, paths, options }, depende
         }
         const afterArtifact = interruptedAt("artifact");
         if (afterArtifact) return afterArtifact;
-        const lock = {
-          configSha256,
-          artifactSha256: artifact.sha256,
-          finalUrl: artifact.finalUrl,
-          version: artifact.version,
-        };
-        validateRoiResumeLock(lock, { configPath, artifactPath: artifact.path });
-        let execution;
-        try {
-          execution = await (dependencies.execute || executeRoiInstall)({
-            bootstrap: topology.bootstrap,
-            configPath,
-            artifactPath: artifact.path,
-            logPath,
-            remoteDir: `/root/.rainbond/rainskills/${state.operation_id}`,
-            persistState: persistDriverState,
-            stateStore,
-            session: bootstrapSession,
-            registerChild: dependencies.registerChild,
-            resumeArgv,
-            write: dependencies.write,
-            abortState: dependencies.abortState,
-          });
-        } catch (error) {
-          if (error.code !== "RAINSKILLS_HOST_CLUSTER_INTERRUPTED") throw error;
-          persistDriverState({ stage: "executing", status: "interrupted", signal: error.signal || "SIGINT", resumeArgv });
-          return { waiting: true, interrupted: true, signal: error.signal || "SIGINT", resumeArgv };
-        }
-        if (execution.interrupted) return { waiting: true, interrupted: true };
-        const afterExecution = interruptedAt("executing");
-        if (afterExecution) return afterExecution;
-        const verification = await (dependencies.verify || verifyHostCluster)({
-          expectedNodes: topology.hosts.map(({ name }) => name),
-          inspectCluster: dependencies.inspectCluster || (() => inspectRemoteCluster({
-            bootstrap: topology.bootstrap,
-            session: bootstrapSession,
-            registerChild: dependencies.registerChild,
-            abortState: dependencies.abortState,
-          })),
-          probeConsole: dependencies.probeConsole || probeConsole,
-        });
-        const afterVerification = interruptedAt("verifying");
-        if (afterVerification) return afterVerification;
-        persistDriverState({ stage: "completed", status: "completed", console_url: verification.consoleUrl });
-        return { verification };
+        return executeLockedArtifact(artifact);
       },
     });
     if (!confirmation.accepted) {
@@ -1501,6 +1914,7 @@ module.exports = {
   prepareHostSshSessions,
   probeConsole,
   readSafeClusterSource,
+  reconcileHostExecution,
   redactInstallLog,
   renderConfirmationSummary,
   runClusterWizard,

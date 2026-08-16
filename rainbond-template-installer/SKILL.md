@@ -45,7 +45,29 @@ description: "Use when the user explicitly asks to install a local or cloud Rain
 
 先说：“可以，我会帮你从模板安装应用。不过目前还没有可用的应用运行环境。你刚安装的 Rainskills 是 AI 部署助手，它负责分析项目并执行部署；应用实际会运行在 Rainbond 上。Rainbond 是一套应用运行和管理平台，负责源码构建、容器运行、域名访问、日志和存储等工作，你不需要了解 Kubernetes。”
 
-新应用可选择 `Rainbond Cloud`、`已有私有 Rainbond` 或`安装私有 Rainbond`。已有应用的 template-install intent 不得进入 install-private：只连接 Rainbond Cloud 或承载目标应用的已有私有 Rainbond，已有应用不得安装新平台。
+先根据 `install_scope` 确认 scope，确认前不展示环境选项：`new-app` 使用 new scope，`existing-app` 使用 existing scope。
+
+### 新应用
+
+#### 第一次选择
+
+请提示“请选择应用要运行的环境：”，并只显示：
+
+1) Rainbond Cloud（在线，无需安装）
+2) 私有 Rainbond（自己的环境）
+
+#### 选择私有 Rainbond 后
+
+只有用户选择私有 Rainbond 后，才继续显示：
+
+a) 连接已有私有 Rainbond
+b) 帮我安装私有 Rainbond
+
+选择 a 时执行 `private-existing` route；选择 b 时执行 `install-private` route。第一问不得并列展示已有私有和安装私有。
+
+### 已有应用
+
+已有应用的 template-install intent 不得进入 install-private：只让用户选择 Rainbond Cloud 或承载目标应用的已有私有 Rainbond，已有应用不得安装新平台。
 <!-- rainskills-runtime-routing:end -->
 
 ## Overview
