@@ -48,7 +48,7 @@ Claude Code：
 安装完成后只完成 Skills 安装并展示能力列表，不选择运行环境、不登录 Rainbond，也不配置业务 MCP：
 
 ```text
-Rainskills 安装完成。
+Rainskills 安装完成，下一条消息即可直接使用。
 
 现在可以帮你：
 
@@ -74,17 +74,19 @@ Rainskills 安装完成。
 固定 launcher 来自当前 `package.json` 版本：
 
 ```json
-["npx", "--yes", "rainskills@0.1.0-rc.61"]
+["npx", "--yes", "rainskills@0.1.0-rc.64"]
 ```
 
 所有调用都把 launcher 与参数合并成 argv 数组后直接执行；不得使用 `rainskills@latest`，不得把参数拼成 shell 字符串。
 
-1. 执行 launcher + `["runtime", "status", "--json"]`，先于项目扫描和任何业务 MCP。
-2. `not_started` 不能因为历史上调用过 MCP 而跳过；只有 `connected`、`usable = true` 且本次 live probe 成功才能继续。
+1. 执行 launcher + `["environment", "list", "--json"]`，先于项目扫描和任何业务 MCP。未指定环境时只使用全局默认环境，默认不可用时停止，不自动回退。
+2. 每个请求生成独立 operation UUID，并执行 `operation begin`；显式环境只写入这次 operation。每个 Rainbond MCP 调用都携带返回的 `rainskills_operation_id`。项目不保存环境、团队或应用绑定，同一项目可以部署到多个目标。
 3. 将动作转换为 `runtime-intents.js` 中对应的受限 intent 并完成字段校验。target 只允许 `codex`、`claude`、`all`；按用户选择构造 launcher + `["runtime", "connect", "<target>", ...环境参数, "--intent-json", "<JSON.stringify(已校验 intent)>"]`。
-4. 环境参数必须恰好选择一组且互斥：Cloud 用 `["--saas"]`，已有私有环境用 `["--rainbond-url", "<已验证 Console origin>"]`，新建私有环境用 `["--install-private"]`。
+4. 环境参数必须恰好选择一组且互斥：Cloud 用 `["--saas"]`，已有私有环境用 `["--rainbond-url", "<已验证 Console origin>"]`，新建私有环境用 `["--install-private", "--location", "local"]` 或 `["--install-private", "--location", "server"]`。
 5. 安装私有环境时，只消费完成 schema、action、onboarding id 和参数边界校验的 `rainskills.next-action.v1.argv`；拒绝字符串命令和其他输出字段。
 6. 探针失败进入 reconnect。连接或安装完成后执行 launcher + `["intent", "resume", "--onboarding-id", "<同一 onboarding-id>"]`，恢复受保护的原始 intent 和 `resume_step`，不重新猜测用户动作。
+
+`deploy`/`create` 允许先只保存动作类型。选择私有环境后，先完整完成本地单机、服务器单机、主机集群或已有 Kubernetes 的平台安装和验收；此阶段不得询问本地项目路径、Git 仓库 URL、镜像地址或安装包路径。恢复到 `project-analysis` 后才识别当前项目或询问缺失的应用来源。
 
 ### 新应用环境选择
 
@@ -94,23 +96,48 @@ Rainskills 安装完成。
 >
 > 不过目前还没有可用的应用运行环境。
 >
-> 你刚安装的 Rainskills 是 AI 部署助手，它负责分析项目并执行部署；应用实际会运行在 Rainbond 上。Rainbond 是一套应用运行和管理平台，负责源码构建、容器运行、域名访问、日志和存储等工作，你不需要了解 Kubernetes。
+> 你刚安装的 Rainskills 是负责“部署”的 AI 助手，它会分析项目并执行部署流程；Rainbond 负责为应用提供稳定运行环境。
 >
 #### 第一次选择
 
-第一问提示“请选择应用要运行的环境：”，并只显示：
+第一问提示“请选择应用运行的位置：”，并只显示：
 
-1) Rainbond Cloud（在线，无需安装）
-2) 私有 Rainbond（自己的环境）
+1) 在线环境
+2) 自己的环境
 
-#### 选择私有 Rainbond 后
+#### 选择自己的环境后
 
-只有用户选择私有 Rainbond 后，才继续显示：
+先只显示：
 
-a) 连接已有私有 Rainbond
-b) 帮我安装私有 Rainbond
+1) 连接已有环境
+2) 帮我准备一个新环境
 
-不得把第二问的两项提前到第一问。选择 a 时执行 `private-existing` route；选择 b 时执行 `install-private` route。内部 runtime contract 仍保留 `saas`、`private-existing`、`install-private` 三条可执行 route。
+选择连接已有环境后才询问 Console 地址并执行 `private-existing` route。只有选择准备新环境后，才继续显示：
+
+请选择部署位置：
+
+1、安装到本地
+2、安装到 Linux 服务器
+
+选择 1 时执行 `install-private` route 并传入 `--location local`；选择 2 时执行 `install-private` route 并传入 `--location server`。不得在进入平台安装器后重复询问部署位置，也不得在环境准备完成前询问应用来源。
+
+## 多运行环境
+
+- 第一个连接成功的环境自动成为全局默认环境；以后新增环境不修改默认值。
+- 用户未指定环境时使用默认环境；用户明确指定时只覆盖本次 operation。
+- 环境名称自动生成，可重命名；内部不可变 ID 不随重命名改变。
+- 添加、重命名、重新授权或删除环境不改项目配置，也不需要为每个环境重新配置 Agent MCP。
+- Agent 始终连接一个本地 Rainskills MCP。Rainskills 按 `operation_id` 从隔离凭据存储中选择目标 Rainbond。
+- 明确说“团队”表示默认或指定运行环境中的 Rainbond 团队；明确说“运行环境/平台”表示环境。裸名称同时匹配两者时必须询问。
+
+常用管理命令：
+
+```bash
+npx --yes rainskills@0.1.0-rc.64 environment list --json
+npx --yes rainskills@0.1.0-rc.64 environment rename --environment-id <uuid> --name <name>
+npx --yes rainskills@0.1.0-rc.64 environment set-default --environment-id <uuid>
+npx --yes rainskills@0.1.0-rc.64 environment remove --environment-id <uuid>
+```
 
 ### 已有应用环境选择
 
@@ -134,9 +161,9 @@ b) 帮我安装私有 Rainbond
 
 环境选择按渐进流程展示：
 
-1. 先选`安装到本地`或`安装到 Linux 服务器`。
-2. 本地直接进入单机版，不展示 ROI 或 Kubernetes。
-3. 只有选择服务器后，再选单机版、主机集群或已有 Kubernetes。
+1. 用户选择“自己的环境”后，先选择连接已有环境或准备新环境。
+2. 连接已有环境只询问 Console 地址；准备新环境才选择本地或 Linux 服务器。
+3. 本地直接进入单机版，不展示 ROI 或 Kubernetes；只有选择服务器后，再选单机版、主机集群或已有 Kubernetes。
 
 主机集群支持 1、2 或 N 台 Linux 服务器，不要求固定三台；etcd 节点数必须是正奇数。已有 Kubernetes 分支使用指定 kubeconfig 和 context 安装，要求 Kubernetes 1.24 或更高版本。
 
@@ -146,19 +173,19 @@ Windows 本地安装是预览能力，也可以改选 Linux 服务器。它要�
 
 ```bash
 # 本地单机
-npx --yes rainskills@0.1.0-rc.61 platform install --onboarding-id <id> \
+npx --yes rainskills@0.1.0-rc.64 platform install --onboarding-id <id> \
   --location local --mode single-node
 
 # Linux 服务器单机
-npx --yes rainskills@0.1.0-rc.61 platform install --onboarding-id <id> \
+npx --yes rainskills@0.1.0-rc.64 platform install --onboarding-id <id> \
   --location server --mode single-node --ssh <user@host>
 
 # 服务器主机集群（交互生成配置，或导入已有 ROI cluster.yaml）
-npx --yes rainskills@0.1.0-rc.61 platform install --onboarding-id <id> \
+npx --yes rainskills@0.1.0-rc.64 platform install --onboarding-id <id> \
   --location server --mode host-cluster --cluster-config <path>
 
 # 已有 Kubernetes
-npx --yes rainskills@0.1.0-rc.61 platform install --onboarding-id <id> \
+npx --yes rainskills@0.1.0-rc.64 platform install --onboarding-id <id> \
   --location server --mode existing-kubernetes \
   --kubeconfig <path> --kube-context <name> --chart-version <version>
 ```
@@ -178,19 +205,15 @@ npx --yes rainskills@0.1.0-rc.61 platform install --onboarding-id <id> \
 
 ## 更新
 
-```bash
-npx skills update rainskills
-codex plugin marketplace upgrade goodrain
-```
+Rainskills 会在用户下一次发起业务动作时静默检查更新，且只跟随 npm `latest` 指向的正式版。当前版本是 RC 或其他预发布版本时不会查询、不会自动升级；npm 上的新 RC 版本也不参与正式版自动升级。
 
-Claude Code：
+发现更高的正式版后，当前 launcher 只委托到经过校验的精确版本，例如 `rainskills@1.2.3`，不会执行浮动的 `@latest` 业务代码。新版本先原子刷新已经安装的 Rainskills Skills，再继续原业务操作。版本检查失败、安装位置不安全或文件迁移失败时会保留旧版本继续，不要求用户处理。
 
-```text
-/plugin update rainskills@goodrain
-/reload-plugins
-```
+升级只更新 Rainskills 自身，不触发 Rainbond 安装、运行环境选择、登录授权、MCP 配置或重新对接。原始业务操作会继续执行；只有该业务操作本身需要运行环境时，才按既有门禁检查当前连接。可用连接直接复用，401 只重新授权一次，403 立即停止，从未连接过运行环境时才进入环境选择。
 
-直接安装方式可执行 `npx --yes rainskills@latest --force`。更新同样只更新 Skills；运行环境在下一次实际业务动作时按需检查。
+正在执行或等待恢复的部署、私有平台安装和授权流程继续使用启动时锁定的旧版本，自动升级不会插入这些流程。操作结束后的下一次普通业务请求才会再次检查正式版。
+
+如需手工恢复安装，可执行 `npx --yes rainskills@latest --force`；正常使用不需要主动运行更新命令。
 
 ## 包含的 Skill
 

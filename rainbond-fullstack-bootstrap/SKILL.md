@@ -5,20 +5,22 @@ description: "Use only when the user explicitly asks to create the Rainbond app 
 
 # Rainbond Fullstack Bootstrap
 
-<!-- rainskills-runtime-gate:start -->
-## 运行环境门禁（最高优先级）
+  <!-- rainskills-runtime-gate:start -->
+  ## 运行环境门禁（最高优先级）
+
+  ### 多运行环境操作契约
+
+  Node.js 前置检查通过后，每次请求先执行固定 launcher + `["environment", "list", "--json"]`，按用户明确指定的运行环境选择不可变环境 ID；未指定时只用全局默认环境，默认不可用时停止且不回退。生成 UUID 后执行 `["operation", "begin", "--operation-id", "<uuid>", "--environment-id", "<id>", "--intent-json", "<intent-json>"]`，并在之后每个 Rainbond MCP 调用中加入 `rainskills_operation_id`。环境、团队和应用只属于本次操作，禁止保存项目绑定；同一项目可以部署到多个环境。明确“团队”表示环境内团队；明确“运行环境/平台”表示环境；裸名称同时匹配环境和团队时必须询问。
 
 第一步检查 Node.js 是否存在且主版本不低于 18。Node.js 缺失或低于 18 时，只说明“Rainskills 执行组件需要 Node.js 18 或更高版本”并停止：不选择运行环境，不调用 MCP，不猜测替代命令。只有用户或 agent 明确同意后才安装或升级 Node.js，再从同一原始 intent 继续。
 
-固定 launcher 是 `["npx", "--yes", "rainskills@0.1.0-rc.61"]`；版本必须与本技能包 `package.json` 一致。把 launcher 与参数拼成 argv 数组直接执行，禁止 `rainskills@latest` 或执行 shell 字符串。
-
-前置检查通过后先执行 launcher + `["runtime", "status", "--json"]`，先于任何业务 MCP。`not_started` 不能因历史 MCP 跳过；只有 `connected`、`usable = true` 且本次 live probe 成功才继续，探针失败必须 reconnect。
+固定 launcher 是 `["npx", "--yes", "rainskills@0.1.0-rc.64"]`；版本必须与本技能包 `package.json` 一致。把 launcher 与参数拼成 argv 数组直接执行，禁止 `rainskills@latest` 或执行 shell 字符串。
 
 <!-- rainskills-runtime-contract:start -->
 ```json
 {
   "schema": "rainskills.skill-runtime-contract.v1",
-  "launcher": ["npx", "--yes", "rainskills@0.1.0-rc.61"],
+  "launcher": ["npx", "--yes", "rainskills@0.1.0-rc.64"],
   "intents": {
     "bootstrap": {"required": ["project_root"], "optional": ["team_id", "app_id", "service_id"], "enums": {}}
   },
@@ -31,9 +33,9 @@ description: "Use only when the user explicitly asks to create the Rainbond app 
     "existing": ["saas", "private-existing"]
   },
   "connect_argv": {
-    "saas": ["npx", "--yes", "rainskills@0.1.0-rc.61", "runtime", "connect", "<target>", "--saas", "--intent-json", "<intent-json>"],
-    "private-existing": ["npx", "--yes", "rainskills@0.1.0-rc.61", "runtime", "connect", "<target>", "--rainbond-url", "<rainbond-url>", "--intent-json", "<intent-json>"],
-    "install-private": ["npx", "--yes", "rainskills@0.1.0-rc.61", "runtime", "connect", "<target>", "--install-private", "--intent-json", "<intent-json>"]
+    "saas": ["npx", "--yes", "rainskills@0.1.0-rc.64", "runtime", "connect", "<target>", "--saas", "--intent-json", "<intent-json>"],
+    "private-existing": ["npx", "--yes", "rainskills@0.1.0-rc.64", "runtime", "connect", "<target>", "--rainbond-url", "<rainbond-url>", "--intent-json", "<intent-json>"],
+    "install-private": ["npx", "--yes", "rainskills@0.1.0-rc.64", "runtime", "connect", "<target>", "--install-private", "--location", "<private-location>", "--intent-json", "<intent-json>"]
   }
 }
 ```
@@ -55,23 +57,25 @@ target 只允许 `codex`、`claude`、`all`。校验 intent 后按 `route_condit
 
 #### 第一次选择
 
-intent 不含 `app_id` 和 `service_id` 时，请提示“请选择应用要运行的环境：”，并只显示：
+intent 不含 `app_id` 和 `service_id` 时，请提示“请选择应用运行的位置：”，并只显示：
 
-1) Rainbond Cloud（在线，无需安装）
-2) 私有 Rainbond（自己的环境）
+1) 在线环境
+2) 自己的环境
 
-#### 选择私有 Rainbond 后
+#### 选择自己的环境后
 
-只有用户选择私有 Rainbond 后，才继续显示：
+先执行固定 launcher + `["runtime", "message", "--id", "own-environment-connection"]` 并原样输出，只显示“连接已有环境 / 帮我准备一个新环境”。连接已有环境才执行 `private-existing` 并询问 Console 地址；选择准备新环境后，才执行固定 launcher + `["runtime", "message", "--id", "private-deployment-location"]`，并原样输出固定消息：
 
-a) 连接已有私有 Rainbond
-b) 帮我安装私有 Rainbond
+请选择部署位置：
 
-选择 a 时执行 `private-existing` route；选择 b 时执行 `install-private` route。第一问不得并列展示已有私有和安装私有。
+1、安装到本地
+2、安装到 Linux 服务器
+
+选择 1 时执行 `install-private` route，并使用 `["--location", "local"]`；选择 2 时执行 `install-private` route，并使用 `["--location", "server"]`。不得重复询问部署位置，也不得在环境准备完成前询问应用来源。
 
 ### 已有目标
 
-intent 含 `app_id` 或 `service_id` 时，已有应用只让用户选择 `Rainbond Cloud` 或承载目标应用的`已有私有 Rainbond`。
+intent 含 `app_id` 或 `service_id` 时，已有应用只让用户选择 `Rainbond Cloud` 或承载目标应用的`已有私有 Rainbond`。选择已有私有 Rainbond 时执行固定 launcher + `["runtime", "message", "--id", "private-console-origin"]` 并原样输出。
 <!-- rainskills-runtime-routing:end -->
 
 ## Overview

@@ -1,5 +1,6 @@
 const os = require("node:os");
 const readline = require("node:readline/promises");
+const { writeUserMessage } = require("./user-message.js");
 
 const LOCATIONS = new Set(["local", "server"]);
 const SERVER_MODES = new Set(["single-node", "host-cluster", "existing-kubernetes"]);
@@ -159,22 +160,30 @@ function waitingRoute(missing, values = {}) {
 
 function writeMissingLocation(write) {
   write("\n[RAINSKILLS_USER_INPUT_REQUIRED:platform_install_location]\n");
-  write("请选择应用运行环境的部署位置后重新执行：\n");
-  write("- 安装到本地：--location local\n");
-  write("- 安装到服务器：--location server\n");
+  writeUserMessage(write, "platform.location", [
+    "请选择应用运行环境的部署位置后重新执行：",
+    "- 安装到本地：--location local",
+    "- 安装到服务器：--location server",
+  ].join("\n"));
 }
 
 function writeMissingServerMode(write) {
   write("\n[RAINSKILLS_USER_INPUT_REQUIRED:platform_install_server_mode]\n");
-  write("请选择服务器安装模式后重新执行：\n");
-  write("- 快速单机安装：--location server --mode single-node\n");
-  write("- 多节点主机集群：--location server --mode host-cluster\n");
-  write("- 已有 Kubernetes 集群：--location server --mode existing-kubernetes\n");
+  writeUserMessage(write, "platform.server-mode", [
+    "请选择服务器安装模式后重新执行：",
+    "- 快速单机安装",
+    "- 多节点主机集群",
+    "- 已有 Kubernetes 集群",
+  ].join("\n"));
 }
 
 function writeMissingSsh(write) {
   write("\n[RAINSKILLS_USER_INPUT_REQUIRED:platform_install_server_ssh]\n");
-  write("请提供单机服务器 SSH 地址后重新执行：--location server --mode single-node --ssh <user@host> [--ssh-port 22]\n");
+  writeUserMessage(
+    write,
+    "platform.server-ssh",
+    "请提供单机服务器 SSH 地址后重新执行：--location server --mode single-node --ssh <user@host> [--ssh-port 22]",
+  );
 }
 
 async function selectPlatformRoute({

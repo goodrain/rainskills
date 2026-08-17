@@ -18,14 +18,13 @@ const {
 } = require("./windows-auth.js");
 const {
   configureSelectedClients,
-  persistWindowsEnvironment,
   validateMcp,
 } = require("./windows-client-config.js");
 const { createLifecycleTelemetry } = require("./telemetry.js");
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CONTROL_MODES = new Set(["windows-native", "wsl", "posix"]);
-const CAPABILITY_SUMMARY = `Rainskills 安装完成。
+const CAPABILITY_SUMMARY = `Rainskills 安装完成，下一条消息即可直接使用。
 
 现在可以帮你：
 
@@ -75,6 +74,7 @@ function parseWindowsInstallerArgs(argv) {
     target: "",
     customDest: "",
     force: false,
+    verbose: false,
     skipMcp: false,
     nonInteractive: false,
     rainbondUrl: "",
@@ -93,6 +93,8 @@ function parseWindowsInstallerArgs(argv) {
       index += 1;
     } else if (argument === "--force") {
       options.force = true;
+    } else if (argument === "--verbose") {
+      options.verbose = true;
     } else if (argument === "--skip-mcp") {
       options.skipMcp = true;
     } else if (argument === "--non-interactive") {
@@ -320,13 +322,18 @@ function createOnboardingCheckpoint({
   return { path: checkpointPath, state };
 }
 
-function createNextAction(operationId) {
+function createNextAction(operationId, location = "") {
   if (!UUID_PATTERN.test(operationId || "")) throw new Error("operation id 不是有效的 UUID");
+  if (location && !["local", "server"].includes(location)) {
+    throw new Error("平台安装 location 只支持 local 或 server");
+  }
+  const argv = ["platform", "install", "--onboarding-id", operationId];
+  if (location) argv.push("--location", location);
   return {
     schema: "rainskills.next-action.v1",
     action: "install-platform",
     onboarding_id: operationId,
-    argv: ["platform", "install", "--onboarding-id", operationId],
+    argv,
   };
 }
 
@@ -340,7 +347,6 @@ async function authorizeAndConfigure({
   authorizeWithDeviceFlowImpl = authorizeWithDeviceFlow,
   authorizeWithLoopbackImpl = authorizeWithLoopback,
   validateMcpImpl = validateMcp,
-  persistWindowsEnvironmentImpl = persistWindowsEnvironment,
   configureSelectedClientsImpl = configureSelectedClients,
   fetchImpl = globalThis.fetch,
   sleep,
@@ -449,6 +455,7 @@ async function authorizeAndConfigure({
     endpoints.push(`${baseUrl}/console/mcp/rainskills/claude-code/query`);
   }
   if (endpoints.length === 0) throw new Error("安装目标无效");
+  const mcpUrls = {};
   for (const url of endpoints) {
     telemetry.record({
       lifecycle_phase: "configure_mcp",
@@ -459,8 +466,18 @@ async function authorizeAndConfigure({
       transport: "powershell",
     });
     try {
-      const validation = await validateMcpImpl({ fetchImpl, token, url });
+      let selectedUrl = url;
+      let validation;
+      try {
+        validation = await validateMcpImpl({ fetchImpl, token, url });
+      } catch (error) {
+        if (error.code !== "MCP_ENDPOINT_UNSUPPORTED") throw error;
+        selectedUrl = `${baseUrl}/console/mcp/query`;
+        validation = await validateMcpImpl({ fetchImpl, token, url: selectedUrl });
+      }
       token = validation.token;
+      if (url.includes("/codex/query")) mcpUrls.codex = selectedUrl;
+      else mcpUrls.claude = selectedUrl;
     } catch (error) {
       telemetry.record({
         lifecycle_phase: "configure_mcp",
@@ -486,8 +503,7 @@ async function authorizeAndConfigure({
     });
   }
   try {
-    persistWindowsEnvironmentImpl({ baseUrl, spawnImpl, token });
-    configureSelectedClientsImpl({ baseUrl, spawnImpl, target, token });
+    configureSelectedClientsImpl({ baseUrl, mcpUrls, spawnImpl, target, token });
   } catch (error) {
     telemetry.record({
       lifecycle_phase: "configure_mcp",
@@ -618,24 +634,17 @@ async function main(argv, dependencies = {}) {
     : destinationsForTarget(target, home);
   const skills = discoverSkills(packageRoot);
   const logger = dependencies.logger || ((message) => stdout.write(`${message}\n`));
+  const detailLogger = options.verbose ? logger : () => {};
   const counts = copySkills({
     skills,
     destinations,
     force: options.force,
-    logger,
+    logger: detailLogger,
   });
-  logger("");
-  logger(`安装完成。本次：${counts.installed} 项新装 / ${counts.updated} 项已更新 / ${counts.unchanged} 项已是最新 / ${counts.forced} 项强制覆盖`);
-  logger("");
+  detailLogger("");
+  detailLogger(`安装完成。本次：${counts.installed} 项新装 / ${counts.updated} 项已更新 / ${counts.unchanged} 项已是最新 / ${counts.forced} 项强制覆盖`);
+  detailLogger("");
   logger(CAPABILITY_SUMMARY);
-  if (!options.customDest) {
-    const clientLabel = target === "codex"
-      ? "Codex"
-      : target === "claude"
-        ? "Claude Code"
-        : "Codex / Claude Code";
-    logger(`请重启 ${clientLabel} 以加载新技能。`);
-  }
   return { status: "skills-installed", counts };
 }
 

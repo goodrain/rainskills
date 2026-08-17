@@ -26,7 +26,7 @@ const platformInstallerPath = path.join(
   "scripts",
   "platform-installer.js"
 );
-const approvedCapabilitySummary = `Rainskills 安装完成。
+const approvedCapabilitySummary = `Rainskills 安装完成，下一条消息即可直接使用。
 
 现在可以帮你：
 
@@ -52,6 +52,8 @@ const forbiddenDefaultInstallText = [
 function assertApprovedCapabilitySummary(output) {
   const content = output.join("\n").replace(/\r\n/g, "\n");
   assert.equal(content.split(approvedCapabilitySummary).length - 1, 1);
+  assert.equal(content.trim(), approvedCapabilitySummary);
+  assert.doesNotMatch(content, /reload|restart|重新加载|重启/i);
   const actualBullets = content
     .slice(content.indexOf("现在可以帮你："), content.indexOf("直接告诉我你想做什么即可。"))
     .split("\n")
@@ -62,6 +64,50 @@ function assertApprovedCapabilitySummary(output) {
     assert.equal(content.includes(forbidden), false, `default install output contains ${forbidden}`);
   }
 }
+
+test("native Windows verbose mode keeps technical installation diagnostics opt-in", async () => {
+  const { main } = require(windowsOnboardingPath);
+  const home = temporaryHome();
+  const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-package-verbose-"));
+  const output = [];
+  writeSkill(packageRoot, "rainbond-test");
+
+  await main(["codex", "--force", "--verbose"], {
+    home,
+    packageRoot,
+    logger(message) {
+      output.push(message);
+    },
+  });
+
+  assert.equal(output.some((line) => line.startsWith("[install]")), true);
+  assert.equal(output.some((line) => line.includes("项新装")), true);
+  assert.equal(output.at(-1), approvedCapabilitySummary);
+});
+
+test("native main ends every default target with the approved Skills-only completion", async (t) => {
+  const { main } = require(windowsOnboardingPath);
+
+  for (const target of ["codex", "claude", "all"]) {
+    await t.test(target, async () => {
+      const home = temporaryHome();
+      const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), `rainskills-package-${target}-`));
+      const output = [];
+      writeSkill(packageRoot, "rainbond-test");
+
+      const result = await main([target, "--force"], {
+        home,
+        packageRoot,
+        logger(message) {
+          output.push(message);
+        },
+      });
+
+      assert.equal(result.status, "skills-installed");
+      assertApprovedCapabilitySummary(output);
+    });
+  }
+});
 
 function temporaryHome() {
   return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-windows-home-")));
@@ -373,6 +419,19 @@ test("native Windows checkpoint is protected and accepted by platform resume", (
     onboarding_id: operationId,
     argv: ["platform", "install", "--onboarding-id", operationId],
   });
+  assert.deepEqual(createNextAction(operationId, "local"), {
+    schema: "rainskills.next-action.v1",
+    action: "install-platform",
+    onboarding_id: operationId,
+    argv: ["platform", "install", "--onboarding-id", operationId, "--location", "local"],
+  });
+  assert.deepEqual(createNextAction(operationId, "server"), {
+    schema: "rainskills.next-action.v1",
+    action: "install-platform",
+    onboarding_id: operationId,
+    argv: ["platform", "install", "--onboarding-id", operationId, "--location", "server"],
+  });
+  assert.throws(() => createNextAction(operationId, "cluster"), /location|位置/i);
 
   assert.throws(() => createOnboardingCheckpoint({
     home,
@@ -754,16 +813,19 @@ test("Windows MCP validation and client configuration keep JWT out of argv", asy
     target: "all",
     baseUrl: "https://rainbond.example.com",
     token,
+    packageVersion: "0.1.0-rc.64",
     spawnImpl,
   });
 
   assert.equal(calls.some((call) => call.args.some((argument) => argument.includes(token))), false);
-  assert.ok(calls.some((call) => call.command === "codex" && call.args.includes(
-    "https://rainbond.example.com/console/mcp/rainskills/codex/query"
-  )));
-  assert.ok(calls.some((call) => call.command === "claude" && call.args.includes(
-    "https://rainbond.example.com/console/mcp/rainskills/claude-code/query"
-  )));
+  assert.deepEqual(calls.find((call) => call.command === "codex" && call.args[1] === "add").args, [
+    "mcp", "add", "rainbond", "--", "npx", "--yes", "rainskills@0.1.0-rc.64",
+    "mcp", "serve", "--client", "codex",
+  ]);
+  assert.deepEqual(calls.find((call) => call.command === "claude" && call.args[1] === "add").args, [
+    "mcp", "add", "--scope", "user", "rainbond", "--", "npx", "--yes",
+    "rainskills@0.1.0-rc.64", "mcp", "serve", "--client", "claude",
+  ]);
   assert.deepEqual(
     calls.filter((call) => call.command === "codex").map((call) => call.args.slice(0, 3)),
     [["mcp", "remove", "rainbond"], ["mcp", "add", "rainbond"]]
@@ -772,7 +834,7 @@ test("Windows MCP validation and client configuration keep JWT out of argv", asy
     calls.filter((call) => call.command === "claude").map((call) => call.args.slice(0, 5)),
     [
       ["mcp", "remove", "--scope", "user", "rainbond"],
-      ["mcp", "add", "--scope", "user", "--transport"],
+      ["mcp", "add", "--scope", "user", "rainbond"],
     ]
   );
   assert.equal(calls[0].options.env.RAINSKILLS_RAINBOND_JWT, token);
@@ -796,6 +858,7 @@ test("Windows MCP validation and client configuration keep JWT out of argv", asy
     target: "codex",
     baseUrl: "https://rainbond.example.com",
     token,
+    packageVersion: "0.1.0-rc.64",
     home,
     spawnImpl() {
       return { status: null, error: Object.assign(new Error("missing"), { code: "ENOENT" }) };
@@ -806,11 +869,40 @@ test("Windows MCP validation and client configuration keep JWT out of argv", asy
   assert.match(config, /model = "gpt-5"/);
   assert.match(config, /\[projects\.'C:\\\\work'\]/);
   assert.match(config, /\[mcp_servers\.rainbond\]/);
-  assert.match(config, /url = "https:\/\/rainbond\.example\.com\/console\/mcp\/rainskills\/codex\/query"/);
-  assert.match(config, /bearer_token_env_var = "RAINBOND_JWT"/);
+  assert.match(config, /command = "npx"/);
+  assert.match(config, /args = \["--yes","rainskills@0\.1\.0-rc\.64","mcp","serve","--client","codex"\]/);
+  assert.doesNotMatch(config, /url =|bearer_token_env_var/);
   assert.doesNotMatch(config, /old\.example\.com|OLD_TOKEN|header\.payload\.signature/);
   assert.equal((config.match(/\[mcp_servers\.rainbond\]/g) || []).length, 1);
   assert.equal(fs.existsSync(`${configPath}.rainskills-backup`), true);
+});
+
+test("Windows MCP validation pins the selected endpoint and rejects redirect drift", async () => {
+  const { validateMcp } = require(path.join(
+    repoRoot,
+    "rainbond-platform-installer",
+    "scripts",
+    "windows-client-config.js"
+  ));
+  const endpoint = "https://rainbond.example.com/console/mcp/rainskills/codex/query";
+  let redirectMode = "";
+  await assert.rejects(() => validateMcp({
+    url: endpoint,
+    token: "header.payload.signature",
+    async fetchImpl(_url, options) {
+      redirectMode = options.redirect;
+      return {
+        ok: true,
+        status: 200,
+        url: "https://attacker.example/console/mcp/rainskills/codex/query",
+        headers: new Headers(),
+        async json() {
+          return { jsonrpc: "2.0", id: 1, result: { serverInfo: { name: "rainbond-console-mcp" } } };
+        },
+      };
+    },
+  }), /地址|endpoint|重定向/i);
+  assert.equal(redirectMode, "manual");
 });
 
 test("native authorization orchestration falls back from Device Flow and configures clients", async () => {
@@ -861,6 +953,54 @@ test("native authorization orchestration falls back from Device Flow and configu
   assert.ok(events.some((event) => event.lifecycle_phase === "configure_mcp" && event.lifecycle_status === "completed"));
   assert.equal(new Set(events.map((event) => event.install_attempt_id)).size, 1);
   assert.doesNotMatch(fs.readFileSync(path.join(telemetryDirectory, "events.jsonl"), "utf8"), /header\.payload\.signature/);
+});
+
+test("native authorization falls back to the legacy generic MCP endpoint only for a verified missing route", async () => {
+  const { authorizeAndConfigure } = require(windowsOnboardingPath);
+  const calls = [];
+  await authorizeAndConfigure({
+    target: "codex",
+    baseUrl: "https://rainbond.example.com",
+    authorizeWithDeviceFlowImpl: async () => "header.payload.signature",
+    validateMcpImpl: async ({ url, token }) => {
+      calls.push({ kind: "validate", url, token });
+      if (url.includes("/console/mcp/rainskills/")) {
+        const error = new Error("missing");
+        error.code = "MCP_ENDPOINT_UNSUPPORTED";
+        throw error;
+      }
+      return { token: "renewed.payload.signature" };
+    },
+    persistWindowsEnvironmentImpl() {},
+    configureSelectedClientsImpl(options) {
+      calls.push({ kind: "configure", options });
+    },
+    telemetryFactory: () => ({ record() {} }),
+  });
+
+  assert.deepEqual(calls.filter(({ kind }) => kind === "validate").map(({ url }) => url), [
+    "https://rainbond.example.com/console/mcp/rainskills/codex/query",
+    "https://rainbond.example.com/console/mcp/query",
+  ]);
+  assert.deepEqual(calls.find(({ kind }) => kind === "configure").options.mcpUrls, {
+    codex: "https://rainbond.example.com/console/mcp/query",
+  });
+});
+
+test("native authorization does not downgrade MCP endpoints after a server error", async () => {
+  const { authorizeAndConfigure } = require(windowsOnboardingPath);
+  const urls = [];
+  await assert.rejects(() => authorizeAndConfigure({
+    target: "codex",
+    baseUrl: "https://rainbond.example.com",
+    authorizeWithDeviceFlowImpl: async () => "header.payload.signature",
+    validateMcpImpl: async ({ url }) => {
+      urls.push(url);
+      throw new Error("Rainbond MCP 校验失败，HTTP 500");
+    },
+    telemetryFactory: () => ({ record() {} }),
+  }), /HTTP 500/);
+  assert.deepEqual(urls, ["https://rainbond.example.com/console/mcp/rainskills/codex/query"]);
 });
 
 test("native main does not authorize or configure an explicitly supplied SaaS runtime", async () => {

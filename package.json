@@ -1,6 +1,6 @@
 {
   "name": "rainskills",
-  "version": "0.1.0-rc.61",
+  "version": "0.1.0-rc.64",
   "description": "Interactive Rainbond skill installer for Codex and Claude Code",
   "license": "Apache-2.0",
   "homepage": "https://github.com/goodrain/rainskills#readme",
@@ -58,8 +58,9 @@
     "build:pi": "node scripts/build-pi-extension.mjs",
     "check:marketplace": "node scripts/build-marketplace-package.mjs --check",
     "check:pi": "node scripts/build-pi-extension.mjs --check",
-    "test": "npm run test:launcher && npm run test:marketplace && npm run test:runtime-routing && npm run test:pi && npm run test:telemetry && npm run test:platform && npm run test:windows && npm run test:package-upload && npm run test:package && npm run test:installer && npm run test:signal && npm run test:npx-pty",
-    "test:launcher": "node --test tests/console-origin.test.js tests/npx-launcher.test.js tests/runtime-credentials.test.js tests/runtime-intents.test.js tests/runtime-state.test.js",
+    "test": "npm run test:auto-update && npm run test:launcher && npm run test:marketplace && npm run test:runtime-routing && npm run test:pi && npm run test:telemetry && npm run test:platform && npm run test:windows && npm run test:package-upload && npm run test:package && npm run test:installer && npm run test:signal && npm run test:npx-pty",
+    "test:auto-update": "node --test tests/auto-update.test.js",
+    "test:launcher": "node --test tests/console-origin.test.js tests/environment-credentials.test.js tests/environment-registry.test.js tests/mcp-router.test.js tests/mcp-server.test.js tests/npx-launcher.test.js tests/runtime-credentials.test.js tests/runtime-intents.test.js tests/runtime-operations.test.js tests/runtime-state.test.js",
     "test:marketplace": "node --test tests/marketplace-entry.test.js",
     "test:runtime-routing": "node --test tests/runtime-onboarding-routing.test.js && python3 tests/run_skill_routing_evals.py",
     "test:pi": "npm run check:pi && node --test tests/pi-extension.test.js",
@@ -73,10 +74,10 @@
     "test:npx-pty": "python3 tests/npx_pty_test.py"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
     "yaml": "2.9.0"
   },
   "devDependencies": {
-    "@modelcontextprotocol/sdk": "1.30.0",
     "esbuild": "0.25.8"
   },
   "publishConfig": {

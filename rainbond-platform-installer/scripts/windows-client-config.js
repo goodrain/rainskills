@@ -6,6 +6,8 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { looksLikeJwt } = require("./windows-auth.js");
 
+const MAX_MISSING_ROUTE_BODY_BYTES = 64 * 1024;
+
 function normalizeBaseUrl(value) {
   const url = new URL(value);
   if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) {
@@ -17,10 +19,63 @@ function normalizeBaseUrl(value) {
   return url.toString().replace(/\/$/, "");
 }
 
+async function readBoundedResponseText(response) {
+  const declaredLength = Number(response.headers?.get?.("content-length") || 0);
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_MISSING_ROUTE_BODY_BYTES) return null;
+  if (!response.body?.getReader) {
+    const text = await response.text();
+    return Buffer.byteLength(text, "utf8") <= MAX_MISSING_ROUTE_BODY_BYTES ? text : null;
+  }
+  const reader = response.body.getReader();
+  const chunks = [];
+  let length = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      length += value.byteLength;
+      if (length > MAX_MISSING_ROUTE_BODY_BYTES) {
+        await reader.cancel();
+        return null;
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+async function isVerifiedMissingMcpRoute(response) {
+  if (response.status !== 404) return false;
+  const contentType = String(response.headers?.get?.("content-type") || "").toLowerCase();
+  const body = await readBoundedResponseText(response);
+  if (body === null) return false;
+  const trimmed = body.trim();
+  if (contentType.includes("text/plain")) return trimmed === "Not Found";
+  if (contentType.includes("text/html")) {
+    const lower = trimmed.toLowerCase();
+    return lower.includes("<title") && lower.includes("not found");
+  }
+  if (contentType.includes("json")) {
+    try {
+      const payload = JSON.parse(trimmed);
+      return payload && typeof payload === "object" && !Array.isArray(payload)
+        && [payload.code, payload.status, payload.status_code, payload.error_code].some(
+          (value) => value === 404 || value === "404"
+        );
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
 async function validateMcp({ url, token, fetchImpl = globalThis.fetch }) {
   if (!looksLikeJwt(token)) throw new Error("Rainbond JWT 格式无效");
   const response = await fetchImpl(url, {
     method: "POST",
+    redirect: "manual",
     headers: {
       accept: "application/json",
       Authorization: `GRJWT ${token}`,
@@ -34,7 +89,31 @@ async function validateMcp({ url, token, fetchImpl = globalThis.fetch }) {
       params: {},
     }),
   });
-  if (!response.ok) throw new Error(`Rainbond MCP 校验失败，HTTP ${response.status}`);
+  const location = response.headers?.get?.("location");
+  const hasLocation = typeof response.headers?.has === "function"
+    ? response.headers.has("location")
+    : location !== null && location !== undefined;
+  if ((response.status >= 300 && response.status < 400) || hasLocation) {
+    throw new Error("Rainbond MCP endpoint 不允许重定向");
+  }
+  if (response.url) {
+    let observed;
+    let expected;
+    try {
+      observed = new URL(response.url);
+      expected = new URL(url);
+    } catch {
+      throw new Error("Rainbond MCP endpoint 响应地址无效");
+    }
+    if (observed.href !== expected.href) {
+      throw new Error("Rainbond MCP endpoint 响应地址不匹配");
+    }
+  }
+  if (!response.ok) {
+    const error = new Error(`Rainbond MCP 校验失败，HTTP ${response.status}`);
+    if (await isVerifiedMissingMcpRoute(response)) error.code = "MCP_ENDPOINT_UNSUPPORTED";
+    throw error;
+  }
   const payload = await response.json();
   if (payload?.result?.serverInfo?.name !== "rainbond-console-mcp") {
     throw new Error("Rainbond MCP 校验返回了无法识别的响应");
@@ -62,7 +141,17 @@ function removeExistingClient(spawnImpl, command, args, options) {
   if (result.signal) throw new Error(`${command} 被信号 ${result.signal} 中断`);
 }
 
-function writeCodexMcpConfig({ baseUrl, home = process.env.USERPROFILE || os.homedir() }) {
+function localMcpCommand(client, packageVersion = require("../../package.json").version) {
+  if (!["codex", "claude", "pi", "generic"].includes(client)) {
+    throw new Error("本地 MCP client 无效");
+  }
+  if (typeof packageVersion !== "string" || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(packageVersion)) {
+    throw new Error("Rainskills package version 无效");
+  }
+  return ["npx", "--yes", `rainskills@${packageVersion}`, "mcp", "serve", "--client", client];
+}
+
+function writeCodexMcpConfig({ packageVersion, home = process.env.USERPROFILE || os.homedir() }) {
   const configDirectory = path.join(home, ".codex");
   const configPath = path.join(configDirectory, "config.toml");
   fs.mkdirSync(configDirectory, { recursive: true });
@@ -71,10 +160,11 @@ function writeCodexMcpConfig({ baseUrl, home = process.env.USERPROFILE || os.hom
   const sectionPattern = /^\s*\[\s*mcp_servers\.rainbond\s*\]\s*(?:#.*)?$/;
   const nextSectionPattern = /^\s*\[/;
   const start = lines.findIndex((line) => sectionPattern.test(line));
+  const [command, ...args] = localMcpCommand("codex", packageVersion);
   const block = [
     "[mcp_servers.rainbond]",
-    `url = ${JSON.stringify(`${baseUrl}/console/mcp/rainskills/codex/query`)}`,
-    'bearer_token_env_var = "RAINBOND_JWT"',
+    `command = ${JSON.stringify(command)}`,
+    `args = ${JSON.stringify(args)}`,
   ];
 
   if (start >= 0) {
@@ -124,6 +214,7 @@ function configureSelectedClients({
   token,
   spawnImpl = spawnSync,
   home = process.env.USERPROFILE || os.homedir(),
+  packageVersion = require("../../package.json").version,
 }) {
   if (!looksLikeJwt(token)) throw new Error("Rainbond JWT 格式无效");
   if (!["codex", "claude", "all"].includes(target)) throw new Error("安装目标无效");
@@ -137,18 +228,12 @@ function configureSelectedClients({
   if (target === "codex" || target === "all") {
     const remove = spawnImpl("codex", ["mcp", "remove", "rainbond"], options);
     if (remove.error?.code === "ENOENT") {
-      writeCodexMcpConfig({ baseUrl: normalizedBase, home });
+      writeCodexMcpConfig({ packageVersion, home });
     } else {
       if (remove.error) throw remove.error;
       if (remove.signal) throw new Error(`codex 被信号 ${remove.signal} 中断`);
       checkedSpawn(spawnImpl, "codex", [
-        "mcp",
-        "add",
-        "rainbond",
-        "--url",
-        `${normalizedBase}/console/mcp/rainskills/codex/query`,
-        "--bearer-token-env-var",
-        "RAINBOND_JWT",
+        "mcp", "add", "rainbond", "--", ...localMcpCommand("codex", packageVersion),
       ], options);
     }
   }
@@ -161,22 +246,16 @@ function configureSelectedClients({
       "rainbond",
     ], options);
     checkedSpawn(spawnImpl, "claude", [
-      "mcp",
-      "add",
-      "--scope",
-      "user",
-      "--transport",
-      "http",
-      "rainbond",
-      `${normalizedBase}/console/mcp/rainskills/claude-code/query`,
-      "-H",
-      "Authorization: GRJWT ${RAINBOND_JWT}",
+      "mcp", "add", "--scope", "user", "rainbond", "--",
+      ...localMcpCommand("claude", packageVersion),
     ], options);
   }
 }
 
 module.exports = {
   configureSelectedClients,
+  isVerifiedMissingMcpRoute,
+  localMcpCommand,
   persistWindowsEnvironment,
   validateMcp,
 };

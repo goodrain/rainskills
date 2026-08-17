@@ -1,6 +1,6 @@
 ---
 name: rainskills
-description: Use when a user asks to install, set up, initialize, update, repair, or start using Rainskills or the Rainbond skill suite from goodrain/rainskills.
+description: Use when a user asks to install, set up, initialize, update, repair, start using Rainskills, or list, add, rename, remove, reconnect, or change the default Rainskills runtime environment.
 ---
 
 # Rainskills
@@ -20,10 +20,10 @@ Skills-only 安装不需要 Node.js；CDN fallback 只负责安装 Skill 文件�
 
 ## Completion Message
 
-After success, print exactly this capability summary and nothing else:
+The installer emits this text inside `RAINSKILLS_USER_MESSAGE_BEGIN:install.completed` and the matching END marker. Relay only the body exactly and print nothing else; do not expose the markers, summarize, reformat, add a source link, or add verification details.
 
 ```text
-Rainskills 安装完成。
+Rainskills 安装完成，下一条消息即可直接使用。
 
 现在可以帮你：
 
@@ -37,3 +37,15 @@ Rainskills 安装完成。
 
 直接告诉我你想做什么即可。
 ```
+
+## Manage Runtime Environments
+
+环境是全局列表，不是项目绑定。所有命令使用与当前技能包一致的固定 launcher `npx --yes rainskills@0.1.0-rc.64`，以 argv 数组执行。
+
+- 列表：执行 `environment list --json`，只展示名称、类型、状态、是否默认和最近验证时间。
+- 重命名：执行 `environment rename --environment-id <uuid> --name <name>`。
+- 设为默认：执行 `environment set-default --environment-id <uuid>`。只影响之后未指定环境的新操作。
+- 删除：执行 `environment remove --environment-id <uuid>`；默认环境或活动操作使用中的环境必须先阻断。
+- 添加：生成 operation UUID，以 `{"type":"environment-add"}` 执行 runtime connect。先原样展示 `runtime message --id add-environment-location`；选择自己的环境后再展示 `own-environment-connection`；只有选择准备新环境后才展示本地/服务器安装分支。连接成功后可按用户要求重命名，再执行 `operation complete --operation-id <uuid>`。第二个环境不得自动改成默认环境。
+
+用户在一次业务请求中明确指定运行环境时，只把该环境 ID 传给本次 `operation begin`；同一项目可以部署到任意多个环境和团队。明确“团队”表示环境内团队；明确“运行环境/平台”表示环境；裸名称同时匹配两者时必须询问，不能靠名称中是否含“环境”二字猜测。

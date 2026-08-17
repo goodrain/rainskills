@@ -58,20 +58,24 @@ description: "Use whenever a user asks to deploy, run, deliver, publish, inspect
   <!-- rainskills-runtime-gate:start -->
   ## 运行环境门禁（最高优先级）
 
+  ### 多运行环境操作契约
+
+  Node.js 前置检查通过后，每次用户业务请求都创建独立操作，不把项目绑定到任何环境、团队或应用。先执行固定 launcher + `["environment", "list", "--json"]`：用户明确说“运行环境/平台”时按环境名选择；明确说“团队”时表示默认环境中的团队；裸名称同时匹配环境和团队时必须让用户确认。未指定环境时使用全局默认环境；默认环境不可用时停止，禁止自动切换到其他环境。
+
+  生成新的 UUID，并执行 launcher + `["operation", "begin", "--operation-id", "<uuid>", "--intent-json", "<intent-json>"]`；用户明确指定已有环境时在 `--intent-json` 前加入 `["--environment-id", "<immutable-environment-id>"]`。保存返回的 `operation_id`，此后每个 Rainbond MCP 工具调用都必须在参数中加入 `rainskills_operation_id`。环境改名或修改全局默认值不能改变已开始操作的目标。同一项目可以在多个环境和团队分别部署，禁止写入或推断项目级默认环境。
+
   第一步检查 Node.js 是否存在且主版本不低于 18。Node.js 缺失或低于 18 时，只说明“Rainskills 执行组件需要 Node.js 18 或更高版本”并停止：不选择运行环境，不调用 MCP，不猜测替代命令。只有用户或 agent 明确同意后才安装或升级 Node.js，再从同一原始 intent 继续。
 
-  固定 launcher 是 `["npx", "--yes", "rainskills@0.1.0-rc.61"]`；版本必须与本技能包 `package.json` 一致。把 launcher 与参数拼成 argv 数组直接执行，禁止使用 `rainskills@latest`，禁止拼接或执行 shell 字符串。
-
-  Node.js 前置检查通过后，先执行 launcher + `["runtime", "status", "--json"]`；它必须先于项目扫描和任何业务 MCP。`not_started` 时，即使本会话历史上调用过 MCP 也不能跳过门禁。只有返回 `connected`、`usable = true` 且本次 live probe 成功，才进入业务流程；live probe 失败必须进入 reconnect。
+  固定 launcher 是 `["npx", "--yes", "rainskills@0.1.0-rc.64"]`；版本必须与本技能包 `package.json` 一致。把 launcher 与参数拼成 argv 数组直接执行，禁止使用 `rainskills@latest`，禁止拼接或执行 shell 字符串。
 
   <!-- rainskills-runtime-contract:start -->
   ```json
   {
     "schema": "rainskills.skill-runtime-contract.v1",
-    "launcher": ["npx", "--yes", "rainskills@0.1.0-rc.61"],
+    "launcher": ["npx", "--yes", "rainskills@0.1.0-rc.64"],
     "intents": {
-      "deploy": {"required": ["project_root", "source_kind"], "optional": ["source_url", "service_id"], "enums": {"source_kind": ["local", "git", "image", "package"]}},
-      "create": {"required": ["project_root", "source_kind"], "optional": ["source_url", "service_id"], "enums": {"source_kind": ["local", "git", "image", "package"]}},
+      "deploy": {"required": [], "optional": ["project_root", "source_kind", "source_url", "service_id"], "enums": {"source_kind": ["local", "git", "image", "package"]}},
+      "create": {"required": [], "optional": ["project_root", "source_kind", "source_url", "service_id"], "enums": {"source_kind": ["local", "git", "image", "package"]}},
       "query": {"required": ["operation"], "optional": ["team_id", "app_id", "service_id"], "enums": {"operation": ["summary", "components", "events", "logs", "access"]}},
       "troubleshoot": {"required": ["operation"], "optional": ["team_id", "app_id", "service_id"], "enums": {"operation": ["auto", "build", "runtime", "access"]}},
       "modify": {"required": ["team_id", "app_id", "operation"], "optional": ["service_id"], "enums": {"operation": ["component-config", "build-source", "ports", "env", "storage", "dependency"]}}
@@ -81,9 +85,9 @@ description: "Use whenever a user asks to deploy, run, deliver, publish, inspect
       "existing": ["saas", "private-existing"]
     },
     "connect_argv": {
-      "saas": ["npx", "--yes", "rainskills@0.1.0-rc.61", "runtime", "connect", "<target>", "--saas", "--intent-json", "<intent-json>"],
-      "private-existing": ["npx", "--yes", "rainskills@0.1.0-rc.61", "runtime", "connect", "<target>", "--rainbond-url", "<rainbond-url>", "--intent-json", "<intent-json>"],
-      "install-private": ["npx", "--yes", "rainskills@0.1.0-rc.61", "runtime", "connect", "<target>", "--install-private", "--intent-json", "<intent-json>"]
+      "saas": ["npx", "--yes", "rainskills@0.1.0-rc.64", "runtime", "connect", "<target>", "--saas", "--intent-json", "<intent-json>"],
+      "private-existing": ["npx", "--yes", "rainskills@0.1.0-rc.64", "runtime", "connect", "<target>", "--rainbond-url", "<rainbond-url>", "--intent-json", "<intent-json>"],
+      "install-private": ["npx", "--yes", "rainskills@0.1.0-rc.64", "runtime", "connect", "<target>", "--install-private", "--location", "<private-location>", "--intent-json", "<intent-json>"]
     }
   }
   ```
@@ -107,33 +111,41 @@ description: "Use whenever a user asks to deploy, run, deliver, publish, inspect
 
   ### 新应用
 
-  用户明确要部署新应用后，先说：
+  用户明确要部署新应用后，先执行固定 launcher + `["runtime", "message", "--id", "new-application-environment"]`。收到 `[RAINSKILLS_USER_MESSAGE_BEGIN:<id>]` 与对应 END marker 后，只原样输出两者之间的正文，不输出 marker，不得总结、改写、调整项目符号或追加其它说明。下方文案仅用于核对，不得由 agent 自行生成：
 
-  > 可以，我会帮你分析、构建、部署和验证当前项目。
+  > 可以，我会帮你完成应用识别、构建、部署和访问验证。
   >
   > 不过目前还没有可用的应用运行环境。
   >
-  > 你刚安装的 Rainskills 是 AI 部署助手，它负责分析项目并执行部署；应用实际会运行在 Rainbond 上。Rainbond 是一套应用运行和管理平台，负责源码构建、容器运行、域名访问、日志和存储等工作，你不需要了解 Kubernetes。
+  > 你刚安装的 Rainskills 是负责“部署”的 AI 助手，它会分析项目并执行部署流程；Rainbond 负责为应用提供稳定运行环境。
+  >
+  此时只保存用户已经明确提供的 intent 字段。`deploy`/`create` 可以只保存 `type`；不得为了构造 runtime intent 提前补参数，平台安装完成前不得询问应用来源，包括本地项目路径、Git 仓库 URL、镜像地址或安装包路径。运行环境连接并通过验收后，恢复到 `project-analysis`，再识别当前项目或询问缺失的应用来源。
 
   #### 第一次选择
 
-  请提示“请选择应用要运行的环境：”，并只显示：
+  请提示“请选择应用运行的位置：”，并只显示：
 
-  1) Rainbond Cloud（在线，无需安装）
-  2) 私有 Rainbond（自己的环境）
+  1) 在线环境
+     无需安装平台，授权后即可开始部署。
+  2) 自己的环境
+     应用运行在用户自己的电脑、服务器或 Kubernetes 集群中。
 
-  #### 选择私有 Rainbond 后
+  #### 选择自己的环境后
 
-  只有用户选择私有 Rainbond 后，才继续显示：
+  先执行固定 launcher + `["runtime", "message", "--id", "own-environment-connection"]` 并原样输出，只显示“连接已有环境 / 帮我准备一个新环境”。选择连接已有环境后才询问 Console 地址并执行 `private-existing`；选择准备新环境后才执行 `private-deployment-location`。
 
-  a) 连接已有私有 Rainbond
-  b) 帮我安装私有 Rainbond
+  只有用户明确选择准备新环境后，才执行固定 launcher + `["runtime", "message", "--id", "private-deployment-location"]`，并按同一消息协议原样输出块内正文。macOS 上的固定正文是：
 
-  选择 a 时执行 `private-existing` route；选择 b 时执行 `install-private` route。第一问不得并列展示已有私有和安装私有。
+  请选择部署位置：
+
+  1、安装到本地（当前 Mac，使用 OrbStack，安装可能较久）
+  2、安装到 Linux 服务器
+
+  选择 1 时执行 `install-private` route，并在完整 argv 中使用 `["--location", "local"]`；选择 2 时执行 `install-private` route，并使用 `["--location", "server"]`。不得在平台安装器中重复询问部署位置，也不得在环境准备完成前询问应用来源。
 
   ### 已有应用
 
-  用户明确要查询、排障、修改或验证已有应用时，使用与动作匹配的第一句话，只提供 `Rainbond Cloud` 或承载目标应用的`已有私有 Rainbond`。已有应用不得安装新平台，也不得进入 install-private。
+  用户明确要查询、排障、修改或验证已有应用时，使用与动作匹配的第一句话，只提供 `Rainbond Cloud` 或承载目标应用的`已有私有 Rainbond`。选择已有私有 Rainbond 时执行固定 launcher + `["runtime", "message", "--id", "private-console-origin"]` 并原样输出。已有应用不得安装新平台，也不得进入 install-private。
   <!-- rainskills-runtime-routing:end -->
 
   ## 硬规则

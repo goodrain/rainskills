@@ -1,13 +1,12 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import { spawn } from "node:child_process";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { ReadBuffer, serializeMessage } from "@modelcontextprotocol/sdk/shared/stdio.js";
+import manifest from "../../package.json";
 
 type RainbondConfig = {
-  token: string;
-  url: string;
+  command: string;
+  args: string[];
 };
 
 type ConfigInput = {
@@ -27,45 +26,17 @@ type McpClient = {
   close(): Promise<void>;
 };
 
-function decodeEnvValue(raw: string): string {
-  const value = raw.trim();
-  if (value.length >= 2 && value[0] === "'" && value.at(-1) === "'") {
-    return value.slice(1, -1).replace(/'"'"'/g, "'");
-  }
-  if (value.length >= 2 && value[0] === '"' && value.at(-1) === '"') {
-    return value.slice(1, -1).replace(/\\([\\"$`])/g, "$1");
-  }
-  return value;
-}
-
-function readManagedEnv(filePath: string): Record<string, string> {
-  if (!fs.existsSync(filePath)) return {};
-
-  const values: Record<string, string> = {};
-  for (const line of fs.readFileSync(filePath, "utf8").split(/\r?\n/)) {
-    const match = line.match(/^\s*(?:export\s+)?(RAINBOND_JWT|RAINBOND_URL)=(.*)$/);
-    if (match) values[match[1]] = decodeEnvValue(match[2]);
-  }
-  return values;
-}
-
-export function readRainbondConfig(input: ConfigInput = {}): RainbondConfig | null {
-  const env = input.env ?? process.env;
-  const home = input.home ?? os.homedir();
-  const stored = readManagedEnv(path.join(home, ".rainbond", "mcp.env"));
-  const token = env.RAINBOND_JWT || stored.RAINBOND_JWT;
-  const baseUrl = (env.RAINBOND_URL || stored.RAINBOND_URL || "").replace(/\/+$/, "");
-  if (!token || !baseUrl || !/^https?:\/\//.test(baseUrl)) return null;
-
+export function readRainbondConfig(_input: ConfigInput = {}): RainbondConfig {
   return {
-    token,
-    url: `${baseUrl}/console/mcp/rainskills/pi/query`,
+    command: "npx",
+    args: [
+      "--yes", `rainskills@${manifest.version}`, "mcp", "serve", "--client", "pi",
+    ],
   };
 }
 
 export function publicConfig(config: RainbondConfig) {
-  const parsed = new URL(config.url);
-  return { origin: parsed.origin, endpoint: parsed.pathname };
+  return { command: config.command, args: [...config.args] };
 }
 
 export function toPiContent(result: any): Array<{ type: "text"; text: string }> {
@@ -83,13 +54,56 @@ export function toPiContent(result: any): Array<{ type: "text"; text: string }> 
 
 function createMcpClient(config: RainbondConfig): McpClient {
   const client = new Client({ name: "rainskills-pi", version: "0.1.0" });
-  const transport = new StreamableHTTPClientTransport(new URL(config.url), {
-    requestInit: {
-      headers: {
-        Authorization: `GRJWT ${config.token}`,
-      },
+  const readBuffer = new ReadBuffer();
+  let child: ReturnType<typeof spawn> | null = null;
+  const inherited: Record<string, string> = {};
+  for (const key of ["HOME", "LOGNAME", "PATH", "SHELL", "TERM", "USER", "APPDATA", "USERPROFILE", "TEMP"]) {
+    if (process.env[key]) inherited[key] = process.env[key] as string;
+  }
+  const transport: any = {
+    onmessage: undefined,
+    onerror: undefined,
+    onclose: undefined,
+    async start() {
+      child = spawn(config.command, config.args, {
+        env: inherited,
+        shell: false,
+        stdio: ["pipe", "pipe", "inherit"],
+        windowsHide: true,
+      });
+      await new Promise<void>((resolve, reject) => {
+        child?.once("spawn", resolve);
+        child?.once("error", reject);
+      });
+      child.stdout?.on("data", (chunk) => {
+        try {
+          readBuffer.append(chunk);
+          for (;;) {
+            const message = readBuffer.readMessage();
+            if (message === null) break;
+            transport.onmessage?.(message);
+          }
+        } catch (error) {
+          transport.onerror?.(error);
+        }
+      });
+      child.once("close", () => transport.onclose?.());
+      child.once("error", (error) => transport.onerror?.(error));
     },
-  });
+    async send(message: unknown) {
+      if (!child?.stdin?.writable) throw new Error("Rainskills local MCP is not writable.");
+      await new Promise<void>((resolve, reject) => {
+        child?.stdin?.write(serializeMessage(message as any), (error) => error ? reject(error) : resolve());
+      });
+    },
+    async close() {
+      const running = child;
+      child = null;
+      if (!running) return;
+      running.stdin?.end();
+      if (running.exitCode === null) running.kill("SIGTERM");
+    },
+  };
   return {
     connect: () => client.connect(transport),
     listTools: (params) => client.listTools(params),
@@ -158,7 +172,7 @@ export function registerRainbondExtension(
       await client?.close().catch(() => undefined);
       client = null;
       ctx?.ui?.notify?.(
-        "Rainbond MCP 连接失败。请运行 rainskills refresh 后执行 /reload。",
+        "Rainskills 本地运行环境路由连接失败。",
         "warning"
       );
     }

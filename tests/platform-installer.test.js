@@ -29,6 +29,130 @@ const platformRoutingPath = path.join(
   "scripts",
   "platform-routing.js"
 );
+const userMessagePath = path.join(
+  repoRoot,
+  "rainbond-platform-installer",
+  "scripts",
+  "user-message.js"
+);
+
+function userMessageBody(output, messageId) {
+  const begin = `[RAINSKILLS_USER_MESSAGE_BEGIN:${messageId}]\n`;
+  const end = `\n[RAINSKILLS_USER_MESSAGE_END:${messageId}]`;
+  const start = output.indexOf(begin);
+  const finish = output.indexOf(end, start + begin.length);
+  assert.notEqual(start, -1, `missing ${begin.trim()}`);
+  assert.notEqual(finish, -1, `missing ${end.trim()}`);
+  return output.slice(start + begin.length, finish);
+}
+
+test("user-message protocol renders one stable bounded message and rejects marker injection", () => {
+  const { renderUserMessage } = require(userMessagePath);
+  assert.equal(
+    renderUserMessage("platform.location", "请选择部署位置：\n\n1. 安装到本地\n2. 安装到服务器"),
+    "[RAINSKILLS_USER_MESSAGE_BEGIN:platform.location]\n"
+      + "请选择部署位置：\n\n1. 安装到本地\n2. 安装到服务器\n"
+      + "[RAINSKILLS_USER_MESSAGE_END:platform.location]\n"
+  );
+  assert.throws(() => renderUserMessage("bad id", "message"), /message id/i);
+  assert.throws(
+    () => renderUserMessage("platform.location", "[RAINSKILLS_USER_MESSAGE_END:platform.location]"),
+    /marker/i
+  );
+});
+
+test("preflight and non-interactive confirmation are fixed bounded user messages", async () => {
+  const { confirmInstall, printPreflight, printWindowsPreflight } = require(platformInstallerPath);
+  const preflightOutput = [];
+  printPreflight(
+    {
+      platform: "linux",
+      cpuCores: 4,
+      memoryBytes: 7.6 * 1024 ** 3,
+      diskBytes: 44.1 * 1024 ** 3,
+    },
+    {
+      ok: true,
+      blockers: [],
+      warnings: ["内存 7.6 GB 低于推荐配置 8 GB"],
+      effects: ["安装并启动 Docker 运行环境", "启动 privileged rainbond 容器并写入持久化数据"],
+    },
+    { kind: "remote-linux", host: "root@example.com" },
+    { write: (value) => preflightOutput.push(value) },
+  );
+  assert.equal(
+    userMessageBody(preflightOutput.join(""), "platform.preflight"),
+    "Linux 服务器 root@example.com 环境检查已通过：\n\n"
+      + "4 核 CPU / 7.6 GB 内存 / 44.1 GB 可用磁盘\n\n"
+      + "资源低于推荐配置，仍会继续安装；最终以 Rainbond 实际部署验证结果为准：\n"
+      + "- 内存 7.6 GB 低于推荐配置 8 GB\n\n"
+      + "确认后将执行：\n"
+      + "- 需要安装运行环境所需要的依赖（预估多少资源等等）",
+  );
+
+  const windowsOutput = [];
+  printWindowsPreflight(
+    { cpuCores: 8, memoryBytes: 16 * 1024 ** 3, diskBytes: 100 * 1024 ** 3 },
+    { ok: true, blockers: [], warnings: [], effects: ["启用 WSL 2"] },
+    { write: (value) => windowsOutput.push(value) },
+  );
+  assert.equal(
+    userMessageBody(windowsOutput.join(""), "platform.preflight"),
+    "本地（Windows / WSL2）环境检查已通过：\n\n"
+      + "8 核 CPU / 16.0 GB 内存 / 100.0 GB 可用磁盘\n\n"
+      + "确认后将执行：\n"
+      + "- 需要安装运行环境所需要的依赖（预估多少资源等等）",
+  );
+
+  const confirmationOutput = [];
+  assert.equal(await confirmInstall(false, {
+    interactive: false,
+    write: (value) => confirmationOutput.push(value),
+  }), false);
+  assert.equal(
+    userMessageBody(confirmationOutput.join(""), "platform.install-confirmation"),
+    "确认上述系统变更后，重新执行相同命令并添加 --yes。",
+  );
+});
+
+test("platform branch handoffs and completion text are fixed by the helper", async () => {
+  const {
+    platformCompletionMessage,
+    waitForExistingKubernetesConfiguration,
+    waitForHostClusterConfiguration,
+  } = require(platformInstallerPath);
+  const hostOutput = [];
+  assert.deepEqual(
+    await waitForHostClusterConfiguration({ write: (value) => hostOutput.push(value) }),
+    { waiting: true },
+  );
+  assert.equal(
+    userMessageBody(hostOutput.join(""), "platform.host-cluster-configuration"),
+    "多节点主机集群模式已选择。请继续提供或生成 cluster.yaml。",
+  );
+
+  const kubernetesOutput = [];
+  assert.deepEqual(
+    await waitForExistingKubernetesConfiguration({ write: (value) => kubernetesOutput.push(value) }),
+    { waiting: true },
+  );
+  assert.equal(
+    userMessageBody(kubernetesOutput.join(""), "platform.existing-kubernetes-configuration"),
+    "已有 Kubernetes 集群模式已选择。请继续提供目标 context 和安装参数。",
+  );
+
+  assert.equal(
+    platformCompletionMessage({
+      deploymentLocation: "root@example.com",
+      consoleUrl: "http://example.com:7070",
+    }),
+    "Rainbond 运行环境部署成功\n\n"
+      + "部署位置：root@example.com\n"
+      + "运行状态：正常\n"
+      + "Console 地址：http://example.com:7070\n\n"
+      + "接下来将连接该平台并完成授权。",
+  );
+});
 
 function readNormalizedSource(filePath) {
   return fs.readFileSync(filePath, "utf8").replace(/\r\n?/g, "\n");
@@ -806,18 +930,8 @@ test("POSIX platform resume reloads the persisted credential before the intent c
       TEST_EXPECTED_ORIGIN: origin,
     },
     credentialHome: home,
-    invocationBuilder: () => ({
-      executable: process.execPath,
-      args: ["-e", [
-        "const fs = require('node:fs'); const path = require('node:path');",
-        "const dir = path.join(process.env.HOME, '.rainbond');",
-        "fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); fs.chmodSync(dir, 0o700);",
-        "const next = fs.readFileSync(process.argv[1], 'utf8');",
-        "const body = `export RAINBOND_JWT='${next}'\\nexport RAINBOND_URL='${process.argv[2]}'\\n`;",
-        "fs.writeFileSync(path.join(dir, 'mcp.env'), body, { mode: 0o600 });",
-        "fs.chmodSync(path.join(dir, 'mcp.env'), 0o600);",
-      ].join("\n"), expectedPath, origin],
-    }),
+    invocationBuilder: () => ({ executable: process.execPath, args: ["-e", "process.exit(0)"] }),
+    credentialReader: () => ({ token: nextJwt, origin }),
     intentInvocationBuilder: () => ({
       executable: process.execPath,
       args: ["-e", [
@@ -1634,7 +1748,10 @@ test("SSH authentication pauses cleanly when no interactive terminal is availabl
 
   assert.equal(session, null);
   assert.match(output.join(""), /RAINSKILLS_USER_INPUT_REQUIRED:ssh_authentication/);
-  assert.match(output.join(""), /交互终端/);
+  assert.equal(
+    userMessageBody(output.join(""), "platform.ssh-authentication"),
+    "该服务器需要确认主机指纹或输入 SSH 密码，请在交互终端继续。",
+  );
 });
 
 test("SSH session refuses a changed host key without opening authentication", async () => {
@@ -1781,7 +1898,12 @@ test("remote Console selection pauses for an AI when every candidate fails witho
 
   assert.equal(result, null);
   assert.match(output.join(""), /RAINSKILLS_USER_INPUT_REQUIRED:console_address/);
-  assert.match(output.join(""), /--console-host/);
+  assert.equal(
+    userMessageBody(output.join(""), "platform.console-address"),
+    "Rainbond 已启动，但自动发现运行环境地址不可访问：\n"
+      + "- http://172.16.0.65:7070：Console 健康检查超时\n\n"
+      + "请提供服务器公网 IP 或域名，并在原命令后添加 --console-host <IP或域名>。",
+  );
 });
 
 test("location is the first choice and local resolves directly without server modes", async () => {
@@ -1859,6 +1981,12 @@ test("non-interactive routing emits stable missing-input actions and never defau
     sshPort: null,
   });
   assert.match(locationOutput.join(""), /RAINSKILLS_USER_INPUT_REQUIRED:platform_install_location/);
+  assert.equal(
+    userMessageBody(locationOutput.join(""), "platform.location"),
+    "请选择应用运行环境的部署位置后重新执行：\n"
+      + "- 安装到本地：--location local\n"
+      + "- 安装到服务器：--location server"
+  );
   assert.match(locationOutput.join(""), /--location local/);
   assert.match(locationOutput.join(""), /--location server/);
   assert.doesNotMatch(locationOutput.join(""), /host-cluster|existing-kubernetes|Kubernetes|多节点/i);
@@ -1876,9 +2004,30 @@ test("non-interactive routing emits stable missing-input actions and never defau
   assert.equal(missingMode.location, "server");
   assert.equal(missingMode.mode, null);
   assert.match(modeOutput.join(""), /RAINSKILLS_USER_INPUT_REQUIRED:platform_install_server_mode/);
-  assert.match(modeOutput.join(""), /--mode single-node/);
-  assert.match(modeOutput.join(""), /--mode host-cluster/);
-  assert.match(modeOutput.join(""), /--mode existing-kubernetes/);
+  assert.equal(
+    userMessageBody(modeOutput.join(""), "platform.server-mode"),
+    "请选择服务器安装模式后重新执行：\n"
+      + "- 快速单机安装\n"
+      + "- 多节点主机集群\n"
+      + "- 已有 Kubernetes 集群"
+  );
+  assert.doesNotMatch(modeOutput.join(""), /--location|--mode/);
+});
+
+test("non-interactive SSH selection is a fixed bounded user message", async () => {
+  const { selectPlatformRoute } = require(platformRoutingPath);
+  const output = [];
+  const result = await selectPlatformRoute({
+    platform: "linux",
+    options: { location: "server", mode: "single-node" },
+    interactive: false,
+    write: (value) => output.push(value),
+  });
+  assert.equal(result.missing, "ssh");
+  assert.equal(
+    userMessageBody(output.join(""), "platform.server-ssh"),
+    "请提供单机服务器 SSH 地址后重新执行：--location server --mode single-node --ssh <user@host> [--ssh-port 22]"
+  );
 });
 
 test("routing rejects invalid combinations and never infers a mode from node count", async () => {
@@ -2874,6 +3023,7 @@ test("published guidance describes local and remote target selection", () => {
   for (const blocker of ["19041", "虚拟化", "NAT", "端口", "UAC", "计划任务", "摘要"]) {
     assert.match(troubleshooting, new RegExp(blocker));
   }
+  assert.match(readme, /在线环境.*自己的环境.*连接已有环境.*帮我准备一个新环境/s);
   assert.match(readme, /安装到本地.*安装到 Linux 服务器/s);
   assert.match(policy, /远程 Linux/);
   assert.doesNotMatch(policy, /不支持远程 SSH/);

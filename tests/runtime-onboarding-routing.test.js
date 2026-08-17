@@ -28,7 +28,7 @@ const launcher = `["npx", "--yes", "rainskills@${packageVersion}"]`;
 const runtimeSkills = [
   {
     file: "rainbond-app-assistant/SKILL.md",
-    action: "分析、构建、部署和验证当前项目",
+    action: "完成应用识别、构建、部署和访问验证",
     route: "mixed",
     intentTypes: ["deploy", "create", "query", "troubleshoot", "modify"],
   },
@@ -117,19 +117,24 @@ function runtimeContract(text) {
 }
 
 function assertTwoLevelNewRuntimeChoice(routing) {
-  const firstChoice = headingSection(routing, "#### 第一次选择", "#### 选择私有 Rainbond 后");
-  const privateChoice = headingSection(routing, "#### 选择私有 Rainbond 后");
+  const firstChoice = headingSection(routing, "#### 第一次选择", "#### 选择自己的环境后");
+  const ownChoice = headingSection(routing, "#### 选择自己的环境后");
 
-  assert.match(firstChoice, /请选择应用要运行的环境/);
-  assert.match(firstChoice, /1\)\s*Rainbond Cloud（在线，无需安装）/);
-  assert.match(firstChoice, /2\)\s*私有 Rainbond（自己的环境）/);
+  assert.match(firstChoice, /请选择应用运行的位置/);
+  assert.match(firstChoice, /1\)\s*在线环境/);
+  assert.match(firstChoice, /2\)\s*自己的环境/);
   assert.doesNotMatch(firstChoice, /已有私有 Rainbond|安装私有 Rainbond|准备私有 Rainbond/);
 
-  assert.match(privateChoice, /选择.*私有 Rainbond.*后/s);
-  assert.match(privateChoice, /a\)\s*连接已有私有 Rainbond/);
-  assert.match(privateChoice, /b\)\s*帮我(?:安装|准备)私有 Rainbond/);
-  assert.match(privateChoice, /private-existing/);
-  assert.match(privateChoice, /install-private/);
+  assert.match(ownChoice, /连接已有环境/);
+  assert.match(ownChoice, /帮我准备一个新环境/);
+  assert(ownChoice.indexOf("连接已有环境") < ownChoice.indexOf("请选择部署位置"));
+  assert.match(ownChoice, /请选择部署位置/);
+  assert.match(ownChoice, /1、\s*安装到本地/);
+  assert.match(ownChoice, /2、\s*安装到 Linux 服务器/);
+  assert.doesNotMatch(ownChoice, /3、|对接到本地|对接到独立服务器/);
+  assert.match(ownChoice, /private-existing/);
+  assert.match(ownChoice, /install-private/);
+  assert.match(ownChoice, /--location.*local.*--location.*server/s);
 }
 
 const intentSamples = {
@@ -170,10 +175,17 @@ const bootstrapScopeCases = [
   [{ type: "bootstrap", project_root: "/workspace/app", app_id: "app", service_id: "service" }, "existing"],
 ];
 
+const approvedNewApplicationRuntimeCopy = `> 可以，我会帮你完成应用识别、构建、部署和访问验证。
+  >
+  > 不过目前还没有可用的应用运行环境。
+  >
+  > 你刚安装的 Rainskills 是负责“部署”的 AI 助手，它会分析项目并执行部署流程；Rainbond 负责为应用提供稳定运行环境。`;
+
 function materializeConnectArgv(template, intent) {
   return template.map((value) => {
     if (value === "<target>") return "codex";
     if (value === "<rainbond-url>") return "https://console.example.com";
+    if (value === "<private-location>") return "local";
     if (value === "<intent-json>") return JSON.stringify(intent);
     return value;
   });
@@ -235,20 +247,58 @@ test("bootstrap scope is explicit and existing targets cannot install a private 
   assert.doesNotMatch(existingBranch, /install-private|安装私有 Rainbond/i);
 });
 
+test("generic deployment uses the approved copy and defers source intake until platform completion", async () => {
+  const skill = read("rainbond-app-assistant/SKILL.md");
+  const contract = runtimeContract(skill);
+  const routing = markedSection(skill, "runtime-routing");
+  const platformSkill = read("rainbond-platform-installer/SKILL.md");
+
+  assert.deepEqual(contract.intents.deploy, {
+    required: [],
+    optional: ["project_root", "source_kind", "source_url", "service_id"],
+    enums: { source_kind: ["local", "git", "image", "package"] },
+  });
+  assert.deepEqual(contract.intents.create, contract.intents.deploy);
+  assert.match(routing, new RegExp(approvedNewApplicationRuntimeCopy.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(routing, /平台安装完成前.*不得.*应用来源|不得.*应用来源.*平台安装完成前/s);
+  assert.match(routing, /项目路径.*Git 仓库.*镜像地址.*安装包路径/s);
+  assert.match(platformSkill, /平台安装.*不得.*应用来源|不得.*应用来源.*平台安装/s);
+
+  for (const type of ["deploy", "create"]) {
+    const intent = { type };
+    const argv = materializeConnectArgv(contract.connect_argv["install-private"], intent);
+    assert.deepEqual(parseRuntimeConnectArgs(argv.slice(3)).intent, intent);
+  }
+});
+
 for (const skill of runtimeSkills) {
-  test(`${skill.file} gates every business operation on protected runtime status`, () => {
+  test(`${skill.file} locks every request to one environment without project binding`, () => {
+    const gate = markedSection(read(skill.file), "runtime-gate");
+
+    assert.match(gate, /\["environment", "list", "--json"\]/);
+    assert.match(gate, /\["operation", "begin"/);
+    assert.match(gate, /不可变环境 ID|immutable.*environment/i);
+    assert.match(gate, /rainskills_operation_id/);
+    assert.match(gate, /未指定.*全局默认环境/s);
+    assert.match(gate, /默认(?:环境)?不可用.*停止.*(?:禁止自动切换|不回退)/s);
+    assert.match(gate, /同一项目.*多个环境|同一项目.*任意多个环境/s);
+    assert.match(gate, /禁止.*项目级.*(?:默认环境|绑定)|不.*项目绑定/s);
+    assert.match(gate, /明确.*团队.*团队/s);
+    assert.match(gate, /明确.*运行环境.*环境/s);
+    assert.match(gate, /裸名称.*同时匹配.*(?:确认|询问)/s);
+  });
+
+  test(`${skill.file} gates every business operation on the protected environment registry`, () => {
     const gate = markedSection(read(skill.file), "runtime-gate");
 
     assert.match(gate, /第一步.*Node\.js.*18/s);
-    assert(gate.indexOf("Node.js") < gate.indexOf("runtime\", \"status"));
+    assert.match(gate, /Node\.js 前置检查通过后.*\["environment", "list", "--json"\]/s);
     assert.match(gate, /执行组件需要 Node\.js 18/);
     assert.match(gate, /缺失|低于/);
     assert.match(gate, /停止.*不.*选择运行环境.*不.*MCP.*不.*猜测/s);
     assert.match(gate, /用户或 agent 明确同意.*安装.*Node\.js.*原始 intent/s);
-    assert.match(gate, /先于.*业务 MCP/s);
-    assert.match(gate, /not_started.*(?:历史.*MCP.*不能|不能因历史.*MCP).*跳过|not_started.*不得.*跳过/s);
-    assert.match(gate, /connected.*usable\s*=\s*true.*live probe/s);
-    assert.match(gate, /live probe.*失败.*reconnect|探针.*失败.*重连/is);
+    assert.match(gate, /\["environment", "list", "--json"\]/);
+    assert.match(gate, /\["operation", "begin"/);
     assert.match(gate, /固定.*onboarding-id.*原始 intent.*resume_step/s);
     assert.match(gate, /401.*--step/s);
     assert.match(gate, /401.*一次/s);
@@ -259,7 +309,6 @@ for (const skill of runtimeSkills) {
     assert.match(gate, /argv 数组/);
     assert.match(gate, /禁止.*rainskills@latest|禁止.*latest/s);
     assert.match(gate, /禁止.*shell 字符串|禁止.*执行 shell 字符串/s);
-    assert.match(gate, /\["runtime", "status", "--json"\]/);
     assert.match(gate, /"runtime", "connect"/);
     assert.match(gate, /codex.*claude.*all/s);
     assert.match(gate, /--intent-json/);
@@ -337,9 +386,15 @@ for (const skill of runtimeSkills) {
 
     assert.match(routing, new RegExp(skill.action));
     assert.match(routing, /目前还没有可用的应用运行环境/);
-    assert.match(routing, /Rainskills 是 AI 部署助手/);
-    assert.match(routing, /Rainbond 是一套应用运行和管理平台/);
-    assert.match(routing, /不需要了解 Kubernetes/);
+    if (skill.file === "rainbond-app-assistant/SKILL.md") {
+      assert.match(routing, /Rainskills 是负责“部署”的 AI 助手/);
+      assert.match(routing, /Rainbond 负责为应用提供稳定运行环境/);
+    } else {
+      assert.match(routing, /Rainskills 是 AI 部署助手/);
+      assert.match(routing, /Rainbond 是一套应用运行和管理平台/);
+      assert.match(routing, /不需要了解 Kubernetes/);
+    }
+    assert.match(routing, /runtime.*message.*private-console-origin/s);
     if (skill.route === "new" || skill.route === "mixed") {
       assertTwoLevelNewRuntimeChoice(routing);
     }
@@ -363,9 +418,9 @@ for (const skill of runtimeSkills) {
 
 test("root Rainskills installation stops after Skills success and capability guidance", () => {
   const skill = read("SKILL.md");
-  const initialize = skill.slice(skill.indexOf("## Initialize"));
+  const initialize = headingSection(skill, "## Initialize", "## Completion Message");
   const completion = headingSection(skill, "## Completion Message");
-  const approved = `Rainskills 安装完成。
+  const approved = `Rainskills 安装完成，下一条消息即可直接使用。
 
 现在可以帮你：
 
@@ -391,6 +446,20 @@ test("root Rainskills installation stops after Skills success and capability gui
   assert.match(skill, /Skills-only.*不需要 Node\.js|仅安装 Skills.*不需要 Node\.js/s);
   assert.match(skill, /首次.*需要运行环境.*Node\.js 18/s);
   assert.doesNotMatch(completion, /Node\.js|Node 18/i);
+});
+
+test("root Rainskills manages a global default and adds later environments without project binding", () => {
+  const skill = read("SKILL.md");
+  const management = headingSection(skill, "## Manage Runtime Environments");
+
+  assert.match(management, /environment list --json/);
+  assert.match(management, /environment rename --environment-id <uuid> --name <name>/);
+  assert.match(management, /environment set-default --environment-id <uuid>/);
+  assert.match(management, /environment remove --environment-id <uuid>/);
+  assert.match(management, /"type":"environment-add"/);
+  assert.match(management, /第二个环境不得自动改成默认环境/);
+  assert.match(management, /同一项目可以部署到任意多个环境和团队/);
+  assert.match(management, /裸名称同时匹配两者时必须询问/);
 });
 
 test("CDN Skills-only installation works without Node and keeps completion unchanged", () => {
@@ -421,7 +490,7 @@ test("CDN Skills-only installation works without Node and keeps completion uncha
   assert.equal(spawnSync("/bin/sh", ["-c", "command -v node"], { env: { PATH: "/usr/bin:/bin" } }).status, 1);
   const approved = headingSection(read("SKILL.md"), "## Completion Message")
     .match(/```text\n([\s\S]*?)\n```/)?.[1];
-  assert(result.stdout.trim().endsWith(approved));
+  assert(result.stdout.includes(`[RAINSKILLS_USER_MESSAGE_BEGIN:install.completed]\n${approved}\n[RAINSKILLS_USER_MESSAGE_END:install.completed]`));
 });
 
 test("protected runtime intents directly cover every business skill and survive connect/resume", async () => {
@@ -436,7 +505,11 @@ test("protected runtime intents directly cover every business skill and survive 
     "template-install": { type: "template-install", template_id: "template", install_scope: "new-app" },
   };
   const expectedSkills = new Set(runtimeSkills.map(({ file }) => file.split("/", 1)[0]));
-  const coveredSkills = new Set(Object.values(INTENT_DEFINITIONS).map(({ skillId }) => skillId));
+  const coveredSkills = new Set(
+    Object.values(INTENT_DEFINITIONS)
+      .map(({ skillId }) => skillId)
+      .filter((skillId) => skillId !== "rainskills")
+  );
   assert.deepEqual([...expectedSkills].sort(), [...coveredSkills].sort());
 
   for (const skillId of expectedSkills) {
@@ -482,7 +555,7 @@ test("app assistant frontmatter is a pure generic trigger without MCP preference
 
 test("generated Rainskills completion has no reload or next-step prompt", () => {
   const skill = read("marketplace/rainskills/skills/rainskills/SKILL.md");
-  const completion = headingSection(skill, "## Completion Message");
+  const completion = headingSection(skill, "## Completion Message", "## Manage Runtime Environments");
 
   assert.match(completion, /Rainskills 安装完成/);
   assert.doesNotMatch(completion, /reload|restart|重新加载|重启|下一步/i);
@@ -509,7 +582,7 @@ test("README introduces runtime only after an application action and documents r
   assert.match(readme, /安装完成后.*只.*Skills.*能力列表/s);
   assert.match(readme, /用户首次提出.*部署|第一次提出.*运行环境/s);
   assert.match(readme, /目前还没有可用的应用运行环境/);
-  assert.match(readme, /\["runtime", "status", "--json"\]/);
+  assert.match(readme, /\["environment", "list", "--json"\]/);
   assert.match(readme, /Console origin/);
   assert.match(readme, /401.*一次.*403.*不.*重新授权/s);
   assert.match(readme, /取消.*重试|失败.*重试/s);
@@ -550,6 +623,16 @@ test("platform installer guidance reveals modes progressively", () => {
   assert.match(skill, /--yes/);
   assert.match(skill, new RegExp(launcher.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.match(skill, /rainskills\.next-action\.v1.*(?:validate.*argv|校验.*argv)/is);
+  assert.match(skill, /RAINSKILLS_USER_MESSAGE_BEGIN/);
+  assert.match(skill, /原样.*(?:转发|输出).*不得.*(?:总结|改写|追加)/s);
+  assert.match(skill, /附着.*(?:PTY|终端)|(?:PTY|终端).*附着/is);
+  assert.match(skill, /不得.*ssh-keyscan/is);
+  assert.match(skill, /不得.*ssh-copy-id/is);
+  assert.match(skill, /不得.*回复.*已授权|不得.*要求.*已授权/is);
+  const appAssistant = read("rainbond-app-assistant/SKILL.md");
+  assert.match(appAssistant, /runtime["',\s]+message["',\s]+--id["',\s]+new-application-environment/);
+  assert.match(appAssistant, /runtime["',\s]+message["',\s]+--id["',\s]+private-deployment-location/);
+  assert.match(appAssistant, /RAINSKILLS_USER_MESSAGE_BEGIN/);
 });
 
 test("platform installer UI metadata follows the OpenAI Skill contract", () => {

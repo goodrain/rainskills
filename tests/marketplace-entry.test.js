@@ -222,7 +222,7 @@ test("README distinguishes marketplace and direct installer Node requirements", 
   assert.match(readme, /直接运行.*最低支持 Node\.js 18/s);
 });
 
-test("README documents one-product installation and updates for each adapter", () => {
+test("README documents one-product installation and adapter-neutral stable auto-updates", () => {
   const readme = read("README.md");
 
   assert.match(readme, /npx skills add goodrain\/rainskills/);
@@ -230,9 +230,10 @@ test("README documents one-product installation and updates for each adapter", (
   assert.match(readme, /codex plugin add rainskills@goodrain/);
   assert.match(readme, /\/plugin marketplace add goodrain\/rainskills/);
   assert.match(readme, /\/plugin install rainskills@goodrain/);
-  assert.match(readme, /npx skills update rainskills/);
-  assert.match(readme, /codex plugin marketplace upgrade goodrain/);
-  assert.match(readme, /\/plugin update rainskills@goodrain/);
+  assert.match(readme, /静默检查更新/);
+  assert.match(readme, /只跟随.*正式版/s);
+  assert.match(readme, /RC.*不会.*自动升级/s);
+  assert.match(readme, /升级只更新 Rainskills 自身，不触发 Rainbond/s);
   assert.match(readme, /支持 Codex 和 Claude Code/);
   assert.match(readme, /不支持 OpenClaw 或 Pi Agent 安装/);
   assert.doesNotMatch(readme, /npx --yes rainskills (openclaw|pi)/);

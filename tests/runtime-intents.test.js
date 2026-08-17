@@ -44,6 +44,38 @@ test("every bounded runtime intent maps to a fixed Skill and first resume step",
   }
 });
 
+test("new deploy and create intents can defer application source until the runtime is ready", () => {
+  const { createIntentContinuation, validateIntent } = require(modulePath);
+
+  for (const type of ["deploy", "create"]) {
+    const intent = validateIntent({ type });
+    assert.deepEqual(intent, { type });
+    assert.deepEqual(createIntentContinuation(intent), {
+      schema: "rainskills.intent-continuation.v1",
+      skill_id: "rainbond-app-assistant",
+      intent: { type },
+      resume_step: "project-analysis",
+    });
+  }
+});
+
+test("deferred application source fields remain bounded and internally consistent", () => {
+  const { validateIntent } = require(modulePath);
+
+  assert.deepEqual(validateIntent({ type: "deploy", project_root: "/workspace/app" }), {
+    type: "deploy",
+    project_root: "/workspace/app",
+  });
+  assert.deepEqual(validateIntent({ type: "create", source_kind: "git" }), {
+    type: "create",
+    source_kind: "git",
+  });
+  assert.throws(
+    () => validateIntent({ type: "deploy", source_url: "https://example.com/app.git" }),
+    /source_kind|应用来源/i
+  );
+});
+
 test("intent validation rejects unknown and credential-like fields", () => {
   const { validateIntent } = require(modulePath);
 

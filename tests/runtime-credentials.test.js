@@ -165,3 +165,28 @@ test("Windows credential reader rejects helper symlink and permission tampering"
     }), /symlink|符号链接|权限|0600|凭据/i);
   }
 });
+
+test("runtime credential reader delegates explicit environment ids to the isolated store", () => {
+  const { readRuntimeCredential } = require(modulePath);
+  const calls = [];
+  const credential = readRuntimeCredential({
+    platform: "linux",
+    environmentId: "11111111-1111-4111-8111-111111111111",
+    expectedOrigin: "https://prod.example.com",
+    environmentCredentialStore: {
+      read(input) {
+        calls.push(input);
+        return { origin: "https://prod.example.com", token: "prod.payload.signature" };
+      },
+    },
+  });
+
+  assert.deepEqual(calls, [{
+    environmentId: "11111111-1111-4111-8111-111111111111",
+    expectedOrigin: "https://prod.example.com",
+  }]);
+  assert.deepEqual(credential, {
+    origin: "https://prod.example.com",
+    token: "prod.payload.signature",
+  });
+});

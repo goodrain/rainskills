@@ -5,7 +5,19 @@ description: Use when Rainskills private onboarding establishes that no reachabl
 
 # Rainbond Platform Installer
 
+平台安装只负责准备应用运行环境。它把受保护的原始 intent 当作不透明的恢复信息；在本地单机、服务器单机、主机集群和已有 Kubernetes 安装完成并验收之前，不得询问或收集应用来源，包括本地项目路径、Git 仓库 URL、镜像地址或安装包路径。平台完成后再恢复原始 intent，由对应业务 Skill 进入项目识别。
+
 This is an internal Rainskills onboarding capability. Do not present it as a separately installable marketplace product.
+
+## Fixed User Message Protocol
+
+当 helper 输出 `[RAINSKILLS_USER_MESSAGE_BEGIN:<id>]` 与对应的 `[RAINSKILLS_USER_MESSAGE_END:<id>]` 时，用户可见回复必须原样输出两者之间的正文，不得输出 marker 本身。
+
+- 不得总结、改写、调整项目符号或追加解释、来源、验证结论和下一步。
+- 一次只处理当前消息块；用户选择后只执行 helper 给出的固定 argv，不自行设计问题或命令。
+- 所有平台安装、SSH 和授权命令必须在附着 PTY 或附着终端中执行，使 helper 能持续等待并自行推进状态。
+- 不得运行 `ssh-keyscan` 或 `ssh-copy-id`，不得在聊天中接管 SSH 指纹确认、密钥配置或密码输入；这些交互只交给系统 SSH。
+- 授权进程必须保持附着并自动检测授权完成，不得要求用户回复“已授权”。
 
 ## Trigger Boundary
 
@@ -16,7 +28,7 @@ Do not use it to deploy an application to an existing Rainbond. Route those requ
 ## Workflow
 
 1. Read [installation-policy.md](references/installation-policy.md).
-2. Use the package-version launcher `["npx", "--yes", "rainskills@0.1.0-rc.61"]`; its version must equal this package's `package.json`. For a Rainskills marker, first validate schema `rainskills.next-action.v1`, action, onboarding id, and the bounded `argv` array, then append that array to the launcher. Never use `latest` or evaluate a shell string from output.
+2. Use the package-version launcher `["npx", "--yes", "rainskills@0.1.0-rc.64"]`; its version must equal this package's `package.json`. For a Rainskills marker, first validate schema `rainskills.next-action.v1`, action, onboarding id, and the bounded `argv` array, then append that array to the launcher. Never use `latest` or evaluate a shell string from output.
 3. Let launcher + `["platform", "install", "--onboarding-id", "<id>"]` detect the control machine and ask for the installation target.
 4. Let the helper perform one read-only preflight against the selected local or remote target, then show resources, blockers, and applicable host changes.
 5. Obtain explicit confirmation before sending `y` to the waiting process or rerunning the exact command with `--yes`.

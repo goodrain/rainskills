@@ -146,8 +146,9 @@ async function probeConfiguredMcp(state, { env, fetchImpl }) {
     ? ["codex", "claude-code"]
     : [state.target_client === "claude" ? "claude-code" : "codex"];
   for (const client of clientPaths) {
-    const endpoint = `${state.console_origin}/console/mcp/rainskills/${client}/query`;
-    const validation = await validateMcp({
+    const preferredEndpoint = `${state.console_origin}/console/mcp/rainskills/${client}/query`;
+    const genericEndpoint = `${state.console_origin}/console/mcp/query`;
+    const validateEndpoint = (endpoint) => validateMcp({
       url: endpoint,
       token,
       fetchImpl: (url, options) => {
@@ -155,6 +156,13 @@ async function probeConfiguredMcp(state, { env, fetchImpl }) {
         return fetchPinnedMcpEndpoint(endpoint, fetchImpl, options);
       },
     });
+    let validation;
+    try {
+      validation = await validateEndpoint(preferredEndpoint);
+    } catch (error) {
+      if (error.code !== "MCP_ENDPOINT_UNSUPPORTED") throw error;
+      validation = await validateEndpoint(genericEndpoint);
+    }
     token = validation.token;
   }
   return {

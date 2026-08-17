@@ -135,7 +135,20 @@ function readWindowsRuntimeCredential({
   }
 }
 
-function readRuntimeCredential({ platform = process.platform, ...options } = {}) {
+function readRuntimeCredential({
+  platform = process.platform,
+  environmentId,
+  environmentCredentialStore,
+  ...options
+} = {}) {
+  if (environmentId !== undefined) {
+    const store = environmentCredentialStore || require("./environment-credentials.js")
+      .createEnvironmentCredentialStore({ platform, ...options });
+    return store.read({
+      environmentId,
+      expectedOrigin: options.expectedOrigin,
+    });
+  }
   return platform === "win32"
     ? readWindowsRuntimeCredential(options)
     : readPosixRuntimeCredential(options);

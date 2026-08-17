@@ -10,6 +10,7 @@ const path = require("node:path");
 const readline = require("node:readline/promises");
 const { spawn, spawnSync } = require("node:child_process");
 const { createSecureStateStore } = require("./secure-state.js");
+const { writeUserMessage } = require("./user-message.js");
 const { assertIntentCanInstallNewPlatform, validateIntent } = require("./runtime-intents.js");
 const {
   selectPlatformRoute,
@@ -405,7 +406,11 @@ async function establishSshSession(target, {
   }
   if (!interactive) {
     write("\n[RAINSKILLS_USER_INPUT_REQUIRED:ssh_authentication]\n");
-    write("该服务器需要确认主机指纹或输入 SSH 密码，请在交互终端继续。\n");
+    writeUserMessage(
+      write,
+      "platform.ssh-authentication",
+      "该服务器需要确认主机指纹或输入 SSH 密码，请在交互终端继续。",
+    );
     return null;
   }
 
@@ -644,15 +649,21 @@ async function resolveRemoteConsole({
   const automatic = await selectReachableConsole(candidates, probe);
   if (automatic.consoleUrl) return automatic;
 
-  write("\nRainbond 已启动，但自动发现的 Console 地址不可访问：\n");
-  for (const attempt of automatic.attempts) {
-    write(`- ${attempt.url}：${attempt.error || "访问失败"}\n`);
-  }
+  const unavailableMessage = [
+    "Rainbond 已启动，但自动发现运行环境地址不可访问：",
+    ...automatic.attempts.map((attempt) => `- ${attempt.url}：${attempt.error || "访问失败"}`),
+  ].join("\n");
   if (!interactive) {
     write("\n[RAINSKILLS_USER_INPUT_REQUIRED:console_address]\n");
-    write("请提供服务器公网 IP 或域名，并在原命令后添加 --console-host <IP或域名>。\n");
+    writeUserMessage(
+      write,
+      "platform.console-address",
+      `${unavailableMessage}\n\n请提供服务器公网 IP 或域名，并在原命令后添加 --console-host <IP或域名>。`,
+    );
     return null;
   }
+
+  write(`\n${unavailableMessage}\n`);
 
   let prompt;
   let ownsPrompt = false;
@@ -1754,47 +1765,74 @@ function probeConsole(url) {
   });
 }
 
-function printPreflight(facts, assessment, target) {
+function preflightMessage(facts, assessment, target) {
   const location = target.kind === "remote-linux"
     ? `Linux 服务器 ${target.host}`
     : facts.platform === "darwin" ? "当前 Mac" : "当前 Linux 设备";
-  process.stdout.write(`\n${location} 环境检查${assessment.ok ? "已通过" : "未通过"}：\n\n`);
-  process.stdout.write(`${facts.cpuCores} 核 CPU / ${gibibytes(facts.memoryBytes).toFixed(1)} GB 内存 / ${gibibytes(facts.diskBytes).toFixed(1)} GB 可用磁盘\n`);
-  if (facts.platform === "darwin") process.stdout.write("macOS 安装依赖 OrbStack，首次准备时间通常比 Linux 更长。\n");
+  const lines = [
+    `${location} 环境检查${assessment.ok ? "已通过" : "未通过"}：`,
+    "",
+    `${facts.cpuCores} 核 CPU / ${gibibytes(facts.memoryBytes).toFixed(1)} GB 内存 / ${gibibytes(facts.diskBytes).toFixed(1)} GB 可用磁盘`,
+  ];
+  if (facts.platform === "darwin") lines.push("macOS 安装依赖 OrbStack，首次准备时间通常比 Linux 更长。");
   if (!assessment.ok) {
-    process.stdout.write("\n需要先处理：\n");
-    for (const blocker of assessment.blockers) process.stdout.write(`- ${blocker}\n`);
-    return;
+    lines.push("", "需要先处理：", ...assessment.blockers.map((blocker) => `- ${blocker}`));
+    return lines.join("\n");
   }
   if (assessment.warnings?.length) {
-    process.stdout.write("\n资源低于推荐配置，仍会继续安装；最终以 Rainbond 实际部署验证结果为准：\n");
-    for (const warning of assessment.warnings) process.stdout.write(`- ${warning}\n`);
+    lines.push(
+      "",
+      "资源低于推荐配置，仍会继续安装；最终以 Rainbond 实际部署验证结果为准：",
+      ...assessment.warnings.map((warning) => `- ${warning}`),
+    );
   }
-  process.stdout.write("\n确认后将执行：\n");
-  for (const effect of assessment.effects) process.stdout.write(`- ${effect}\n`);
+  lines.push("", "确认后将执行：", "- 需要安装运行环境所需要的依赖（预估多少资源等等）");
+  return lines.join("\n");
 }
 
-function printWindowsPreflight(facts, assessment) {
-  process.stdout.write(`\n本地（Windows / WSL2）环境检查${assessment.ok ? "已通过" : "未通过"}：\n\n`);
-  process.stdout.write(`${facts.cpuCores} 核 CPU / ${gibibytes(facts.memoryBytes).toFixed(1)} GB 内存 / ${gibibytes(facts.diskBytes).toFixed(1)} GB 可用磁盘\n`);
+function printPreflight(facts, assessment, target, {
+  write = (value) => process.stdout.write(value),
+} = {}) {
+  write("\n");
+  writeUserMessage(write, "platform.preflight", preflightMessage(facts, assessment, target));
+}
+
+function printWindowsPreflight(facts, assessment, {
+  write = (value) => process.stdout.write(value),
+} = {}) {
+  const lines = [
+    `本地（Windows / WSL2）环境检查${assessment.ok ? "已通过" : "未通过"}：`,
+    "",
+    `${facts.cpuCores} 核 CPU / ${gibibytes(facts.memoryBytes).toFixed(1)} GB 内存 / ${gibibytes(facts.diskBytes).toFixed(1)} GB 可用磁盘`,
+  ];
   if (!assessment.ok) {
-    process.stdout.write("\n需要先处理：\n");
-    for (const blocker of assessment.blockers) process.stdout.write(`- ${blocker}\n`);
-    return;
+    lines.push("", "需要先处理：", ...assessment.blockers.map((blocker) => `- ${blocker}`));
+  } else {
+    if (assessment.warnings?.length) {
+      lines.push(
+        "",
+        "资源低于推荐配置，仍会继续安装；最终以 Rainbond 实际部署验证结果为准：",
+        ...assessment.warnings.map((warning) => `- ${warning}`),
+      );
+    }
+    lines.push("", "确认后将执行：", "- 需要安装运行环境所需要的依赖（预估多少资源等等）");
   }
-  if (assessment.warnings?.length) {
-    process.stdout.write("\n资源低于推荐配置，仍会继续安装；最终以 Rainbond 实际部署验证结果为准：\n");
-    for (const warning of assessment.warnings) process.stdout.write(`- ${warning}\n`);
-  }
-  process.stdout.write("\n确认后将执行：\n");
-  for (const effect of assessment.effects) process.stdout.write(`- ${effect}\n`);
+  write("\n");
+  writeUserMessage(write, "platform.preflight", lines.join("\n"));
 }
 
-async function confirmInstall(assumeYes) {
+async function confirmInstall(assumeYes, {
+  interactive = process.stdin.isTTY && process.stdout.isTTY,
+  write = (value) => process.stdout.write(value),
+} = {}) {
   if (assumeYes) return true;
-  if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    process.stdout.write("\n[RAINSKILLS_USER_INPUT_REQUIRED:platform_install_confirmation]\n");
-    process.stdout.write("确认上述系统变更后，重新执行相同命令并添加 --yes。\n");
+  if (!interactive) {
+    write("\n[RAINSKILLS_USER_INPUT_REQUIRED:platform_install_confirmation]\n");
+    writeUserMessage(
+      write,
+      "platform.install-confirmation",
+      "确认上述系统变更后，重新执行相同命令并添加 --yes。",
+    );
     return false;
   }
   const prompt = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -2463,7 +2501,7 @@ async function runResume(onboardingId, {
   onboardingUpdater = updateOnboarding,
   invocationBuilder = resumeInvocationForOnboarding,
   intentInvocationBuilder = intentResumeInvocationForOnboarding,
-  credentialReader = require("./runtime-credentials.js").readRuntimeCredential,
+  credentialReader = null,
   environment = process.env,
   credentialHome = environment.USERPROFILE || environment.HOME || os.homedir(),
   attachedRunner = spawnAttached,
@@ -2568,11 +2606,36 @@ async function runResume(onboardingId, {
     let latestCredential;
     try {
       assertHostOperationActive(abortState);
-      latestCredential = await credentialReader({
-        expectedOrigin: onboarding.console_url,
-        home: credentialHome,
-        platform: onboarding.control_mode === "windows-native" ? "win32" : process.platform,
-      });
+      if (credentialReader) {
+        latestCredential = await credentialReader({
+          expectedOrigin: onboarding.console_url,
+          home: credentialHome,
+          platform: onboarding.control_mode === "windows-native" ? "win32" : process.platform,
+        });
+      } else {
+        const credentialPlatform = onboarding.control_mode === "windows-native" ? "win32" : process.platform;
+        const { createEnvironmentRegistry } = require("./environment-registry.js");
+        const { createEnvironmentCredentialStore } = require("./environment-credentials.js");
+        const { createRuntimeOperationStore } = require("./runtime-operations.js");
+        const registry = createEnvironmentRegistry({
+          platform: credentialPlatform,
+          home: credentialHome,
+        });
+        const operations = createRuntimeOperationStore({
+          platform: credentialPlatform,
+          home: credentialHome,
+          registry,
+        });
+        const operation = operations.read(onboardingId);
+        if (!operation?.environment_id) throw new Error("运行环境操作尚未绑定环境");
+        latestCredential = createEnvironmentCredentialStore({
+          platform: credentialPlatform,
+          home: credentialHome,
+        }).read({
+          environmentId: operation.environment_id,
+          expectedOrigin: onboarding.console_url,
+        });
+      }
       assertHostOperationActive(abortState);
     } catch {
       write(`\n运行环境已连接，但无法安全读取最新凭据。稍后继续：\n  npx rainskills@${packageManifest.version} resume --onboarding-id ${onboardingId}\n`);
@@ -2659,20 +2722,45 @@ async function completePlatform(onboarding, state, paths, verification, noResume
   activeOperation = null;
 
   const deploymentLocation = verification.location || state.host;
-  process.stdout.write(`\nRainbond 部署成功\n\n部署位置：${deploymentLocation}\n运行状态：正常\nConsole 地址：${verification.consoleUrl}\n\n接下来将连接该平台并完成授权。\n`);
+  process.stdout.write("\n");
+  writeUserMessage(
+    (value) => process.stdout.write(value),
+    "platform.completed",
+    platformCompletionMessage({ deploymentLocation, consoleUrl: verification.consoleUrl }),
+  );
   assertHostOperationActive(abortState);
   if (!noResume) await runResume(onboarding.operation_id, { abortState });
 }
 
+function platformCompletionMessage({ deploymentLocation, consoleUrl }) {
+  return [
+    "Rainbond 运行环境部署成功",
+    "",
+    `部署位置：${deploymentLocation}`,
+    "运行状态：正常",
+    `Console 地址：${consoleUrl}`,
+    "",
+    "接下来将连接该平台并完成授权。",
+  ].join("\n");
+}
+
 async function waitForHostClusterConfiguration({ write = (value) => process.stdout.write(value) } = {}) {
   write("\n[RAINSKILLS_NEXT_ACTION_REQUIRED:host_cluster_configuration]\n");
-  write("多节点主机集群模式已选择。请继续提供或生成 cluster.yaml。\n");
+  writeUserMessage(
+    write,
+    "platform.host-cluster-configuration",
+    "多节点主机集群模式已选择。请继续提供或生成 cluster.yaml。",
+  );
   return { waiting: true };
 }
 
 async function waitForExistingKubernetesConfiguration({ write = (value) => process.stdout.write(value) } = {}) {
   write("\n[RAINSKILLS_NEXT_ACTION_REQUIRED:existing_kubernetes_configuration]\n");
-  write("已有 Kubernetes 集群模式已选择。请继续提供目标 context 和安装参数。\n");
+  writeUserMessage(
+    write,
+    "platform.existing-kubernetes-configuration",
+    "已有 Kubernetes 集群模式已选择。请继续提供目标 context 和安装参数。",
+  );
   return { waiting: true };
 }
 
@@ -3323,6 +3411,10 @@ module.exports = {
   normalizeRemoteTarget,
   normalizeWindowsExecutableForControl,
   parseArgs,
+  platformCompletionMessage,
+  printPreflight,
+  printWindowsPreflight,
+  confirmInstall,
   interruptActiveOperation,
   prepareInstallerForRainbondImage,
   prepareRemoteInstaller,
@@ -3351,6 +3443,8 @@ module.exports = {
   verifyRemoteDeployment,
   verifyRemoteRainbond,
   waitForWindowsConsole,
+  waitForHostClusterConfiguration,
+  waitForExistingKubernetesConfiguration,
   windowsRecoveryBundle,
   windowsHelperRunOptions,
 };

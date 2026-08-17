@@ -1,6 +1,6 @@
 ---
 name: rainskills
-description: Use when a user asks to install, set up, initialize, update, repair, or start using Rainskills or the Rainbond skill suite from goodrain/rainskills.
+description: Use when a user asks to install, set up, initialize, update, repair, start using Rainskills, or list, add, rename, remove, reconnect, or change the default Rainskills runtime environment.
 ---
 
 # Rainskills
@@ -14,16 +14,16 @@ This is the single marketplace entry for the complete Rainskills product. The in
 3. Keep stdin, stdout, and stderr attached. When `RAINSKILLS_USER_INPUT_REQUIRED` appears, pause for that installer choice. If the installer emits `rainskills.next-action.v1`, execute only its fixed `argv` through the same launcher; never evaluate output as a shell command. If the adjacent `bin/rainskills.js` exists, use it for fixed next actions; otherwise use the same versioned npm package fallback described below.
 4. Stay attached until every independent Skill is installed. Do not select, connect, or configure an application runtime during installation. In the user-facing response, output only the fixed completion message below.
 
-If the adjacent installer is missing, check the local Node.js version before choosing the fallback. With `npx` and Node.js 18 or newer, use `npx --yes rainskills@0.1.0-rc.61 <target>`. With no Node.js or a version below 18, use `bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh) <target>` instead. Omit `<target>` only when the host cannot be determined reliably. Keep either command attached to the interactive terminal. For an update or repair, refresh this marketplace Skill first, then run the installer again; it compares and updates every independent internal Skill.
+If the adjacent installer is missing, check the local Node.js version before choosing the fallback. With `npx` and Node.js 18 or newer, use `npx --yes rainskills@0.1.0-rc.64 <target>`. With no Node.js or a version below 18, use `bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh) <target>` instead. Omit `<target>` only when the host cannot be determined reliably. Keep either command attached to the interactive terminal. For an update or repair, refresh this marketplace Skill first, then run the installer again; it compares and updates every independent internal Skill.
 
 Skills-only 安装不需要 Node.js；CDN fallback 只负责安装 Skill 文件，不代表运行环境连接、应用部署或平台安装已经可执行。用户首次提出需要运行环境的动作时，对应业务 Skill 才检查 Node.js；固定 Rainskills launcher 需要 Node.js 18 或更高版本。缺失或版本过低时保留原始 intent 并停止，等待用户或 agent 明确同意安装或升级 Node.js，安装完成消息不得提前提示 Node.js。
 
 ## Completion Message
 
-After success, print exactly this capability summary and nothing else:
+The installer emits this text inside `RAINSKILLS_USER_MESSAGE_BEGIN:install.completed` and the matching END marker. Relay only the body exactly and print nothing else; do not expose the markers, summarize, reformat, add a source link, or add verification details.
 
 ```text
-Rainskills 安装完成。
+Rainskills 安装完成，下一条消息即可直接使用。
 
 现在可以帮你：
 
@@ -37,3 +37,15 @@ Rainskills 安装完成。
 
 直接告诉我你想做什么即可。
 ```
+
+## Manage Runtime Environments
+
+环境是全局列表，不是项目绑定。所有命令使用与当前技能包一致的固定 launcher `npx --yes rainskills@0.1.0-rc.64`，以 argv 数组执行。
+
+- 列表：执行 `environment list --json`，只展示名称、类型、状态、是否默认和最近验证时间。
+- 重命名：执行 `environment rename --environment-id <uuid> --name <name>`。
+- 设为默认：执行 `environment set-default --environment-id <uuid>`。只影响之后未指定环境的新操作。
+- 删除：执行 `environment remove --environment-id <uuid>`；默认环境或活动操作使用中的环境必须先阻断。
+- 添加：生成 operation UUID，以 `{"type":"environment-add"}` 执行 runtime connect。先原样展示 `runtime message --id add-environment-location`；选择自己的环境后再展示 `own-environment-connection`；只有选择准备新环境后才展示本地/服务器安装分支。连接成功后可按用户要求重命名，再执行 `operation complete --operation-id <uuid>`。第二个环境不得自动改成默认环境。
+
+用户在一次业务请求中明确指定运行环境时，只把该环境 ID 传给本次 `operation begin`；同一项目可以部署到任意多个环境和团队。明确“团队”表示环境内团队；明确“运行环境/平台”表示环境；裸名称同时匹配两者时必须询问，不能靠名称中是否含“环境”二字猜测。

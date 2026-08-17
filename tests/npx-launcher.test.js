@@ -20,6 +20,224 @@ const windowsOnboardingPath = path.join(
   "windows-onboarding.js"
 );
 
+function boundedUserMessage(output, messageId) {
+  const begin = `[RAINSKILLS_USER_MESSAGE_BEGIN:${messageId}]\n`;
+  const end = `\n[RAINSKILLS_USER_MESSAGE_END:${messageId}]`;
+  const start = output.indexOf(begin);
+  const finish = output.indexOf(end, start + begin.length);
+  assert.notEqual(start, -1, `missing ${begin.trim()}`);
+  assert.notEqual(finish, -1, `missing ${end.trim()}`);
+  return output.slice(start + begin.length, finish);
+}
+
+test("runtime onboarding messages come from the launcher as fixed bounded blocks", async () => {
+  const { runBuiltin } = require(launcherPath);
+  const first = [];
+  assert.equal(await runBuiltin([
+    "runtime", "message", "--id", "new-application-environment",
+  ], { write: (value) => first.push(value) }), true);
+  assert.equal(
+    boundedUserMessage(first.join(""), "runtime.new-application-environment"),
+    "可以，我会帮你完成应用识别、构建、部署和访问验证。\n\n"
+      + "不过目前还没有可用的应用运行环境。\n\n"
+      + "请选择应用运行的位置：\n\n"
+      + "1) 在线环境\n"
+      + "   无需安装平台，授权后即可开始部署。\n\n"
+      + "2) 自己的环境\n"
+      + "   应用运行在你自己的电脑、服务器或 Kubernetes 集群中。",
+  );
+
+  const own = [];
+  assert.equal(await runBuiltin([
+    "runtime", "message", "--id", "own-environment-connection",
+  ], { write: (value) => own.push(value) }), true);
+  assert.equal(
+    boundedUserMessage(own.join(""), "runtime.own-environment-connection"),
+    "请选择接入方式：\n\n1) 连接已有环境\n2) 帮我准备一个新环境",
+  );
+
+  const second = [];
+  assert.equal(await runBuiltin([
+    "runtime", "message", "--id", "private-deployment-location",
+  ], {
+    control: { mode: "posix", hostPlatform: "darwin", controlPlatform: "darwin" },
+    write: (value) => second.push(value),
+  }), true);
+  assert.equal(
+    boundedUserMessage(second.join(""), "runtime.private-deployment-location"),
+    "请选择部署位置：\n\n"
+      + "1、安装到本地（当前 Mac，使用 OrbStack，安装可能较久）\n"
+      + "2、安装到 Linux 服务器",
+  );
+  for (const controlPlatform of ["linux", "win32"]) {
+    const output = [];
+    assert.equal(await runBuiltin([
+      "runtime", "message", "--id", "private-deployment-location",
+    ], {
+      control: { mode: "posix", hostPlatform: controlPlatform, controlPlatform },
+      write: (value) => output.push(value),
+    }), true);
+    assert.equal(
+      boundedUserMessage(output.join(""), "runtime.private-deployment-location"),
+      "请选择部署位置：\n\n"
+        + "1、安装到本地\n"
+        + "2、安装到 Linux 服务器",
+    );
+  }
+
+  const third = [];
+  assert.equal(await runBuiltin([
+    "runtime", "message", "--id", "private-console-origin",
+  ], { write: (value) => third.push(value) }), true);
+  assert.equal(
+    boundedUserMessage(third.join(""), "runtime.private-console-origin"),
+    "请提供已有私有 Rainbond 的 Console 地址。\n\n"
+      + "示例：https://rainbond.example.com",
+  );
+  await assert.rejects(
+    () => runBuiltin(["runtime", "message", "--id", "unknown"], { write: () => {} }),
+    /message id/i,
+  );
+});
+
+test("environment commands use immutable ids and operation begin has no project binding", async () => {
+  const { runBuiltin } = require(launcherPath);
+  const environmentId = "11111111-1111-4111-8111-111111111111";
+  const operationId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const environments = [{
+    id: environmentId,
+    name: "生产环境",
+    console_origin: "https://prod.example.com",
+    kind: "private",
+    connection_state: "connected",
+    created_at: "2026-08-17T00:00:00.000Z",
+    updated_at: "2026-08-17T00:00:00.000Z",
+    last_verified_at: "2026-08-17T00:00:00.000Z",
+  }];
+  const registryCalls = [];
+  const credentialCalls = [];
+  const environmentCredentialStore = {
+    remove(id) { credentialCalls.push(id); return true; },
+  };
+  const environmentRegistry = {
+    read: () => ({ default_environment_id: environmentId, environments }),
+    rename(id, name) {
+      registryCalls.push(["rename", id, name]);
+      return { ...environments[0], name };
+    },
+    setDefault(id) {
+      registryCalls.push(["set-default", id]);
+      return environments[0];
+    },
+    remove(id) {
+      registryCalls.push(["remove", id]);
+      return environments[0];
+    },
+  };
+  const operationCalls = [];
+  const operationStore = {
+    begin(input) {
+      operationCalls.push(input);
+      return {
+        operation_id: input.operationId,
+        environment_id: input.environmentId,
+        intent: input.intent,
+        stage: "active",
+      };
+    },
+  };
+
+  const listOutput = [];
+  assert.equal(await runBuiltin(["environment", "list", "--json"], {
+    environmentRegistry,
+    write: (value) => listOutput.push(value),
+  }), true);
+  assert.deepEqual(JSON.parse(listOutput.join("")), {
+    schema: "rainskills.environment-list.v1",
+    default_environment_id: environmentId,
+    environments,
+  });
+
+  for (const [argv, action] of [
+    [["environment", "rename", "--environment-id", environmentId, "--name", "正式环境"], "renamed"],
+    [["environment", "set-default", "--environment-id", environmentId], "default-changed"],
+    [["environment", "remove", "--environment-id", environmentId], "removed"],
+  ]) {
+    const output = [];
+    assert.equal(await runBuiltin(argv, {
+      environmentRegistry,
+      environmentCredentialStore,
+      write: (value) => output.push(value),
+    }), true);
+    assert.equal(JSON.parse(output.join("")).action, action);
+  }
+  assert.deepEqual(registryCalls, [
+    ["rename", environmentId, "正式环境"],
+    ["set-default", environmentId],
+    ["remove", environmentId],
+  ]);
+  assert.deepEqual(credentialCalls, [environmentId]);
+
+  const operationOutput = [];
+  assert.equal(await runBuiltin([
+    "operation", "begin",
+    "--operation-id", operationId,
+    "--environment-id", environmentId,
+    "--intent-json", JSON.stringify({ type: "deploy", project_root: "/workspace/demo" }),
+  ], {
+    operationStore,
+    write: (value) => operationOutput.push(value),
+  }), true);
+  assert.deepEqual(operationCalls, [{
+    operationId,
+    environmentId,
+    intent: { type: "deploy", project_root: "/workspace/demo" },
+  }]);
+  const operationResult = JSON.parse(operationOutput.join(""));
+  assert.equal(operationResult.schema, "rainskills.operation-begin-result.v1");
+  assert.equal(operationResult.operation_id, operationId);
+  assert.equal(Object.hasOwn(operationResult, "project_environment_id"), false);
+
+  operationStore.complete = (id) => ({
+    operation_id: id,
+    environment_id: environmentId,
+    stage: "completed",
+  });
+  const completeOutput = [];
+  assert.equal(await runBuiltin([
+    "operation", "complete", "--operation-id", operationId,
+  ], { operationStore, write: (value) => completeOutput.push(value) }), true);
+  assert.equal(JSON.parse(completeOutput.join("")).stage, "completed");
+
+  await assert.rejects(() => runBuiltin([
+    "environment", "remove", "--environment-id", "not-a-uuid",
+  ], { environmentRegistry, write: () => {} }), /环境 ID/);
+});
+
+test("mcp serve starts one local operation router for every supported agent client", async () => {
+  const { runBuiltin } = require(launcherPath);
+  for (const client of ["codex", "claude", "pi", "generic"]) {
+    const calls = [];
+    assert.equal(await runBuiltin(["mcp", "serve", "--client", client], {
+      environmentRegistry: { read() {}, get() {} },
+      environmentCredentialStore: { read() {} },
+      operationStore: { read() {} },
+      mcpServerRunner: async (input) => calls.push(input),
+    }), true);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].client, client);
+    assert.equal(typeof calls[0].environmentRegistry.read, "function");
+    assert.equal(typeof calls[0].environmentCredentialStore.read, "function");
+    assert.equal(typeof calls[0].operationStore.read, "function");
+  }
+  await assert.rejects(
+    () => runBuiltin(["mcp", "serve", "--client", "unknown"], {
+      mcpServerRunner: async () => {},
+    }),
+    /mcp serve 参数无效/
+  );
+});
+
 test("control environment distinguishes native Windows, WSL, and POSIX", () => {
   const { detectControlEnvironment } = require(controlEnvironmentPath);
 
@@ -188,6 +406,118 @@ test("launcher handles runtime status in-process without spawning a shell", asyn
   });
 });
 
+test("launcher delegates a safe runtime status to one exact newer stable package", async () => {
+  const { runAutoUpdatePhase } = require(launcherPath);
+  const calls = [];
+  const result = await runAutoUpdatePhase(["runtime", "status", "--json"], {
+    currentVersion: "1.2.3",
+    env: { PATH: "/usr/bin", RAINBOND_JWT: "header.payload.signature" },
+    platform: "linux",
+    updateState: {
+      acquireLease: () => ({ release() {} }),
+      recordFailure() {},
+    },
+    checkForUpdate: async () => ({ action: "delegate", version: "1.2.4" }),
+    delegate: async (invocation, environment) => {
+      calls.push({ invocation, environment });
+      return { code: 0, signal: null };
+    },
+  });
+
+  assert.equal(result.handled, true);
+  assert.equal(result.code, 0);
+  assert.deepEqual(calls[0].invocation, {
+    executable: "npx",
+    args: ["--yes", "--ignore-scripts", "rainskills@1.2.4", "runtime", "status", "--json"],
+  });
+  assert.equal(calls[0].environment.RAINSKILLS_AUTO_UPDATE_HOP, "1");
+  assert.equal(calls[0].environment.RAINBOND_JWT, "header.payload.signature");
+});
+
+test("launcher holds one protected update lease through exact-version delegation", async () => {
+  const { runAutoUpdatePhase } = require(launcherPath);
+  const events = [];
+  const result = await runAutoUpdatePhase(["runtime", "status", "--json"], {
+    currentVersion: "1.2.3",
+    env: {},
+    updateState: {
+      acquireLease() {
+        events.push("acquire");
+        return { release: () => events.push("release") };
+      },
+      read: () => ({ checked_at: null }),
+      recordFailure: () => {},
+    },
+    checkForUpdate: async () => {
+      events.push("check");
+      return { action: "delegate", version: "1.2.4" };
+    },
+    delegate: async () => {
+      events.push("delegate");
+      return { code: 0, signal: null };
+    },
+  });
+
+  assert.equal(result.handled, true);
+  assert.deepEqual(events, ["acquire", "check", "delegate", "release"]);
+});
+
+test("the delegated stable package refreshes skills before continuing the original action", async () => {
+  const { runAutoUpdatePhase } = require(launcherPath);
+  const calls = [];
+  const result = await runAutoUpdatePhase(["runtime", "status", "--json"], {
+    currentVersion: "1.2.4",
+    env: {
+      RAINSKILLS_AUTO_UPDATE_HOP: "1",
+      RAINSKILLS_AUTO_UPDATE_FROM: "1.2.3",
+      RAINSKILLS_AUTO_UPDATE_TARGET: "1.2.4",
+    },
+    packageRoot: repoRoot,
+    synchronizeSkills: (options) => calls.push(["sync", options.packageRoot]),
+    updateState: {
+      recordApplied: (version) => calls.push(["applied", version]),
+    },
+    checkForUpdate: async () => {
+      throw new Error("delegated package must not check npm again");
+    },
+  });
+
+  assert.deepEqual(result, { handled: false, reason: "delegated-sync-complete" });
+  assert.deepEqual(calls, [["sync", repoRoot], ["applied", "1.2.4"]]);
+});
+
+test("a failed delegated skill refresh falls back to the old package without user-visible onboarding", async () => {
+  const { AUTO_UPDATE_FALLBACK_EXIT_CODE, runAutoUpdatePhase } = require(launcherPath);
+  const child = await runAutoUpdatePhase(["runtime", "status", "--json"], {
+    currentVersion: "1.2.4",
+    env: {
+      RAINSKILLS_AUTO_UPDATE_HOP: "1",
+      RAINSKILLS_AUTO_UPDATE_FROM: "1.2.3",
+      RAINSKILLS_AUTO_UPDATE_TARGET: "1.2.4",
+    },
+    synchronizeSkills: () => {
+      throw new Error("unsafe destination");
+    },
+    updateState: { recordFailure: () => {} },
+  });
+  assert.deepEqual(child, {
+    handled: true,
+    code: AUTO_UPDATE_FALLBACK_EXIT_CODE,
+    signal: null,
+  });
+
+  let failures = 0;
+  const parent = await runAutoUpdatePhase(["runtime", "status", "--json"], {
+    currentVersion: "1.2.3",
+    env: {},
+    checkForUpdate: async () => ({ action: "delegate", version: "1.2.4" }),
+    delegate: async () => ({ code: AUTO_UPDATE_FALLBACK_EXIT_CODE, signal: null }),
+    updateState: { recordFailure: () => { failures += 1; } },
+  });
+  assert.deepEqual(parent, { handled: false, reason: "delegated-update-failed" });
+  assert.equal(failures, 1);
+});
+
 test("runtime connect parses fixed validated argv and rejects mixed environment choices", () => {
   const { parseRuntimeConnectArgs } = require(launcherPath);
   const intent = {
@@ -217,6 +547,22 @@ test("runtime connect parses fixed validated argv and rejects mixed environment 
   assert.throws(() => parseRuntimeConnectArgs([
     "runtime", "connect", "all", "--saas", "--intent-json", '{"type":"deploy","token":"secret"}',
   ]), /凭据|字段|intent/i);
+  assert.equal(parseRuntimeConnectArgs([
+    "runtime", "connect", "codex", "--install-private", "--location", "local",
+    "--intent-json", JSON.stringify(intent),
+  ]).privateLocation, "local");
+  assert.equal(parseRuntimeConnectArgs([
+    "runtime", "connect", "codex", "--install-private", "--location", "server",
+    "--intent-json", JSON.stringify(intent),
+  ]).privateLocation, "server");
+  assert.throws(() => parseRuntimeConnectArgs([
+    "runtime", "connect", "codex", "--saas", "--location", "local",
+    "--intent-json", JSON.stringify(intent),
+  ]), /location.*install-private|私有.*位置/i);
+  assert.throws(() => parseRuntimeConnectArgs([
+    "runtime", "connect", "codex", "--install-private", "--location", "cluster",
+    "--intent-json", JSON.stringify(intent),
+  ]), /location|位置/i);
 });
 
 test("runtime connector child receives only an explicit environment allowlist", () => {
@@ -331,6 +677,55 @@ test("runtime persist-connect-credential binds the env credential to connecting 
   assert.equal(persisted.length, 1);
 });
 
+test("runtime persist-connect-credential writes the isolated environment store without legacy shell state", async () => {
+  const { runBuiltin } = require(launcherPath);
+  const { createEnvironmentRegistry } = require(path.join(
+    repoRoot, "rainbond-platform-installer", "scripts", "environment-registry.js"
+  ));
+  const { createEnvironmentCredentialStore } = require(path.join(
+    repoRoot, "rainbond-platform-installer", "scripts", "environment-credentials.js"
+  ));
+  const { createRuntimeOperationStore } = require(path.join(
+    repoRoot, "rainbond-platform-installer", "scripts", "runtime-operations.js"
+  ));
+  const { createPortableSecureStateStore } = require("./helpers/portable-secure-state.js");
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-isolated-connect-"));
+  const stateStore = createPortableSecureStateStore(home);
+  const environmentId = "11111111-1111-4111-8111-111111111111";
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  const registry = createEnvironmentRegistry({
+    home, stateStore, randomUUID: () => environmentId,
+    now: () => "2026-08-17T00:00:00.000Z",
+  });
+  const credentials = createEnvironmentCredentialStore({ home, stateStore });
+  const operations = createRuntimeOperationStore({ home, stateStore, registry });
+  operations.createPending({ operationId, intent: { type: "deploy" } });
+
+  await runBuiltin([
+    "runtime", "persist-connect-credential", "--onboarding-id", operationId,
+  ], {
+    runtimeStateManager: { read: () => ({
+      state: "connecting",
+      operation_id: operationId,
+      target_client: "codex",
+      environment_kind: "private",
+      console_origin: "https://console.example.com",
+    }) },
+    environmentRegistry: registry,
+    environmentCredentialStore: credentials,
+    operationStore: operations,
+    credentialEnvironment: { RAINBOND_JWT: "fixtureHeader.fixturePayload.fixtureSignature" },
+  });
+
+  assert.equal(registry.read().default_environment_id, environmentId);
+  assert.equal(operations.read(operationId).environment_id, environmentId);
+  assert.equal(credentials.read({
+    environmentId,
+    expectedOrigin: "https://console.example.com",
+  }).token, "fixtureHeader.fixturePayload.fixtureSignature");
+  assert.equal(fs.existsSync(path.join(home, ".rainbond", "mcp.env")), false);
+});
+
 test("runtime connect uses fixed POSIX argv and marks connected only after the live probe", async () => {
   const { runBuiltin } = require(launcherPath);
   const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
@@ -369,6 +764,95 @@ test("runtime connect uses fixed POSIX argv and marks connected only after the l
   }]);
   assert.equal(events[2][0], "connected");
   assert.deepEqual(events[2][1], events[0][1]);
+});
+
+test("runtime connect registers and binds one environment without changing an existing default", async () => {
+  const { runBuiltin } = require(launcherPath);
+  const { createEnvironmentRegistry } = require(path.join(
+    repoRoot, "rainbond-platform-installer", "scripts", "environment-registry.js"
+  ));
+  const { createEnvironmentCredentialStore } = require(path.join(
+    repoRoot, "rainbond-platform-installer", "scripts", "environment-credentials.js"
+  ));
+  const { createRuntimeOperationStore } = require(path.join(
+    repoRoot, "rainbond-platform-installer", "scripts", "runtime-operations.js"
+  ));
+  const { createPortableSecureStateStore } = require("./helpers/portable-secure-state.js");
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-connect-environment-"));
+  const stateStore = createPortableSecureStateStore(home);
+  const ids = [
+    "11111111-1111-4111-8111-111111111111",
+    "22222222-2222-4222-8222-222222222222",
+  ];
+  const registry = createEnvironmentRegistry({
+    home,
+    stateStore,
+    randomUUID: () => ids.shift(),
+    now: () => "2026-08-17T00:00:00.000Z",
+  });
+  const production = registry.add({
+    kind: "private",
+    consoleOrigin: "https://prod.example.com",
+    connectionState: "connected",
+    name: "生产环境",
+  }).environment;
+  const credentialStore = createEnvironmentCredentialStore({ home, stateStore });
+  const operations = createRuntimeOperationStore({
+    home,
+    stateStore,
+    registry,
+    now: () => "2026-08-17T00:00:01.000Z",
+  });
+  const operationId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  let current = { state: "not_started" };
+  const runtimeStateManager = {
+    startConnecting(connection) {
+      current = { ...connection, state: "connecting" };
+      return current;
+    },
+    async markConnected(connection) {
+      current = { ...connection, state: "connected" };
+      return current;
+    },
+    read() { return current; },
+  };
+  const output = [];
+
+  assert.equal(await runBuiltin([
+    "runtime", "connect", "codex",
+    "--rainbond-url", "https://test.example.com",
+    "--onboarding-id", operationId,
+    "--intent-json", JSON.stringify({ type: "deploy", project_root: "/workspace/demo" }),
+  ], {
+    runtimeStateManager,
+    environmentRegistry: registry,
+    environmentCredentialStore: credentialStore,
+    operationStore: operations,
+    connectedCredentialReader: () => ({
+      origin: "https://test.example.com",
+      token: "test.payload.signature",
+    }),
+    originInspector: async () => ({
+      origin: "https://test.example.com",
+      pendingRedirectOrigin: "",
+      httpConfirmationRequired: false,
+    }),
+    connectionRunner: async () => ({ code: 0, signal: null, completesRuntimeState: false }),
+    write: (value) => output.push(value),
+  }), true);
+
+  const result = JSON.parse(output.at(-1));
+  assert.equal(result.environment_id, "22222222-2222-4222-8222-222222222222");
+  assert.equal(registry.read().default_environment_id, production.id);
+  assert.equal(registry.list().length, 2);
+  assert.equal(operations.read(operationId).environment_id, result.environment_id);
+  assert.equal(
+    credentialStore.read({
+      environmentId: result.environment_id,
+      expectedOrigin: "https://test.example.com",
+    }).token,
+    "test.payload.signature"
+  );
 });
 
 test("POSIX runtime connect without an inherited token keeps browser authorization interactive", () => {
@@ -535,7 +1019,7 @@ test("runtime connect schedules a new private platform without connecting or aut
   let output = "";
 
   await runBuiltin([
-    "runtime", "connect", "claude", "--install-private", "--intent-json",
+    "runtime", "connect", "claude", "--install-private", "--location", "server", "--intent-json",
     JSON.stringify({
       type: "template-install",
       template_id: "wordpress",
@@ -560,6 +1044,7 @@ test("runtime connect schedules a new private platform without connecting or aut
 
   assert.equal(calls.length, 1);
   assert.equal(calls[0].target, "claude");
+  assert.equal(calls[0].privateLocation, "server");
   assert.deepEqual(calls[0].intent, {
     type: "template-install",
     template_id: "wordpress",
@@ -803,6 +1288,96 @@ test("runtime reconnect reauthorizes the exact protected connection and live-pro
     onboarding_id: operationId,
     environment_kind: "private",
   });
+});
+
+test("runtime reconnect rotates only the operation environment credential", async () => {
+  const { runBuiltin } = require(launcherPath);
+  const { createEnvironmentRegistry } = require(path.join(
+    repoRoot, "rainbond-platform-installer", "scripts", "environment-registry.js"
+  ));
+  const { createEnvironmentCredentialStore } = require(path.join(
+    repoRoot, "rainbond-platform-installer", "scripts", "environment-credentials.js"
+  ));
+  const { createRuntimeOperationStore } = require(path.join(
+    repoRoot, "rainbond-platform-installer", "scripts", "runtime-operations.js"
+  ));
+  const { createPortableSecureStateStore } = require("./helpers/portable-secure-state.js");
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-reconnect-environment-"));
+  const stateStore = createPortableSecureStateStore(home);
+  const environmentId = "11111111-1111-4111-8111-111111111111";
+  const operationId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const registry = createEnvironmentRegistry({
+    home,
+    stateStore,
+    randomUUID: () => environmentId,
+    now: () => "2026-08-17T00:00:00.000Z",
+  });
+  registry.add({
+    kind: "private",
+    consoleOrigin: "https://prod.example.com",
+    connectionState: "connected",
+  });
+  const credentialStore = createEnvironmentCredentialStore({ home, stateStore });
+  credentialStore.write({
+    environmentId,
+    origin: "https://prod.example.com",
+    token: "old.payload.signature",
+  });
+  const operations = createRuntimeOperationStore({
+    home,
+    stateStore,
+    registry,
+    now: () => "2026-08-17T00:00:01.000Z",
+  });
+  operations.begin({ operationId, environmentId, intent: { type: "deploy" } });
+  operations.recordFailure(operationId, { step: "build", reason: "credential-expired" });
+  const connection = {
+    state: "connected",
+    target_client: "codex",
+    environment_kind: "private",
+    console_origin: "https://prod.example.com",
+    intent: { type: "deploy" },
+    operation_id: operationId,
+  };
+  const runtimeStateManager = {
+    async withReconnectLease(id, action) {
+      assert.equal(id, operationId);
+      return action(connection);
+    },
+    async markConnected() {},
+    read: () => connection,
+  };
+
+  const output = [];
+  assert.equal(await runBuiltin([
+    "runtime", "reconnect", "--onboarding-id", operationId,
+  ], {
+    runtimeStateManager,
+    environmentRegistry: registry,
+    environmentCredentialStore: credentialStore,
+    operationStore: operations,
+    connectedCredentialReader: () => ({
+      origin: "https://prod.example.com",
+      token: "new.payload.signature",
+    }),
+    originInspector: async () => ({
+      origin: "https://prod.example.com",
+      pendingRedirectOrigin: "",
+      httpConfirmationRequired: false,
+    }),
+    connectionRunner: async () => ({ code: 0, signal: null, completesRuntimeState: true }),
+    write: (value) => output.push(value),
+  }), true);
+
+  assert.equal(
+    credentialStore.read({
+      environmentId,
+      expectedOrigin: "https://prod.example.com",
+    }).token,
+    "new.payload.signature"
+  );
+  assert.equal(registry.list().length, 1);
+  assert.equal(JSON.parse(output.at(-1)).environment_id, environmentId);
 });
 
 test("runtime reconnect completion rejects drift in any protected connection field", async () => {

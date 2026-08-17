@@ -266,6 +266,41 @@ test("default live probe uses fixed client endpoints and only the process JWT", 
   }
 });
 
+test("default live probe falls back to the same-origin generic MCP endpoint for an old Rainbond", async () => {
+  const { createRuntimeStateManager } = require(runtimeStatePath);
+  const home = temporaryHome();
+  const stateStore = createPortableSecureStateStore(home);
+  const bootstrap = createRuntimeStateManager({ home, stateStore, liveProbe: async () => true });
+  bootstrap.startConnecting(connectedInput());
+  await bootstrap.markConnected(connectedInput());
+  const calls = [];
+  const manager = createRuntimeStateManager({
+    home,
+    stateStore,
+    env: { RAINBOND_JWT: "current.process.jwt" },
+    async fetchImpl(url) {
+      calls.push(url);
+      if (url.endsWith("/console/mcp/rainskills/codex/query")) {
+        return new Response(JSON.stringify({ code: 404, msg: "not found" }), {
+          status: 404,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        result: { serverInfo: { name: "rainbond-console-mcp" } },
+      }), { status: 200 });
+    },
+  });
+
+  assert.equal((await manager.status()).usable, true);
+  assert.deepEqual(calls.map((url) => new URL(url).pathname), [
+    "/console/mcp/rainskills/codex/query",
+    "/console/mcp/query",
+  ]);
+});
+
 test("default live probe rejects redirects and endpoint drift", async () => {
   const { createRuntimeStateManager } = require(runtimeStatePath);
   for (const fetchImpl of [

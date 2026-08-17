@@ -32,14 +32,16 @@ function serializeJson(value) {
 
 function buildVersionedSkill() {
   const unversionedCommand = `npx --yes ${packageName}`;
-  const occurrences = canonicalSkill.split(unversionedCommand).length - 1;
+  const escapedCommand = unversionedCommand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const unversionedPattern = new RegExp(`${escapedCommand}(?!@)`, "g");
+  const occurrences = canonicalSkill.match(unversionedPattern)?.length || 0;
   if (occurrences !== 1) {
     throw new Error(
       `SKILL.md must contain exactly one fallback command: ${unversionedCommand}`
     );
   }
   return canonicalSkill.replace(
-    unversionedCommand,
+    unversionedPattern,
     `${unversionedCommand}@${version}`
   );
 }

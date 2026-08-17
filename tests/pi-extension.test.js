@@ -1,7 +1,6 @@
 const assert = require("node:assert/strict");
 const { webcrypto } = require("node:crypto");
 const fs = require("node:fs");
-const http = require("node:http");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
@@ -31,25 +30,19 @@ test("generated Pi extension has no trailing whitespace", () => {
   assert.doesNotMatch(extension, /[ \t]+$/m);
 });
 
-test("Pi extension reads the shared Rainbond credential without exposing it", async () => {
+test("Pi extension starts the version-pinned local Rainskills router without credentials", async () => {
   assert(fs.existsSync(extensionPath), "Pi extension must be built before testing");
   const extension = await loadExtension();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-pi-"));
-  const configDir = path.join(home, ".rainbond");
-  fs.mkdirSync(configDir);
-  fs.writeFileSync(
-    path.join(configDir, "mcp.env"),
-    "export RAINBOND_JWT='header.payload.signature'\n" +
-      "export RAINBOND_URL='https://rainbond.example.com/'\n",
-    { mode: 0o600 }
-  );
-
   const config = extension.readRainbondConfig({ env: {}, home });
   assert.deepEqual(config, {
-    token: "header.payload.signature",
-    url: "https://rainbond.example.com/console/mcp/rainskills/pi/query",
+    command: "npx",
+    args: [
+      "--yes", "rainskills@0.1.0-rc.64", "mcp", "serve", "--client", "pi",
+    ],
   });
-  assert(!JSON.stringify(extension.publicConfig(config)).includes(config.token));
+  assert.deepEqual(extension.publicConfig(config), config);
+  assert.doesNotMatch(JSON.stringify(config), /JWT|token|rainbond\.example/i);
 });
 
 test("Pi extension preserves MCP text results and serializes other content", async () => {
@@ -123,59 +116,25 @@ test("Pi extension registers every discovered MCP tool independently", async () 
   assert.deepEqual(result.content, [{ type: "text", text: "ok" }]);
 });
 
-test("bundled Pi extension completes a real Streamable HTTP MCP call", async () => {
+test("bundled Pi extension completes a real local stdio MCP call", async () => {
   const extension = await loadExtension();
-  const { McpServer } = await import("@modelcontextprotocol/sdk/server/mcp.js");
-  const { StreamableHTTPServerTransport } = await import(
-    "@modelcontextprotocol/sdk/server/streamableHttp.js"
-  );
-  const { z } = await import("zod");
-  function createServer() {
-    const server = new McpServer({ name: "pi-test", version: "1" });
-    server.registerTool(
-      "rainbond_echo",
-      {
-        description: "Echo through Rainbond MCP",
-        inputSchema: { message: z.string() },
-      },
-      async ({ message }) => ({
-        content: [{ type: "text", text: `echo:${message}` }],
-      })
-    );
-    return server;
-  }
-
-  const receivedAuth = [];
-  const serverErrors = [];
-  const httpServer = http.createServer(async (request, response) => {
-    receivedAuth.push(request.headers.authorization);
-    try {
-      if (request.method !== "POST") {
-        response.writeHead(405).end();
-        return;
-      }
-      const chunks = [];
-      for await (const chunk of request) chunks.push(chunk);
-      const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-      const server = createServer();
-      const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: undefined,
-        enableJsonResponse: true,
-      });
-      await server.connect(transport);
-      await transport.handleRequest(request, response, body);
-      response.on("close", () => {
-        transport.close();
-        server.close();
-      });
-    } catch (error) {
-      serverErrors.push(error);
-      if (!response.headersSent) response.writeHead(500);
-      response.end();
-    }
-  });
-  await new Promise((resolve) => httpServer.listen(0, "127.0.0.1", resolve));
-  const address = httpServer.address();
+  const fixture = path.join(extensionTestDir, "fake-router.mjs");
+  const sdkRoot = path.join(repoRoot, "node_modules", "@modelcontextprotocol", "sdk", "dist", "esm");
+  fs.writeFileSync(fixture, `
+import { Server } from ${JSON.stringify(pathToFileURL(path.join(sdkRoot, "server", "index.js")).href)};
+import { StdioServerTransport } from ${JSON.stringify(pathToFileURL(path.join(sdkRoot, "server", "stdio.js")).href)};
+import { CallToolRequestSchema, ListToolsRequestSchema } from ${JSON.stringify(pathToFileURL(path.join(sdkRoot, "types.js")).href)};
+const server = new Server({ name: "pi-test", version: "1" }, { capabilities: { tools: {} } });
+server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [{
+  name: "rainbond_echo",
+  description: "Echo through the local Rainskills router",
+  inputSchema: { type: "object", properties: { message: { type: "string" } }, required: ["message"] }
+}] }));
+server.setRequestHandler(CallToolRequestSchema, async ({ params }) => ({
+  content: [{ type: "text", text: "echo:" + params.arguments.message }]
+}));
+await server.connect(new StdioServerTransport());
+`);
 
   const registered = [];
   const handlers = {};
@@ -188,31 +147,15 @@ test("bundled Pi extension completes a real Streamable HTTP MCP call", async () 
     },
   };
 
-  try {
-    const connectionErrors = [];
-    extension.registerRainbondExtension(fakePi, {
-      readConfig: () => ({
-        token: "integration-secret",
-        url: `http://127.0.0.1:${address.port}/mcp`,
-      }),
-      onError: (error) => connectionErrors.push(error),
-    });
-    await handlers.session_start({}, { ui: { notify() {} } });
-    const tool = registered.find(({ name }) => name === "rainbond_echo");
-    assert(
-      tool,
-      [...connectionErrors, ...serverErrors]
-        .map((error) => `${error?.constructor?.name}:${error?.code || ""}:${error?.message || error}`)
-        .concat(`requests:${JSON.stringify(receivedAuth)}`)
-        .join("\n") ||
-        "MCP tool should be registered in Pi"
-    );
-    const result = await tool.execute("call-1", { message: "ready" });
-    assert.deepEqual(result.content, [{ type: "text", text: "echo:ready" }]);
-    assert(receivedAuth.length >= 2);
-    assert(receivedAuth.every((value) => value === "GRJWT integration-secret"));
-    await handlers.session_shutdown();
-  } finally {
-    await new Promise((resolve) => httpServer.close(resolve));
-  }
+  const connectionErrors = [];
+  extension.registerRainbondExtension(fakePi, {
+    readConfig: () => ({ command: process.execPath, args: [fixture] }),
+    onError: (error) => connectionErrors.push(error),
+  });
+  await handlers.session_start({}, { ui: { notify() {} } });
+  const tool = registered.find(({ name }) => name === "rainbond_echo");
+  assert(tool, connectionErrors.map((error) => error?.message || String(error)).join("\n"));
+  const result = await tool.execute("call-1", { message: "ready" });
+  assert.deepEqual(result.content, [{ type: "text", text: "echo:ready" }]);
+  await handlers.session_shutdown();
 });

@@ -21,7 +21,7 @@ const skillNames = [
   "rainbond-project-init",
   "rainbond-template-installer",
 ];
-const approvedCapabilitySummary = `Rainskills 安装完成。
+const approvedCapabilitySummary = `Rainskills 安装完成，下一条消息即可直接使用。
 
 现在可以帮你：
 
@@ -49,7 +49,7 @@ function packPackage(destination) {
   };
 }
 
-test("package metadata defines a public npx command with only the pinned YAML parser", () => {
+test("package metadata defines a public npx command with pinned runtime dependencies", () => {
   const manifest = JSON.parse(
     fs.readFileSync(path.join(repoRoot, "package.json"), "utf8")
   );
@@ -65,9 +65,12 @@ test("package metadata defines a public npx command with only the pinned YAML pa
   assert.equal(manifest.publishConfig.registry, "https://registry.npmjs.org/");
   assert.equal(manifest.publishConfig.access, "public");
   assert.deepEqual(manifest.os, ["darwin", "linux", "win32"]);
-  assert.deepEqual(manifest.dependencies, { yaml: "2.9.0" });
+  assert.deepEqual(manifest.dependencies, {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    yaml: "2.9.0",
+  });
   assert.equal(manifest.devDependencies.esbuild, "0.25.8");
-  assert.equal(manifest.devDependencies["@modelcontextprotocol/sdk"], "1.30.0");
+  assert.equal(manifest.devDependencies["@modelcontextprotocol/sdk"], undefined);
   assert.deepEqual(manifest.pi, {
     skills: ["./marketplace/rainskills/skills"],
   });
@@ -78,8 +81,9 @@ test("package metadata defines a public npx command with only the pinned YAML pa
   );
   assert.equal(
     manifest.scripts.test,
-    "npm run test:launcher && npm run test:marketplace && npm run test:runtime-routing && npm run test:pi && npm run test:telemetry && npm run test:platform && npm run test:windows && npm run test:package-upload && npm run test:package && npm run test:installer && npm run test:signal && npm run test:npx-pty"
+    "npm run test:auto-update && npm run test:launcher && npm run test:marketplace && npm run test:runtime-routing && npm run test:pi && npm run test:telemetry && npm run test:platform && npm run test:windows && npm run test:package-upload && npm run test:package && npm run test:installer && npm run test:signal && npm run test:npx-pty"
   );
+  assert.equal(manifest.scripts["test:auto-update"], "node --test tests/auto-update.test.js");
   assert.equal(
     manifest.scripts["test:platform"],
     "node --test tests/platform-installer.test.js tests/host-cluster-installer.test.js tests/existing-kubernetes-installer.test.js"
@@ -102,6 +106,7 @@ test("packed artifact contains the installer and all skills but no development f
   assert(filePaths.has("install.sh"));
   assert(filePaths.has("pi/rainskills-mcp.ts"));
   assert(filePaths.has("rainbond-platform-installer/scripts/platform-installer.js"));
+  assert(filePaths.has("rainbond-platform-installer/scripts/auto-update.js"));
   assert(filePaths.has("rainbond-platform-installer/scripts/host-cluster-installer.js"));
   assert(filePaths.has("rainbond-platform-installer/scripts/existing-kubernetes-installer.js"));
   assert(filePaths.has("rainbond-platform-installer/agents/openai.yaml"));
@@ -117,6 +122,12 @@ test("packed artifact contains the installer and all skills but no development f
     "windows-platform.js",
     "windows-platform.ps1",
     "runtime-credentials.js",
+    "environment-credentials.js",
+    "environment-registry.js",
+    "runtime-operations.js",
+    "mcp-router.js",
+    "mcp-server.js",
+    "user-message.js",
     "wsl-bootstrap.sh",
   ]) {
     assert(filePaths.has(`rainbond-platform-installer/scripts/${runtimeFile}`), `${runtimeFile} is missing`);
@@ -232,6 +243,8 @@ test("the packed default installer installs only Skills and prints the approved 
   assert.equal(result.status, 0, result.stderr || result.stdout);
   const output = `${result.stdout}\n${result.stderr}`.replace(/\r\n/g, "\n");
   assert.equal(output.split(approvedCapabilitySummary).length - 1, 1);
+  assert.match(output, /\[RAINSKILLS_USER_MESSAGE_BEGIN:install\.completed\]/);
+  assert.match(output, /\[RAINSKILLS_USER_MESSAGE_END:install\.completed\]/);
   for (const forbidden of [
     "Rainbond Cloud",
     "私有",
@@ -247,6 +260,11 @@ test("the packed default installer installs only Skills and prints the approved 
   assert.equal(fs.existsSync(path.join(home, ".rainbond", "mcp.env")), false);
   assert.equal(fs.existsSync(path.join(home, ".rainbond", "rainskills-onboarding-v1.json")), false);
   assert.equal(fs.existsSync(path.join(home, ".rainbond", "platform-installer")), false);
+  const autoUpdateState = JSON.parse(fs.readFileSync(
+    path.join(home, ".rainbond", "rainskills", "auto-update-v1.json"),
+    "utf8"
+  ));
+  assert.deepEqual(autoUpdateState.destinations, [path.join(home, ".codex", "skills")]);
   assert.equal(fs.existsSync(path.join(home, ".codex", "config.toml")), false);
   assert.equal(fs.existsSync(path.join(home, ".claude.json")), false);
   assert.equal(fs.existsSync(path.join(home, ".zshrc")), false);

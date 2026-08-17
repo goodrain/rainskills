@@ -20,7 +20,7 @@ from installer_signal_cleanup_test import (
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TTY_PATTERN = re.compile(rb"RAINSKILLS_TTY stdin=1 stdout=1 stderr=1")
-APPROVED_CAPABILITY_SUMMARY = """Rainskills 安装完成。
+APPROVED_CAPABILITY_SUMMARY = """Rainskills 安装完成，下一条消息即可直接使用。
 
 现在可以帮你：
 
@@ -162,6 +162,8 @@ exit 0
             )
             assert TTY_PATTERN.search(output), decoded
             assert decoded.count(APPROVED_CAPABILITY_SUMMARY) == 1, decoded
+            assert "[RAINSKILLS_USER_MESSAGE_BEGIN:install.completed]" in decoded, decoded
+            assert "[RAINSKILLS_USER_MESSAGE_END:install.completed]" in decoded, decoded
             for forbidden in (
                 "Rainbond Cloud",
                 "私有",

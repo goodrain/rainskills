@@ -16,17 +16,24 @@ function deepFreeze(value) {
 }
 
 const INTENT_DEFINITIONS = deepFreeze({
+  "environment-add": {
+    skillId: "rainskills",
+    required: [],
+    optional: [],
+    enums: {},
+    steps: ["connect"],
+  },
   deploy: {
     skillId: "rainbond-app-assistant",
-    required: ["project_root", "source_kind"],
-    optional: ["source_url", "service_id"],
+    required: [],
+    optional: ["project_root", "source_kind", "source_url", "service_id"],
     enums: { source_kind: ["local", "git", "image", "package"] },
     steps: ["project-analysis", "topology", "build", "runtime", "access-verification"],
   },
   create: {
     skillId: "rainbond-app-assistant",
-    required: ["project_root", "source_kind"],
-    optional: ["source_url", "service_id"],
+    required: [],
+    optional: ["project_root", "source_kind", "source_url", "service_id"],
     enums: { source_kind: ["local", "git", "image", "package"] },
     steps: ["project-analysis", "topology", "build", "runtime", "access-verification"],
   },
@@ -189,6 +196,9 @@ function validateIntent(input, { pathApi = path } = {}) {
     } else if (IDENTIFIER_FIELDS.has(field)) {
       result[field] = assertBoundedString(value, field, MAX_IDENTIFIER_LENGTH);
     }
+  }
+  if (["deploy", "create"].includes(type) && result.source_url && !result.source_kind) {
+    throw new Error("应用来源 URL 必须同时指定 source_kind");
   }
   return result;
 }
