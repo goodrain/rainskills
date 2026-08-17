@@ -8,7 +8,7 @@ The goal is not to extend the current demo prompt chain. The goal is to turn the
 
 - describe a local project using consistent objects
 - minimize user input to intent plus a small amount of clarification
-- map directly onto current MCP and skill capabilities
+- map directly onto current Rainbond Tool and skill capabilities
 - support onboarding, deployment, delivery verification, and version operations as one continuous flow
 
 This document is the source of truth for product-level object boundaries. Individual `SKILL.md` files should describe execution behavior and handoff rules, but they should not redefine the object model independently.
@@ -62,7 +62,7 @@ The target effect is:
 
 This implies:
 
-- the system must resolve intent from layered local state plus MCP runtime truth
+- the system must resolve intent from layered local state plus platform runtime truth
 - the system must separate declarative project baseline from local binding state
 - the system must distinguish execution readiness from runtime health
 - the system must expose only stable fields in user-facing files
@@ -92,7 +92,7 @@ Responsibilities:
 - associate per-environment config layers
 - act as the root object for planning and delivery state
 
-It should not store raw runtime truth. Runtime truth belongs to MCP-derived runtime state.
+It should not store raw runtime truth. Runtime truth belongs to platform-derived runtime state.
 
 Canonical shape:
 
@@ -123,7 +123,7 @@ Ownership split:
 
 - `rainbond.app.json` owns the topology baseline
 - `.rainbond/local.json` owns the local binding record
-- MCP owns runtime truth
+- the locked Rainbond transport owns runtime truth
 
 The project object should therefore be understood as the composition of:
 
@@ -143,8 +143,8 @@ Identity resolution table:
 | explicit user input | 1 | team/region/app identity is complete | explicit input is still incomplete or conflicts with current linked state |
 | `.rainbond/local.json` | 2 | binding is already linked and identity is complete | project is not linked or binding is incomplete |
 | `rainbond.app.json` | 3 | committed baseline already provides enough identity context | critical identity remains ambiguous |
-| repository inference | 4 | inference plus MCP lookup resolves a single unambiguous identity | inference remains ambiguous or would require guessing |
-| MCP discovery | 5 | exactly one safe resolution path exists | multiple teams/regions/apps remain possible or MCP cannot verify the result |
+| repository inference | 4 | inference plus platform lookup resolves a single unambiguous identity | inference remains ambiguous or would require guessing |
+| platform discovery | 5 | exactly one safe resolution path exists | multiple teams/regions/apps remain possible or the platform cannot verify the result |
 
 ### 4.2 Environment
 
@@ -185,7 +185,7 @@ Ownership split:
 - `.rainbond/env.<env>.json` owns non-sensitive environment delta
 - `.rainbond/secrets.<env>.json` owns local-only secret input
 - manifest owns project baseline values
-- MCP/runtime owns live generated connection coordinates and runtime state
+- platform runtime owns live generated connection coordinates and runtime state
 
 The `Environment` object should never absorb runtime-derived host/port data, generated credentials, or other transient values that only exist because a deployment is currently running.
 
@@ -270,12 +270,12 @@ Deployment gate table:
 | template intent | user explicitly requests template install or resolved topology marks next step as `template` | continue non-template path only for non-template components | `rainbond-template-installer` |
 | topology missing | app is missing, required components are absent, or topology is not created | do not treat the app as runtime-repair-only | `rainbond-fullstack-bootstrap` |
 | bootstrap completion | `access_mode` declared, source-backed components sufficiently converged, and no deeper runtime blocker surfaced | stop bootstrap and surface a blocker rather than claiming setup complete | `rainbond-fullstack-troubleshooter` |
-| runtime health | MCP/runtime evidence no longer indicates unresolved blockers | continue diagnosis instead of claiming success | `rainbond-delivery-verifier` when healthy enough; otherwise `rainbond-fullstack-troubleshooter` |
+| runtime health | platform evidence no longer indicates unresolved blockers | continue diagnosis instead of claiming success | `rainbond-delivery-verifier` when healthy enough; otherwise `rainbond-fullstack-troubleshooter` |
 | code/build blocker | root cause is in browser host usage, build-time env, reverse-proxy config, or source/build failure | stop Rainbond-side repair | `code_build_handoff` |
 
 ### 4.5 RuntimeState
 
-`RuntimeState` represents observed deployment/runtime reality from MCP, component summaries, Pod runtime diagnostics, recent events, logs, and access-path inspection.
+`RuntimeState` represents observed deployment/runtime reality from Rainbond Tools, component summaries, Pod runtime diagnostics, recent events, logs, and access-path inspection.
 
 Responsibilities:
 
@@ -493,12 +493,12 @@ Standard middleware note:
 4. `.rainbond/local.json`
 5. `rainbond.app.json`
 6. repository inference
-7. MCP/runtime correction
+7. platform runtime correction
 
 Notes:
 
 - env and secret files usually affect executability, not source kind directly
-- MCP/runtime is not just another candidate layer; it is the final correction layer
+- platform runtime is not just another candidate layer; it is the final correction layer
 
 ### 6.2 Resolution Principle
 
@@ -507,7 +507,7 @@ The system should:
 - collect candidate source facts from all eligible layers
 - normalize them into one canonical source object
 - evaluate whether the source is executable
-- align or correct it using MCP/runtime truth
+- align or correct it using platform runtime truth
 
 The system may infer. It may not invent.
 
@@ -531,20 +531,20 @@ resolve_component_source(component, context):
   collect conservative repo inference
   normalize into one canonical source
   evaluate executability
-  align with MCP/runtime truth if available
+  align with platform runtime truth if available
   if ambiguity remains, mark needs_confirmation or blocked
 ```
 
 ### 6.4 Runtime Correction
 
-MCP/runtime is the final source of truth.
+Platform runtime is the final source of truth.
 
 Rules:
 
 - `.rainbond/local.json.runtime_components` is only a hint
 - `rainbond.app.json` is a declarative baseline
 - repository inference is only a candidate
-- when MCP/runtime facts disagree, the system must follow MCP/runtime and surface drift explicitly
+- when platform runtime facts disagree, the system must follow platform runtime and surface drift explicitly
 
 This does not mean every local declaration is discarded. It means local declarations must yield when they conflict with observable runtime reality.
 
@@ -595,7 +595,7 @@ ResolvedComponentSource:
 #### `image`
 
 - create if no runtime component exists and prerequisites are satisfied
-- reuse if MCP confirms a matching existing component
+- reuse if the platform confirms a matching existing component
 - block if critical prerequisites are unresolved
 
 #### `source`
@@ -656,7 +656,7 @@ Recommended step progression:
 3. ensure each executable component exists or is reused
 4. wire minimum dependencies that are ready to wire
 5. deploy or restart affected components when required
-6. inspect runtime evidence from MCP summaries, events, and logs
+6. inspect runtime evidence from Rainbond Tool summaries, events, and logs
 7. evaluate delivery readiness
 8. hand off to the next skill or stop with a blocker
 
@@ -839,7 +839,7 @@ May contain:
 - `region_name`
 - `app_name`
 - `app_id`
-- `mcp.server_name`
+- `platform.server_name`
 - `metadata.status`
 - link metadata
 - preferences such as `default_environment`
@@ -862,7 +862,7 @@ Example:
     "region_name": "cn-north-1",
     "app_name": "example-app",
     "app_id": "app-123",
-    "mcp": {
+    "platform": {
       "server_name": "rio.cn-north-1.rainbond.me"
     }
   },
@@ -1001,7 +1001,7 @@ These fields should remain internal to the canonical model and should not be pro
 
 ### 9.1 RuntimeState Boundary
 
-`RuntimeState` is derived from MCP/runtime evidence, not from repo inference.
+`RuntimeState` is derived from platform runtime evidence, not from repo inference.
 
 It should classify at least:
 
@@ -1029,8 +1029,8 @@ Definitions:
 
 Observed evidence comes from:
 
-- MCP component summaries
-- MCP component Pod lists and Pod detail
+- Rainbond Tool component summaries
+- Rainbond Tool component Pod lists and Pod detail
 - recent events
 - logs
 - access-path inspection
@@ -1117,7 +1117,7 @@ When a dependency is deferred specifically because an upstream source-backed com
 - `frontend access-path issue`
 - `source build still running`
 - `source build failed`
-- `mcp backend issue`
+- `platform backend issue`
 - `external artifact unreachable`
 - `cluster capacity blocked`
 

@@ -23,7 +23,7 @@ Follow this order.
 ### 1. Resolve context and selected environment
 
 - collect any user-explicit identifiers, environment choice, component overrides, or env overrides first
-- read `.rainbond/local.json` if present for bound `team_name`, `region_name`, `app_name`, `app_id`, MCP server, and `preferences.default_environment`
+- read `.rainbond/local.json` if present for bound `team_name`, `region_name`, `app_name`, `app_id`, platform server, and `preferences.default_environment`
 - if `.rainbond/local.json.runtime_components` exists, load it as a reuse hint for later role-to-runtime matching
 - select the environment file with this order: user explicit input > `.rainbond/local.json.preferences.default_environment` > `preview`
 - read `.rainbond/secrets.<environment>.json` if present and extract component-level secret env values
@@ -38,7 +38,7 @@ Follow this order.
 
 - find the target app
 - create it if missing
-- if the app already exists, query MCP component data first and use `.rainbond/local.json.runtime_components` only as a hint to align logical roles to existing runtime components before deciding whether to reuse or create resources
+- if the app already exists, query current component data through Rainbond Tools first and use `.rainbond/local.json.runtime_components` only as a hint to align logical roles to existing runtime components before deciding whether to reuse or create resources
 
 ### 3. Ensure provider components exist
 
@@ -78,7 +78,7 @@ For every package-backed component, treat local preparation, event initializatio
 Convergence gates:
 - `source.local_path` is client-local input and is read only by the local helper
 - the initialization response must provide both `event_id` and the complete `upload_request`
-- the local cleanup attempt happens immediately after the HTTP attempt, before any MCP status or create call
+- the local cleanup attempt happens immediately after the HTTP attempt, before any Rainbond Tool status or create call
 - failed HTTP upload means local cleanup, remote upload-event deletion, and stop
 - a successful HTTP response is not proof that Rainbond recorded the file; uploaded-file status must be non-empty before create-by-event
 - empty status means remote upload-event deletion and stop
@@ -94,7 +94,7 @@ Convergence gates:
   - include edges declared in the manifest and edges strongly inferred from README instructions, service roles, image conventions, env names, config hostnames, exposed internal ports, proxy upstreams, or connection workflows used by the application
   - query the current dependency summary before adding edges, add missing accepted edges, then query again to verify the visible Rainbond topology
 - if the dependency tool reports `requires_open_inner`, open the target component's inner port or retry with `open_inner=true` and the target `container_port`
-- do not report that MCP lacks explicit dependency management; `rainbond_manage_component_dependency` is the explicit dependency management tool
+- do not report that Rainbond Tool lacks explicit dependency management; `rainbond_manage_component_dependency` is the explicit dependency management tool
 - do not treat Nginx `proxy_pass`, application config hostnames, Kubernetes Service DNS, or manually written runtime envs as a replacement for a Rainbond dependency edge
 - when adding a dependency to a middleware provider, prefer provider connection envs over duplicate consumer runtime envs
 - set only the minimum frontend env required by the declared `access_mode`
@@ -197,14 +197,14 @@ If source creation or source build fails:
 - only switch to runtime logs when the build has already succeeded or the evidence has clearly shifted from build failure to startup/runtime behavior
 - if the failure evidence points to source code, build output, or source metadata, hand off with `blocking_bucket = source build failed` or `next_handoff = code_build_handoff`
 - if the build or pull failure evidence points to an unreachable third-party artifact, registry layer, package tarball, or GitHub Release asset, use `blocking_bucket = external artifact unreachable` and `next_handoff = code_build_handoff`
-- if the failure evidence points to Rainbond console, MCP, or control-plane exceptions while creating the source component, use `blocking_bucket = mcp backend issue` and `next_handoff = none`
+- if the failure evidence points to Rainbond Console, Rainbond Tool, or control-plane exceptions while creating the source component, use `blocking_bucket = platform backend issue` and `next_handoff = none`
 - do not retry the same component through the image path unless the user explicitly changes the source definition
 - do not retry the same component with a different Git branch or ref unless the user explicitly changes the source definition
 
 ## Package Upload Failure Convergence
 
 Package upload is a pre-create transaction, not a partially healthy component state:
-- if prepare or initialization fails, no package component was created; record it as skipped/waiting with the concrete local-helper or MCP blocker
+- if prepare or initialization fails, no package component was created; record it as skipped/waiting with the concrete local-helper or platform blocker
 - if the HTTP upload fails, local cleanup and remote upload deletion must both be attempted before reporting the stop
 - if upload status is empty, delete the remote event and stop instead of calling create-by-event
 - do not deploy, wire dependencies to, or report a package component as created until event-based creation returns a component identity

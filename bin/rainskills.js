@@ -976,6 +976,13 @@ function resolveInvocation(args, {
     "windows-onboarding.js"
   );
 
+  if (args[0] === "tools") {
+    return {
+      executable: execPath,
+      args: [path.resolve(__dirname, "rainskills-tools.js"), ...args.slice(1)],
+    };
+  }
+
   if (args[0] === "platform" && args[1] === "install") {
     return {
       executable: execPath,

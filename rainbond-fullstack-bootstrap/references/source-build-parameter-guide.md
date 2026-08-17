@@ -1,10 +1,10 @@
 # Source Build Parameter Guide
 
-Use this reference when a source-backed component needs build parameter tuning through the updated Rainbond MCP workflow.
+Use this reference when a source-backed component needs build parameter tuning through the current Rainbond Tool workflow.
 
 ## Tool Routing
 
-Route each concern through the correct MCP entry:
+Route each concern through the correct Rainbond Tool entry:
 
 - build parameters: `rainbond_manage_component_envs(operation=replace_build_envs, build_env_dict=...)`
 - runtime envs: `rainbond_manage_component_envs` with normal env operations
@@ -28,7 +28,7 @@ When source detection returns BOTH a language signature AND a Dockerfile, decide
 
 Cross-cutting MUSTs (apply at every priority):
 - MUST NOT generate a local Dockerfile, modify the user's Dockerfile, switch the component to `image` or `package` mode, or run local `mvn` / `npm` / `docker build` to produce upload artifacts. These count as delivery-mode switches and require explicit user confirmation.
-- MUST NOT promise `dockerfile_path`; the current MCP surface only exposes the boolean `prefer_dockerfile_when_detected` on `rainbond_create_component_from_source`.
+- MUST NOT promise `dockerfile_path`; the current Rainbond Tool surface only exposes the boolean `prefer_dockerfile_when_detected` on `rainbond_create_component_from_source`.
 
 ### Priority 1 — Manifest declaration (deterministic)
 
@@ -122,8 +122,8 @@ An incorrect heuristic call must be self-correcting: the user reads `reason`, ed
 ### Forbidden Short-Circuits (apply regardless of mode)
 
 - generating local `Dockerfile` / `manifest` / `docker-compose.yml` to "preview" the deployment before the platform path has been tried.
-- running `mvn package` / `npm run build` / `docker build` locally to produce artifacts for MCP package upload.
-- switching to MCP package upload as the first response to a build failure.
+- running `mvn package` / `npm run build` / `docker build` locally to produce artifacts for platform package upload.
+- switching to platform package upload as the first response to a build failure.
 - pushing a temporary image to a registry as a fallback for source build failure.
 
 Any of the above is a delivery-mode switch and requires explicit user confirmation; otherwise stay on the language build path and report the structural failure.
@@ -152,7 +152,7 @@ If the language is uncertain, stop and read detection results before changing `b
 
 If the build log shows a timeout or connection failure while downloading an external artifact, first classify whether the issue is reachability rather than build configuration. Use `external artifact unreachable` when the dominant failing object is a registry layer, GitHub Release asset, native binary package, package tarball, or installer binary.
 
-## Current MCP-Facing Build Keys
+## Current Rainbond Tool Build Keys
 
 Use these as candidate keys for `build_env_dict`. They are not all mandatory.
 
