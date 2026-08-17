@@ -1,7 +1,7 @@
 {
   "name": "rainskills",
   "version": "1.0.0",
-  "description": "Interactive Rainbond skill installer for Codex and Claude Code",
+  "description": "Rainbond skills with a versioned local CLI runtime",
   "license": "Apache-2.0",
   "homepage": "https://github.com/goodrain/rainskills#readme",
   "bugs": {
@@ -27,7 +27,6 @@
     "bin/",
     "install.sh",
     "marketplace/",
-    "pi/",
     "rainbond-app-assistant/",
     "rainbond-app-version-assistant/",
     "rainbond-delivery-verifier/",
@@ -55,13 +54,12 @@
   },
   "scripts": {
     "build:marketplace": "node scripts/build-marketplace-package.mjs",
-    "build:pi": "node scripts/build-pi-extension.mjs",
     "check:marketplace": "node scripts/build-marketplace-package.mjs --check",
-    "check:pi": "node scripts/build-pi-extension.mjs --check",
-    "test": "npm run test:launcher && npm run test:marketplace && npm run test:pi && npm run test:platform && npm run test:windows && npm run test:package-upload && npm run test:package && npm run test:installer && npm run test:signal && npm run test:npx-pty",
+    "test": "npm run test:launcher && npm run test:api-bridge && npm run test:skill-profile && npm run test:marketplace && npm run test:platform && npm run test:windows && npm run test:package-upload && npm run test:package && npm run test:installer && npm run test:signal && npm run test:npx-pty",
     "test:launcher": "node --test tests/npx-launcher.test.js",
+    "test:api-bridge": "node --test tests/api-bridge.test.js",
+    "test:skill-profile": "node --test tests/skill-profile-builder.test.js",
     "test:marketplace": "node --test tests/marketplace-entry.test.js",
-    "test:pi": "npm run check:pi && node --test tests/pi-extension.test.js",
     "test:platform": "node --test tests/platform-installer.test.js",
     "test:windows": "node --test tests/windows-onboarding.test.js tests/windows-platform.test.js",
     "test:package-upload": "python3 tests/package_upload_helper_test.py && python3 tests/package_upload_workflow_contract_test.py && python3 rainbond-fullstack-bootstrap/scripts/run_bootstrap_evals.py",
@@ -71,7 +69,6 @@
     "test:npx-pty": "python3 tests/npx_pty_test.py"
   },
   "devDependencies": {
-    "@modelcontextprotocol/sdk": "1.30.0",
     "esbuild": "0.25.8"
   },
   "publishConfig": {

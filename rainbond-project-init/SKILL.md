@@ -5,18 +5,9 @@ description: Use when onboarding a local project into Rainbond for the first tim
 
 # Rainbond Project Init
 
-## MCP 认证失败恢复（JWT 过期 / 401 / 403）
+## Rainbond 传输
 
-当任何 `rainbond_*` MCP 工具返回 401 / 403 / `unauthorized` / `token expired` 类认证错误时，
-禁止重装 skills，也禁止手工改 `~/.rainbond/mcp.env`。先用下面任一命令刷新 JWT：
-
-```bash
-bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh) refresh
-# 或：bash ~/.rainbond/skills/install.sh refresh
-```
-
-刷新成功后按安装器输出执行客户端恢复动作：Codex / Claude Code 重启，Pi Agent 执行
-`/reload`；OpenClaw 当前 CLI 使用安装器触发 MCP 热加载，独立 Gateway / Agent 进程需重新加载配置或重启。在恢复完成前不要自动重试同一个 MCP 工具调用。
+如果上游已初始化本次工作流的 RainSkills CLI，直接复用，不重新探测。否则在第一次 Rainbond 调用前读取 [../rainbond-app-assistant/references/transport-resolution.md](../rainbond-app-assistant/references/transport-resolution.md) 并初始化一次。CLI 锁定后，认证、网络、超时和业务错误均不得触发替代调用通道。
 
 ## Overview
 
@@ -96,7 +87,7 @@ This skill should describe how onboarding produces or resolves those objects. It
 2. 如果没有 manifest，就按仓库结构推断生成 `rainbond.app.json`。
 3. 如果推断出的源码地址是原始 GitHub URL，且用户未显式给出代理地址，先询问是否改用 GitHub 代理。
 4. 解析 `team_name / region_name / app_name`。
-5. 通过 MCP 查找或创建 Rainbond app。
+5. 通过已锁定的 Rainbond 传输查找或创建 Rainbond app。
 6. 写入 `.rainbond/local.json`。
 7. 输出 `ProjectInitResult`，并决定是 stop 还是 bootstrap。
 
@@ -106,7 +97,7 @@ This skill should describe how onboarding produces or resolves those objects. It
 
 - 多个 team 但用户还没选
 - region / app identity 仍不明确
-- MCP 不可用，无法完成 online verification
+- 已锁定的 Rainbond 传输不可用，无法完成 online verification
 - 用户明确要求 stop-after-init
 
 ## When to Use
@@ -201,7 +192,7 @@ If the repository strongly suggests a future `source` or `template` workflow, re
 Current execution support:
 - `image`: supported
 - `source`: supported at the design layer and intended to map to Rainbond source-creation flow
-- `template`: supported when template install metadata is complete enough to drive the current MCP install flow
+- `template`: supported when template install metadata is complete enough to drive the current platform install flow
 
 ## Execution Summary Rules
 
@@ -300,7 +291,7 @@ During initialization, resolve values in this order:
 Rules:
 - if `rainbond.app.json` exists, prefer it over repository inference
 - if `.rainbond/local.json` exists and is linked, do not recreate linking blindly
-- if MCP runtime facts later conflict with inferred topology, the inferred draft should be corrected
+- if platform runtime facts later conflict with inferred topology, the inferred draft should be corrected
 - selected environment may only be `preview` or `production`
 - resolve selected environment in this order:
   - user explicit input
@@ -312,7 +303,7 @@ Rules:
   - single accessible team → use silently
   - multiple accessible teams + manifest `team_name` matches one of them → use silently, mention `已选 team = X（来自 manifest）` in the report
   - multiple accessible teams, no manifest hint → ask the user directly; do not fall through to `default` / first / any existing team
-- never silently invent `team_name`; if it cannot be resolved from explicit input, manifest, or a single unambiguous MCP result, ask the user directly
+- never silently invent `team_name`; if it cannot be resolved from explicit input, manifest, or a single unambiguous platform result, ask the user directly
 - `team_name = default` is allowed only when it came from explicit user input or explicit user confirmation
 
 ## Repository Inference Rules
@@ -372,7 +363,7 @@ Compose persistence rule:
 Monorepo build-context rule:
 - when a component Dockerfile or subdirectory build depends on root-level files such as `pyproject.toml`, `uv.lock`, `pnpm-lock.yaml`, `package-lock.json`, `bun.lock`, `go.work`, `settings.gradle`, or `pom.xml`, keep the repository root as the conceptual build context and record the component subdirectory separately
 - do not infer a child-directory-only source if that would omit required root build metadata
-- if the current MCP/source path cannot express the needed build context safely, mark that component `needs_confirmation` with a build-context reason instead of switching to local package or image fallback
+- if the current platform source path cannot express the needed build context safely, mark that component `needs_confirmation` with a build-context reason instead of switching to local package or image fallback
 
 ## Source Inference Rules
 
@@ -618,8 +609,8 @@ Follow this order.
 
 6. Write local binding
 - create or update `.rainbond/local.json`
-- if app existence and `app_id` were confirmed through MCP, set `metadata.status = linked`
-- if MCP is unavailable and online verification cannot be completed, set `metadata.status = pending_verification`
+- if app existence and `app_id` were confirmed through the locked Rainbond transport, set `metadata.status = linked`
+- if the locked Rainbond transport is unavailable and online verification cannot be completed, set `metadata.status = pending_verification`
 - do not present the project as fully initialized until online verification succeeds
 
 7. Build execution summary
@@ -635,7 +626,7 @@ Follow this order.
 
 Hard rule:
 - if `app_id` is still unknown, initialization is not complete
-- if MCP is unavailable and app existence cannot be verified online, initialization is only partially complete
+- if the locked Rainbond transport is unavailable and app existence cannot be verified online, initialization is only partially complete
 - if initialization is not complete, do not hand off to `rainbond-fullstack-troubleshooter`
 - `rainbond-fullstack-troubleshooter` is only valid after app creation and binding are complete
 - if the user requested stop-after-init, do not hand off to `rainbond-fullstack-bootstrap`
@@ -651,7 +642,7 @@ Initialization is successful when:
 - the project is now in a linked state
 - an execution summary is available
 
-If MCP is unavailable:
+If the locked Rainbond transport is unavailable:
 - manifest generation or reuse may still complete
 - a provisional `.rainbond/local.json` may still be written
 - but initialization must be reported as pending online verification rather than fully complete
@@ -708,7 +699,7 @@ ProjectInitResult:
       status: ready | needs_confirmation | blocked
       blocking_reason: string | null
   init_status: linked | pending_verification | blocked
-  next_action: stop | bootstrap | reconnect_mcp | ask_identity | ask_manifest_review
+  next_action: stop | bootstrap | reconnect_transport | ask_identity | ask_manifest_review
 ```
 
 Construction rules:
@@ -736,8 +727,8 @@ Construction rules:
   - must reuse the same `execution_mode`, `status`, and `blocking_reason` semantics as the prose summary
   - use canonical status spelling: `ready`, `needs_confirmation`, `blocked`
 - `init_status`
-  - use `linked` only when current-run MCP verification confirmed the app/binding
-  - use `pending_verification` when local binding or generated state exists but current-run MCP verification did not complete
+  - use `linked` only when current-run platform verification confirmed the app/binding
+  - use `pending_verification` when local binding or generated state exists but current-run platform verification did not complete
   - use `blocked` when identity or other critical preconditions remain unresolved
 - `next_action`
   - must be the normalized form of the prose `Next Step`
@@ -745,7 +736,7 @@ Construction rules:
   - use `stop` when the current run intentionally ends at the init boundary, including user-requested stop-after-init
   - when the user asked only for initialization, reuse, or status/result reporting, treat that as stop-at-init unless they explicitly asked to continue
   - use `bootstrap` only when the current run is expected to continue directly into `rainbond-fullstack-bootstrap`
-  - use `reconnect_mcp`, `ask_identity`, or `ask_manifest_review` only when that specific external action is the true gating step
+  - use `reconnect_transport`, `ask_identity`, or `ask_manifest_review` only when that specific external action is the true gating step
 - `runtime_components`
   - may be written into `.rainbond/local.json` as a reuse hint, but it does not belong inside `ProjectInitResult`
 
@@ -802,7 +793,7 @@ Example final reply:
 
 ````markdown
 ### Init Result
-Initialization succeeded with a freshly inferred manifest; the missing `rainbond.app.json` was generated and the Rainbond app was created via MCP, so the project is now linked and ready for bootstrap.
+Initialization succeeded with a freshly inferred manifest; the missing `rainbond.app.json` was generated and the Rainbond app was created through the locked Rainbond transport, so the project is now linked and ready for bootstrap.
 
 ### Resolved Project
 App `storefront`, environment `preview`.
@@ -861,7 +852,7 @@ Always respond using exactly these sections:
 - state whether the project was initialized successfully
 - state whether the manifest was reused or generated
 - state whether the Rainbond app was reused or created
-- if MCP was unavailable, explicitly say initialization is pending online verification
+- if the locked Rainbond transport was unavailable, explicitly say initialization is pending online verification
 - describe manifest/app/file actions from what happened in the current run, not merely from what exists by the time the reply is written
 
 ### Resolved Project
@@ -877,7 +868,7 @@ Always respond using exactly these sections:
 - optional `.rainbond/env.<env>.json` or `.rainbond/secrets.<env>.json` files may be mentioned only when they were actually created or updated, but they do not replace the required pair above
 - state whether each file was reused, created, or updated
 - decide reused/created/updated from file state before the run versus after the run; do not call a newly generated file "reused" just because it now exists
-- if `.rainbond/local.json` was written without MCP verification, state that its status is `pending_verification`
+- if `.rainbond/local.json` was written without platform verification, state that its status is `pending_verification`
 - do not introduce additional result-carrier files just to store current-run init status
 
 ### Execution Summary
@@ -900,7 +891,7 @@ Always respond using exactly these sections:
 - one of:
   - `run rainbond-fullstack-bootstrap`
   - `stop, initialization complete`
-  - `reconnect MCP and verify app existence`
+  - `reconnect Rainbond transport and verify app existence`
   - `stop, initialization pending online verification`
   - `ask user to confirm missing identity`
   - `ask user to review generated manifest`
@@ -916,7 +907,7 @@ Always respond using exactly these sections:
 - keep enum values and field names aligned with the schema above
 - do not place any prose after this section
 - do not duplicate secrets or invent missing values
-- when MCP is unavailable or identity is blocked, still use the same required section headings and final `ProjectInitResult`; only field values change
+- when the locked Rainbond transport is unavailable or identity is blocked, still use the same required section headings and final `ProjectInitResult`; only field values change
 - bare YAML under `### Structured Output` is a contract failure; the object must appear inside fenced markdown code block with `yaml`
 - the opening fence must be exactly ````yaml` immediately after the heading
 - the closing fence must be the last non-whitespace line of the whole reply
@@ -954,7 +945,7 @@ Always respond using exactly these sections:
 - handing off to `rainbond-fullstack-troubleshooter` before the app exists and `.rainbond/local.json` is valid
 - emitting `local` or another invalid selected environment value
 - auto-continuing into bootstrap when the user asked to stop after initialization
-- declaring initialization complete when MCP is unavailable and app existence was not verified online
+- declaring initialization complete when the locked Rainbond transport is unavailable and app existence was not verified online
 
 ## Quick Reference
 
@@ -996,5 +987,5 @@ Stop-after-init rule:
 - do not continue into bootstrap automatically
 
 Verification rule:
-- if `.rainbond/local.json` was written without MCP verification, mark it `pending_verification`
-- in that case, the correct next step is to reconnect MCP and verify app existence before claiming full initialization
+- if `.rainbond/local.json` was written without platform verification, mark it `pending_verification`
+- in that case, the correct next step is to reconnect the locked Rainbond transport and verify app existence before claiming full initialization

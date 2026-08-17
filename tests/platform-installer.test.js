@@ -117,6 +117,29 @@ test("platform resume selects native Node or POSIX Bash from onboarding control 
   });
   assert.deepEqual(resumeInvocationForOnboarding({
     ...base,
+    control_mode: "windows-native",
+    transport_mode: "api",
+  }, "/fake/node").args, [
+    windowsOnboardingPath,
+    "codex",
+    "--self-hosted",
+    "--rainbond-url",
+    "http://127.0.0.1:7070",
+    "--allow-insecure-http",
+    "--api-only",
+  ]);
+  assert.deepEqual(resumeInvocationForOnboarding({
+    ...base,
+    control_mode: "posix",
+    transport_mode: "api",
+  }).args.filter((argument) => argument === "--api-only"), ["--api-only"]);
+  assert.equal(
+    resumeInvocationForOnboarding({ ...base, control_mode: "posix" }).args.includes("--api-only"),
+    false,
+    "legacy checkpoints without transport_mode must resume in MCP mode"
+  );
+  assert.deepEqual(resumeInvocationForOnboarding({
+    ...base,
     control_mode: "posix",
   }, "/fake/node"), {
     executable: "bash",
@@ -809,6 +832,21 @@ test("onboarding state is schema checked and must be a protected regular file", 
     readOnboardingState(statePath, state.operation_id, stateStore),
     state
   );
+  for (const transportMode of ["mcp", "api"]) {
+    const explicit = { ...state, transport_mode: transportMode };
+    fs.writeFileSync(statePath, `${JSON.stringify(explicit)}\n`, { mode: 0o600 });
+    assert.deepEqual(
+      readOnboardingState(statePath, state.operation_id, stateStore),
+      explicit
+    );
+  }
+  for (const transportMode of ["fallback", "", true, 1, null, {}]) {
+    fs.writeFileSync(statePath, `${JSON.stringify({ ...state, transport_mode: transportMode })}\n`, { mode: 0o600 });
+    assert.throws(
+      () => readOnboardingState(statePath, state.operation_id, stateStore),
+      /transport_mode/
+    );
+  }
 
   fs.writeFileSync(statePath, `${JSON.stringify({ ...state, target: "openclaw" })}\n`, { mode: 0o600 });
   assert.throws(

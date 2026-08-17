@@ -41,8 +41,8 @@ test("repository exposes one complete Rainskills marketplace entry", () => {
   assert.match(skill, /install\.sh/);
   assert.match(skill, /every bundled `rainbond-\*` Skill as an independent Skill/i);
   assert.match(skill, /Do not ask the user to choose only one/i);
-  assert.match(skill, /Codex=`codex` or Claude Code=`claude`/);
-  assert.match(skill, /does not support OpenClaw or Pi Agent/);
+  assert.match(skill, /Codex=`codex`, Claude Code=`claude`, or Pi=`pi`/);
+  assert.match(skill, /does not support OpenClaw/);
   assert.match(skill, /attached interactive terminal/i);
   assert.match(skill, /RAINSKILLS_USER_INPUT_REQUIRED/);
   assert.match(skill, /rainskills\.next-action\.v1/);
@@ -189,10 +189,8 @@ test("npm artifact includes the marketplace entry", () => {
   assert(manifest.files.includes("SKILL.md"));
   assert(manifest.files.includes("agents/"));
   assert(manifest.files.includes("marketplace/"));
-  assert(manifest.files.includes("pi/"));
-  assert.deepEqual(manifest.pi, {
-    skills: ["./marketplace/rainskills/skills"],
-  });
+  assert(!manifest.files.includes("pi/"), "Pi uses the packaged Skill entry and no Extension payload");
+  assert.deepEqual(manifest.pi, { skills: ["./marketplace/rainskills/skills"] });
   assert.equal(
     manifest.scripts["test:marketplace"],
     "node --test tests/marketplace-entry.test.js"
@@ -226,8 +224,10 @@ test("README documents one-product installation and updates for each adapter", (
   assert.match(readme, /npx skills update rainskills/);
   assert.match(readme, /codex plugin marketplace upgrade goodrain/);
   assert.match(readme, /\/plugin update rainskills@goodrain/);
-  assert.match(readme, /支持 Codex 和 Claude Code/);
-  assert.match(readme, /不支持 OpenClaw 或 Pi Agent 安装/);
-  assert.doesNotMatch(readme, /npx --yes rainskills (openclaw|pi)/);
+  assert.match(readme, /pi install npm:rainskills/);
+  assert.match(readme, /支持 Codex、Claude Code 和 Pi/);
+  assert.match(readme, /不支持 OpenClaw 安装/);
+  assert.match(readme, /npx --yes rainskills pi/);
+  assert.doesNotMatch(readme, /npx --yes rainskills openclaw/);
   assert.match(readme, /只会看到一个.*Rainskills/s);
 });

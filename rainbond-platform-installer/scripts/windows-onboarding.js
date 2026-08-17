@@ -3,7 +3,6 @@
 
 const crypto = require("node:crypto");
 const fs = require("node:fs");
-const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 const readline = require("node:readline/promises");
@@ -16,37 +15,86 @@ const {
   authorizeWithLoopback,
   openWindowsBrowser,
 } = require("./windows-auth.js");
-const {
-  configureSelectedClients,
-  persistWindowsEnvironment,
-  validateMcp,
-} = require("./windows-client-config.js");
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CONTROL_MODES = new Set(["windows-native", "wsl", "posix"]);
+const API_VALIDATION_TIMEOUT_MS = 180000;
+const API_VALIDATION_MAX_BYTES = 10 * 1024 * 1024;
 
-function isLocalHttpUrl(value) {
-  let parsed;
+async function validateApi({
+  url,
+  token,
+  fetchImpl = globalThis.fetch,
+  timeoutMs = API_VALIDATION_TIMEOUT_MS,
+  maxResponseBytes = API_VALIDATION_MAX_BYTES,
+}) {
+  const controller = new AbortController();
+  let reader;
+  let wallClockTimer;
+  const timeoutError = new Error("Rainbond API Bridge 校验超时");
+  const wallClock = new Promise((_, reject) => {
+    wallClockTimer = setTimeout(() => {
+      controller.abort();
+      if (reader) void reader.cancel().catch(() => {});
+      reject(timeoutError);
+    }, timeoutMs);
+  });
   try {
-    parsed = new URL(value);
-  } catch {
-    return false;
+    return await Promise.race([(async () => {
+      const response = await fetchImpl(url, {
+        method: "POST",
+        signal: controller.signal,
+        headers: {
+          accept: "application/json",
+          Authorization: `GRJWT ${token}`,
+          "content-type": "application/json",
+          "mcp-protocol-version": "2025-03-26",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/list",
+          params: {},
+        }),
+      });
+      if (!response.ok) throw new Error(`Rainbond API Bridge 校验失败，HTTP ${response.status}`);
+      if (!response.body || typeof response.body.getReader !== "function") {
+        throw new Error("Rainbond API Bridge 校验返回了无法识别的响应");
+      }
+      reader = response.body.getReader();
+      const chunks = [];
+      let total = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        total += value.byteLength;
+        if (total > maxResponseBytes) {
+          controller.abort();
+          await reader.cancel().catch(() => {});
+          throw new Error("Rainbond API Bridge 校验响应过大");
+        }
+        chunks.push(value);
+      }
+      const body = new Uint8Array(total);
+      let offset = 0;
+      for (const chunk of chunks) {
+        body.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      let payload;
+      try {
+        payload = JSON.parse(new TextDecoder().decode(body));
+      } catch {
+        throw new Error("Rainbond API Bridge 校验返回了无法识别的响应");
+      }
+      if (!Array.isArray(payload?.result?.tools)) {
+        throw new Error("Rainbond API Bridge 校验返回了无法识别的响应");
+      }
+      return { token };
+    })(), wallClock]);
+  } finally {
+    clearTimeout(wallClockTimer);
   }
-  if (parsed.protocol !== "http:") return false;
-
-  const hostname = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
-  if (hostname === "localhost" || hostname.endsWith(".localhost")) return true;
-  if (net.isIP(hostname) === 6) {
-    return hostname === "::1" || hostname.startsWith("fc") || hostname.startsWith("fd");
-  }
-  if (net.isIP(hostname) !== 4) return false;
-
-  const octets = hostname.split(".").map(Number);
-  return octets[0] === 10
-    || octets[0] === 127
-    || (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31)
-    || (octets[0] === 192 && octets[1] === 168)
-    || (octets[0] === 169 && octets[1] === 254);
 }
 
 function requireValue(argv, index, option) {
@@ -62,6 +110,7 @@ function parseWindowsInstallerArgs(argv) {
     customDest: "",
     force: false,
     skipMcp: false,
+    apiOnly: false,
     nonInteractive: false,
     rainbondUrl: "",
     deploymentMode: "",
@@ -72,7 +121,7 @@ function parseWindowsInstallerArgs(argv) {
 
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
-    if (["codex", "claude", "all"].includes(argument)) {
+    if (["codex", "claude", "pi", "all"].includes(argument)) {
       options.target = argument;
     } else if (argument === "--dest") {
       options.customDest = requireValue(argv, index, argument);
@@ -81,6 +130,8 @@ function parseWindowsInstallerArgs(argv) {
       options.force = true;
     } else if (argument === "--skip-mcp") {
       options.skipMcp = true;
+    } else if (argument === "--api-only") {
+      options.apiOnly = true;
     } else if (argument === "--non-interactive") {
       options.nonInteractive = true;
     } else if (argument === "--rainbond-url") {
@@ -105,9 +156,37 @@ function parseWindowsInstallerArgs(argv) {
   return options;
 }
 
+function writeCliCredentials({ baseUrl, home, token, stateStore, allowInsecureHttp = false }) {
+  const store = stateStore || createWindowsSecureStateStore({ home });
+  const directory = store.ensurePrivateDirectory(path.join(home, ".rainbond"));
+  const target = path.join(directory, "credentials.env");
+  const temporary = path.join(directory, `.credentials.${process.pid}.${crypto.randomBytes(6).toString("hex")}.tmp`);
+  if (fs.existsSync(target) && fs.lstatSync(target).isSymbolicLink()) {
+    throw new Error(`拒绝覆盖 Windows reparse point：${target}`);
+  }
+  fs.writeFileSync(
+    temporary,
+    `export RAINBOND_JWT=${JSON.stringify(token)}\nexport RAINBOND_URL=${JSON.stringify(baseUrl)}\nexport RAINBOND_ALLOW_INSECURE_HTTP=${JSON.stringify(String(allowInsecureHttp))}\n`,
+    { mode: 0o600 }
+  );
+  try {
+    store.protectRegularFile(temporary);
+    fs.renameSync(temporary, target);
+    store.protectRegularFile(target);
+  } catch (error) {
+    try {
+      fs.unlinkSync(temporary);
+    } catch (cleanupError) {
+      if (cleanupError.code !== "ENOENT") throw cleanupError;
+    }
+    throw error;
+  }
+}
+
 function destinationsForTarget(target, home) {
   if (target === "codex") return [path.join(home, ".codex", "skills")];
   if (target === "claude") return [path.join(home, ".claude", "skills")];
+  if (target === "pi") return [path.join(home, ".pi", "agent", "skills")];
   if (target === "all") {
     return [
       path.join(home, ".claude", "skills"),
@@ -248,6 +327,136 @@ function copySkills({ skills, destinations, force = false, logger = () => {} }) 
   return counts;
 }
 
+function installBridge({ home, packageRoot, stateStore }) {
+  const source = path.join(packageRoot, "bin", "rainskills-tools.js");
+  const info = fs.lstatSync(source);
+  if (!info.isFile() || info.isSymbolicLink()) {
+    throw new Error(`API Bridge 必须是普通文件，不能是符号链接或 reparse point：${source}`);
+  }
+  const store = stateStore || (
+    process.platform === "win32"
+      ? createWindowsSecureStateStore({ home })
+      : createSecureStateStore({ platform: process.platform, home })
+  );
+  const directory = path.join(home, ".rainbond", "bin");
+  try {
+    const directoryInfo = fs.lstatSync(directory);
+    if (directoryInfo.isSymbolicLink()) {
+      throw new Error(`拒绝使用符号链接或 reparse point Bridge 目录：${directory}`);
+    }
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  assertNoSymlinkPath(directory);
+  store.ensurePrivateDirectory(directory);
+  const destination = path.join(directory, "rainskills-tools.js");
+  if (fs.existsSync(destination)) {
+    const existing = fs.lstatSync(destination);
+    if (!existing.isFile() || existing.isSymbolicLink()) {
+      throw new Error(`拒绝覆盖符号链接或 reparse point Bridge：${destination}`);
+    }
+  }
+  const temporary = path.join(
+    directory,
+    `.rainskills-tools.js.${process.pid}.${crypto.randomBytes(6).toString("hex")}`
+  );
+  const backup = path.join(
+    directory,
+    `.rainskills-tools.js.backup.${process.pid}.${crypto.randomBytes(6).toString("hex")}`
+  );
+  let backedUp = false;
+  try {
+    fs.copyFileSync(source, temporary, fs.constants.COPYFILE_EXCL);
+    store.protectRegularFile(temporary);
+    if (fs.existsSync(destination)) {
+      fs.renameSync(destination, backup);
+      backedUp = true;
+    }
+    fs.renameSync(temporary, destination);
+    store.protectRegularFile(destination);
+    if (backedUp) fs.rmSync(backup, { force: true });
+  } catch (error) {
+    try {
+      fs.rmSync(temporary, { force: true });
+    } catch {
+      // Preserve the original installation error.
+    }
+    if (backedUp && fs.existsSync(destination)) {
+      fs.rmSync(destination, { force: true });
+    }
+    if (backedUp && fs.existsSync(backup)) {
+      fs.renameSync(backup, destination);
+    }
+    throw error;
+  }
+  return destination;
+}
+
+function installCodexReadRule({ home, bridge, stateStore }) {
+  const bridgeInfo = fs.lstatSync(bridge);
+  if (!bridgeInfo.isFile() || bridgeInfo.isSymbolicLink()) {
+    throw new Error(`RainSkills CLI 必须是普通文件，不能是符号链接或 reparse point：${bridge}`);
+  }
+  const store = stateStore || (
+    process.platform === "win32"
+      ? createWindowsSecureStateStore({ home })
+      : createSecureStateStore({ platform: process.platform, home })
+  );
+  const directory = path.join(home, ".codex", "rules");
+  assertNoSymlinkPath(directory);
+  store.ensurePrivateDirectory(directory);
+  const destination = path.join(directory, "rainskills.rules");
+  if (fs.existsSync(destination)) {
+    const existing = fs.lstatSync(destination);
+    if (!existing.isFile() || existing.isSymbolicLink()) {
+      throw new Error(`拒绝覆盖符号链接或 reparse point Codex 规则：${destination}`);
+    }
+  }
+  const rule = [
+    "# Managed by RainSkills. The CLI enforces the read-only boundary before network access.",
+    "prefix_rule(",
+    "    pattern = [",
+    "        \"node\",",
+    `        ${JSON.stringify(bridge)},`,
+    "        [\"status\", \"list\", \"describe\", \"read\"],",
+    "    ],",
+    "    decision = \"allow\",",
+    "    justification = \"Allow only RainSkills catalog inspection and CLI-enforced read-only Rainbond queries.\",",
+    ")",
+    "",
+  ].join("\n");
+  const temporary = path.join(
+    directory,
+    `.rainskills.rules.${process.pid}.${crypto.randomBytes(6).toString("hex")}`
+  );
+  const backup = path.join(
+    directory,
+    `.rainskills.rules.backup.${process.pid}.${crypto.randomBytes(6).toString("hex")}`
+  );
+  let backedUp = false;
+  try {
+    fs.writeFileSync(temporary, rule, { flag: "wx" });
+    store.protectRegularFile(temporary);
+    if (fs.existsSync(destination)) {
+      fs.renameSync(destination, backup);
+      backedUp = true;
+    }
+    fs.renameSync(temporary, destination);
+    store.protectRegularFile(destination);
+    if (backedUp) fs.rmSync(backup, { force: true });
+  } catch (error) {
+    try {
+      fs.rmSync(temporary, { force: true });
+    } catch {
+      // Preserve the original installation error.
+    }
+    if (backedUp && fs.existsSync(destination)) fs.rmSync(destination, { force: true });
+    if (backedUp && fs.existsSync(backup)) fs.renameSync(backup, destination);
+    throw error;
+  }
+  return destination;
+}
+
 function validateControl(control) {
   if (!control || !CONTROL_MODES.has(control.mode)) {
     throw new Error("不支持的 RainSkills control mode");
@@ -270,9 +479,13 @@ function createOnboardingCheckpoint({
   operationId = crypto.randomUUID(),
   now = () => new Date().toISOString(),
   stateStore,
+  transportMode = "cli",
 }) {
   if (!UUID_PATTERN.test(operationId)) throw new Error("operation id 不是有效的 UUID");
-  if (!["codex", "claude", "all"].includes(target)) throw new Error("安装目标无效");
+  if (!["codex", "claude", "pi", "all"].includes(target)) throw new Error("安装目标无效");
+  // Existing interrupted onboardings may still carry the old transport label.
+  // New checkpoints are always written by main() with transportMode="cli".
+  if (!["cli", "mcp", "api"].includes(transportMode)) throw new Error("安装传输模式无效");
   const controlDistro = validateControl(control);
   const store = stateStore || (
     process.platform === "win32"
@@ -290,6 +503,7 @@ function createOnboardingCheckpoint({
     stage: "awaiting-platform",
     target,
     deployment_mode: "self-hosted",
+    transport_mode: transportMode,
     control_mode: control.mode,
     control_distro: controlDistro,
     platform_state_path: path.join(
@@ -316,6 +530,10 @@ function createNextAction(operationId) {
 
 async function authorizeAndConfigure({
   target,
+  home = os.homedir(),
+  packageRoot = path.resolve(__dirname, "..", ".."),
+  stateStore,
+  allowInsecureHttp = false,
   baseUrl,
   noBrowser = false,
   signal,
@@ -323,9 +541,7 @@ async function authorizeAndConfigure({
   openBrowser = openWindowsBrowser,
   authorizeWithDeviceFlowImpl = authorizeWithDeviceFlow,
   authorizeWithLoopbackImpl = authorizeWithLoopback,
-  validateMcpImpl = validateMcp,
-  persistWindowsEnvironmentImpl = persistWindowsEnvironment,
-  configureSelectedClientsImpl = configureSelectedClients,
+  validateApiImpl = validateApi,
   fetchImpl = globalThis.fetch,
   sleep,
   now,
@@ -353,33 +569,25 @@ async function authorizeAndConfigure({
     });
   }
 
-  const endpoints = [];
-  if (target === "codex" || target === "all") {
-    endpoints.push(`${baseUrl}/console/mcp/rainskills/codex/query`);
-  }
-  if (target === "claude" || target === "all") {
-    endpoints.push(`${baseUrl}/console/mcp/rainskills/claude-code/query`);
-  }
-  if (endpoints.length === 0) throw new Error("安装目标无效");
-  for (const url of endpoints) {
-    const validation = await validateMcpImpl({ fetchImpl, token, url });
-    token = validation.token;
-  }
-  persistWindowsEnvironmentImpl({ baseUrl, spawnImpl, token });
-  configureSelectedClientsImpl({ baseUrl, spawnImpl, target, token });
-  return { status: "configured" };
+  const apiUrl = `${baseUrl}/console/mcp/rainskills/api/query`;
+  const validation = await validateApiImpl({ fetchImpl, token, url: apiUrl });
+  token = validation.token;
+  writeCliCredentials({ baseUrl, home, token, stateStore, allowInsecureHttp });
+  logger("RainSkills CLI 已授权并验证；未修改客户端 MCP 配置。");
+  return { status: "cli-configured" };
 }
 
 async function promptTarget() {
   const terminal = readline.createInterface({ input: stdin, output: stdout });
   try {
-    stdout.write("请选择要安装和配置的平台：\n  1) Codex\n  2) Claude Code\n  3) 两者都要\n");
+    stdout.write("请选择要安装和配置的平台：\n  1) Codex\n  2) Claude Code\n  3) Pi\n  4) Codex 和 Claude Code\n");
     for (;;) {
-      const answer = (await terminal.question("请输入选项 [1-3]: ")).trim();
+      const answer = (await terminal.question("请输入选项 [1-4]: ")).trim();
       if (answer === "1") return "codex";
       if (answer === "2") return "claude";
-      if (answer === "" || answer === "3") return "all";
-      stdout.write("请输入 1、2 或 3。\n");
+      if (answer === "3") return "pi";
+      if (answer === "" || answer === "4") return "all";
+      stdout.write("请输入 1、2、3 或 4。\n");
     }
   } finally {
     terminal.close();
@@ -452,7 +660,7 @@ async function resolveDeployment(options, {
 }
 
 function usage() {
-  stdout.write("Usage: npx rainskills [codex|claude|all] [options]\n");
+  stdout.write("Usage: npx rainskills [codex|claude|pi|all] [options]\n");
 }
 
 async function main(argv, dependencies = {}) {
@@ -463,11 +671,20 @@ async function main(argv, dependencies = {}) {
   }
   const home = dependencies.home || os.homedir();
   const packageRoot = dependencies.packageRoot || path.resolve(__dirname, "..", "..");
+  const nodeVersion = Object.hasOwn(dependencies, "nodeVersion")
+    ? dependencies.nodeVersion
+    : process.versions.node;
+  const nodeMajorText = typeof nodeVersion === "string" ? nodeVersion.split(".")[0] : "";
+  const nodeMajor = /^\d+$/.test(nodeMajorText) ? Number(nodeMajorText) : Number.NaN;
+  if (!Number.isInteger(nodeMajor) || nodeMajor < 18) {
+    throw new Error("RainSkills CLI 需要 Node.js 18 或更高版本；不会安装 Python/Shell Bridge");
+  }
   const target = options.target || (
     options.nonInteractive || !stdin.isTTY
       ? "all"
       : await (dependencies.promptTarget || promptTarget)()
   );
+  const logger = dependencies.logger || ((message) => stdout.write(`${message}\n`));
   const destinations = options.customDest
     ? [path.resolve(options.customDest)]
     : destinationsForTarget(target, home);
@@ -476,15 +693,28 @@ async function main(argv, dependencies = {}) {
     skills,
     destinations,
     force: options.force,
-    logger: dependencies.logger || ((message) => stdout.write(`${message}\n`)),
+    logger,
   });
-  if (options.customDest || options.skipMcp) return { status: "skills-installed", counts };
+  if (options.customDest) {
+    installBridge({ home, packageRoot, stateStore: dependencies.stateStore });
+    return { status: "skills-installed", counts };
+  }
+  const runtimePlatform = dependencies.platform || process.platform;
+  const stateStore = dependencies.stateStore || (
+    runtimePlatform === "win32"
+      ? createWindowsSecureStateStore({ home, runner: dependencies.runner })
+      : createSecureStateStore({ platform: runtimePlatform, home })
+  );
+  const bridge = installBridge({ home, packageRoot, stateStore });
+  if (target === "codex" || target === "all") {
+    const rule = installCodexReadRule({ home, bridge, stateStore });
+    logger(`[install] 已安装 Codex 只读网络规则到 ${rule}`);
+  }
 
   const deployment = await resolveDeployment(options, {
     isTty: dependencies.isTty,
     promptDeployment: dependencies.promptDeployment,
   });
-  const logger = dependencies.logger || ((message) => stdout.write(`${message}\n`));
   if (deployment.needsUserInput) {
     logger("[RAINSKILLS_USER_INPUT_REQUIRED:rainbond_environment]");
     logger("请选择 Rainbond Cloud，或选择私有化部署并提供平台地址/继续平台安装。");
@@ -493,12 +723,6 @@ async function main(argv, dependencies = {}) {
 
   if (deployment.needsPlatform) {
     const packageManifest = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"));
-    const runtimePlatform = dependencies.platform || process.platform;
-    const stateStore = dependencies.stateStore || (
-      runtimePlatform === "win32"
-        ? createWindowsSecureStateStore({ home, runner: dependencies.runner })
-        : createSecureStateStore({ platform: runtimePlatform, home })
-    );
     const operationId = dependencies.operationId || crypto.randomUUID();
     const operationLock = stateStore.acquireOperationLock({ operationId });
     try {
@@ -509,6 +733,7 @@ async function main(argv, dependencies = {}) {
         control: dependencies.control || detectControlEnvironment(),
         operationId,
         stateStore,
+        transportMode: "cli",
       });
       const nextAction = createNextAction(operationId);
       logger("");
@@ -532,12 +757,16 @@ async function main(argv, dependencies = {}) {
   parsedBase.search = "";
   parsedBase.hash = "";
   const normalizedBase = parsedBase.toString().replace(/\/$/, "");
-  if (parsedBase.protocol === "http:" && !options.allowInsecureHttp && !isLocalHttpUrl(normalizedBase)) {
+  if (parsedBase.protocol === "http:" && !options.allowInsecureHttp) {
     throw new Error("默认禁用明文 HTTP；如需继续请添加 --allow-insecure-http");
   }
   const configure = dependencies.authorizeAndConfigure || authorizeAndConfigure;
-  await configure({
+  const configuration = await configure({
     target,
+    home,
+    packageRoot,
+    stateStore,
+    allowInsecureHttp: options.allowInsecureHttp,
     baseUrl: normalizedBase,
     noBrowser: options.noBrowser,
     logger,
@@ -547,9 +776,11 @@ async function main(argv, dependencies = {}) {
     ? "Codex"
     : target === "claude"
       ? "Claude Code"
-      : "Codex 和 Claude Code";
-  logger(`安装和授权已完成。请重新启动 ${clientLabel}，让新 Skills、MCP 和环境变量生效。`);
-  return { status: "configured", counts };
+      : target === "pi"
+        ? "Pi（执行 /reload）"
+        : "Codex 和 Claude Code";
+  logger(`安装和授权已完成。请重新启动 ${clientLabel}，让新 Skills 生效。`);
+  return { status: "cli-configured", counts, configuration };
 }
 
 module.exports = {
@@ -562,7 +793,10 @@ module.exports = {
   main,
   parseWindowsInstallerArgs,
   resolveDeployment,
-  isLocalHttpUrl,
+  installBridge,
+  installCodexReadRule,
+  writeCliCredentials,
+  validateApi,
 };
 
 if (require.main === module) {

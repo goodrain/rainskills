@@ -7,6 +7,7 @@ const test = require("node:test");
 
 const repoRoot = path.resolve(__dirname, "..");
 const launcherPath = path.join(repoRoot, "bin", "rainskills.js");
+const toolsBridgePath = path.join(repoRoot, "bin", "rainskills-tools.js");
 const controlEnvironmentPath = path.join(
   repoRoot,
   "rainbond-platform-installer",
@@ -88,6 +89,10 @@ test("launcher has the Node shebang and classifies supported runtimes", () => {
   assert.deepEqual(resolveInvocation(["codex", "--skip-mcp"]), {
     executable: "bash",
     args: [path.join(repoRoot, "install.sh"), "codex", "--skip-mcp"],
+  });
+  assert.deepEqual(resolveInvocation(["tools", "list", "--prefix", "rainbond_query_"]), {
+    executable: process.execPath,
+    args: [toolsBridgePath, "list", "--prefix", "rainbond_query_"],
   });
 });
 

@@ -1,6 +1,6 @@
 ---
 name: rainbond-app-assistant
-description: "Use for any request to deploy, run, deliver, publish, or troubleshoot the current project — regardless of whether the user mentions \"Rainbond\" by name. Triggers on generic intents such as: 帮我把项目跑起来 / 部署这个项目 / 发布上线 / 看看为什么跑不起来 / 帮我交付 / 排查一下 / deploy this project / run this app / check what is blocking it. Prefer this skill when a Rainbond MCP connection is configured in the session. Handles the full lifecycle: project-init, bootstrap, troubleshooting, delivery verification, dev-to-test promotion, and code-layer handoff."
+description: "Use for any request to deploy, run, deliver, publish, or troubleshoot the current project — regardless of whether the user mentions \"Rainbond\" by name. Triggers on generic intents such as: 帮我把项目跑起来 / 部署这个项目 / 发布上线 / 看看为什么跑不起来 / 帮我交付 / 排查一下 / deploy this project / run this app / check what is blocking it. Uses the installed RainSkills CLI for platform actions. Handles the full lifecycle: project-init, bootstrap, troubleshooting, delivery verification, dev-to-test promotion, and code-layer handoff."
 ---
 
   # Rainbond App Assistant
@@ -55,56 +55,24 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
   - 规则说明、流程说明、人类可读结论：优先中文
   - `### Structured Output` 里的对象名、字段名、enum：保持英文 canonical 形式
 
-  ## Preflight Gate（最高优先级，先于硬规则执行）
+  ## Rainbond Transport Preflight（最高优先级）
 
-  在读取其它 skill 文件、扫描用户项目、或调用任何业务 MCP 工具之前，必须先验证当前会话能力。
+  在读取下层 Skill、扫描项目或执行 Rainbond 业务操作前，为本次工作流解析一次传输，并在工作流结束前保持不变。先读取 [references/transport-resolution.md](references/transport-resolution.md)，不要复制其中规则。
 
-  Step 0 — Probe MCP availability：
-  - 调用一个轻量探针，例如 `rainbond_query_enterprises`
-  - 成功：记录 enterprise / team / region 上下文，进入"硬规则"和主线流程
-  - 失败（auth / transport / timeout / not configured）：立即停止，不进入业务流程
-
-  Preflight 失败时禁止做的事：
-  - 读取其它 reference / SKILL 文件
-  - 扫描用户项目目录、读取 `rainbond.app.json` 或 `.rainbond/local.json`
-  - 在本地生成 `Dockerfile`、`docker-compose.yml`、`manifest`、部署脚本或临时部署文档
-  - 手工编写或猜测 `~/.rainbond/mcp.env`、JWT、API token
-  - 调用任何业务 MCP 工具
-
-  Preflight 失败时必须给用户的动作建议，需要先区分场景：
-
-  - 如果用户机器上已存在 `~/.rainbond/mcp.env` 或 `~/.rainbond/skills/install.sh`，
-    判定为「已装过，多半是 JWT 过期 / 401 / 403」，给出 refresh 指引：
-
-    ```bash
-    bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh) refresh
-    # 或：bash ~/.rainbond/skills/install.sh refresh
-    ```
-
-    成功后按安装器输出执行客户端恢复动作：Codex / Claude Code 重启，Pi Agent 执行
-    `/reload`；OpenClaw 当前 CLI 使用安装器触发 MCP 热加载，独立 Gateway / Agent 进程需重新加载配置或重启。恢复完成后再让用户重新触发同一指令，
-    本轮不要自动重试同一个 MCP 工具调用。
-
-  - 否则视为首次安装，给完整安装命令：
-
-    ```bash
-    bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh)
-    ```
-
-    安装脚本会配置 MCP server、保存 JWT，并验证当前客户端的 RainSkills 专用 MCP 地址可用。
-    配置完成后重新触发同一指令即可。
-
-  例外：用户在同一会话里已经成功用过任意 `rainbond_*` 工具，则视为 preflight 已通过，不必每轮重探。
+  1. 不检测当前会话的 `rainbond_*` Tool；运行一次 `node ~/.rainbond/bin/rainskills-tools.js status`。
+  2. CLI status 成功时选择 `cli`；失败时停止并按共享规则报告恢复动作。
+  3. 已选择 `cli` 后，认证、网络、超时和业务错误都不得切换传输。
+  6. 写操作超时或结果未知时禁止重放，先用同一传输查询平台事实。
 
   ## Installation Intent（高优先级）
 
   当用户的请求本身是"帮我把 rainskills / Rainbond MCP 装上"或等价表达（含 `github.com/goodrain/rainskills` URL）时，**禁止**走以下旁路：
 
   - 手工 `git clone` 后只复制部分 `rainbond-*` Skill
-  - 手工编写 `~/.rainbond/mcp.env`、JWT、登录回调
+  - 手工编写 `~/.rainbond/credentials.env`、JWT、登录回调
   - 手工修改任一客户端配置来注册 MCP server
 
-  必须给用户一行可直接复制的命令，由仓库内 `install.sh` 接管交互式登录、JWT 获取、MCP 注册和验证：
+  必须给用户一行可直接复制的命令，由仓库内 `install.sh` 接管交互式登录、JWT 获取、CLI 安装和验证：
 
   ```bash
   bash <(curl -fsSL https://raw.githubusercontent.com/goodrain/rainskills/main/install.sh)
@@ -113,7 +81,7 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
   如果用户当前会话所在仓库就是 `rainbond-skills` 本身，可建议 `./install.sh`。
   如果用户明确要求非默认仓库位置，告诉他用环境变量 `RAINBOND_SKILLS_HOME=<path>` 前置。
 
-  说明给用户：脚本会安装全部独立 Skill、引导浏览器登录、写 `~/.rainbond/mcp.env`、为 Codex / Claude Code / OpenClaw / Pi Agent 配置对应 MCP，并验证专用地址。不需要 AI 手工配置其中任何一步。
+  说明给用户：脚本会安装全部独立 Skill、引导浏览器登录、写 `~/.rainbond/credentials.env`、安装并验证本机 CLI。Codex / Claude Code / Pi 不需要 Rainbond MCP 或 Extension。不需要 AI 手工配置其中任何一步。
 
   ## 硬规则
 
@@ -200,7 +168,7 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
     代理事实属于执行记录，不是强制暴露 YAML 的理由。
 28. `rbd-*` 组件（rbd-gateway、rbd-api、rbd-worker、rbd-chaos、rbd-db、rbd-mq、rbd-monitor、rbd-node 等）是 Rainbond 平台自身的基础设施组件，不是用户应用组件。
     - 可以用 `rainbond_query_region_rbd_components` 查询并展示它们的状态
-    - 不能通过 MCP 对它们执行重启、部署、修改等写操作；当前 MCP 工具集不支持此类操作
+    - 当前 Rainbond Tool 能力不支持对它们执行重启、部署、修改等写操作，MCP/API 两种传输都不得尝试
     - 如果用户要求操作这些组件，明确告知：需要通过 Kubernetes 命令（如 `kubectl rollout restart deployment/<name> -n rbd-system`）或 Rainbond 集群管理控制台进行，超出本技能的操作范围，不要假装可以执行
 29. **仅给 bare Git URL 时默认 root + 空 `subdirectories`**：当用户给的只是一个 Git URL（无本地 manifest、无明确子目录提示），默认 `subdirectories=""`（仓库根）进入 source 检测，让后端判断这个仓库结构。**不要**先问用户"根目录还是子目录"。
     - 单项目仓库（一个 buildable root）→ 后端检测通过，正常 build
@@ -225,23 +193,26 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
     - **不允许**根据"模型对该仓库的先验知识"猜常见名字（Java-maven-demo、java_maven_demo、demo/java-maven 等）
     - 这与 Iron Law 29 入口"必须问用户"配套：29 管入口、30 管中途用户输入验证失败的二次询问。
     猜测换参数 + 删-再-create 循环是典型 anti-pattern，server 端可能直接 reject 重复 create 调用。
-31. **任何 Rainbond MCP 写工具调用之前**，必须先按下面的映射调用对应的 `select_skill_<id>` 工具，把该阶段的执行手册加载进会话上下文；没先调 `select_skill_<id>` 就直接动手等于**无授权操作**，是 Iron Law 违反。
-    触发动作（凡是这类，第一次调之前都必须先 `select_skill_<id>`）：
+31. **任何 Rainbond 写操作之前**，必须先按下面的映射加载对应下层 `SKILL.md`，把该阶段的执行手册载入上下文；未加载就禁止执行写操作，是 Iron Law 违反。
+    加载方式：按下表的已安装相对路径读取一次。每个阶段只加载一次，跨阶段时再加载新阶段。
+    触发动作（凡是这类，第一次调用之前都必须完成加载）：
     - 创建/更新/部署组件：`rainbond_create_component_from_source`、`rainbond_create_component_from_image`、`rainbond_create_component_from_package`、`rainbond_create_component`、`rainbond_build_component`、`rainbond_update_component_build_source`、`rainbond_change_component_image`
     - 包上传事务：`rainbond_init_package_upload`、`rainbond_delete_package_upload`；包内容必须由 bootstrap 的客户端 helper 上传，完成后再用上面的 event-based package create
     - 组件配置：`rainbond_manage_component_envs`、`rainbond_manage_component_ports`、`rainbond_manage_component_connection_envs`、`rainbond_manage_component_dependency`、`rainbond_manage_component_storage`、`rainbond_manage_component_probe`、`rainbond_manage_component_autoscaler`
     - 应用操作：`rainbond_operate_app`、`rainbond_horizontal_scale_component`、`rainbond_vertical_scale_component`、`rainbond_delete_component`
-    映射表：
-    - 当前 run 是**首次部署/创建组件/补齐拓扑**（含从源码/镜像创建，以及客户端 package upload + event-based package create） → 在第一个 MCP 写调用之前调 `select_skill_rainbond-fullstack-bootstrap`
-    - 当前 run 是**排查运行态/构建失败**（CrashLoopBackOff / ImagePullBackOff / 构建报错 / 端口/依赖不通） → 在第一个 MCP 写调用之前调 `select_skill_rainbond-fullstack-troubleshooter`
-    - 当前 run 是**交付验收**（验证 URL 可达、reverse-proxy 路径连通） → 调 `select_skill_rainbond-delivery-verifier`
-    - 当前 run 是**开发到测试 promotion**（创建快照 + 测试 app） → 调 `select_skill_rainbond-app-version-assistant`
-    - 当前 run 是**模板安装**（本地/云端 Rainbond 应用模板） → 调 `select_skill_rainbond-template-installer`
+    映射表（已安装相对路径）：
+    - 首次部署/创建组件/补齐拓扑 → `../rainbond-fullstack-bootstrap/SKILL.md`
+    - 排查运行态/构建失败 → `../rainbond-fullstack-troubleshooter/SKILL.md`
+    - 交付验收 → `../rainbond-delivery-verifier/SKILL.md`
+    - 开发到测试 promotion → `../rainbond-app-version-assistant/SKILL.md`
+    - 模板安装 → `../rainbond-template-installer/SKILL.md`
+    - 首次项目绑定 → `../rainbond-project-init/SKILL.md`
+    - 环境同步 → `../rainbond-env-sync/SKILL.md`
     规则细节：
-    - `select_skill_<id>` 本身不需用户审批、不消耗 MCP，但它的调用是**前置门控**，没调不允许走下去
-    - 一个 skill 在同一次 run 内只需调一次（重复调用工具会返回 "already active" ack）
-    - **判断依据**：用户消息中只要含"部署 / 跑起来 / 上线 / 创建组件 / 发布"等部署意图，且当前 app 还没有对应组件，就必然要先 `select_skill_rainbond-fullstack-bootstrap`，不论用户是不是显式说"先 deep dive"
-    - 如果一次 run 内场景跨阶段（先创建后排障），按需追加 `select_skill_<id>`，旧的不会被卸载
+    - 相对路径读取只加载文档，不执行平台操作
+    - 一个 skill 在同一次 run 内只需加载一次
+    - **判断依据**：用户消息中只要含"部署 / 跑起来 / 上线 / 创建组件 / 发布"等部署意图，且当前 app 还没有对应组件，就必然要先读取 `../rainbond-fullstack-bootstrap/SKILL.md`，不论用户是不是显式说"先 deep dive"
+    - 如果一次 run 内场景跨阶段（先创建后排障），按需读取新阶段的文档
     正确路径：用户说"试试 maven-demo" → 你直接调 `rainbond_update_component_build_source(service_id=已知的, subdirectories='maven-demo')` → `rainbond_check_component(service_id=已知的, is_again=true)` → 轮询 `rainbond_get_component_check_result` 直到拿到新一轮 `check_event_id`/`check_uuid` 的结果。
 32. **简短回复继承上一轮被中断的操作**：当上一轮你向用户提了问、或在 prose 里邀请用户回复（"回复继续 / check / OK / 完成 / 重试" 等），用户给了简短或单值回复（"继续"、"OK"、"试试 X"、"对的就是 Y"、"换 master"），你的**下一个动作必须基于 priorTurnMessages 的最新状态继续上一个被中断的操作**，**禁止**把它当成一次"全新的开始"。
     - 看 priorTurnMessages 里上一条 assistant 消息：以问号结尾 / 含"回复 X / 你看 / 是否 / 请确认 / 请选" → 视为对你提问的回答
@@ -250,7 +221,7 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
     - **禁止**：本轮重新走"加载 skill / 询问意图 / 查 app 详情 / 列能力清单"的初始化流程
     - **例外**：用户消息明显是新任务（"换个项目"、"算了别部署了"、"先停下"），按新任务处理
     - 信号词识别："继续 / check / OK / 完成了吗 / 现在怎样 / 进度 / 试 X" 这类短词 → 多半属于回答；超过一句完整描述新任务的才算 fresh intent
-33. **`rainbond_update_component_build_source` 只改 DB 不触发检测**，调完之后下一个 MCP 写调用**必须**是 `rainbond_check_component(service_id=..., is_again=true)`，不允许中间夹任何其他工具，也不允许跳过它直接读 check_result 或调 build。
+33. **`rainbond_update_component_build_source` 只改 DB 不触发检测**，调完之后在已锁定传输上的下一个写调用**必须**是 `rainbond_check_component(service_id=..., is_again=true)`，不允许中间夹任何其他工具，也不允许跳过它直接读 check_result 或调 build。
     背景（必读）：后端 `update_component_build_source` 视图仅把 `git_url`/`subdirectories`/`code_version`/凭证字段写进 DB（`service.save()` 结束），**没有调用 `app_check_service.check_service`**。因此：
     - 改完 build_source 后调 `rainbond_get_component_check_result` → 返回的依然是**上一轮**（最初 create 时）的 `check_uuid` 和 "源码目录不存在" 旧结果，给人"我的修改没生效"的假象，实际是检测根本没重跑
     - 改完 build_source 后调 `rainbond_build_component` → 组件还停留在 `service_source=source_code` + 上轮检测未通过的状态，build 任务会被卡在 `checking`，无法真正启动
@@ -270,7 +241,7 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
     - `update_component_build_source` → `build_component`（中间没 `check_component`，组件仍 `checking`，build 必失败）
     - 多次 `update_component_build_source` 之间不夹 `check_component`（等价于在改了 DB 但没触发检测的情况下又改一遍，每次轮询的还是同一个旧 `check_uuid`）
     与 Iron Law 30 配套：30 管"换参数重试"的预算（同 `service_cname` 最多 2 次 create / 同 service_id 同字段最多 N 次 update），33 管"改完后必须走完一个完整 check 闭环"。两者一起堵住"猜参数 → 改了又不重检测 → 又看到旧错误 → 再猜"的死循环。
-34. **service_id provenance：任何 MCP 写工具传入的 `service_id` 必须有明确出处**，不允许凭模型记忆或上下文里飘着的 UUID 猜。
+34. **service_id provenance：任何 Rainbond 写 Tool 传入的 `service_id` 必须有明确出处**，不允许凭模型记忆或上下文里飘着的 UUID 猜。
     合法的 `service_id` 来源（按优先级）：
     - 本会话内 `rainbond_query_components` 的返回结果（最新一次）
     - 本会话内 `rainbond_create_component_*` 工具的返回值
@@ -296,10 +267,10 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
 
     反例（来自真实回归 case `cs_1779149681822_3u`，2026-05-19）：模型从 `rainbond_get_component_summary` 响应的 `recent_events` 段看到形如 `{"ID": 17740, "event_id": "...", "opt_type": "build-service"}`，直接把 `17740` 当成 `event_id` 传给 `rainbond_get_component_build_logs`，工具返回 `items: []`（找不到该 UUID 的日志）。正确做法：从同一 `recent_events[i].event_id` 字段取出 UUID 字符串，或调 `rainbond_get_component_events` 重查。
 35. **会话内部叙述纪律 + 内部 preflight 工具不要主动调**。下列四类是"内部会话状态"，对用户**无信息量**，禁止外漏到 assistant 可见消息：
-    - **`select_skill_*` 工具调用本身**：这是 server 内部 hookup，把指定 skill 的执行手册拼到 system prompt 用的。调用前**不要**说"我先加载 bootstrap 手册"、"现在调用 select_skill_..."；调用后**不要**说"Bootstrap 手册已加载"、"skill ready" 这类回声。server 返回的 `loaded_skill` / `already active` ack 是给你看的内部信号，**直接进入下一个真实工具调用**，保持沉默。
+    - **下层 Skill 加载本身**：相对路径读取是内部准备动作。加载前后都不要叙述“先加载手册”或回声；完成后直接进入下一个真实调用。
     - **`rainbond_get_current_user`**：本工具被 server 端 AuthSubjectResolver 在每次 HTTP 请求的 preflight 里跑过了。当前 user_id / username / enterprise_id / team_name / region_name **已经在 system prompt 的 session-context 段提供**，需要时直接读那里，**不要发 tool call 重新拉**。例外：用户明确说"我换了团队/企业，重新认一下"这种 explicit 重认证需求才调。
     - **`rainbond_query_components` 同入参重复轮询**：服务端 30s 内的同 args 调用会走缓存；你**不要**在每个新 user turn 开头都"先查一下组件列表"，priorTurnMessages 里上一次的 query 结果在 contextSignature 不变时仍然有效。
-    - **规则推理过程 / MCP 工具内部限制 / 分类决策叙述**：你内部基于哪条 Iron Law / hard rule / 推断信号做的决策、具体 MCP 工具签名 / 字段限制、对组件 / 服务的分类判断（"ClickHouse 是公认的列式分析数据库"这类），都属于内部状态，对用户**无信息量**。
+    - **规则推理过程 / Rainbond Tool 内部限制 / 分类决策叙述**：你内部基于哪条 Iron Law / hard rule / 推断信号做的决策、具体 Tool 签名 / 字段限制、对组件 / 服务的分类判断（"ClickHouse 是公认的列式分析数据库"这类），都属于内部状态，对用户**无信息量**。
       
       **禁止**这类叙述（来自真实回归 case 的典型模式）：
       - "ClickHouse 是公认的列式分析数据库，属于基础设施软件，按 image 模式创建"
@@ -322,10 +293,10 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
       
       > rainagent 运行时通过 server-side "最终覆盖规则" 段也强制了同一条规则；本条主要服务 CLI / Codex 端使用者（他们没有 runtime tail 注入）。
     
-    **同一个 `<skill_id>` 在 session 内最多 select 一次（跨 user turn 也算）**，但**不同 skill 之间切换永远允许**（典型流程：bootstrap 部署 → troubleshooter 排障 → delivery-verifier 验收 → version-assistant promote，每切一个阶段调一次新的 select_skill_<id>）。判断方式：如果当前会话的 priorTurnMessages 里已经出现过该 `skill_id` 的 `loaded_skill` 或 `already active` tool_result，**不要再调** `select_skill_<that-same-id>`；但如果你要切到另一个 skill_id（如从 bootstrap 切到 troubleshooter），就**必须**调 `select_skill_<new-id>` 一次。
+    **同一个 `<skill_id>` 在 session 内最多加载一次（跨 user turn 也算）**，但不同阶段之间切换永远允许。读取映射表中的新阶段相对路径；priorTurnMessages 已记录文件读取时，不重复加载同一 skill。
     
-    反例（**禁止**）：上一轮已经 `select_skill_rainbond-fullstack-bootstrap` 过了，本轮 user 简短回复 "java/jar"，你又调一次 `select_skill_rainbond-fullstack-bootstrap` 并叙述"先加载 bootstrap"。正确做法：priorTurnMessages 已有 ack → 直接 `rainbond_update_component_build_source(...)` 继续。
-    正例：上一轮 `select_skill_rainbond-fullstack-bootstrap`，本轮用户说"组件起不来帮我排查下" → 现在阶段从部署切到排障 → 调一次 `select_skill_rainbond-fullstack-troubleshooter`（新 skill，允许）→ 沉默地进入诊断流程，不复述"troubleshooter 已加载"。
+    反例（**禁止**）：上一轮已加载 bootstrap，本轮 user 简短回复 "java/jar"，又重复 selector 或读取同一文件并叙述“先加载 bootstrap”。正确做法：直接 `rainbond_update_component_build_source(...)` 继续。
+    正例：上一轮已加载 bootstrap，本轮用户说“组件起不来帮我排查下” → 切换到排障阶段 → 读取 `../rainbond-fullstack-troubleshooter/SKILL.md` → 沉默进入诊断流程。
 36. **用户给出的字面值（URL / 镜像地址 / 分支名 / 凭证）必须 verbatim 传给工具，禁止 LLM 凭训练知识"补全"、"修正"、"猜测"**。
     适用字段：`git_url` / `image_address` / `code_version`（分支/tag/commit）/ `username` / `password` / `token` / `subdirectories` 等任何用户在消息里给出的字面值。
     **禁止行为**：
@@ -419,28 +390,30 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
 
   ### 触发时机
 
-  在主线流程进入每个专项阶段的**第一个动作之前**，调用对应的 `select_skill_<id>` 工具一次（同一个 skill 在同一次 run 内只需调一次，后续都已生效）。具体映射：
+  在主线流程进入每个专项阶段的第一个动作之前，必须读取对应下层 `SKILL.md`；未读取时禁止执行该阶段写操作。每个阶段只读取一次，后续复用。
 
-  | 主线阶段 | 触发条件 | 必须先调的工具 |
-  |---------|---------|---------------|
-  | 步骤 3：topology 创建 | linked 但拓扑/组件不存在；或要从源码/镜像/包创建/补齐组件 | `select_skill_rainbond-fullstack-bootstrap` |
-  | 步骤 4：运行态排障 | 组件已存在但运行不健康；构建失败、CrashLoopBackOff、ImagePullBackOff 等 | `select_skill_rainbond-fullstack-troubleshooter` |
-  | 步骤 5：交付验收 | 运行态健康，剩下的问题是用户能否访问、URL 是否可达、文件是否落盘等 | `select_skill_rainbond-delivery-verifier` |
-  | 步骤 6：dev-to-test promotion | 已 `delivered`，用户要求创建快照 + 测试 app | `select_skill_rainbond-app-version-assistant` |
-  | 模板安装路径 | 用户要求安装本地/云端 Rainbond 应用模板到目标 app | `select_skill_rainbond-template-installer` |
+  | 主线阶段 | 已安装相对路径 |
+  |---------|---------------|
+  | topology 创建 | `../rainbond-fullstack-bootstrap/SKILL.md` |
+  | 运行态排障 | `../rainbond-fullstack-troubleshooter/SKILL.md` |
+  | 交付验收 | `../rainbond-delivery-verifier/SKILL.md` |
+  | dev-to-test promotion | `../rainbond-app-version-assistant/SKILL.md` |
+  | 模板安装 | `../rainbond-template-installer/SKILL.md` |
+  | 项目绑定 | `../rainbond-project-init/SKILL.md` |
+  | 环境同步 | `../rainbond-env-sync/SKILL.md` |
 
   ### 调用语义
 
-  - `select_skill_<id>` 是当前会话的载入指令，不消耗 MCP 工具，无副作用，无需用户审批
-  - 调用后该 skill 的完整执行手册立即进入系统提示，后续动作必须严格按该 skill 的判断顺序、术语、输出契约执行
-  - 多个专项 skill 可以叠加加载（例如 bootstrap → 发现需要排障 → 再 `select_skill_rainbond-fullstack-troubleshooter`），新加载的 skill 在主题冲突时优先级更高
-  - 不能用调用 `select_skill_<id>` 来"探索这个 skill 是什么意思"——只在确认要进入对应阶段时调用
+  - 相对路径读取是载入指令，无平台副作用，无需用户审批
+  - 加载后必须严格按该 skill 的判断顺序、术语和输出契约执行
+  - 多个专项 skill 可以按阶段叠加加载；新加载的阶段规则在主题冲突时优先级更高
+  - 不用文件读取探索能力；只在确认进入对应阶段时加载
 
   ### 边界
 
   - 顶层路由判断（"用户的意图是不是部署/排障/交付"）仍然由本 skill 负责，不要在专项 skill 加载之后回头改路由
   - 工具行为约束（如本 skill 硬规则第 30 条"源码失败后必须先 query 不能直接重 create"）即使在专项 skill 加载之后仍然有效，专项 skill 只是补充更细的操作规则
-  - `rainbond-project-init` 是 workspace 型 skill，只在 Claude/Codex CLI 等有本地项目目录的客户端有意义；在 Web 端 rainagent 中**不存在** `select_skill_rainbond-project-init`，主线遇到 unlinked 时直接停下来让用户在 UI 中绑定项目
+  - `rainbond-project-init` 是 workspace 型 skill，只在有本地项目目录的客户端有意义；无本地工作区时主线遇到 unlinked 应停下来让用户在 UI 中绑定项目
 
   ## 停止条件
 
@@ -530,7 +503,7 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
   - `.rainbond/local.json`: project binding and runtime mapping context
   - `.rainbond/secrets.*.json`: local-only secret source
   - `.rainbond/env.*.json`: non-sensitive environment delta reference
-  - Rainbond MCP: runtime truth
+  - locked Rainbond transport: runtime truth
   - `template` source or explicit template-install intent: app-model installation path
 
   ## Decision Rules
@@ -1322,7 +1295,7 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
 
   Trust model:
   - local files provide context
-  - MCP provides runtime truth
+  - the locked Rainbond transport provides runtime truth
 
   Default orchestration:
   1. resolve context

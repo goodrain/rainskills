@@ -5,18 +5,9 @@ description: Use only when the current task is already known to be runtime or bu
 
 # Rainbond Fullstack Troubleshooter
 
-## MCP 认证失败恢复（JWT 过期 / 401 / 403）
+## Rainbond 传输
 
-当任何 `rainbond_*` MCP 工具返回 401 / 403 / `unauthorized` / `token expired` 类认证错误时，
-禁止重装 skills，也禁止手工改 `~/.rainbond/mcp.env`。先用下面任一命令刷新 JWT：
-
-```bash
-bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh) refresh
-# 或：bash ~/.rainbond/skills/install.sh refresh
-```
-
-刷新成功后按安装器输出执行客户端恢复动作：Codex / Claude Code 重启，Pi Agent 执行
-`/reload`；OpenClaw 当前 CLI 使用安装器触发 MCP 热加载，独立 Gateway / Agent 进程需重新加载配置或重启。在恢复完成前不要自动重试同一个 MCP 工具调用。
+如果上游已初始化本次工作流的 RainSkills CLI，直接复用，不重新探测。否则在第一次 Rainbond 调用前读取 [../rainbond-app-assistant/references/transport-resolution.md](../rainbond-app-assistant/references/transport-resolution.md) 并初始化一次。CLI 锁定后，认证、网络、超时和业务错误均不得触发替代调用通道。
 
 ## Overview
 
@@ -98,8 +89,8 @@ Operational rules:
 - Resolve selected environment in this order: user explicit input > `.rainbond/local.json.preferences.default_environment` > `preview`
 - Use `.rainbond/secrets.<environment>.json` and `.rainbond/env.<environment>.json` only as reference input for intended values or compatibility expectations; they are not proof of current deployed env
 - Use `rainbond.app.json` only as a baseline hint for topology, naming, ports, and non-sensitive defaults
-- Real state must come from Rainbond MCP queries: app detail, component summaries, pod runtime diagnostics, deployed envs, dependencies, ports, events, and logs
-- If persisted files conflict with Rainbond MCP results, trust MCP and report the mismatch explicitly
+- Real state must come through the locked Rainbond transport: app detail, component summaries, pod runtime diagnostics, deployed envs, dependencies, ports, events, and logs
+- If persisted files conflict with platform responses, trust the locked Rainbond transport and report the mismatch explicitly
 - Never print secret values in prose or structured output
 
 ## Runtime Configuration Source Precedence
@@ -131,7 +122,7 @@ Configuration source roles:
 - `.rainbond/secrets.preview.json` / `.rainbond/secrets.prod.json`: reference-only expected secret inputs, never runtime truth
 - `.rainbond/env.preview.json` / `.rainbond/env.prod.json`: reference-only expected env overrides, not runtime truth
 - `rainbond.app.json`: baseline topology hints such as component names, roles, ports, and non-sensitive default envs
-- Rainbond MCP: the only valid source for live component state, pod runtime diagnostics, deployed envs, dependencies, logs, and health
+- Locked Rainbond transport: the only valid source for live component state, pod runtime diagnostics, deployed envs, dependencies, logs, and health
 
 Allowed actions:
 - read app detail, component summary, component detail, component pods, pod detail, logs, and monitor data
@@ -256,10 +247,10 @@ Attempt budget:
 - Read `.rainbond/local.json` if present and prefer it for `app_id`, `team_name`, `region_name`, and default environment
 - Read `.rainbond/secrets.<environment>.json` and `.rainbond/env.<environment>.json` only as reference inputs for expected values
 - Read `rainbond.app.json`; if absent, read legacy `rainbond.json` only as a topology hint
-- Query Rainbond MCP for app detail and component list
-- If any local file conflicts with MCP runtime facts, trust MCP and report the drift
-- Identify `web`, `api`, and db components from MCP data first, then use files only as hints
-- Treat bootstrap handoff context as useful input, but let current MCP/runtime truth decide the current state
+- Query the locked Rainbond transport for app detail and component list
+- If any local file conflicts with platform runtime facts, trust the platform response and report the drift
+- Identify `web`, `api`, and db components from platform data first, then use files only as hints
+- Treat bootstrap handoff context as useful input, but let current platform runtime truth decide the current state
 
 2. Read current runtime evidence
 - Read `api` component summary first
@@ -826,8 +817,8 @@ Source resolution summary:
 - target app identity: explicit input > `.rainbond/local.json` > baseline project hints
 - selected reference environment: explicit input > local default > `preview`
 - expected secret and env intent: explicit input > secret file reference > env file reference > baseline env hints
-- runtime truth: Rainbond MCP only
-- if files disagree with MCP, trust MCP and report drift
+- runtime truth: the locked Rainbond transport only
+- if files disagree with platform responses, trust the locked Rainbond transport and report drift
 
 Preferred diagnostic branches:
 
