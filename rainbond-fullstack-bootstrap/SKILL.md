@@ -55,23 +55,22 @@ target 只允许 `codex`、`claude`、`all`。校验 intent 后按 `route_condit
 
 ### 新建目标
 
-#### 第一次选择
+#### 选择运行环境
 
-intent 不含 `app_id` 和 `service_id` 时，请提示“请选择应用运行的位置：”，并只显示：
+intent 不含 `app_id` 和 `service_id` 时，请提示“请选择应用要运行的环境：”，并只显示：
 
-1) 在线环境
-2) 自己的环境
+1) 云端环境（免费体验）
+2) 私有环境（去对接）
 
-#### 选择自己的环境后
-
-先执行固定 launcher + `["runtime", "message", "--id", "own-environment-connection"]` 并原样输出，只显示“连接已有环境 / 帮我准备一个新环境”。连接已有环境才执行 `private-existing` 并询问 Console 地址；选择准备新环境后，才执行固定 launcher + `["runtime", "message", "--id", "private-deployment-location"]`，并原样输出固定消息：
+用户选择私有环境后，立即执行固定 launcher + `["runtime", "message", "--id", "private-deployment-location"]`，并原样输出固定消息：
 
 请选择部署位置：
 
-1、安装到本地
-2、安装到 Linux 服务器
+1、对接到本地
+2、对接到独立服务器
+3、对接已有私有环境
 
-选择 1 时执行 `install-private` route，并使用 `["--location", "local"]`；选择 2 时执行 `install-private` route，并使用 `["--location", "server"]`。不得重复询问部署位置，也不得在环境准备完成前询问应用来源。
+选择 1 时执行 `install-private` route，并使用 `["--location", "local"]`；选择 2 时执行 `install-private` route，并使用 `["--location", "server"]`；选择 3 时执行固定 launcher + `["runtime", "message", "--id", "private-console-origin"]`，收到地址后执行 `private-existing`。不得显示额外的接入方式中间步骤，不得重复询问部署位置，也不得在环境准备完成前询问应用来源。
 
 ### 已有目标
 

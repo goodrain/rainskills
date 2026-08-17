@@ -40,20 +40,17 @@ test("runtime onboarding messages come from the launcher as fixed bounded blocks
     boundedUserMessage(first.join(""), "runtime.new-application-environment"),
     "可以，我会帮你完成应用识别、构建、部署和访问验证。\n\n"
       + "不过目前还没有可用的应用运行环境。\n\n"
-      + "请选择应用运行的位置：\n\n"
-      + "1) 在线环境\n"
-      + "   无需安装平台，授权后即可开始部署。\n\n"
-      + "2) 自己的环境\n"
-      + "   应用运行在你自己的电脑、服务器或 Kubernetes 集群中。",
+      + "你刚安装的 Rainskills 是负责“部署”的 AI 助手，它会分析项目并执行部署流程；Rainbond 负责为应用提供稳定运行环境。\n\n"
+      + "请选择应用要运行的环境：\n\n"
+      + "1) 云端环境（免费体验）\n"
+      + "2) 私有环境（去对接）",
   );
 
-  const own = [];
-  assert.equal(await runBuiltin([
-    "runtime", "message", "--id", "own-environment-connection",
-  ], { write: (value) => own.push(value) }), true);
-  assert.equal(
-    boundedUserMessage(own.join(""), "runtime.own-environment-connection"),
-    "请选择接入方式：\n\n1) 连接已有环境\n2) 帮我准备一个新环境",
+  await assert.rejects(
+    () => runBuiltin([
+      "runtime", "message", "--id", "own-environment-connection",
+    ], { write: () => {} }),
+    /message id/i,
   );
 
   const second = [];
@@ -66,8 +63,9 @@ test("runtime onboarding messages come from the launcher as fixed bounded blocks
   assert.equal(
     boundedUserMessage(second.join(""), "runtime.private-deployment-location"),
     "请选择部署位置：\n\n"
-      + "1、安装到本地（当前 Mac，使用 OrbStack，安装可能较久）\n"
-      + "2、安装到 Linux 服务器",
+      + "1、对接到本地\n"
+      + "2、对接到独立服务器\n"
+      + "3、对接已有私有环境",
   );
   for (const controlPlatform of ["linux", "win32"]) {
     const output = [];
@@ -80,8 +78,9 @@ test("runtime onboarding messages come from the launcher as fixed bounded blocks
     assert.equal(
       boundedUserMessage(output.join(""), "runtime.private-deployment-location"),
       "请选择部署位置：\n\n"
-        + "1、安装到本地\n"
-        + "2、安装到 Linux 服务器",
+        + "1、对接到本地\n"
+        + "2、对接到独立服务器\n"
+        + "3、对接已有私有环境",
     );
   }
 
@@ -91,7 +90,7 @@ test("runtime onboarding messages come from the launcher as fixed bounded blocks
   ], { write: (value) => third.push(value) }), true);
   assert.equal(
     boundedUserMessage(third.join(""), "runtime.private-console-origin"),
-    "请提供已有私有 Rainbond 的 Console 地址。\n\n"
+    "请提供已有私有环境地址。\n\n"
       + "示例：https://rainbond.example.com",
   );
   await assert.rejects(

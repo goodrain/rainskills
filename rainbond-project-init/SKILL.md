@@ -44,23 +44,22 @@ target 只允许 `codex`、`claude`、`all`。校验 intent 后只执行 new sco
 
 先说：“可以，我会帮你识别并接入当前项目。不过目前还没有可用的应用运行环境。你刚安装的 Rainskills 是 AI 部署助手，它负责分析项目并执行部署；应用实际会运行在 Rainbond 上。Rainbond 是一套应用运行和管理平台，负责源码构建、容器运行、域名访问、日志和存储等工作，你不需要了解 Kubernetes。”
 
-#### 第一次选择
+#### 选择运行环境
 
-请提示“请选择应用运行的位置：”，并只显示：
+请提示“请选择应用要运行的环境：”，并只显示：
 
-1) 在线环境
-2) 自己的环境
+1) 云端环境（免费体验）
+2) 私有环境（去对接）
 
-#### 选择自己的环境后
-
-先执行固定 launcher + `["runtime", "message", "--id", "own-environment-connection"]` 并原样输出，只显示“连接已有环境 / 帮我准备一个新环境”。连接已有环境时执行固定 launcher + `["runtime", "message", "--id", "private-console-origin"]` 并原样输出，收到 Console 地址后才执行 `private-existing`；选择准备新环境后，才执行固定 launcher + `["runtime", "message", "--id", "private-deployment-location"]`，并原样输出固定消息：
+用户选择私有环境后，立即执行固定 launcher + `["runtime", "message", "--id", "private-deployment-location"]`，并原样输出固定消息：
 
 请选择部署位置：
 
-1、安装到本地
-2、安装到 Linux 服务器
+1、对接到本地
+2、对接到独立服务器
+3、对接已有私有环境
 
-选择 1 时执行 `install-private` route，并使用 `["--location", "local"]`；选择 2 时执行 `install-private` route，并使用 `["--location", "server"]`。不得重复询问部署位置，也不得在环境准备完成前询问应用来源。
+选择 1 时执行 `install-private` route，并使用 `["--location", "local"]`；选择 2 时执行 `install-private` route，并使用 `["--location", "server"]`；选择 3 时执行固定 launcher + `["runtime", "message", "--id", "private-console-origin"]`，收到地址后执行 `private-existing`。不得显示额外的接入方式中间步骤，不得重复询问部署位置，也不得在环境准备完成前询问应用来源。
 <!-- rainskills-runtime-routing:end -->
 
 ## Overview

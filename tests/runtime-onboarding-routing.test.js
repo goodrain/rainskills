@@ -117,24 +117,19 @@ function runtimeContract(text) {
 }
 
 function assertTwoLevelNewRuntimeChoice(routing) {
-  const firstChoice = headingSection(routing, "#### 第一次选择", "#### 选择自己的环境后");
-  const ownChoice = headingSection(routing, "#### 选择自己的环境后");
+  const firstChoice = headingSection(routing, "#### 选择运行环境");
 
-  assert.match(firstChoice, /请选择应用运行的位置/);
-  assert.match(firstChoice, /1\)\s*在线环境/);
-  assert.match(firstChoice, /2\)\s*自己的环境/);
-  assert.doesNotMatch(firstChoice, /已有私有 Rainbond|安装私有 Rainbond|准备私有 Rainbond/);
-
-  assert.match(ownChoice, /连接已有环境/);
-  assert.match(ownChoice, /帮我准备一个新环境/);
-  assert(ownChoice.indexOf("连接已有环境") < ownChoice.indexOf("请选择部署位置"));
-  assert.match(ownChoice, /请选择部署位置/);
-  assert.match(ownChoice, /1、\s*安装到本地/);
-  assert.match(ownChoice, /2、\s*安装到 Linux 服务器/);
-  assert.doesNotMatch(ownChoice, /3、|对接到本地|对接到独立服务器/);
-  assert.match(ownChoice, /private-existing/);
-  assert.match(ownChoice, /install-private/);
-  assert.match(ownChoice, /--location.*local.*--location.*server/s);
+  assert.match(firstChoice, /请选择应用要运行的环境/);
+  assert.match(firstChoice, /1\)\s*云端环境（免费体验）/);
+  assert.match(firstChoice, /2\)\s*私有环境（去对接）/);
+  assert.match(firstChoice, /请选择部署位置/);
+  assert.match(firstChoice, /1、\s*对接到本地/);
+  assert.match(firstChoice, /2、\s*对接到独立服务器/);
+  assert.match(firstChoice, /3、\s*对接已有私有环境/);
+  assert.doesNotMatch(firstChoice, /连接已有环境.*帮我准备一个新环境/s);
+  assert.match(firstChoice, /private-existing/);
+  assert.match(firstChoice, /install-private/);
+  assert.match(firstChoice, /--location.*local.*--location.*server/s);
 }
 
 const intentSamples = {
@@ -407,7 +402,7 @@ for (const skill of runtimeSkills) {
     }
     if (skill.route === "mixed") {
       assert.match(routing, /先.*(?:确认|判定).*scope/s);
-      assert(routing.search(/先.*(?:确认|判定).*scope/s) < routing.indexOf("#### 第一次选择"));
+      assert(routing.search(/先.*(?:确认|判定).*scope/s) < routing.indexOf("#### 选择运行环境"));
       assert.match(
         routing,
         /已有应用.*(?:不得.*安装.*新|existing-app.*不得.*install-private|只(?:让用户选择|提供|连接).*Rainbond Cloud.*已有私有 Rainbond)/is

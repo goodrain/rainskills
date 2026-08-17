@@ -10,22 +10,12 @@ const USER_MESSAGES = Object.freeze({
       "",
       "不过目前还没有可用的应用运行环境。",
       "",
-      "请选择应用运行的位置：",
+      "你刚安装的 Rainskills 是负责“部署”的 AI 助手，它会分析项目并执行部署流程；Rainbond 负责为应用提供稳定运行环境。",
       "",
-      "1) 在线环境",
-      "   无需安装平台，授权后即可开始部署。",
+      "请选择应用要运行的环境：",
       "",
-      "2) 自己的环境",
-      "   应用运行在你自己的电脑、服务器或 Kubernetes 集群中。",
-    ].join("\n"),
-  },
-  "own-environment-connection": {
-    messageId: "runtime.own-environment-connection",
-    message: [
-      "请选择接入方式：",
-      "",
-      "1) 连接已有环境",
-      "2) 帮我准备一个新环境",
+      "1) 云端环境（免费体验）",
+      "2) 私有环境（去对接）",
     ].join("\n"),
   },
   "add-environment-location": {
@@ -40,22 +30,20 @@ const USER_MESSAGES = Object.freeze({
   "private-console-origin": {
     messageId: "runtime.private-console-origin",
     message: [
-      "请提供已有私有 Rainbond 的 Console 地址。",
+      "请提供已有私有环境地址。",
       "",
       "示例：https://rainbond.example.com",
     ].join("\n"),
   },
 });
 
-function privateDeploymentLocationMessage(controlPlatform) {
-  const local = controlPlatform === "darwin"
-    ? "1、安装到本地（当前 Mac，使用 OrbStack，安装可能较久）"
-    : "1、安装到本地";
+function privateDeploymentLocationMessage() {
   return [
     "请选择部署位置：",
     "",
-    local,
-    "2、安装到 Linux 服务器",
+    "1、对接到本地",
+    "2、对接到独立服务器",
+    "3、对接已有私有环境",
   ].join("\n");
 }
 
@@ -82,7 +70,7 @@ function renderCatalogUserMessage(id, { controlPlatform = process.platform } = {
   if (id === "private-deployment-location") {
     return renderUserMessage(
       "runtime.private-deployment-location",
-      privateDeploymentLocationMessage(controlPlatform),
+      privateDeploymentLocationMessage(),
     );
   }
   const entry = USER_MESSAGES[id];

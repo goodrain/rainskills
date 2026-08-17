@@ -121,27 +121,22 @@ description: "Use whenever a user asks to deploy, run, deliver, publish, inspect
   >
   此时只保存用户已经明确提供的 intent 字段。`deploy`/`create` 可以只保存 `type`；不得为了构造 runtime intent 提前补参数，平台安装完成前不得询问应用来源，包括本地项目路径、Git 仓库 URL、镜像地址或安装包路径。运行环境连接并通过验收后，恢复到 `project-analysis`，再识别当前项目或询问缺失的应用来源。
 
-  #### 第一次选择
+  #### 选择运行环境
 
-  请提示“请选择应用运行的位置：”，并只显示：
+  请提示“请选择应用要运行的环境：”，并只显示：
 
-  1) 在线环境
-     无需安装平台，授权后即可开始部署。
-  2) 自己的环境
-     应用运行在用户自己的电脑、服务器或 Kubernetes 集群中。
+  1) 云端环境（免费体验）
+  2) 私有环境（去对接）
 
-  #### 选择自己的环境后
-
-  先执行固定 launcher + `["runtime", "message", "--id", "own-environment-connection"]` 并原样输出，只显示“连接已有环境 / 帮我准备一个新环境”。选择连接已有环境后才询问 Console 地址并执行 `private-existing`；选择准备新环境后才执行 `private-deployment-location`。
-
-  只有用户明确选择准备新环境后，才执行固定 launcher + `["runtime", "message", "--id", "private-deployment-location"]`，并按同一消息协议原样输出块内正文。macOS 上的固定正文是：
+  用户选择私有环境后，立即执行固定 launcher + `["runtime", "message", "--id", "private-deployment-location"]`，并按同一消息协议原样输出块内正文：
 
   请选择部署位置：
 
-  1、安装到本地（当前 Mac，使用 OrbStack，安装可能较久）
-  2、安装到 Linux 服务器
+  1、对接到本地
+  2、对接到独立服务器
+  3、对接已有私有环境
 
-  选择 1 时执行 `install-private` route，并在完整 argv 中使用 `["--location", "local"]`；选择 2 时执行 `install-private` route，并使用 `["--location", "server"]`。不得在平台安装器中重复询问部署位置，也不得在环境准备完成前询问应用来源。
+  选择 1 时执行 `install-private` route，并在完整 argv 中使用 `["--location", "local"]`；选择 2 时执行 `install-private` route，并使用 `["--location", "server"]`；选择 3 时执行固定 launcher + `["runtime", "message", "--id", "private-console-origin"]`，收到地址后执行 `private-existing`。不得显示额外的接入方式中间步骤，不得在平台安装器中重复询问部署位置，也不得在环境准备完成前询问应用来源。
 
   ### 已有应用
 

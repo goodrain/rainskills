@@ -3023,8 +3023,8 @@ test("published guidance describes local and remote target selection", () => {
   for (const blocker of ["19041", "虚拟化", "NAT", "端口", "UAC", "计划任务", "摘要"]) {
     assert.match(troubleshooting, new RegExp(blocker));
   }
-  assert.match(readme, /在线环境.*自己的环境.*连接已有环境.*帮我准备一个新环境/s);
-  assert.match(readme, /安装到本地.*安装到 Linux 服务器/s);
+  assert.match(readme, /云端环境（免费体验）.*私有环境（去对接）.*对接到本地.*对接到独立服务器.*对接已有私有环境/s);
+  assert.match(readme, /对接到本地.*对接到独立服务器.*对接已有私有环境/s);
   assert.match(policy, /远程 Linux/);
   assert.doesNotMatch(policy, /不支持远程 SSH/);
 });
