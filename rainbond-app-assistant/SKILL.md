@@ -143,12 +143,12 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
 16. 如果用户要求调整源码构建参数，优先走 `rainbond_manage_component_envs(operation=replace_build_envs, build_env_dict=...)`。
     不要把语言构建参数塞进 `build_info`。
 17. 如果源码检测同时命中 Dockerfile 和语言构建，按 `rainbond-fullstack-bootstrap` 的 Build Mode Selection 优先级链解决：manifest `source.build.strategy` 优先 → 启发式按 Dockerfile 分类 + 意图信号判断（"语言 buildpack 能否产生等价运行时行为"，原则驱动而非固定清单）→ 真正模糊时才问一次并建议用户写回 manifest。决策必须双轨可审计：prose 输出"Build mode for `<name>`: `<picked>` (`<source>` — `<reason>`; to override: `<hint>`)"逐组件展示，且 bootstrap 的结构化输出 `deployment_plan.workflow.build_strategy_decisions[<name>]` 同步记录（仅给有 dual detection 的组件填）。`dockerfile` 决策映射到 `rainbond_create_component_from_source` 的 `prefer_dockerfile_when_detected = true`。详见 `rainbond-fullstack-bootstrap/references/source-build-parameter-guide.md § Build Mode Selection`。
-18. 当前 MCP 不支持显式 `dockerfile_path` 时，不要在顶层编排里承诺该能力。
+18. 当前 Rainbond Tool 不支持显式 `dockerfile_path` 时，不要在顶层编排里承诺该能力。
 19. 对 reverse-proxy full-stack 项目，不要只因为根路径 URL 存在就把它当作最终交付成功或 Fast Path 的可信 URL；同 host 的 backend 路径（通常是 `/api`）必须也一致可用，或明确停在 blocker。
 20. **组件依赖与连接变量管理**（合并自原 20-23 四条）：多组件拓扑里，provider/consumer 关系必须用显式依赖 + provider 侧连接变量管理，不要让 consumer 端硬编码或重复声明。
 
     **可执行工具（fact）**：
-    - 显式依赖：`rainbond_manage_component_dependency` — 不要回答"MCP 没有依赖接口"；调用失败时按 MCP/控制面真实错误报告，不要描述为工具不存在
+    - 显式依赖：`rainbond_manage_component_dependency` — 不要回答“Rainbond Tool 没有依赖接口”；调用失败时按 Rainbond Tool/控制面真实错误报告，不要描述为工具不存在
     - Provider 连接变量：`rainbond_manage_component_connection_envs(scope=outer)` — 这是 provider 暴露给 consumer 的接口面
     - Consumer 自身的本地 env：`rainbond_manage_component_envs` — 仅放该 consumer 真正本地的值
 
@@ -157,7 +157,7 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
     - 共享连接信息（数据库连接串、缓存地址、消息队列 broker 等任何"provider 拥有的连接 fact"）→ 配在 provider 的 connection envs 上，**不要**在每个 consumer 上重复写
     - 运行时报 `connection refused` / `ENOTFOUND <provider-name>` / 错 host / 错 port / 缺密码等连接类错误 → 先看 provider connection env / dependency alias / compatibility env，**不要**把 baseline 里的硬编码主机名当成事实
     - 多组件拓扑进入交付验收前 → 必须跑一遍依赖完整性 gate（列已接受边 → 查现有依赖 → 补齐缺失 → 再次验证依赖摘要）。手工创建镜像组件、Compose fallback 路径、组件能独立启动都**不能**跳过 gate
-    - **配置覆盖 gate（backend 组件，设完 env 后、宣布健康/可交付前必跑）**：从 `rainbond_get_component_summary` 枚举该组件挂载的 config-file 卷。若有卷挂到已知配置路径（`config.yml` / `application.yml` / `application.properties` / `.env` / `nginx.conf` / `*.conf`），运行态有效配置由该文件决定而非 env（mounted config-file > env > 镜像默认值）。这时必须警告"env 可能被挂载的配置文件覆盖"，并先确认该文件反映了预期值，再宣布交付健康。比较配置值用于该 gate 是允许的，但**禁止**回显原始文件内容或密钥明文，只报结构化不一致。文件内容无法用当前 MCP 能力读取时，显式标注覆盖风险并停下来让用户确认，不要默默改 env 就当成功
+    - **配置覆盖 gate（backend 组件，设完 env 后、宣布健康/可交付前必跑）**：从 `rainbond_get_component_summary` 枚举该组件挂载的 config-file 卷。若有卷挂到已知配置路径（`config.yml` / `application.yml` / `application.properties` / `.env` / `nginx.conf` / `*.conf`），运行态有效配置由该文件决定而非 env（mounted config-file > env > 镜像默认值）。这时必须警告“env 可能被挂载的配置文件覆盖”，并先确认该文件反映了预期值，再宣布交付健康。比较配置值用于该 gate 是允许的，但**禁止**回显原始文件内容或密钥明文，只报结构化不一致。文件内容无法用当前 Rainbond Tool 能力读取时，显式标注覆盖风险并停下来让用户确认，不要默默改 env 就当成功
 
     具体的 provider 命名约定、connection env 变量名（`DB_*` / `REDIS_*` / `KAFKA_*` 等是示例，按 provider 文档实际名字为准）、以及依赖 alias 细节，详见 bootstrap modules/30-creation-rules.md 的相关章节。
 24. 不要自动拉起本地 Docker Desktop/OrbStack、执行本地 Docker build/push、或推送临时镜像作为兜底；这属于 delivery-mode 策略切换，必须先得到用户明确确认。
@@ -168,7 +168,7 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
     代理事实属于执行记录，不是强制暴露 YAML 的理由。
 28. `rbd-*` 组件（rbd-gateway、rbd-api、rbd-worker、rbd-chaos、rbd-db、rbd-mq、rbd-monitor、rbd-node 等）是 Rainbond 平台自身的基础设施组件，不是用户应用组件。
     - 可以用 `rainbond_query_region_rbd_components` 查询并展示它们的状态
-    - 当前 Rainbond Tool 能力不支持对它们执行重启、部署、修改等写操作，MCP/API 两种传输都不得尝试
+    - 当前 Rainbond Tool 能力不支持对它们执行重启、部署、修改等写操作，任何传输都不得尝试
     - 如果用户要求操作这些组件，明确告知：需要通过 Kubernetes 命令（如 `kubectl rollout restart deployment/<name> -n rbd-system`）或 Rainbond 集群管理控制台进行，超出本技能的操作范围，不要假装可以执行
 29. **仅给 bare Git URL 时默认 root + 空 `subdirectories`**：当用户给的只是一个 Git URL（无本地 manifest、无明确子目录提示），默认 `subdirectories=""`（仓库根）进入 source 检测，让后端判断这个仓库结构。**不要**先问用户"根目录还是子目录"。
     - 单项目仓库（一个 buildable root）→ 后端检测通过，正常 build
@@ -304,7 +304,7 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
     - 用户给的 URL 没 `.git` 后缀就自动加上
     - 用户给的 URL 是 `gitee.com/xxx/yyy`，你"知道这个仓库其实在 GitHub" 就改成 `github.com/...`
     - 用户给了主仓库 URL（`https://gitee.com/rainbond/sourcecode-examples`），你把它换成你以为的子项目独立仓库（`https://gitee.com/some-org/java-maven-demo.git`）—— 同一个仓库下的不同子项目应该用**同一个 URL + subdirectories 参数**区分，而不是换 URL
-    - 用户没说分支，你自己写 `code_version=main` 或 `master` 当默认值（应该让后端/MCP 默认值生效，传 `master` 的前提是用户说过 master 或者你是 carrying over 从已有组件 build_source 拿到的字面值）
+    - 用户没说分支，你自己写 `code_version=main` 或 `master` 当默认值（应该让平台默认值生效，传 `master` 的前提是用户说过 master 或者你是 carrying over 从已有组件 build_source 拿到的字面值）
     
     **正确做法**：
     - 用户消息里出现的 URL/分支/凭证，**逐字符 copy** 传给工具
@@ -423,7 +423,7 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
   - team / app 选择仍然有歧义
   - source ref 无效
   - 多组件源码检测需要显式策略选择
-  - MCP / 控制面后端异常
+  - Rainbond Tool / 控制面后端异常
   - `delivery-verifier` 结果只是 `delivered-but-needs-manual-validation`
   - 进入 `code_or_build_handoff_needed`
 
@@ -513,8 +513,8 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
   - check whether `.rainbond/local.json` exists
   - check whether local binding identity is present
   - if `.rainbond/local.json.metadata.status == linked`, treat the project as linked
-  - if local metadata is not `linked` but current-run MCP/runtime confirmation proves the same app identity exists and is accessible, continue as linked and record the local metadata drift explicitly instead of stopping
-  - stop and ask for project linking only when neither local binding nor current-run MCP evidence can confirm a linked project state
+  - if local metadata is not `linked` but current-run platform confirmation proves the same app identity exists and is accessible, continue as linked and record the local metadata drift explicitly instead of stopping
+  - stop and ask for project linking only when neither local binding nor current-run platform evidence can confirm a linked project state
 
   ### 2. Environment selection
   Select environment in this order:
@@ -669,7 +669,7 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
   - `linked-and-needs-delivery-verification` is a handoff state that usually follows `RuntimeState = runtime_healthy` and precedes a final `DeliveryState`
   - `linked-and-healthy` should only be used once delivery has effectively reached `DeliveryState = delivered`
   - `linked-and-ready-for-promotion` should only be used when the user has asked for dev-to-test promotion and the source app has already reached `DeliveryState = delivered`
-  - classify `linked-and-cluster-capacity-blocked` only when current-run MCP/runtime evidence still shows active scheduling failure caused by cluster resource shortage
+  - classify `linked-and-cluster-capacity-blocked` only when current-run platform evidence still shows active scheduling failure caused by cluster resource shortage
   - if historical events mention `Unschedulable` but current node capacity and current component/app state no longer support an active capacity blocker, do not keep the project in `linked-and-cluster-capacity-blocked`; classify from the current dominant runtime state instead
 
   3. Choose next action
@@ -707,7 +707,7 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
   - if bootstrap reports an invalid source ref or missing branch, stop and report that the source definition itself needs confirmation; do not rewrite the branch automatically
   - do not block source-backed bootstrap only because `check_uuid` or `event_id` is absent unless the backend explicitly reports those fields as required
   - if bootstrap reports multi-component source detection, stop and ask for an explicit execution-path decision; do not automatically switch to local package or other workaround paths
-  - if bootstrap reports `mcp backend issue`, stop and report that the control plane must be repaired before bootstrap can continue
+  - if bootstrap reports `platform backend issue`, stop and report that the control plane must be repaired before bootstrap can continue
   - if bootstrap says handoff to troubleshooter is needed, continue into troubleshooting in the same high-level flow unless
   the user asked to stop after creation
   - if bootstrap says the runtime is converged enough and the remaining question is delivery acceptance, continue into `rainbond-delivery-verifier`
@@ -751,7 +751,7 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
 
   Safe-to-continue actions:
   - reading local config files
-  - reading MCP runtime state
+  - reading platform runtime state
   - running env sync
   - running template installer when source, version, and target app context are already resolved
   - running bootstrap
@@ -962,7 +962,7 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
     - comes from the resolved current-run identity after applying explicit input, local binding, and manifest context
   - `project.linked`
     - must reflect whether current-run context confirms a linked project state
-    - do not force `false` only because local metadata is stale when MCP confirms the same bound app in the current run
+    - do not force `false` only because local metadata is stale when the platform confirms the same bound app in the current run
   - `project.selected_environment`
     - must match the resolved environment for the current run
   - `project.deployment_location_url`
@@ -995,7 +995,7 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
     - raw app-level labels must not override stronger current component-level evidence
   - `runtime_state.blocker`
     - must capture the dominant unresolved blocker when one exists
-    - prefer the blocker supported by current-run MCP/runtime truth over stale historical events when they disagree
+    - prefer the blocker supported by current-run platform truth over stale historical events when they disagree
   - `delivery_state`
     - may be `null` if delivery verifier has not run yet
     - must remain `null` when this run stopped before entering `rainbond-delivery-verifier`
@@ -1044,7 +1044,7 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
   Consistency rules:
 
   - `orchestration_state` and `runtime_state.phase` may differ in wording but must not conflict semantically
-  - if current-run MCP evidence confirms the app exists and the dominant blocker is runtime/platform capacity, do not downgrade the project to unlinked solely because local metadata still says `pending_verification`
+  - if current-run platform evidence confirms the app exists and the dominant blocker is runtime/platform capacity, do not downgrade the project to unlinked solely because local metadata still says `pending_verification`
   - do not classify the project as `capacity_blocked` based only on old `Unschedulable` events when current node capacity and current app/component state indicate another blocker is now dominant
   - if app-level runtime labels say `closed` but current component evidence shows active capacity scheduling failure, canonical component status must still be `capacity-blocked`
   - only use `abnormal` for raw `closed` when no stronger canonical state can be supported from current evidence
@@ -1061,7 +1061,7 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
   - if a GitHub source URL is still raw `https://github.com/...`, the assistant may ask once whether to use `https://ghfast.top/https://github.com/...` or `https://gh.rainbond.cc/https://github.com/...`, but must not silently rewrite the Git URL without either explicit user input or a repo-local proxy URL already present
   - transport hints for registry or Git mirrors must not be treated as a delivery-mode override unless the user explicitly asked to switch to image deployment
   - external artifact download failures, image layer pull timeouts, Docker Hub timeouts, and GitHub Release asset download failures should be reported as `external artifact unreachable` when that is the dominant evidence
-  - if bootstrap reports `mcp backend issue`, do not classify the result as `linked-and-needs-code-handoff`; stop with the source app still incomplete and report the backend capability failure explicitly
+  - if bootstrap reports `platform backend issue`, do not classify the result as `linked-and-needs-code-handoff`; stop with the source app still incomplete and report the backend capability failure explicitly
   - if `delivery_state.status = delivered-but-needs-manual-validation`, `promotion_result` must stay `null` and `next_action` must not auto-enter version flow
   - if runtime logs show hard-coded dependency coordinates such as `db`, but current dependency wiring provides provider connection envs or alias-based connection envs, prefer provider connection contract repair, then compatibility-env troubleshooting, over accepting the hard-coded value as authoritative
   - if `promotion_result` is non-null, `delivery_state.status` must already be `delivered`
@@ -1189,7 +1189,7 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
   - if a downstream skill was intentionally not entered because the user asked not to continue yet, say that explicitly
   - if development-to-testing promotion was entered, explicitly name the source delivery gate, snapshot creation, testing-app creation, and testing-app verification stages
   - if source creation failed, say so explicitly instead of describing the resulting component as if it had always been image-backed
-  - if source creation failed because of a control-plane exception, say that this is a backend/MCP issue rather than code/build failure
+  - if source creation failed because of a control-plane exception, say that this is a platform backend issue rather than code/build failure
   - if the source ref or branch was invalid, say that explicitly instead of auto-rewriting it
 
   ### Current Health
@@ -1199,7 +1199,7 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
   - **frontend-access status**
   - **overall status** using the canonical runtime or delivery term when one is available
   - explicitly include the exact `runtime_state.phase` label in prose, preferably in backticks
-  - if MCP/runtime reports a raw label such as `closed`, explain it in prose if useful, but normalize the status field itself to the canonical vocabulary
+  - if the platform reports a raw label such as `closed`, explain it in prose if useful, but normalize the status field itself to the canonical vocabulary
 
   ### Blocking Issue
   - state the main blocker if the app is not fully healthy
@@ -1246,7 +1246,7 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
   - stripping useful diagnostic evidence from building, blocked, unhealthy, ambiguous, handoff, or incomplete promotion states
   - omitting the required `### Structured Output` section in structured contract mode
   - replacing the required five human-readable sections with freeform narrative in structured contract mode
-  - treating a project as unlinked only because `.rainbond/local.json.metadata.status` is stale even though MCP confirms the same app in the current run
+  - treating a project as unlinked only because `.rainbond/local.json.metadata.status` is stale even though the platform confirms the same app in the current run
   - omitting `Actions Performed` detail when the run only did inspection/classification and intentionally skipped downstream skills
   - echoing raw platform labels such as `closed` instead of normalizing component status to the canonical vocabulary
   - stopping after bootstrap even when bootstrap explicitly recommends troubleshooting
@@ -1262,7 +1262,7 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
   - silently degrading a source-backed component into an image-backed component after a source creation error
   - silently rewriting the source branch or ref after a source creation error
   - inventing `delivery_state.partially-delivered` before `rainbond-delivery-verifier` has actually run
-  - routing a control-plane or MCP backend failure into `code_build_handoff`
+  - routing a control-plane or platform backend failure into `code_build_handoff`
   - copying a frontend-only component state into `api_status`
   - stopping the top-level app-assistant run at successful init even though the user asked for deploy or dev-to-test continuation
   - silently selecting one team when multiple accessible teams existed and the user had not chosen one

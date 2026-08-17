@@ -29,7 +29,7 @@ Do not try to solve every runtime problem inside this skill.
 
 ## 2a. Deployment-plan readiness for multi-component image topologies
 
-Before any mutating MCP call for a multi-component image deployment, build a short `DeploymentPlanReadiness` mentally and stop if it is not ready.
+Before any mutating Rainbond Tool call for a multi-component image deployment, build a short `DeploymentPlanReadiness` mentally and stop if it is not ready.
 
 This gate applies when:
 - the planned topology has more than one component
@@ -139,7 +139,7 @@ The list illustrates the breadth; it is not exhaustive. For any service in your 
 For services not in this list, recall the documented data directory from the image's official documentation, state your assumption in the report, and invite the user to correct it. If genuinely unsure (rare image, conflicting variants), ask the user.
 
 **Platform reality (fact, must be remembered)**:
-- `rainbond_create_component_from_image` and `rainbond_create_component_from_source` do **not** expose `extend_method` as a parameter. Components created via these tools are stateless by default, and the platform exposes **no MCP tool to convert stateless → stateful in place**.
+- `rainbond_create_component_from_image` and `rainbond_create_component_from_source` do **not** expose `extend_method` as a parameter. Components created via these tools are stateless by default, and the platform exposes **no Rainbond Tool to convert stateless → stateful in place**.
 - Therefore: **image-mode / source-mode component creation always produces a stateless component**, regardless of whether the service is genuinely stateful.
 
 **Persistence strategy for stateful services created via image/source mode**:
@@ -149,14 +149,14 @@ For services not in this list, recall the documented data directory from the ima
 
 **Persistence strategy when stateful + local volume is genuinely required**:
 - Path: **template install** via `rainbond_install_app_model` from the app market. Market templates can be pre-configured as stateful with local volumes.
-- Image-mode creation cannot reach a stateful component on the current MCP surface.
+- Image-mode creation cannot reach a stateful component on the current Rainbond Tool surface.
 - If the user explicitly needs `local` (block-backed) persistence and no template exists, report this as a delivery-mode limitation, not as a step the bootstrap can silently work around.
 
 **Rules**:
 - inspect existing component storage before deploying the stateful-service component
 - if no durable storage is already mounted at the data directory, use `rainbond_manage_component_storage(operation=create_volume, volume_type=share-file, volume_path=<data-dir>)` **before** `rainbond_operate_app(action=deploy)`
 - prefer the smallest durable storage binding accepted by the platform; do not invent a storage class, PVC name, host path, reclaim policy, or data-retention guarantee
-- if the storage MCP call fails or the platform does not expose a usable storage provider, do not silently ignore it; report missing persistence as a bootstrap caveat or blocker depending on user intent
+- if the storage Tool call fails or the platform does not expose a usable storage provider, do not silently ignore it; report missing persistence as a bootstrap caveat or blocker depending on user intent
 - if no stateful service component is present, no persistence check is required
 - if a cache component is explicitly configured as ephemeral and user intent is clearly disposable (e.g., user said "just for testing" or `--ephemeral`), it may run without durable storage, but this must be reported as an intentional ephemeral caveat
 - demo bootstrap may continue without persistence only when user intent is clearly ephemeral, or when storage creation is blocked and the caveat is explicitly reported
@@ -168,7 +168,7 @@ Rainbond rejects `volume_type = local` on stateless components with HTTP 400:
 > 数据中心操作故障 应用类型为'无状态'.不支持本地存储
 
 Rules:
-- `local` volume_type requires the component to be stateful (`extend_method = state`); it cannot be attached to a stateless component, and the platform exposes no MCP tool to convert a stateless component into stateful in place
+- `local` volume_type requires the component to be stateful (`extend_method = state`); it cannot be attached to a stateless component, and the platform exposes no Rainbond Tool to convert a stateless component into stateful in place
 - for stateless components that need persistence, use `share-file` (RWX shared file) or `config-file` (small text payload) volume_type instead of `local`
 - for genuine stateful middleware (mysql, postgres, mongodb, redis when persisted, etc.), the component must be created as stateful from the start; verify component type before issuing `create_volume` with `local`
 - when a stateful middleware component arrives via app-market template install, the template usually pre-configures storage; do **not** layer an extra manual `create_volume` on top — first inspect existing storage and only add what's missing
@@ -218,12 +218,12 @@ When setup reaches the first deeper runtime issue, stop and hand off.
 If `.rainbond/local.json.runtime_components` exists:
 - use it to help align logical roles to already-existing runtime components
 - use it to decide whether reuse is plausible
-- do not trust it over MCP runtime facts
+- do not trust it over current platform runtime facts
 
-If local mapping and MCP disagree:
-- trust MCP
+If local mapping and current platform evidence disagree:
+- trust current platform runtime facts
 - report drift
-- keep going with MCP-discovered runtime components
+- keep going with runtime components discovered through Rainbond Tools
 
 ## 10. Image Registry Proxy Prompt
 
@@ -287,7 +287,7 @@ Rules:
 
 ## 12. Prefer batch port operations
 
-When calling `rainbond_manage_component_ports`, use the `ports` array form to fold multiple single-port calls into a single MCP call. The goal is to cut tool-call count and avoid partial-state windows where some ports are already created or enabled while others are still pending.
+When calling `rainbond_manage_component_ports`, use the `ports` array form to fold multiple single-port calls into a single Rainbond Tool call. The goal is to cut tool-call count and avoid partial-state windows where some ports are already created or enabled while others are still pending.
 
 ### Batch create (operation=add)
 

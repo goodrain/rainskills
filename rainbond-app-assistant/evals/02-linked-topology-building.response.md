@@ -46,7 +46,7 @@ AppAssistantResult:
   actions_performed:
     - skill: inspection-only
       status: completed
-      details: Resolved the linked source app state from current MCP truth without changing the source-backed path.
+      details: Resolved the linked source app state from current platform truth without changing the source-backed path.
     - skill: rainbond-fullstack-troubleshooter
       status: pending
       details: Selected because topology exists but source-backed components are still converging.

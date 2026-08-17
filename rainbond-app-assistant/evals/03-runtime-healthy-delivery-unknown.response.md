@@ -46,7 +46,7 @@ AppAssistantResult:
   actions_performed:
     - skill: inspection-only
       status: completed
-      details: Confirmed runtime convergence for the linked source app from current MCP truth.
+      details: Confirmed runtime convergence for the linked source app from current platform truth.
     - skill: rainbond-delivery-verifier
       status: pending
       details: Selected because runtime is healthy but delivery acceptance is still unknown.

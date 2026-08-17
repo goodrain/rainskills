@@ -124,112 +124,6 @@ make_fake_commands() {
   local bin_dir="$1"
   mkdir -p "$bin_dir"
 
-  cat >"$bin_dir/codex" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-printf '%s\n' "$*" >> "${TEST_LOG_DIR}/codex.log"
-if [[ "${1:-}" == "mcp" && "${2:-}" == "add" ]]; then
-  if [[ "${TEST_FAKE_CODEX_ADD_FAIL:-}" == "1" ]]; then
-    exit 1
-  fi
-  name="${3:-}"
-  shift 3
-  url=""
-  env_var=""
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --url)
-        url="$2"
-        shift 2
-        ;;
-      --bearer-token-env-var)
-        env_var="$2"
-        shift 2
-        ;;
-      *)
-        shift
-        ;;
-    esac
-  done
-  mkdir -p "$HOME/.codex"
-  cat > "$HOME/.codex/config.toml" <<CONFIG
-[mcp_servers.${name}]
-url = "${url}"
-bearer_token_env_var = "${env_var}"
-CONFIG
-  exit 0
-fi
-echo "unsupported fake codex command: $*" >&2
-exit 1
-EOF
-
-  cat >"$bin_dir/claude" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-printf '%s\n' "$*" >> "${TEST_LOG_DIR}/claude.log"
-if [[ "${1:-}" == "mcp" && "${2:-}" == "add" ]]; then
-  if [[ "${TEST_FAKE_CLAUDE_ADD_FAIL:-}" == "1" ]]; then
-    exit 1
-  fi
-  shift 2
-  scope="local"
-  transport=""
-  header=""
-  name=""
-  url=""
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --scope)
-        scope="$2"
-        shift 2
-        ;;
-      --transport)
-        transport="$2"
-        shift 2
-        ;;
-      -H|--header)
-        header="$2"
-        shift 2
-        ;;
-      http://*|https://*)
-        url="$1"
-        shift
-        ;;
-      *)
-        if [[ -z "$name" ]]; then
-          name="$1"
-        fi
-        shift
-        ;;
-    esac
-  done
-  mkdir -p "$HOME"
-  auth_value="${header#Authorization: }"
-  cat > "$HOME/.claude.json" <<CONFIG
-{
-  "mcpServers": {
-    "${name}": {
-      "type": "${transport}",
-      "url": "${url}",
-      "headers": {
-        "Authorization": "${auth_value}"
-      }
-    }
-  }
-}
-CONFIG
-  exit 0
-fi
-echo "unsupported fake claude command: $*" >&2
-exit 1
-EOF
-
-  cat >"$bin_dir/pi" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-printf '%s\n' "$*" >> "${TEST_LOG_DIR}/pi.log"
-EOF
-
   cat >"$bin_dir/curl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -309,12 +203,6 @@ elif [[ "$url" == *"/console/mcp/rainskills/api/query" ]]; then
   else
     body='{"jsonrpc":"2.0","id":1,"result":{"tools":[]}}'
   fi
-elif [[ "$url" == *"/console/mcp/query" || "$url" == *"/console/mcp/rainskills/codex/query" || "$url" == *"/console/mcp/rainskills/claude-code/query" || "$url" == *"/console/mcp/rainskills/pi/query" ]]; then
-  if [[ -n "${TEST_FAKE_MCP_HTTP_CODE:-}" && "${TEST_FAKE_MCP_HTTP_CODE}" != "200" ]]; then
-    body='{"code":404,"msg":"not found"}'
-  else
-    body='{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{"name":"rainbond-console-mcp"}}}'
-  fi
 else
   body='{"code":404}'
 fi
@@ -347,8 +235,6 @@ if [[ "$write_out" == "%{http_code}" ]]; then
     printf '404'
   elif [[ "$url" == *"/console/mcp/rainskills/api/query" ]]; then
     printf '%s' "${TEST_FAKE_API_HTTP_CODE:-200}"
-  elif [[ "$url" == *"/console/mcp/"*"query" && -n "${TEST_FAKE_MCP_HTTP_CODE:-}" ]]; then
-    printf '%s' "$TEST_FAKE_MCP_HTTP_CODE"
   elif [[ "$url" == *"/console/users/details" && -n "${TEST_FAKE_DETAILS_HTTP_CODE:-}" ]]; then
     printf '%s' "$TEST_FAKE_DETAILS_HTTP_CODE"
   else
@@ -357,7 +243,7 @@ if [[ "$write_out" == "%{http_code}" ]]; then
 fi
 EOF
 
-  chmod +x "$bin_dir/codex" "$bin_dir/claude" "$bin_dir/pi" "$bin_dir/curl"
+  chmod +x "$bin_dir/curl"
 }
 
 make_fake_node() {
@@ -406,12 +292,9 @@ run_installer() {
     SHELL="/bin/zsh" \
     TEST_LOG_DIR="$workdir/logs" \
     PATH="$workdir/bin:/usr/bin:/bin" \
-    TEST_FAKE_MCP_HTTP_CODE="${TEST_FAKE_MCP_HTTP_CODE:-}" \
     TEST_FAKE_API_HTTP_CODE="${TEST_FAKE_API_HTTP_CODE:-}" \
     TEST_FAKE_LOGIN_TOKEN="${TEST_FAKE_LOGIN_TOKEN:-}" \
     TEST_FAKE_RENEWED_TOKEN="${TEST_FAKE_RENEWED_TOKEN:-}" \
-    TEST_FAKE_CODEX_ADD_FAIL="${TEST_FAKE_CODEX_ADD_FAIL:-}" \
-    TEST_FAKE_CLAUDE_ADD_FAIL="${TEST_FAKE_CLAUDE_ADD_FAIL:-}" \
     TEST_FAKE_INSTALL_REPORT_FAIL="${TEST_FAKE_INSTALL_REPORT_FAIL:-}" \
     TEST_FAKE_DETAILS_HTTP_CODE="${TEST_FAKE_DETAILS_HTTP_CODE:-}" \
     bash "$REPO_ROOT/install.sh" "$@"
@@ -477,6 +360,7 @@ while True:
         try:
             chunk = os.read(master_fd, 4096)
         except OSError:
+            _, status = os.waitpid(pid, 0)
             break
         if not chunk:
             break
@@ -510,77 +394,6 @@ except ChildProcessError:
 with open(output_file, "wb") as fh:
     fh.write(buffer)
 sys.exit(exit_code)
-PY
-}
-
-run_interactive_no_platform_with_pty() {
-  local workdir="$1"
-  local output_file="$2"
-  python3 - "$REPO_ROOT" "$workdir" "$output_file" <<'PY'
-import os
-import pty
-import select
-import sys
-import time
-
-repo_root, workdir, output_file = sys.argv[1:4]
-responses = ["1\n", "2\n", "2\n"]
-prompts = [
-    "请输入选项 [1-5]",
-    "请输入选项 [1-2]",
-    "请输入选项 [1-2]",
-]
-
-env = os.environ.copy()
-env["HOME"] = os.path.join(workdir, "home")
-env["TEST_LOG_DIR"] = os.path.join(workdir, "logs")
-env["PATH"] = os.path.join(workdir, "bin") + ":/usr/bin:/bin"
-
-pid, master_fd = pty.fork()
-if pid == 0:
-    os.chdir(repo_root)
-    os.execvpe("bash", ["bash", os.path.join(repo_root, "install.sh")], env)
-
-buffer = bytearray()
-response_index = 0
-search_offset = 0
-deadline = time.monotonic() + 10
-status = None
-
-while time.monotonic() < deadline:
-    ready, _, _ = select.select([master_fd], [], [], 0.2)
-    if master_fd in ready:
-        try:
-            chunk = os.read(master_fd, 4096)
-        except OSError:
-            break
-        if not chunk:
-            break
-        buffer.extend(chunk)
-        text = buffer.decode("utf-8", errors="replace")
-        if response_index < len(responses):
-            prompt_index = text.find(prompts[response_index], search_offset)
-            if prompt_index >= 0:
-                os.write(master_fd, responses[response_index].encode("utf-8"))
-                response_index += 1
-                search_offset = prompt_index + len(prompts[response_index - 1])
-    done_pid, child_status = os.waitpid(pid, os.WNOHANG)
-    if done_pid == pid:
-        status = child_status
-        break
-
-if status is None:
-    try:
-        os.kill(pid, 9)
-    except OSError:
-        pass
-    with open(output_file, "wb") as fh:
-        fh.write(buffer)
-    sys.exit(124)
-
-with open(output_file, "wb") as fh:
-    fh.write(buffer)
-sys.exit(os.waitstatus_to_exitcode(status))
 PY
 }
 
@@ -692,102 +505,6 @@ test_codex_install_writes_narrow_read_only_network_rule() {
   [[ ! -e "$rule" ]] || fail "Claude-only install must not create a Codex rule"
 }
 
-test_installer_configures_both_platforms_and_shell_autoload() {
-  local tmpdir
-  local default_token
-  tmpdir="$(mktemp -d)"
-  trap 'rm -rf "$tmpdir"' RETURN
-  mkdir -p "$tmpdir/home" "$tmpdir/logs"
-  make_fake_commands "$tmpdir/bin"
-  default_token="$(make_test_jwt 1893456000)"
-
-  run_installer "$tmpdir" all --non-interactive --rainbond-url http://rainbond.internal --username demo --allow-insecure-http --force
-
-  assert_file_exists "$tmpdir/home/.rainbond/mcp.env"
-  assert_contains "$tmpdir/home/.rainbond/mcp.env" "export RAINBOND_JWT='$default_token'"
-  [[ "$(file_mode "$tmpdir/home/.rainbond/mcp.env")" == "600" ]] || fail "expected token file permissions to be 600"
-
-  assert_file_exists "$tmpdir/home/.zshrc"
-  assert_contains "$tmpdir/home/.zshrc" "# >>> rainbond skills mcp >>>"
-  assert_contains "$tmpdir/home/.zshrc" 'source "$HOME/.rainbond/mcp.env"'
-  assert_line_count "$tmpdir/home/.zshrc" "# >>> rainbond skills mcp >>>" "1"
-
-  assert_file_exists "$tmpdir/home/.codex/config.toml"
-  assert_contains "$tmpdir/home/.codex/config.toml" "url = \"http://rainbond.internal/console/mcp/rainskills/codex/query\""
-  assert_contains "$tmpdir/home/.codex/config.toml" "bearer_token_env_var = \"RAINBOND_JWT\""
-  assert_file_exists "$tmpdir/home/.codex/skills/rainbond-fullstack-bootstrap/references/source-build-parameter-guide.md"
-
-  assert_file_exists "$tmpdir/home/.claude.json"
-  assert_contains "$tmpdir/home/.claude.json" "\"url\": \"http://rainbond.internal/console/mcp/rainskills/claude-code/query\""
-  assert_contains "$tmpdir/home/.claude.json" "\"Authorization\": \"GRJWT \${RAINBOND_JWT}\""
-  assert_file_exists "$tmpdir/home/.claude/skills/rainbond-fullstack-bootstrap/references/source-build-parameter-guide.md"
-
-  assert_contains "$tmpdir/logs/curl.log" "http://rainbond.internal/console/users/login"
-  assert_contains "$tmpdir/logs/curl.log" "http://rainbond.internal/console/mcp/rainskills/codex/query"
-  assert_contains "$tmpdir/logs/curl.log" "http://rainbond.internal/console/mcp/rainskills/claude-code/query"
-  assert_contains "$tmpdir/logs/codex.log" "mcp add rainbond --url http://rainbond.internal/console/mcp/rainskills/codex/query --bearer-token-env-var RAINBOND_JWT"
-  assert_contains "$tmpdir/logs/claude.log" "mcp add --scope user --transport http rainbond http://rainbond.internal/console/mcp/rainskills/claude-code/query -H Authorization: GRJWT \${RAINBOND_JWT}"
-}
-
-test_installer_configures_pi_extension_and_uses_pi_endpoint() {
-  local tmpdir
-  tmpdir="$(mktemp -d)"
-  trap 'rm -rf "$tmpdir"' RETURN
-  mkdir -p "$tmpdir/home" "$tmpdir/logs"
-  make_fake_commands "$tmpdir/bin"
-  make_fake_node "$tmpdir/bin"
-
-  run_installer "$tmpdir" pi --non-interactive --rainbond-url http://rainbond.internal \
-    --username demo --allow-insecure-http --force >/tmp/rainskills-pi-install.out 2>&1
-
-  assert_file_exists "$tmpdir/home/.pi/agent/skills/rainbond-app-assistant/SKILL.md"
-  assert_file_exists "$tmpdir/home/.pi/agent/extensions/rainskills-mcp.ts"
-  cmp -s "$REPO_ROOT/pi/rainskills-mcp.ts" "$tmpdir/home/.pi/agent/extensions/rainskills-mcp.ts" \
-    || fail "Pi extension must match the bundled extension"
-  [[ "$(file_mode "$tmpdir/home/.pi/agent/extensions/rainskills-mcp.ts")" == "600" ]] \
-    || fail "Pi extension must be private to the current user"
-  assert_contains "$tmpdir/logs/curl.log" "http://rainbond.internal/console/mcp/rainskills/pi/query"
-  assert_not_contains "$tmpdir/logs/curl.log" "/console/mcp/rainskills/api/query"
-  assert_contains /tmp/rainskills-pi-install.out "执行 /reload"
-}
-
-test_pi_mcp_validation_falls_back_to_verified_api_bridge() {
-  local tmpdir
-  tmpdir="$(mktemp -d)"
-  trap 'rm -rf "$tmpdir"' RETURN
-  mkdir -p "$tmpdir/home" "$tmpdir/logs"
-  make_fake_commands "$tmpdir/bin"
-  make_fake_node "$tmpdir/bin"
-
-  TEST_FAKE_MCP_HTTP_CODE=404 run_installer "$tmpdir" pi --non-interactive \
-    --rainbond-url http://rainbond.internal --username demo --allow-insecure-http --force \
-    >/tmp/rainskills-pi-fallback.out 2>&1
-
-  assert_file_exists "$tmpdir/home/.rainbond/bin/rainskills-tools.js"
-  [[ ! -e "$tmpdir/home/.pi/agent/extensions/rainskills-mcp.ts" ]] \
-    || fail "failed Pi MCP verification must not install the extension"
-  assert_contains "$tmpdir/logs/curl.log" "/console/mcp/rainskills/pi/query"
-  assert_contains "$tmpdir/logs/curl.log" "/console/mcp/rainskills/api/query"
-  assert_contains /tmp/rainskills-pi-fallback.out "API Bridge 回退"
-}
-
-test_dedicated_mcp_url_input_is_normalized_to_console_base() {
-  local tmpdir
-  tmpdir="$(mktemp -d)"
-  trap 'rm -rf "$tmpdir"' RETURN
-  mkdir -p "$tmpdir/home" "$tmpdir/logs"
-  make_fake_commands "$tmpdir/bin"
-
-  run_installer "$tmpdir" codex --non-interactive \
-    --rainbond-url http://rainbond.internal/console/mcp/rainskills/codex/query \
-    --username demo --allow-insecure-http --force >/tmp/rainbond-install-normalize.out 2>&1
-
-  assert_contains "$tmpdir/home/.rainbond/mcp.env" "export RAINBOND_URL='http://rainbond.internal'"
-  assert_contains "$tmpdir/home/.codex/config.toml" \
-    "url = \"http://rainbond.internal/console/mcp/rainskills/codex/query\""
-  assert_not_contains "$tmpdir/home/.codex/config.toml" "/query/console/mcp/"
-}
-
 test_interactive_prompts_are_visible() {
   local tmpdir
   local output_file
@@ -834,48 +551,6 @@ test_interactive_prompts_are_visible() {
     "Rainbond Console 地址: "
 }
 
-test_private_install_branch_writes_checkpoint_and_returns_fixed_next_action() {
-  local tmpdir output_file state_file
-  tmpdir="$(mktemp -d)"
-  output_file="$tmpdir/no-platform.out"
-  state_file="$tmpdir/home/.rainbond/rainskills-onboarding-v1.json"
-  trap 'rm -rf "$tmpdir"' RETURN
-  mkdir -p "$tmpdir/home" "$tmpdir/logs"
-  make_fake_commands "$tmpdir/bin"
-
-  run_interactive_no_platform_with_pty "$tmpdir" "$output_file"
-
-  assert_file_exists "$state_file"
-  [[ "$(file_mode "$state_file")" == "600" ]] || fail "expected onboarding state permissions to be 600"
-  assert_contains "$output_file" "Rainbond 平台安装将在独立步骤中继续"
-  assert_contains "$output_file" "npx rainskills@0.1.0-rc.3 platform install --onboarding-id"
-  assert_contains "$output_file" '"schema":"rainskills.next-action.v1"'
-  assert_contains "$output_file" '"action":"install-platform"'
-  assert_not_contains "$output_file" "Rainbond Console 地址: "
-
-  python3 - "$state_file" "$output_file" <<'PY'
-import json
-import sys
-
-state_path, output_path = sys.argv[1:]
-state = json.load(open(state_path, encoding="utf-8"))
-assert state["schema"] == "rainskills.onboarding.v1"
-assert state["version"] == 1
-assert state["stage"] == "awaiting-platform"
-assert state["target"] == "codex"
-assert state["deployment_mode"] == "self-hosted"
-assert state["transport_mode"] == "cli"
-assert state["console_url"] is None
-
-lines = open(output_path, encoding="utf-8", errors="replace").read().splitlines()
-markers = [json.loads(line) for line in lines if line.startswith('{"schema":"rainskills.next-action.v1"')]
-assert len(markers) == 1
-marker = markers[0]
-assert marker["onboarding_id"] == state["operation_id"]
-assert marker["argv"] == ["platform", "install", "--onboarding-id", state["operation_id"]]
-PY
-}
-
 test_saas_mode_does_not_show_self_hosted_install_hint() {
   local tmpdir token output_file
   tmpdir="$(mktemp -d)"
@@ -899,6 +574,7 @@ test_expired_cached_token_reauthenticates_before_write() {
   trap 'rm -rf "$tmpdir"' RETURN
   mkdir -p "$tmpdir/home" "$tmpdir/logs"
   make_fake_commands "$tmpdir/bin"
+  make_fake_node "$tmpdir/bin"
 
   expired_token="$(make_test_jwt 1700000000)"
   fresh_token="$(make_test_jwt 1893456000)"
@@ -910,7 +586,7 @@ test_expired_cached_token_reauthenticates_before_write() {
     >/tmp/rainbond-install-expired-cache.out 2>&1
 
   assert_contains "$tmpdir/logs/curl.log" "http://rainbond.internal/console/users/login"
-  assert_contains "$tmpdir/home/.rainbond/mcp.env" "export RAINBOND_JWT='$fresh_token'"
+  assert_contains "$tmpdir/home/.rainbond/credentials.env" "export RAINBOND_JWT='$fresh_token'"
   grep -F -- "已过期" /tmp/rainbond-install-expired-cache.out >/dev/null || fail "expected expired token guidance"
 }
 
@@ -920,6 +596,7 @@ test_expiring_cached_token_reauthenticates_before_write() {
   trap 'rm -rf "$tmpdir"' RETURN
   mkdir -p "$tmpdir/home" "$tmpdir/logs"
   make_fake_commands "$tmpdir/bin"
+  make_fake_node "$tmpdir/bin"
 
   expiring_token="$(make_test_jwt "$(( $(date +%s) + 300 ))")"
   fresh_token="$(make_test_jwt 1893456000)"
@@ -931,7 +608,7 @@ test_expiring_cached_token_reauthenticates_before_write() {
     >/tmp/rainbond-install-expiring-cache.out 2>&1
 
   assert_contains "$tmpdir/logs/curl.log" "http://rainbond.internal/console/users/login"
-  assert_contains "$tmpdir/home/.rainbond/mcp.env" "export RAINBOND_JWT='$fresh_token'"
+  assert_contains "$tmpdir/home/.rainbond/credentials.env" "export RAINBOND_JWT='$fresh_token'"
   grep -F -- "即将过期" /tmp/rainbond-install-expiring-cache.out >/dev/null || fail "expected expiring token guidance"
 }
 
@@ -941,6 +618,7 @@ test_expired_flag_token_fails_without_writing_config() {
   trap 'rm -rf "$tmpdir"' RETURN
   mkdir -p "$tmpdir/home" "$tmpdir/logs"
   make_fake_commands "$tmpdir/bin"
+  make_fake_node "$tmpdir/bin"
 
   expired_token="$(make_test_jwt 1700000000)"
 
@@ -951,7 +629,7 @@ test_expired_flag_token_fails_without_writing_config() {
   set -e
 
   [[ $rc -ne 0 ]] || fail "expected expired --token to fail"
-  [[ ! -f "$tmpdir/home/.rainbond/mcp.env" ]] || fail "did not expect token file for expired --token"
+  [[ ! -f "$tmpdir/home/.rainbond/credentials.env" ]] || fail "did not expect token file for expired --token"
   grep -F -- "--token 提供的 Rainbond JWT 已过期" /tmp/rainbond-install-expired-flag.out >/dev/null || fail "expected expired --token guidance"
   wait_for_file_line_count "$tmpdir/logs/install-report.log" "2"
   python3 - "$tmpdir/logs/install-report.log" <<'PY'
@@ -967,186 +645,13 @@ if failed[0]["failure_stage"] != "authorization" or failed[0]["failure_category"
 PY
 }
 
-test_mcp_renewed_token_is_persisted_after_validation() {
-  local tmpdir original_token renewed_token
-  tmpdir="$(mktemp -d)"
-  trap 'rm -rf "$tmpdir"' RETURN
-  mkdir -p "$tmpdir/home" "$tmpdir/logs"
-  make_fake_commands "$tmpdir/bin"
-
-  original_token="$(make_test_jwt "$(( $(date +%s) + 86400 * 30 ))")"
-  renewed_token="$(make_test_jwt 1893456000)"
-
-  RAINBOND_JWT="$original_token" \
-  RAINBOND_URL="http://rainbond.internal" \
-  TEST_FAKE_RENEWED_TOKEN="$renewed_token" \
-    run_installer "$tmpdir" codex --non-interactive --rainbond-url http://rainbond.internal --allow-insecure-http --force \
-    >/tmp/rainbond-install-renewed.out 2>&1
-
-  assert_contains "$tmpdir/home/.rainbond/mcp.env" "export RAINBOND_JWT='$renewed_token'"
-  assert_contains "$tmpdir/logs/codex.log" "mcp add rainbond --url http://rainbond.internal/console/mcp/rainskills/codex/query --bearer-token-env-var RAINBOND_JWT"
-  grep -F -- "已保存后端滑动续期返回的新 JWT" /tmp/rainbond-install-renewed.out >/dev/null || fail "expected renewal guidance"
-}
-
-test_refresh_rewrites_token_and_refreshes_every_installed_client() {
-  local tmpdir expired_token fresh_token
-  tmpdir="$(mktemp -d)"
-  trap 'rm -rf "$tmpdir"' RETURN
-  mkdir -p "$tmpdir/home/.rainbond" "$tmpdir/home/.codex" "$tmpdir/logs"
-  make_fake_commands "$tmpdir/bin"
-
-  expired_token="$(make_test_jwt 1700000000)"
-  fresh_token="$(make_test_jwt 1893456000)"
-
-  cat > "$tmpdir/home/.rainbond/mcp.env" <<EOF
-export RAINBOND_JWT='$expired_token'
-export RAINBOND_URL='http://rainbond.internal'
-EOF
-  chmod 600 "$tmpdir/home/.rainbond/mcp.env"
-
-  cat > "$tmpdir/home/.codex/config.toml" <<EOF
-[mcp_servers.rainbond]
-url = "http://rainbond.internal/console/mcp/query"
-bearer_token_env_var = "RAINBOND_JWT"
-EOF
-  cat > "$tmpdir/home/.claude.json" <<'EOF'
-{
-  "mcpServers": {
-    "rainbond": {
-      "type": "http",
-      "url": "http://rainbond.internal/console/mcp/query",
-      "headers": {"Authorization": "GRJWT ${RAINBOND_JWT}"}
-    }
-  }
-}
-EOF
-  TEST_FAKE_LOGIN_TOKEN="$fresh_token" \
-    run_installer "$tmpdir" refresh --non-interactive --self-hosted --username demo --allow-insecure-http \
-    >/tmp/rainbond-install-refresh.out 2>&1
-
-  assert_contains "$tmpdir/home/.rainbond/mcp.env" "export RAINBOND_JWT='$fresh_token'"
-  assert_contains "$tmpdir/home/.rainbond/mcp.env" "export RAINBOND_URL='http://rainbond.internal'"
-  [[ "$(file_mode "$tmpdir/home/.rainbond/mcp.env")" == "600" ]] || fail "refresh should keep mcp.env permissions at 600"
-
-  assert_contains "$tmpdir/home/.codex/config.toml" "url = \"http://rainbond.internal/console/mcp/rainskills/codex/query\""
-  assert_contains "$tmpdir/home/.claude.json" "\"url\": \"http://rainbond.internal/console/mcp/rainskills/claude-code/query\""
-  assert_file_exists "$tmpdir/home/.codex/config.toml.rainskills-backup"
-  assert_file_exists "$tmpdir/home/.claude.json.rainskills-backup"
-
-  [[ ! -d "$tmpdir/home/.codex/skills" ]] || fail "refresh should not copy skills to codex"
-  [[ ! -d "$tmpdir/home/.claude/skills" ]] || fail "refresh should not copy skills to claude"
-
-  assert_contains "$tmpdir/logs/curl.log" "http://rainbond.internal/console/users/login"
-  assert_contains "$tmpdir/logs/curl.log" "http://rainbond.internal/console/mcp/rainskills/codex/query"
-  assert_contains "$tmpdir/logs/curl.log" "http://rainbond.internal/console/mcp/rainskills/claude-code/query"
-  grep -F -- "使用 ~/.rainbond/mcp.env 中已记录的地址" /tmp/rainbond-install-refresh.out >/dev/null \
-    || fail "expected refresh to log cached URL reuse"
-  grep -F -- "请重启 Claude Code 或 Codex" /tmp/rainbond-install-refresh.out >/dev/null \
-    || fail "expected restart guidance"
-
-  assert_contains "$tmpdir/home/.zshrc" "# >>> rainbond skills mcp >>>"
-  assert_line_count "$tmpdir/home/.zshrc" "# >>> rainbond skills mcp >>>" "1"
-}
-
-test_refresh_leaves_custom_mcp_urls_untouched() {
-  local tmpdir fresh_token
-  tmpdir="$(mktemp -d)"
-  trap 'rm -rf "$tmpdir"' RETURN
-  mkdir -p "$tmpdir/home/.rainbond" "$tmpdir/home/.codex" "$tmpdir/logs"
-  make_fake_commands "$tmpdir/bin"
-  fresh_token="$(make_test_jwt 1893456000)"
-
-  cat > "$tmpdir/home/.rainbond/mcp.env" <<EOF
-export RAINBOND_JWT='$fresh_token'
-export RAINBOND_URL='http://rainbond.internal'
-EOF
-  cat > "$tmpdir/home/.codex/config.toml" <<'EOF'
-[mcp_servers.rainbond]
-url = "http://custom.internal/my-mcp"
-bearer_token_env_var = "RAINBOND_JWT"
-EOF
-
-  run_installer "$tmpdir" refresh --non-interactive --self-hosted --token "$fresh_token" --allow-insecure-http \
-    >/tmp/rainbond-refresh-custom.out 2>&1
-
-  assert_contains "$tmpdir/home/.codex/config.toml" "url = \"http://custom.internal/my-mcp\""
-  [[ ! -f "$tmpdir/home/.codex/config.toml.rainskills-backup" ]] || fail "custom config must not be backed up"
-  [[ ! -f "$tmpdir/logs/codex.log" ]] || fail "custom config must not invoke codex mcp"
-}
-
-test_refresh_restores_generic_config_when_migration_fails() {
-  local tmpdir fresh_token
-  tmpdir="$(mktemp -d)"
-  trap 'rm -rf "$tmpdir"' RETURN
-  mkdir -p "$tmpdir/home/.rainbond" "$tmpdir/home/.codex" "$tmpdir/logs"
-  make_fake_commands "$tmpdir/bin"
-  fresh_token="$(make_test_jwt 1893456000)"
-
-  cat > "$tmpdir/home/.rainbond/mcp.env" <<EOF
-export RAINBOND_JWT='$fresh_token'
-export RAINBOND_URL='http://rainbond.internal'
-EOF
-  cat > "$tmpdir/home/.codex/config.toml" <<'EOF'
-[mcp_servers.rainbond]
-url = "http://rainbond.internal/console/mcp/query"
-bearer_token_env_var = "RAINBOND_JWT"
-EOF
-
-  set +e
-  TEST_FAKE_CODEX_ADD_FAIL=1 run_installer "$tmpdir" refresh --non-interactive --self-hosted \
-    --token "$fresh_token" --allow-insecure-http >/tmp/rainbond-refresh-restore.out 2>&1
-  local rc=$?
-  set -e
-
-  [[ $rc -ne 0 ]] || fail "expected failed MCP migration to fail refresh"
-  assert_contains "$tmpdir/home/.codex/config.toml" "url = \"http://rainbond.internal/console/mcp/query\""
-  assert_file_exists "$tmpdir/home/.codex/config.toml.rainskills-backup"
-}
-
-test_mcp_404_reports_missing_endpoint() {
-  local tmpdir
-  tmpdir="$(mktemp -d)"
-  trap 'rm -rf "$tmpdir"' RETURN
-  mkdir -p "$tmpdir/home" "$tmpdir/logs"
-  make_fake_commands "$tmpdir/bin"
-
-  set +e
-  (
-    export TEST_FAKE_MCP_HTTP_CODE=404
-    run_installer "$tmpdir" codex --non-interactive --rainbond-url http://rainbond.internal --username demo --allow-insecure-http --force
-  ) >/tmp/rainbond-install-404.out 2>&1
-  local rc=$?
-  set -e
-
-  [[ $rc -ne 0 ]] || fail "expected installer to fail when MCP endpoint returns 404"
-  grep -F -- "未暴露 /console/mcp/rainskills/codex/query" /tmp/rainbond-install-404.out >/dev/null || fail "expected missing endpoint guidance"
-
-  wait_for_file_line_count "$tmpdir/logs/install-report.log" "3"
-  python3 - "$tmpdir/logs/install-report.log" <<'PY'
-import json
-import sys
-
-records = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8") if line.strip()]
-failed = next((record for record in records if record["phase"] == "failed"), None)
-if failed is None:
-    raise SystemExit("missing failed report: {!r}".format(records))
-if failed["phase"] != "failed" or failed["status"] != "failure":
-    raise SystemExit("expected final failed report, got {!r}".format(failed))
-if failed["failure_stage"] != "verification":
-    raise SystemExit("unexpected failure stage: {!r}".format(failed))
-if failed["failure_category"] != "mcp_verification_failed":
-    raise SystemExit("unexpected failure category: {!r}".format(failed))
-if failed["eid"] != "enterprise-test" or failed["install_client"] != "codex":
-    raise SystemExit("failure report lost enterprise/client metadata: {!r}".format(failed))
-PY
-}
-
 test_installer_reports_installation_lifecycle() {
   local tmpdir report_file
   tmpdir="$(mktemp -d)"
   trap 'rm -rf "$tmpdir"' RETURN
   mkdir -p "$tmpdir/home" "$tmpdir/logs"
   make_fake_commands "$tmpdir/bin"
+  make_fake_node "$tmpdir/bin"
 
   run_installer "$tmpdir" codex --non-interactive --rainbond-url http://rainbond.internal \
     --username demo --allow-insecure-http --force >/tmp/rainbond-install-report.out 2>&1
@@ -1202,13 +707,14 @@ test_installation_reporting_failures_do_not_block_installation() {
   trap 'rm -rf "$tmpdir"' RETURN
   mkdir -p "$tmpdir/home" "$tmpdir/logs"
   make_fake_commands "$tmpdir/bin"
+  make_fake_node "$tmpdir/bin"
 
   TEST_FAKE_INSTALL_REPORT_FAIL=1 \
     run_installer "$tmpdir" codex --non-interactive --rainbond-url http://rainbond.internal \
       --username demo --allow-insecure-http --force >/tmp/rainbond-install-report-failure.out 2>&1
 
-  assert_file_exists "$tmpdir/home/.rainbond/mcp.env"
-  assert_file_exists "$tmpdir/home/.codex/config.toml"
+  assert_file_exists "$tmpdir/home/.rainbond/credentials.env"
+  [[ ! -e "$tmpdir/home/.codex/config.toml" ]] || fail "CLI-only install must not create Codex MCP config"
   wait_for_file_line_count "$tmpdir/logs/install-report.log" "3"
 }
 
@@ -1218,13 +724,14 @@ test_enterprise_lookup_failure_does_not_block_installation() {
   trap 'rm -rf "$tmpdir"' RETURN
   mkdir -p "$tmpdir/home" "$tmpdir/logs"
   make_fake_commands "$tmpdir/bin"
+  make_fake_node "$tmpdir/bin"
 
   TEST_FAKE_DETAILS_HTTP_CODE=500 \
     run_installer "$tmpdir" claude --non-interactive --rainbond-url http://rainbond.internal \
       --username demo --allow-insecure-http --force >/tmp/rainbond-install-details-failure.out 2>&1
 
-  assert_file_exists "$tmpdir/home/.rainbond/mcp.env"
-  assert_file_exists "$tmpdir/home/.claude.json"
+  assert_file_exists "$tmpdir/home/.rainbond/credentials.env"
+  [[ ! -e "$tmpdir/home/.claude.json" ]] || fail "CLI-only install must not create Claude MCP config"
   wait_for_file_line_count "$tmpdir/logs/install-report.log" "1"
   python3 - "$tmpdir/logs/install-report.log" <<'PY'
 import json
@@ -1245,13 +752,14 @@ test_unhandled_skill_installation_failure_is_reported() {
   source_dir="$tmpdir/source"
   mkdir -p "$tmpdir/home" "$tmpdir/logs" "$source_dir/rainbond-invalid"
   make_fake_commands "$tmpdir/bin"
+  make_fake_node "$tmpdir/bin"
   cp "$REPO_ROOT/install.sh" "$source_dir/install.sh"
 
   set +e
   HOME="$tmpdir/home" \
   TEST_LOG_DIR="$tmpdir/logs" \
   PATH="$tmpdir/bin:/usr/bin:/bin" \
-    bash "$source_dir/install.sh" codex --skip-mcp --force \
+    bash "$source_dir/install.sh" codex --force \
       >/tmp/rainbond-install-invalid-skill.out 2>&1
   local rc=$?
   set -e
@@ -1271,177 +779,6 @@ if failed["phase"] != "failed" or failed["failure_stage"] != "skill_installation
 if failed["failure_category"] != "skill_installation_failed":
     raise SystemExit("unexpected unhandled failure category: {!r}".format(failed))
 PY
-}
-
-test_api_only_installs_bridge_authorizes_and_never_configures_mcp() {
-  local target tmpdir custom_dest default_token
-  default_token="$(make_test_jwt 1893456000)"
-  for target in codex claude pi all; do
-    tmpdir="$(mktemp -d)"
-    mkdir -p "$tmpdir/home" "$tmpdir/logs"
-    make_fake_commands "$tmpdir/bin"
-    make_fake_node "$tmpdir/bin"
-
-    run_installer "$tmpdir" "$target" --api-only --non-interactive \
-      --rainbond-url http://rainbond.internal --username demo --allow-insecure-http --force
-
-    assert_file_exists "$tmpdir/home/.rainbond/bin/rainskills-tools.js"
-    [[ "$(file_mode "$tmpdir/home/.rainbond")" == "700" ]] || fail "expected .rainbond mode 700"
-    [[ "$(file_mode "$tmpdir/home/.rainbond/bin")" == "700" ]] || fail "expected bridge directory mode 700"
-    [[ "$(file_mode "$tmpdir/home/.rainbond/bin/rainskills-tools.js")" == "700" ]] \
-      || fail "expected bridge mode 700"
-    assert_contains "$tmpdir/home/.rainbond/mcp.env" "export RAINBOND_JWT='$default_token'"
-    assert_contains "$tmpdir/logs/curl.log" "/console/mcp/rainskills/api/query"
-    assert_contains "$tmpdir/logs/curl.log" "--connect-timeout 10 --max-time 180"
-    [[ ! -f "$tmpdir/logs/codex.log" ]] || fail "api-only must not run codex MCP commands"
-    [[ ! -f "$tmpdir/logs/claude.log" ]] || fail "api-only must not run claude MCP commands"
-    [[ ! -f "$tmpdir/home/.codex/config.toml" ]] || fail "api-only must not edit Codex MCP config"
-    [[ ! -f "$tmpdir/home/.claude.json" ]] || fail "api-only must not edit Claude MCP config"
-    [[ ! -e "$tmpdir/home/.pi/agent/extensions/rainskills-mcp.ts" ]] \
-      || fail "api-only must not install the Pi MCP extension"
-    rm -rf "$tmpdir"
-  done
-
-  tmpdir="$(mktemp -d)"
-  custom_dest="$tmpdir/custom-skills"
-  mkdir -p "$tmpdir/home" "$tmpdir/logs"
-  make_fake_commands "$tmpdir/bin"
-  make_fake_node "$tmpdir/bin"
-  run_installer "$tmpdir" --dest "$custom_dest" --api-only --non-interactive \
-    --rainbond-url http://rainbond.internal --username demo --allow-insecure-http --force
-  assert_file_exists "$custom_dest/rainbond-app-assistant/SKILL.md"
-  assert_file_exists "$tmpdir/home/.rainbond/bin/rainskills-tools.js"
-  assert_contains "$tmpdir/logs/curl.log" "/console/mcp/rainskills/api/query"
-  [[ ! -f "$tmpdir/logs/codex.log" ]] || fail "custom API-only must not run Codex"
-  [[ ! -f "$tmpdir/logs/claude.log" ]] || fail "custom API-only must not run Claude"
-  rm -rf "$tmpdir"
-}
-
-test_api_only_rejects_conflicts_and_missing_node() {
-  local tmpdir rc
-  tmpdir="$(mktemp -d)"
-  mkdir -p "$tmpdir/home" "$tmpdir/logs"
-  make_fake_commands "$tmpdir/bin"
-
-  set +e
-  run_installer "$tmpdir" codex --api-only --skip-mcp --force >/tmp/rainskills-api-conflict.out 2>&1
-  rc=$?
-  set -e
-  [[ $rc -ne 0 ]] || fail "expected --api-only/--skip-mcp conflict"
-  grep -F -- "--api-only" /tmp/rainskills-api-conflict.out >/dev/null || fail "expected conflict guidance"
-
-  set +e
-  run_installer "$tmpdir" codex --api-only --non-interactive --saas --force \
-    >/tmp/rainskills-api-node.out 2>&1
-  rc=$?
-  set -e
-  [[ $rc -ne 0 ]] || fail "expected API-only to require Node 18+"
-  grep -F -- "Node.js 18" /tmp/rainskills-api-node.out >/dev/null || fail "expected Node 18 guidance"
-  [[ ! -e "$tmpdir/home/.rainbond/bin/rainskills-tools.js" ]] || fail "failed preflight must not install bridge"
-  rm -rf "$tmpdir"
-}
-
-test_bridge_modes_preserve_legacy_install_semantics_and_refresh() {
-  local tmpdir custom_dest bridge sentinel rc
-  tmpdir="$(mktemp -d)"
-  custom_dest="$tmpdir/custom-skills"
-  mkdir -p "$tmpdir/home" "$tmpdir/logs"
-  make_fake_commands "$tmpdir/bin"
-  make_fake_node "$tmpdir/bin"
-
-  run_installer "$tmpdir" codex --skip-mcp --force
-  [[ ! -e "$tmpdir/home/.rainbond/bin/rainskills-tools.js" ]] || fail "skip-mcp must remain skill-copy-only"
-  run_installer "$tmpdir" --dest "$custom_dest" --force
-  [[ ! -e "$tmpdir/home/.rainbond/bin/rainskills-tools.js" ]] || fail "custom dest alone must remain skill-copy-only"
-
-  TEST_FAKE_CODEX_ADD_FAIL=1 run_installer "$tmpdir" codex --non-interactive \
-    --rainbond-url http://rainbond.internal --username demo --allow-insecure-http --force \
-    >/tmp/rainskills-default-mcp-failure.out 2>&1 && rc=0 || rc=$?
-  [[ $rc -eq 0 ]] || fail "default install must fall back when MCP registration fails"
-  assert_contains /tmp/rainskills-default-mcp-failure.out "API Bridge 回退"
-  assert_contains "$tmpdir/logs/curl.log" "/console/mcp/rainskills/api/query"
-  bridge="$tmpdir/home/.rainbond/bin/rainskills-tools.js"
-  assert_file_exists "$bridge"
-
-  sentinel='refresh-must-not-replace-this-bridge'
-  printf '%s\n' "$sentinel" >"$bridge"
-  chmod 700 "$bridge"
-  run_installer "$tmpdir" refresh --non-interactive --self-hosted --username demo \
-    --rainbond-url http://rainbond.internal --allow-insecure-http
-  assert_contains "$bridge" "$sentinel"
-  rm -rf "$tmpdir"
-}
-
-test_default_install_uses_environment_url_and_automatic_api_fallback() {
-  local tmpdir rc token
-  token="$(make_test_jwt 1893456000)"
-
-  tmpdir="$(mktemp -d)"
-  mkdir -p "$tmpdir/home" "$tmpdir/logs"
-  make_fake_commands "$tmpdir/bin"
-  make_fake_node "$tmpdir/bin"
-  RAINBOND_URL=http://rainbond.internal run_installer "$tmpdir" codex --non-interactive \
-    --username demo --allow-insecure-http --force >/tmp/rainskills-env-url.out 2>&1
-  assert_contains "$tmpdir/home/.rainbond/mcp.env" "export RAINBOND_URL='http://rainbond.internal'"
-  assert_not_contains /tmp/rainskills-env-url.out "非交互私有化部署必须提供 --rainbond-url"
-  assert_not_contains /tmp/rainskills-env-url.out "Rainbond Console 地址:"
-  rm -rf "$tmpdir"
-
-  tmpdir="$(mktemp -d)"
-  mkdir -p "$tmpdir/home" "$tmpdir/logs"
-  make_fake_commands "$tmpdir/bin"
-  make_fake_node "$tmpdir/bin"
-  TEST_FAKE_MCP_HTTP_CODE=404 TEST_FAKE_API_HTTP_CODE=200 \
-    run_installer "$tmpdir" codex --non-interactive --rainbond-url http://rainbond.internal \
-      --username demo --allow-insecure-http --force >/tmp/rainskills-mcp-api-fallback.out 2>&1
-  assert_contains /tmp/rainskills-mcp-api-fallback.out "API Bridge 回退"
-  assert_contains /tmp/rainskills-mcp-api-fallback.out "当前会话无 Rainbond MCP 时会自动使用 API Bridge"
-  assert_contains "$tmpdir/logs/curl.log" "/console/mcp/rainskills/codex/query"
-  assert_contains "$tmpdir/logs/curl.log" "/console/mcp/rainskills/api/query"
-  [[ ! -f "$tmpdir/logs/codex.log" ]] || fail "failed MCP verification must not configure Codex"
-  rm -rf "$tmpdir"
-
-  tmpdir="$(mktemp -d)"
-  mkdir -p "$tmpdir/home" "$tmpdir/logs"
-  make_fake_commands "$tmpdir/bin"
-  make_fake_node "$tmpdir/bin"
-  set +e
-  TEST_FAKE_MCP_HTTP_CODE=404 TEST_FAKE_API_HTTP_CODE=503 \
-    run_installer "$tmpdir" codex --non-interactive --rainbond-url http://rainbond.internal \
-      --username demo --allow-insecure-http --force >/tmp/rainskills-dual-transport-failure.out 2>&1
-  rc=$?
-  set -e
-  [[ $rc -ne 0 ]] || fail "both MCP and API failures must fail installation"
-  assert_contains /tmp/rainskills-dual-transport-failure.out "原生 MCP"
-  assert_contains /tmp/rainskills-dual-transport-failure.out "API Bridge"
-  assert_not_contains /tmp/rainskills-dual-transport-failure.out "$token"
-  [[ ! -e "$tmpdir/home/.rainbond/mcp.env" ]] || fail "dual transport failure must not persist new credentials"
-  rm -rf "$tmpdir"
-
-  tmpdir="$(mktemp -d)"
-  mkdir -p "$tmpdir/home" "$tmpdir/logs"
-  make_fake_commands "$tmpdir/bin"
-  make_fake_node "$tmpdir/bin"
-  TEST_FAKE_CLAUDE_ADD_FAIL=1 run_installer "$tmpdir" all --non-interactive \
-    --rainbond-url http://rainbond.internal --username demo --allow-insecure-http --force \
-    >/tmp/rainskills-partial-mcp-fallback.out 2>&1
-  assert_file_exists "$tmpdir/home/.codex/config.toml"
-  assert_contains /tmp/rainskills-partial-mcp-fallback.out "API Bridge 回退"
-  assert_contains "$tmpdir/logs/curl.log" "/console/mcp/rainskills/api/query"
-  rm -rf "$tmpdir"
-
-  tmpdir="$(mktemp -d)"
-  mkdir -p "$tmpdir/home" "$tmpdir/logs"
-  make_fake_commands "$tmpdir/bin"
-  set +e
-  TEST_FAKE_MCP_HTTP_CODE=404 run_installer "$tmpdir" codex --non-interactive \
-    --rainbond-url http://rainbond.internal --username demo --allow-insecure-http --force \
-    >/tmp/rainskills-no-node-fallback.out 2>&1
-  rc=$?
-  set -e
-  [[ $rc -ne 0 ]] || fail "MCP failure without Node 18 must remain fatal"
-  assert_contains /tmp/rainskills-no-node-fallback.out "Node.js 18"
-  rm -rf "$tmpdir"
 }
 
 test_bridge_install_replaces_updates_and_rejects_symlink_targets() {
@@ -1532,6 +869,13 @@ test_cli_install_writes_private_credentials_without_client_mcp
 test_codex_install_writes_narrow_read_only_network_rule
 test_interactive_prompts_are_visible
 test_saas_mode_does_not_show_self_hosted_install_hint
+test_expired_cached_token_reauthenticates_before_write
+test_expiring_cached_token_reauthenticates_before_write
+test_expired_flag_token_fails_without_writing_config
+test_installer_reports_installation_lifecycle
+test_installation_reporting_failures_do_not_block_installation
+test_enterprise_lookup_failure_does_not_block_installation
+test_unhandled_skill_installation_failure_is_reported
 test_bridge_install_replaces_updates_and_rejects_symlink_targets
 test_bridge_install_failures_preserve_old_target_and_clean_staging
 test_bridge_signal_cleanup_preserves_old_target

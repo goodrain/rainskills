@@ -1,8 +1,8 @@
 ### Creation Result
-Created the package-backed `api` component from the verified upload event. `source.local_path was read only by the local helper`; no client filesystem path was sent to MCP.
+Created the package-backed `api` component from the verified upload event. `source.local_path was read only by the local helper`; no client filesystem path was sent to a Rainbond Tool.
 
 ### Actions Taken
-The local helper prepared `api-release.zip`, then MCP initialization returned a non-empty event_id and complete upload_request. The local helper performed the HTTP upload with the exact upload_request contract. The local cleanup ran immediately after the HTTP attempt and before any status or create call. The uploaded-file query returned non-empty uploaded-file status, so bootstrap created api by event_id, configured the component, and deployed it.
+The local helper prepared `api-release.zip`, then Rainbond Tool initialization returned a non-empty event_id and complete upload_request. The local helper performed the HTTP upload with the exact upload_request contract. The local cleanup ran immediately after the HTTP attempt and before any status or create call. The uploaded-file query returned non-empty uploaded-file status, so bootstrap created api by event_id, configured the component, and deployed it.
 
 ### Current State
 `api` is `running`. The package upload transaction and runtime convergence completed without a blocker.

@@ -464,7 +464,7 @@ skill_id, capability_name, operation_class(read|write), required_profile_rule
 建议作为 major release：
 
 ```text
-RainSkills 1.x: native MCP preferred + CLI bridge fallback
+RainSkills 1.x: legacy hybrid client transport (superseded)
 RainSkills 2.x: local CLI-only
 rainbond-agent: embedded MCP profile, pinned to compatible shared-core SHA
 ```

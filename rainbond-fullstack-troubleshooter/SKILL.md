@@ -67,7 +67,7 @@ Do not use when:
  - the task requires source-code changes, build script changes, reverse-proxy edits, or destructive cleanup
 - the database must be reset or modified directly
 - the issue is clearly unrelated to Rainbond runtime state
-- the user wants to restart or modify Rainbond platform system components (`rbd-*` such as `rbd-gateway`, `rbd-api`, `rbd-worker`, `rbd-chaos`, `rbd-db`, `rbd-mq`, `rbd-monitor`, `rbd-node`); these are platform infrastructure, not user app components — MCP write operations are not supported on them; direct the user to `kubectl rollout restart` or the Rainbond cluster management console instead
+- the user wants to restart or modify Rainbond platform system components (`rbd-*` such as `rbd-gateway`, `rbd-api`, `rbd-worker`, `rbd-chaos`, `rbd-db`, `rbd-mq`, `rbd-monitor`, `rbd-node`); these are platform infrastructure, not user app components — Rainbond Tool write operations are not supported on them; direct the user to `kubectl rollout restart` or the Rainbond cluster management console instead
 
 ## Configuration Priority
 
@@ -222,7 +222,7 @@ Concurrency note:
 
 ### Write-result confirmation under async inconsistency
 
-Mutating MCP calls (storage update, env change, restart, upgrade) can return a 5xx error
+Mutating Rainbond Tool calls (storage update, env change, restart, upgrade) can return a 5xx error
 while the platform still applies the change asynchronously.
 
 - a 5xx response to a write is **not** proof of failure: query the related component events
@@ -293,7 +293,7 @@ Attempt budget:
   - first ensure the provider component exposes the needed port alias and connection envs
   - add the missing dependency with `rainbond_manage_component_dependency`
   - if the tool returns `requires_open_inner`, open the provider inner port or retry with `open_inner=true` and the provider `container_port`
-  - do not claim MCP lacks a dependency API; if dependency creation fails, report the concrete MCP/control-plane error
+  - do not claim Rainbond Tool lacks a dependency capability; if dependency creation fails, report the concrete Rainbond Tool/control-plane error
 - `env naming incompatibility`
   - prefer fixing provider connection env names and port aliases so every dependent service receives the same contract
   - add consumer compatibility envs only when provider-side repair is unsafe or cannot express the app's expected names
@@ -303,7 +303,7 @@ Attempt budget:
   - correct provider connection envs or port aliases first when the wrong values come from provider metadata
   - correct consumer envs only when they are truly consumer-local overrides
 - `api startup issue`
-  - **config-override gate (run BEFORE mutating env)**: same as `wrong connection values` — if a config-file volume is mounted at a known config path, that file outranks env. Repair the file or remove the stale override; do not assume an env edit fixes a value the mounted file re-supplies. When file content cannot be verified with current MCP capability, flag the override risk and escalate rather than claiming the env fix worked.
+  - **config-override gate (run BEFORE mutating env)**: same as `wrong connection values` — if a config-file volume is mounted at a known config path, that file outranks env. Repair the file or remove the stale override; do not assume an env edit fixes a value the mounted file re-supplies. When file content cannot be verified with current Rainbond Tool capability, flag the override risk and escalate rather than claiming the env fix worked.
   - report clearly that the issue is not primarily the db path
   - apply only a confirmed platform-side fix; otherwise keep the state as `runtime_unhealthy`
 - `source build still running`
@@ -408,7 +408,7 @@ Symptoms:
 Action:
 - **before mutating env, run the config-override gate**: enumerate mounted config-file volumes from `rainbond_get_component_summary`; if one targets a known config path (`config.yml` / `application.yml` / `application.properties` / `.env` / `nginx.conf` / `*.conf`), that file is authoritative and outranks env (see Runtime Configuration Source Precedence). Repair the file or remove the stale override; an env-only fix silently reverts when the mounted file re-supplies the value
 - when comparing config values against env for the gate, report mismatches structurally (e.g. "mounted config.yml overrides env: db host differs from intended") and never print the raw secret value
-- if file content cannot be read with current MCP capability, flag the override risk and escalate or instruct the user; do not edit env and declare success
+- if file content cannot be read with current Rainbond Tool capability, flag the override risk and escalate or instruct the user; do not edit env and declare success
 - fix only the incorrect values
 - when dependency wiring already exists, prefer provider connection envs and the currently resolvable Rainbond dependency alias/service coordinates over stale literal hostnames
 - if stale consumer envs duplicate provider connection values, remove or replace the consumer-local override only after confirming the dependency-injected provider values are present
@@ -429,7 +429,7 @@ Symptoms:
 - logs show file-not-found or permission errors for file-backed config/secret paths
 
 Action:
-- **before mutating env, run the config-override gate**: if a config-file volume is mounted at a known config path (`config.yml` / `application.yml` / `application.properties` / `.env` / `nginx.conf` / `*.conf`), that mounted file outranks runtime env (see Runtime Configuration Source Precedence). A startup value driven by the mounted file will not change from an env edit; repair the file or remove the stale override instead. When file content cannot be verified with current MCP capability, flag the override risk and escalate rather than declaring the env fix successful
+- **before mutating env, run the config-override gate**: if a config-file volume is mounted at a known config path (`config.yml` / `application.yml` / `application.properties` / `.env` / `nginx.conf` / `*.conf`), that mounted file outranks runtime env (see Runtime Configuration Source Precedence). A startup value driven by the mounted file will not change from an env edit; repair the file or remove the stale override instead. When file content cannot be verified with current Rainbond Tool capability, flag the override risk and escalate rather than declaring the env fix successful
 - report clearly that the issue is not primarily the db path
 - do not force db-oriented repairs
 - if the evidence shows a source/build defect rather than a runtime config issue, reclassify to `code_or_build_handoff_needed`
@@ -611,7 +611,7 @@ TroubleshootResult:
     dependency_readiness:
       db_dependency: resolved | deferred | deferred_by_upstream_convergence
     blocker_summary: string | null
-  blocker_bucket: db not ready | dependency missing | env naming incompatibility | wrong connection values | api startup issue | frontend access-path issue | source build still running | source build failed | mcp backend issue | external artifact unreachable | cluster capacity blocked | null
+  blocker_bucket: db not ready | dependency missing | env naming incompatibility | wrong connection values | api startup issue | frontend access-path issue | source build still running | source build failed | platform backend issue | external artifact unreachable | cluster capacity blocked | null
   actions_taken:
     - string
   verification_summary:
@@ -809,7 +809,7 @@ Also:
 - skipping Pod detail for `ImagePullBackOff`, `ErrImagePull`, `ContainersNotInitialized`, init-container failures, or similar startup blockers
 - stuffing source build parameters into `build_info` instead of `replace_build_envs`
 - defaulting to Dockerfile or CNB based on file presence alone without applying the Build Mode Selection priority chain (manifest `source.build.strategy` → heuristic by Dockerfile classification + intent signals → ask only when ambiguous); see `rainbond-fullstack-bootstrap/references/source-build-parameter-guide.md`
-- promising `dockerfile_path` support when the current MCP surface only exposes `prefer_dockerfile_when_detected`
+- promising `dockerfile_path` support when the current Rainbond Tool surface only exposes `prefer_dockerfile_when_detected`
 
 ## Quick Reference
 

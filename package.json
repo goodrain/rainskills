@@ -55,9 +55,10 @@
   "scripts": {
     "build:marketplace": "node scripts/build-marketplace-package.mjs",
     "check:marketplace": "node scripts/build-marketplace-package.mjs --check",
-    "test": "npm run test:launcher && npm run test:api-bridge && npm run test:skill-profile && npm run test:marketplace && npm run test:platform && npm run test:windows && npm run test:package-upload && npm run test:package && npm run test:installer && npm run test:signal && npm run test:npx-pty",
+    "test": "npm run test:launcher && npm run test:api-bridge && npm run test:mcp-priority && npm run test:skill-profile && npm run test:marketplace && npm run test:platform && npm run test:windows && npm run test:package-upload && npm run test:package && npm run test:installer && npm run test:signal && npm run test:npx-pty",
     "test:launcher": "node --test tests/npx-launcher.test.js",
     "test:api-bridge": "node --test tests/api-bridge.test.js",
+    "test:mcp-priority": "node --test tests/mcp-priority-cleanup.test.js tests/transport-resolution.test.js",
     "test:skill-profile": "node --test tests/skill-profile-builder.test.js",
     "test:marketplace": "node --test tests/marketplace-entry.test.js",
     "test:platform": "node --test tests/platform-installer.test.js",

@@ -31,7 +31,7 @@ CANONICAL_BUCKETS = {
     "frontend access-path issue",
     "source build still running",
     "source build failed",
-    "mcp backend issue",
+    "platform backend issue",
     "external artifact unreachable",
     "cluster capacity blocked",
 }

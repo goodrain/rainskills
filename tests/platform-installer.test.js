@@ -136,7 +136,7 @@ test("platform resume selects native Node or POSIX Bash from onboarding control 
   assert.equal(
     resumeInvocationForOnboarding({ ...base, control_mode: "posix" }).args.includes("--api-only"),
     false,
-    "legacy checkpoints without transport_mode must resume in MCP mode"
+    "legacy checkpoints without transport_mode must resume on the standard CLI path"
   );
   assert.deepEqual(resumeInvocationForOnboarding({
     ...base,
@@ -832,7 +832,7 @@ test("onboarding state is schema checked and must be a protected regular file", 
     readOnboardingState(statePath, state.operation_id, stateStore),
     state
   );
-  for (const transportMode of ["mcp", "api"]) {
+  for (const transportMode of ["cli", "mcp", "api"]) {
     const explicit = { ...state, transport_mode: transportMode };
     fs.writeFileSync(statePath, `${JSON.stringify(explicit)}\n`, { mode: 0o600 });
     assert.deepEqual(

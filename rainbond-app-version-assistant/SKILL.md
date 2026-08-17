@@ -62,7 +62,7 @@ Important:
 
 So this skill should model the `/version` center, not the old standalone publish page.
 
-## Preferred MCP Tools
+## Preferred Rainbond Tools
 
 ### Version Center
 - `rainbond_get_app_version_overview`
@@ -351,7 +351,7 @@ App `rainbond-demo`, flow type `publish`.
 Current baseline version is `v12`, unsaved runtime changes do not exist, and there is one unfinished publish record: `share-102`.
 
 ### Action Plan
-Next MCP tools: `rainbond_get_app_version_overview`, `rainbond_create_app_share_record`, `rainbond_submit_app_share`. The flow is draft-based.
+Next Rainbond tools: `rainbond_get_app_version_overview`, `rainbond_create_app_share_record`, `rainbond_submit_app_share`. The flow is draft-based.
 
 ### Result
 Prepared the publish session, reused snapshot `version-12`, and confirmed the draft share record `share-102` remains the active publish target.
@@ -400,7 +400,7 @@ Always respond using exactly these sections:
 - whether there is an unfinished publish or rollback record
 
 ### Action Plan
-- exact MCP tools to call next
+- exact Rainbond tools to call next
 - whether the flow is direct or draft-based
 
 ### Result

@@ -558,7 +558,7 @@ Rules for v2 draft mode:
 - `binding.region_name`
 - `binding.app_name`
 - `binding.app_id`
-- `mcp.server_name`
+- `platform.server_name`
 - `preferences.default_environment`
 - `preferences.auto_use_manifest`
 - `metadata.linked_at`

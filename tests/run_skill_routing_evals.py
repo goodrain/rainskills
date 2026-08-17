@@ -17,7 +17,6 @@ SKILL_FILES = {
     "rainbond-fullstack-troubleshooter": ROOT / "rainbond-fullstack-troubleshooter" / "SKILL.md",
     "rainbond-delivery-verifier": ROOT / "rainbond-delivery-verifier" / "SKILL.md",
 }
-POLICY_FILE = ROOT / "rainbond-app-assistant" / "references" / "transport-resolution.md"
 BUSINESS_SKILL_FILES = sorted(ROOT.glob("rainbond-*/SKILL.md"))
 
 
@@ -94,7 +93,6 @@ def main() -> int:
 
     payload = yaml.safe_load(args.fixtures.read_text(encoding="utf-8"))
     cases = payload.get("cases", [])
-    transport_cases = payload.get("transport_cases", [])
     required_markers = payload.get("required_markers", {})
     forbidden_operational_markers = payload.get("forbidden_operational_markers", [])
 
@@ -118,22 +116,6 @@ def main() -> int:
             continue
         print(f"PASS {case['id']}")
 
-    policy = POLICY_FILE.read_text(encoding="utf-8")
-    top_skill = SKILL_FILES["rainbond-app-assistant"].read_text(encoding="utf-8")
-    documents = {"policy": policy, "app-assistant": top_skill}
-    for case in transport_cases:
-        case_failed = False
-        for document_name, markers in case["required_markers"].items():
-            text = documents[document_name]
-            for marker in markers:
-                if marker not in text:
-                    print(f"FAIL {case['id']}")
-                    print(f"  - {document_name} missing semantic marker: {marker}")
-                    failures += 1
-                    case_failed = True
-        if not case_failed:
-            print(f"PASS {case['id']} -> {case['expected_state']}")
-
     for skill_path in BUSINESS_SKILL_FILES:
         text = skill_path.read_text(encoding="utf-8")
         for marker in forbidden_operational_markers:
@@ -147,8 +129,8 @@ def main() -> int:
         return 1
 
     print(
-        f"\nAll {len(cases)} skill routing fixture(s), {len(transport_cases)} transport fixture(s), "
-        f"and {sum(len(v) for v in required_markers.values())} routing marker check(s) passed."
+        f"\nAll {len(cases)} skill routing fixture(s) and "
+        f"{sum(len(v) for v in required_markers.values())} routing marker check(s) passed."
     )
     return 0
 

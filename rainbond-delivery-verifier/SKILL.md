@@ -357,6 +357,6 @@ Delivery checks:
 5. final delivery report
 
 Final truth rules:
-- MCP gives runtime truth
+- the locked Rainbond transport gives runtime truth
 - access URL must be explicitly reported
 - if external validation is not possible, use the final outcome `delivered-but-needs-manual-validation`

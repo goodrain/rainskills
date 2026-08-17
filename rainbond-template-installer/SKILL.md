@@ -50,7 +50,7 @@ Do not use when:
 - the template source or target app context is completely unknown and cannot be resolved
 - the user wants only template discovery without installation
 
-## Preferred MCP Tools
+## Preferred Rainbond Tools
 
 Prefer this tool chain:
 - `rainbond_query_cloud_markets`
@@ -396,5 +396,5 @@ Local flow:
 3. create app if needed
 4. install
 
-Current install MCP:
+Current install capability:
 - `rainbond_install_app_model`

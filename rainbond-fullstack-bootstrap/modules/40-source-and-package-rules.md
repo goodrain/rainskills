@@ -190,7 +190,7 @@ Guardrails:
 - do **not** echo secret example values
 - Python build tuning does **not** get a made-up Node-style `CNB_BUILD_SCRIPT`
 - when a Dockerfile is detected alongside a language build, resolve the build mode by priority: manifest `source.build.strategy` first; then heuristic on Dockerfile classification + intent signals (see `../references/source-build-parameter-guide.md § Build Mode Selection`); only ask the user when signals are genuinely ambiguous. Map a `dockerfile` decision to `prefer_dockerfile_when_detected = true` on `rainbond_create_component_from_source`. Record the per-component decision in BOTH the prose ("Build mode for `<name>`: …") and the structured output (`deployment_plan.workflow.build_strategy_decisions[<name>]`) so the user can audit and override.
-  - **`prefer_dockerfile_when_detected` is honored only at create time.** `rainbond_update_component_build_source` and `rainbond_check_component` (re-detect) do NOT re-apply it, and the MCP surface has no field to flip `build_strategy` after creation. So the Dockerfile-vs-CNB decision must be correct on the create call; a component that already built as CNB cannot be switched to Dockerfile in place (see the build-mode exception in Source-create Retry Discipline).
+  - **`prefer_dockerfile_when_detected` is honored only at create time.** `rainbond_update_component_build_source` and `rainbond_check_component` (re-detect) do NOT re-apply it, and the Rainbond Tool surface has no field to flip `build_strategy` after creation. So the Dockerfile-vs-CNB decision must be correct on the create call; a component that already built as CNB cannot be switched to Dockerfile in place (see the build-mode exception in Source-create Retry Discipline).
   - **Check-timeout caveat (pending console release — detect by response fields, not version):** when the create call returns `check_status = "checking"` (detection outlived the synchronous wait window, typical for large repos), older consoles drop the flag, and the follow-up `rainbond_get_component_check_result` persists the raw CNB language unless `prefer_dockerfile_when_detected = true` is re-passed on that call — so after a checking/timeout create, always re-pass it on check-result. Newer consoles persist the preference server-side and auto-apply it on check-result; their responses carry `prefer_dockerfile_when_detected` / `dockerfile_preference_applied` / `build_mode_note`. If `dockerfile_preference_applied` is `false`, the preference silently fell back to a language build because detection found no Dockerfile at the build root — fix `subdirectories` to point at the directory containing the Dockerfile, or switch to image deploy; do NOT retry the same create. If these fields are absent, assume old behavior and re-pass the flag.
   - **.NET version trap:** dotnet/.NET Core is treated as CNB-capable, but the CNB version policy only allows .NET 8/9/10. A repo on a CNB-rejected version (e.g. .NET 7 → `dotnet version 7.0 is not allowed by cnb version policy`) that ships a usable Dockerfile MUST be created with `prefer_dockerfile_when_detected = true`, or its CNB build dead-ends with no in-place recovery.
 - if build logs fail while downloading third-party build artifacts such as GitHub Release assets, native binary packages, image layers, or package-manager tarballs, classify the blocker as `external artifact unreachable` when the dominant evidence is network reachability rather than app source code
@@ -204,7 +204,7 @@ For source-backed components in monorepos:
 - use component subdirectory metadata only when it does not hide required root build files from the builder
 - if the current Rainbond source interface cannot express the required build context safely, stop with a source/build handoff or manifest review instead of staging a local package silently
 
-Read [../references/source-build-parameter-guide.md](../references/source-build-parameter-guide.md) for the current MCP-facing key list and minimal examples.
+Read [../references/source-build-parameter-guide.md](../references/source-build-parameter-guide.md) for the current Rainbond Tool key list and minimal examples.
 
 ### SQL Initialization Assets
 
@@ -213,7 +213,7 @@ If the source repository ships SQL initialization files (`sql/*.sql`, `db/init/*
 - pick exactly one delivery path from [../references/sql-init-recipe.md](../references/sql-init-recipe.md) and stick to it
 - the default path is Recipe A (Init-Job Component) when the application source is in a git repo reachable by the cluster
 - do **not** use public file-sharing services, manual `kubectl exec`, or import containers without `depends_on` as workarounds
-- do **not** silently choose MCP local-package upload as the SQL transport; require explicit user opt-in
+- do **not** silently choose local-package upload as the SQL transport; require explicit user opt-in
 
 ## Package-backed Components
 
@@ -225,7 +225,7 @@ For v2-style package components:
 
 ### Client Upload Contract
 
-Package bytes live on the MCP client machine. The local helper is the only process allowed to resolve, read, archive, or upload the local source. Never pass `source.local_path` to an MCP tool.
+Package bytes live on the client machine. The local helper is the only process allowed to resolve, read, archive, or upload the local source. Never pass `source.local_path` to a Rainbond Tool.
 
 Follow this transaction in the exact order below:
 
@@ -257,11 +257,11 @@ The helper command is `python3 rainbond-fullstack-bootstrap/scripts/upload_local
 - HTTP upload failure or timeout -> run local helper cleanup first, then call `rainbond_delete_package_upload(event_id=...)`, then stop; never query status or create a component
 - empty uploaded-file status -> call `rainbond_delete_package_upload(event_id=...)` and stop; never create a component from an empty event
 - if remote deletion also fails, report both the original failure and the deletion failure; do not continue to create
-- a create-by-event failure does not justify re-reading `source.local_path` through MCP or switching delivery mode; stop with the event evidence and apply the normal attempt budget
+- a create-by-event failure does not justify exposing `source.local_path` to a platform Tool or switching delivery mode; stop with the event evidence and apply the normal attempt budget
 
 ### Compatibility Boundary
 
-The legacy server-local tools `rainbond_upload_package_file` and `rainbond_create_component_from_local_package` remain compatibility-only server interfaces. They are not RainSkills execution options because their filesystem view is the MCP server's, not the user's client workspace. RainSkills always uses the local helper plus the event-based MCP sequence above.
+The legacy server-local tools `rainbond_upload_package_file` and `rainbond_create_component_from_local_package` remain compatibility-only server interfaces. They are not RainSkills execution options because their filesystem view is the platform server's, not the user's client workspace. RainSkills always uses the local helper plus the event-based Rainbond Tool sequence above.
 
 If `source.local_path` cannot be resolved safely:
 - mark the package component as `needs-confirmation`

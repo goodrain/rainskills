@@ -146,7 +146,7 @@ function readOnboardingState(filePath, expectedOperationId, stateStore = secureS
   }
   if (
     state.transport_mode !== undefined
-    && (typeof state.transport_mode !== "string" || !["mcp", "api"].includes(state.transport_mode))
+    && (typeof state.transport_mode !== "string" || !["cli", "mcp", "api"].includes(state.transport_mode))
   ) {
     throw new Error("状态文件中的 transport_mode 无效");
   }

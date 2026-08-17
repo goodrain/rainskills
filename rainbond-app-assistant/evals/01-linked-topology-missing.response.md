@@ -46,7 +46,7 @@ AppAssistantResult:
   actions_performed:
     - skill: inspection-only
       status: completed
-      details: Resolved the linked source app identity and current project intent from local binding plus current MCP truth.
+      details: Resolved the linked source app identity and current project intent from local binding plus current platform truth.
     - skill: rainbond-fullstack-bootstrap
       status: pending
       details: Selected as the next safe step because the linked source app still has no established topology.

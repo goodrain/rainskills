@@ -2,7 +2,7 @@
 The project is `linked-and-cluster-capacity-blocked` for the `preview` environment with team `demo-team`, region `cn`, app `ops-dashboard`, and app_id `app-207`.
 
 ### Actions Performed
-This run resolved the linked source app state and current MCP/runtime evidence. `rainbond-fullstack-troubleshooter` was not entered because the dominant blocker is active cluster capacity shortage.
+This run resolved the linked source app state and current platform evidence. `rainbond-fullstack-troubleshooter` was not entered because the dominant blocker is active cluster capacity shortage.
 
 ### Current Health
 db status running, api/service status running, frontend-access status capacity-blocked, overall status capacity_blocked.
@@ -46,7 +46,7 @@ AppAssistantResult:
   actions_performed:
     - skill: inspection-only
       status: completed
-      details: Confirmed the linked source app identity and active capacity blocker from current MCP truth.
+      details: Confirmed the linked source app identity and active capacity blocker from current platform truth.
     - skill: rainbond-fullstack-troubleshooter
       status: skipped
       details: Deferred because active cluster capacity shortage must be fixed before bounded runtime repair can continue.

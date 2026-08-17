@@ -62,7 +62,11 @@ test("package metadata defines a public, runtime-dependency-free npx command", (
   );
   assert.equal(
     manifest.scripts.test,
-    "npm run test:launcher && npm run test:api-bridge && npm run test:skill-profile && npm run test:marketplace && npm run test:platform && npm run test:windows && npm run test:package-upload && npm run test:package && npm run test:installer && npm run test:signal && npm run test:npx-pty"
+    "npm run test:launcher && npm run test:api-bridge && npm run test:mcp-priority && npm run test:skill-profile && npm run test:marketplace && npm run test:platform && npm run test:windows && npm run test:package-upload && npm run test:package && npm run test:installer && npm run test:signal && npm run test:npx-pty"
+  );
+  assert.equal(
+    manifest.scripts["test:mcp-priority"],
+    "node --test tests/mcp-priority-cleanup.test.js tests/transport-resolution.test.js"
   );
   assert.equal(
     manifest.scripts["test:platform"],

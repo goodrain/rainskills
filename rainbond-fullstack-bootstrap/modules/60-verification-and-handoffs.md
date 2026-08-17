@@ -39,7 +39,7 @@ Normalized blocker buckets:
 - `frontend access-path issue`
 - `source build still running`
 - `source build failed`
-- `mcp backend issue`
+- `platform backend issue`
 - `external artifact unreachable`
 - `cluster capacity blocked`
 
@@ -48,7 +48,7 @@ Normalized blocker buckets:
 The current bootstrap path must stop when:
 - source ref is invalid
 - multi-component source ambiguity has not been resolved by the user
-- MCP / control-plane / Rainbond console returns a backend exception during source creation
+- Rainbond Tool / control-plane / Rainbond Console returns a backend exception during source creation
 - source build clearly fails and the dominant evidence is no longer a bootstrap-setup issue
 - frontend `access_mode` is still unspecified at the point of acceptance
 - a required startup secret or runtime secret is missing and no safe secret source is available
@@ -118,7 +118,7 @@ When you use this handoff:
 ### `next_handoff = none`
 
 Use `none` when bootstrap must stop but no downstream Rainbond runtime stage should take over yet, for example:
-- MCP or Rainbond console returns a control-plane exception while creating a source-backed component
+- Rainbond Tool or Rainbond Console returns a control-plane exception while creating a source-backed component
 - the source component has not been created yet and the dominant blocker is a backend-side API failure
 - a required secret source is missing
 - the repository requires an explicit multi-service/component-selection decision from the user
@@ -139,5 +139,5 @@ Before finalizing the reply:
 - normalize raw platform states such as `undeploy` into canonical vocabulary
 - ensure `runtime_state.overall`, `runtime_state.blocking_bucket`, and `next_handoff` come from the same dominant evidence
 - make sure `next_handoff` means the **next recommended stage**, not a claim about what already ran in the current turn
-- if the blocker is `mcp backend issue`, set `next_handoff = none`
+- if the blocker is `platform backend issue`, set `next_handoff = none`
 - if the remaining question is only access URL or delivery acceptance, prefer `delivery_verifier` over `troubleshooter`

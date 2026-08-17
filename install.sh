@@ -165,12 +165,10 @@ RAINSKILLS_BROWSER_LOGIN_SERVER_PID=""
 RAINSKILLS_BROWSER_LOGIN_READER_PID=""
 RAINSKILLS_BROWSER_LOGIN_RESULT_FILE=""
 RAINSKILLS_DEVICE_FLOW_TEMP_DIR=""
-RAINSKILLS_MCP_VALIDATION_TEMP_DIR=""
+RAINSKILLS_API_VALIDATION_TEMP_DIR=""
 RAINSKILLS_API_BRIDGE_TEMP_FILE=""
 RAINSKILLS_CODEX_RULE_TEMP_FILE=""
-RAINSKILLS_PI_EXTENSION_TEMP_FILE=""
 RAINSKILLS_API_BRIDGE_AVAILABLE=0
-RAINSKILLS_API_FALLBACK_ACTIVE=0
 TRANSPORT_VALIDATION_ERROR=""
 DEVICE_FLOW_ERROR=""
 DEVICE_FLOW_DEVICE_CODE=""
@@ -481,11 +479,11 @@ cleanup_device_flow() {
   DEVICE_FLOW_DEVICE_CODE=""
 }
 
-cleanup_mcp_validation() {
-  if [[ -n "$RAINSKILLS_MCP_VALIDATION_TEMP_DIR" && -d "$RAINSKILLS_MCP_VALIDATION_TEMP_DIR" ]]; then
-    rm -rf "$RAINSKILLS_MCP_VALIDATION_TEMP_DIR"
+cleanup_api_validation() {
+  if [[ -n "$RAINSKILLS_API_VALIDATION_TEMP_DIR" && -d "$RAINSKILLS_API_VALIDATION_TEMP_DIR" ]]; then
+    rm -rf "$RAINSKILLS_API_VALIDATION_TEMP_DIR"
   fi
-  RAINSKILLS_MCP_VALIDATION_TEMP_DIR=""
+  RAINSKILLS_API_VALIDATION_TEMP_DIR=""
 }
 
 cleanup_api_bridge_install() {
@@ -502,22 +500,14 @@ cleanup_codex_rule_install() {
   RAINSKILLS_CODEX_RULE_TEMP_FILE=""
 }
 
-cleanup_pi_extension_install() {
-  if [[ -n "$RAINSKILLS_PI_EXTENSION_TEMP_FILE" ]]; then
-    rm -f "$RAINSKILLS_PI_EXTENSION_TEMP_FILE"
-  fi
-  RAINSKILLS_PI_EXTENSION_TEMP_FILE=""
-}
-
 handle_installer_signal() {
   local exit_code="$1"
   trap - INT TERM
   cleanup_browser_login
   cleanup_device_flow
-  cleanup_mcp_validation
+  cleanup_api_validation
   cleanup_api_bridge_install
   cleanup_codex_rule_install
-  cleanup_pi_extension_install
   exit "$exit_code"
 }
 
@@ -525,10 +515,9 @@ handle_installer_exit() {
   local exit_code="$1"
   cleanup_browser_login
   cleanup_device_flow
-  cleanup_mcp_validation
+  cleanup_api_validation
   cleanup_api_bridge_install
   cleanup_codex_rule_install
-  cleanup_pi_extension_install
   report_unhandled_rainskills_installation_failure "$exit_code"
 }
 
@@ -1693,7 +1682,7 @@ poll_device_authorization() {
         interval=$((interval + 5))
         ;;
       access_denied)
-        DEVICE_FLOW_ERROR="你已在浏览器中拒绝 Rainbond MCP 授权。"
+        DEVICE_FLOW_ERROR="你已在浏览器中拒绝 Rainbond 授权。"
         return 1
         ;;
       expired_token)
@@ -1981,11 +1970,11 @@ validate_api_connectivity() {
   local fatal="${3:-1}"
   local response_file auth_config http_code
   TRANSPORT_VALIDATION_ERROR=""
-  cleanup_mcp_validation
-  RAINSKILLS_MCP_VALIDATION_TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/rainskills-api-validation.XXXXXX")"
-  chmod 700 "$RAINSKILLS_MCP_VALIDATION_TEMP_DIR"
-  response_file="$RAINSKILLS_MCP_VALIDATION_TEMP_DIR/response.json"
-  auth_config="$RAINSKILLS_MCP_VALIDATION_TEMP_DIR/curl.conf"
+  cleanup_api_validation
+  RAINSKILLS_API_VALIDATION_TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/rainskills-api-validation.XXXXXX")"
+  chmod 700 "$RAINSKILLS_API_VALIDATION_TEMP_DIR"
+  response_file="$RAINSKILLS_API_VALIDATION_TEMP_DIR/response.json"
+  auth_config="$RAINSKILLS_API_VALIDATION_TEMP_DIR/curl.conf"
   printf 'header = "Authorization: GRJWT %s"\n' "$token" >"$auth_config"
   chmod 600 "$auth_config"
   VALIDATED_TOKEN="$token"
@@ -2006,14 +1995,14 @@ validate_api_connectivity() {
       -H 'MCP-Protocol-Version: 2025-03-26' \
       --data '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
   )"; then
-    cleanup_mcp_validation
+    cleanup_api_validation
     TRANSPORT_VALIDATION_ERROR="Rainbond API Bridge 校验请求失败"
     [[ "$fatal" -eq 0 ]] || die "$TRANSPORT_VALIDATION_ERROR"
     return 1
   fi
 
   if [[ ! "$http_code" =~ ^2 ]]; then
-    cleanup_mcp_validation
+    cleanup_api_validation
     if [[ "$http_code" == "404" ]]; then
       TRANSPORT_VALIDATION_ERROR="当前 Rainbond Console 未提供 Rainskills API 入口；请先升级 Console。"
       [[ "$fatal" -eq 0 ]] || die "$TRANSPORT_VALIDATION_ERROR"
@@ -2033,13 +2022,13 @@ with open(sys.argv[1], "r", encoding="utf-8") as response_file:
 if not isinstance((payload.get("result") or {}).get("tools"), list):
     raise SystemExit(1)
 PY
-    cleanup_mcp_validation
+    cleanup_api_validation
     TRANSPORT_VALIDATION_ERROR="Rainbond API Bridge 校验返回了无法识别的响应"
     [[ "$fatal" -eq 0 ]] || die "$TRANSPORT_VALIDATION_ERROR"
     return 1
   fi
 
-  cleanup_mcp_validation
+  cleanup_api_validation
   log "[verify] Rainbond API Bridge 可访问"
 }
 
