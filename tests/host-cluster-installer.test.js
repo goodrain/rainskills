@@ -840,7 +840,7 @@ test("ROI execution transfers fixed bytes, invokes attached roi up, redacts logs
   const states = [];
   const calls = [];
   const output = [];
-  const resumeArgv = ["npx", "rainskills@0.1.0-rc.60", "platform", "install", "--onboarding-id", "1d6754d6-6fb3-4bda-9a04-15c2d261d178"];
+  const resumeArgv = ["npx", "rainskills@0.1.0-rc.61", "platform", "install", "--onboarding-id", "1d6754d6-6fb3-4bda-9a04-15c2d261d178"];
   const result = await executeRoiInstall({
     bootstrap: host("node1", "10.0.0.1", { bootstrap: true }),
     configPath,
@@ -878,7 +878,7 @@ test("ROI execution transfers fixed bytes, invokes attached roi up, redacts logs
   assert.doesNotMatch(JSON.stringify(states), /secret|database|registry|password/i);
   assert.doesNotMatch(fs.readFileSync(logPath, "utf8"), /secret|multiline-log-must-not-leak|stderr-log-must-not-leak|PREFIX-(?:LOG|PEM-LOG)|MULTI-KEY-LOG|AUTH-LOG|COOKIE-LOG|API-LOG|GRJWT-LOG|NAKED-PEM-LOG|JWT-LOG|FIRST-MULTI-LOG|SECOND-MULTI-LOG|COOKIE-MULTI-LOG|AUTH-MULTI-LOG/i);
   assert.match(fs.readFileSync(logPath, "utf8"), /\[REDACTED\]/);
-  assert.match(output.join(""), /npx rainskills@0\.1\.0-rc\.60 platform install --onboarding-id/);
+  assert.match(output.join(""), /npx rainskills@0\.1\.0-rc\.61 platform install --onboarding-id/);
   assert.doesNotMatch(output.join(""), /secret|database\.password|registry password/i);
 
   const terminatedStates = [];

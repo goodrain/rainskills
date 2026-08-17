@@ -10,7 +10,7 @@ description: "Use only when the user explicitly asks for final delivery or acces
 
 第一步检查 Node.js 是否存在且主版本不低于 18。Node.js 缺失或低于 18 时，只说明“Rainskills 执行组件需要 Node.js 18 或更高版本”并停止：不选择运行环境，不调用 MCP，不猜测替代命令。只有用户或 agent 明确同意后才安装或升级 Node.js，再从同一原始 intent 继续。
 
-固定 launcher 是 `["npx", "--yes", "rainskills@0.1.0-rc.60"]`；版本必须与本技能包 `package.json` 一致。把 launcher 与参数拼成 argv 数组直接执行，禁止 `rainskills@latest` 或执行 shell 字符串。
+固定 launcher 是 `["npx", "--yes", "rainskills@0.1.0-rc.61"]`；版本必须与本技能包 `package.json` 一致。把 launcher 与参数拼成 argv 数组直接执行，禁止 `rainskills@latest` 或执行 shell 字符串。
 
 前置检查通过后先执行 launcher + `["runtime", "status", "--json"]`，先于任何业务 MCP。`not_started` 不能因历史 MCP 跳过；只有 `connected`、`usable = true` 且本次 live probe 成功才继续，探针失败必须 reconnect。
 
@@ -18,14 +18,14 @@ description: "Use only when the user explicitly asks for final delivery or acces
 ```json
 {
   "schema": "rainskills.skill-runtime-contract.v1",
-  "launcher": ["npx", "--yes", "rainskills@0.1.0-rc.60"],
+  "launcher": ["npx", "--yes", "rainskills@0.1.0-rc.61"],
   "intents": {
     "delivery-verify": {"required": ["operation"], "optional": ["team_id", "app_id", "service_id"], "enums": {"operation": ["full", "runtime", "access"]}}
   },
   "routes": {"existing": ["saas", "private-existing"]},
   "connect_argv": {
-    "saas": ["npx", "--yes", "rainskills@0.1.0-rc.60", "runtime", "connect", "<target>", "--saas", "--intent-json", "<intent-json>"],
-    "private-existing": ["npx", "--yes", "rainskills@0.1.0-rc.60", "runtime", "connect", "<target>", "--rainbond-url", "<rainbond-url>", "--intent-json", "<intent-json>"]
+    "saas": ["npx", "--yes", "rainskills@0.1.0-rc.61", "runtime", "connect", "<target>", "--saas", "--intent-json", "<intent-json>"],
+    "private-existing": ["npx", "--yes", "rainskills@0.1.0-rc.61", "runtime", "connect", "<target>", "--rainbond-url", "<rainbond-url>", "--intent-json", "<intent-json>"]
   }
 }
 ```

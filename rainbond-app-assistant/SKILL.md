@@ -60,7 +60,7 @@ description: "Use whenever a user asks to deploy, run, deliver, publish, inspect
 
   第一步检查 Node.js 是否存在且主版本不低于 18。Node.js 缺失或低于 18 时，只说明“Rainskills 执行组件需要 Node.js 18 或更高版本”并停止：不选择运行环境，不调用 MCP，不猜测替代命令。只有用户或 agent 明确同意后才安装或升级 Node.js，再从同一原始 intent 继续。
 
-  固定 launcher 是 `["npx", "--yes", "rainskills@0.1.0-rc.60"]`；版本必须与本技能包 `package.json` 一致。把 launcher 与参数拼成 argv 数组直接执行，禁止使用 `rainskills@latest`，禁止拼接或执行 shell 字符串。
+  固定 launcher 是 `["npx", "--yes", "rainskills@0.1.0-rc.61"]`；版本必须与本技能包 `package.json` 一致。把 launcher 与参数拼成 argv 数组直接执行，禁止使用 `rainskills@latest`，禁止拼接或执行 shell 字符串。
 
   Node.js 前置检查通过后，先执行 launcher + `["runtime", "status", "--json"]`；它必须先于项目扫描和任何业务 MCP。`not_started` 时，即使本会话历史上调用过 MCP 也不能跳过门禁。只有返回 `connected`、`usable = true` 且本次 live probe 成功，才进入业务流程；live probe 失败必须进入 reconnect。
 
@@ -68,7 +68,7 @@ description: "Use whenever a user asks to deploy, run, deliver, publish, inspect
   ```json
   {
     "schema": "rainskills.skill-runtime-contract.v1",
-    "launcher": ["npx", "--yes", "rainskills@0.1.0-rc.60"],
+    "launcher": ["npx", "--yes", "rainskills@0.1.0-rc.61"],
     "intents": {
       "deploy": {"required": ["project_root", "source_kind"], "optional": ["source_url", "service_id"], "enums": {"source_kind": ["local", "git", "image", "package"]}},
       "create": {"required": ["project_root", "source_kind"], "optional": ["source_url", "service_id"], "enums": {"source_kind": ["local", "git", "image", "package"]}},
@@ -81,9 +81,9 @@ description: "Use whenever a user asks to deploy, run, deliver, publish, inspect
       "existing": ["saas", "private-existing"]
     },
     "connect_argv": {
-      "saas": ["npx", "--yes", "rainskills@0.1.0-rc.60", "runtime", "connect", "<target>", "--saas", "--intent-json", "<intent-json>"],
-      "private-existing": ["npx", "--yes", "rainskills@0.1.0-rc.60", "runtime", "connect", "<target>", "--rainbond-url", "<rainbond-url>", "--intent-json", "<intent-json>"],
-      "install-private": ["npx", "--yes", "rainskills@0.1.0-rc.60", "runtime", "connect", "<target>", "--install-private", "--intent-json", "<intent-json>"]
+      "saas": ["npx", "--yes", "rainskills@0.1.0-rc.61", "runtime", "connect", "<target>", "--saas", "--intent-json", "<intent-json>"],
+      "private-existing": ["npx", "--yes", "rainskills@0.1.0-rc.61", "runtime", "connect", "<target>", "--rainbond-url", "<rainbond-url>", "--intent-json", "<intent-json>"],
+      "install-private": ["npx", "--yes", "rainskills@0.1.0-rc.61", "runtime", "connect", "<target>", "--install-private", "--intent-json", "<intent-json>"]
     }
   }
   ```

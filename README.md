@@ -74,7 +74,7 @@ Rainskills 安装完成。
 固定 launcher 来自当前 `package.json` 版本：
 
 ```json
-["npx", "--yes", "rainskills@0.1.0-rc.60"]
+["npx", "--yes", "rainskills@0.1.0-rc.61"]
 ```
 
 所有调用都把 launcher 与参数合并成 argv 数组后直接执行；不得使用 `rainskills@latest`，不得把参数拼成 shell 字符串。
@@ -146,19 +146,19 @@ Windows 本地安装是预览能力，也可以改选 Linux 服务器。它要�
 
 ```bash
 # 本地单机
-npx --yes rainskills@0.1.0-rc.60 platform install --onboarding-id <id> \
+npx --yes rainskills@0.1.0-rc.61 platform install --onboarding-id <id> \
   --location local --mode single-node
 
 # Linux 服务器单机
-npx --yes rainskills@0.1.0-rc.60 platform install --onboarding-id <id> \
+npx --yes rainskills@0.1.0-rc.61 platform install --onboarding-id <id> \
   --location server --mode single-node --ssh <user@host>
 
 # 服务器主机集群（交互生成配置，或导入已有 ROI cluster.yaml）
-npx --yes rainskills@0.1.0-rc.60 platform install --onboarding-id <id> \
+npx --yes rainskills@0.1.0-rc.61 platform install --onboarding-id <id> \
   --location server --mode host-cluster --cluster-config <path>
 
 # 已有 Kubernetes
-npx --yes rainskills@0.1.0-rc.60 platform install --onboarding-id <id> \
+npx --yes rainskills@0.1.0-rc.61 platform install --onboarding-id <id> \
   --location server --mode existing-kubernetes \
   --kubeconfig <path> --kube-context <name> --chart-version <version>
 ```
