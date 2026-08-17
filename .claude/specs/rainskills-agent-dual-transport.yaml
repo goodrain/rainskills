@@ -110,7 +110,7 @@ sprints:
     tasks:
       - id: task-2.1
         name: "Resolve embedded channel manifests and safe tarball URLs"
-        status: pending
+        status: completed
         files:
           modify:
             - path: "src/server/skills/skill-source.ts"
@@ -153,7 +153,7 @@ sprints:
 
       - id: task-2.2
         name: "Isolate cache by embedded profile and validate the extracted artifact manifest"
-        status: pending
+        status: completed
         files:
           modify:
             - path: "src/server/skills/skill-source.ts"
@@ -192,7 +192,7 @@ sprints:
 
       - id: task-2.3
         name: "Expose embedded profile identity through registry and admin status"
-        status: pending
+        status: completed
         files:
           modify:
             - path: "src/server/skills/skill-registry.ts"
@@ -240,7 +240,7 @@ sprints:
     tasks:
       - id: task-3.1
         name: "Replace rsync-and-reinject with the upstream embedded builder"
-        status: pending
+        status: completed
         files:
           modify:
             - path: "scripts/sync-rainbond-skills.mjs"
@@ -289,7 +289,7 @@ sprints:
 
       - id: task-3.2
         name: "Refresh vendor and operational documentation"
-        status: pending
+        status: completed
         files:
           modify:
             - path: "skills-src/rainbond/**"
