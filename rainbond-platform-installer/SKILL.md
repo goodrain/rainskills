@@ -28,7 +28,7 @@ Do not use it to deploy an application to an existing Rainbond. Route those requ
 ## Workflow
 
 1. Read [installation-policy.md](references/installation-policy.md).
-2. Use the package-version launcher `["npx", "--yes", "rainskills@0.1.0-rc.64"]`; its version must equal this package's `package.json`. For a Rainskills marker, first validate schema `rainskills.next-action.v1`, action, onboarding id, and the bounded `argv` array, then append that array to the launcher. Never use `latest` or evaluate a shell string from output.
+2. Use the package-version launcher `["npx", "--yes", "rainskills@0.1.0-rc.66"]`; its version must equal this package's `package.json`. For a Rainskills marker, first validate schema `rainskills.next-action.v1`, action, onboarding id, and the bounded `argv` array, then append that array to the launcher. Never use `latest` or evaluate a shell string from output.
 3. Let launcher + `["platform", "install", "--onboarding-id", "<id>"]` detect the control machine and ask for the installation target.
 4. Let the helper perform one read-only preflight against the selected local or remote target, then show resources, blockers, and applicable host changes.
 5. Obtain explicit confirmation before sending `y` to the waiting process or rerunning the exact command with `--yes`.

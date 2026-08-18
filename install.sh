@@ -262,19 +262,18 @@ print_capability_summary() {
   cat <<'EOF'
 Rainskills 安装完成，下一条消息即可直接使用。
 
-现在可以帮你：
+下一步可以直接说：
 
-- 分析项目的技术栈和部署结构
-- 将当前项目或 Git 仓库部署上线
-- 通过源码、镜像或安装包部署应用
-- 分析项目结构
-- 识别技术栈
-- 从应用模板安装应用
-- 给出部署结构建议
+- 帮我部署当前项目
+- 帮我部署一个 Git 仓库
+- 帮我通过镜像或安装包部署应用
+- 帮我安装一个应用模板
+- 帮我分析当前项目应该如何部署
 
-直接告诉我你想做什么即可。
+也可以直接告诉我你想部署什么应用。
 EOF
   printf '[RAINSKILLS_USER_MESSAGE_END:install.completed]\n'
+  printf '[RAINSKILLS_AGENT_SUMMARY_REQUIRED:include-next-actions]\n'
 }
 
 new_rainskills_install_attempt_id() {

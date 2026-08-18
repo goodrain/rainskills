@@ -417,27 +417,27 @@ test("root Rainskills installation stops after Skills success and capability gui
   const completion = headingSection(skill, "## Completion Message");
   const approved = `Rainskills 安装完成，下一条消息即可直接使用。
 
-现在可以帮你：
+下一步可以直接说：
 
-- 分析项目的技术栈和部署结构
-- 将当前项目或 Git 仓库部署上线
-- 通过源码、镜像或安装包部署应用
-- 分析项目结构
-- 识别技术栈
-- 从应用模板安装应用
-- 给出部署结构建议
+- 帮我部署当前项目
+- 帮我部署一个 Git 仓库
+- 帮我通过镜像或安装包部署应用
+- 帮我安装一个应用模板
+- 帮我分析当前项目应该如何部署
 
-直接告诉我你想做什么即可。`;
+也可以直接告诉我你想部署什么应用。`;
 
   assert.match(skill, /Rainskills 安装完成/);
-  assert.match(skill, /分析项目的技术栈和部署结构/);
-  assert.match(skill, /将当前项目或 Git 仓库部署上线/);
-  assert.match(skill, /通过源码、镜像或安装包部署应用/);
-  assert.match(skill, /从应用模板安装应用/);
-  assert.match(skill, /直接告诉我你想做什么即可/);
+  assert.match(skill, /下一步可以直接说/);
+  assert.match(skill, /帮我部署当前项目/);
+  assert.match(skill, /帮我部署一个 Git 仓库/);
+  assert.match(skill, /帮我通过镜像或安装包部署应用/);
+  assert.match(skill, /帮我安装一个应用模板/);
+  assert.match(skill, /也可以直接告诉我你想部署什么应用/);
+  assert.match(skill, /RAINSKILLS_AGENT_SUMMARY_REQUIRED:include-next-actions/);
   assert.doesNotMatch(initialize, /选择.*运行环境|配置 MCP|浏览器.*授权|Rainbond Cloud.*私有/s);
   assert.equal(completion.match(/```text\n([\s\S]*?)\n```/)?.[1], approved);
-  assert.doesNotMatch(completion, /reload|restart|重新加载|重启|下一步/i);
+  assert.doesNotMatch(completion, /reload|restart|重新加载|重启/i);
   assert.match(skill, /Skills-only.*不需要 Node\.js|仅安装 Skills.*不需要 Node\.js/s);
   assert.match(skill, /首次.*需要运行环境.*Node\.js 18/s);
   assert.doesNotMatch(completion, /Node\.js|Node 18/i);
@@ -548,12 +548,14 @@ test("app assistant frontmatter is a pure generic trigger without MCP preference
   assert.doesNotMatch(frontmatter.description, /prefer.*MCP|full lifecycle|project-init.*bootstrap/is);
 });
 
-test("generated Rainskills completion has no reload or next-step prompt", () => {
+test("generated Rainskills completion has actionable next prompts without reload guidance", () => {
   const skill = read("marketplace/rainskills/skills/rainskills/SKILL.md");
   const completion = headingSection(skill, "## Completion Message", "## Manage Runtime Environments");
 
   assert.match(completion, /Rainskills 安装完成/);
-  assert.doesNotMatch(completion, /reload|restart|重新加载|重启|下一步/i);
+  assert.match(completion, /下一步可以直接说/);
+  assert.match(completion, /帮我部署当前项目/);
+  assert.doesNotMatch(completion, /reload|restart|重新加载|重启/i);
   assert.doesNotMatch(completion, /运行环境|MCP|授权|Rainbond Cloud|私有 Rainbond/i);
 });
 

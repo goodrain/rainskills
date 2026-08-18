@@ -3,6 +3,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEST_SUITE_REAL_NODE="$(command -v node)"
+CURRENT_PACKAGE_VERSION="$(node -p 'require(process.argv[1]).version' "$REPO_ROOT/package.json")"
 unset RAINBOND_JWT RAINBOND_URL RAINBOND_USERNAME RAINBOND_PASSWORD
 
 fail() {
@@ -88,28 +89,29 @@ import sys
 path = sys.argv[1]
 expected = """Rainskills 安装完成，下一条消息即可直接使用。
 
-现在可以帮你：
+下一步可以直接说：
 
-- 分析项目的技术栈和部署结构
-- 将当前项目或 Git 仓库部署上线
-- 通过源码、镜像或安装包部署应用
-- 分析项目结构
-- 识别技术栈
-- 从应用模板安装应用
-- 给出部署结构建议
+- 帮我部署当前项目
+- 帮我部署一个 Git 仓库
+- 帮我通过镜像或安装包部署应用
+- 帮我安装一个应用模板
+- 帮我分析当前项目应该如何部署
 
-直接告诉我你想做什么即可。"""
+也可以直接告诉我你想部署什么应用。"""
 content = open(path, encoding="utf-8", errors="replace").read().replace("\r\n", "\n")
 if content.count(expected) != 1:
     raise SystemExit("expected the approved capability summary exactly once")
 framed = "[RAINSKILLS_USER_MESSAGE_BEGIN:install.completed]\n{}\n[RAINSKILLS_USER_MESSAGE_END:install.completed]".format(expected)
-if content.strip() != framed:
-    raise SystemExit("default Skills-only output must contain only the bounded approved capability summary")
+summary_requirement = "[RAINSKILLS_AGENT_SUMMARY_REQUIRED:include-next-actions]"
+if content.strip() != "{}\n{}".format(framed, summary_requirement):
+    raise SystemExit("default Skills-only output must contain only the bounded next-action summary contract")
+if content.count(summary_requirement) != 1:
+    raise SystemExit("missing agent summary next-action requirement")
 for forbidden in ("reload", "restart", "重新加载", "重启"):
     if forbidden in content.lower():
         raise SystemExit("skills-only completion contains forbidden guidance: {}".format(forbidden))
-start = content.index("现在可以帮你：")
-end = content.index("直接告诉我你想做什么即可。", start)
+start = content.index("下一步可以直接说：")
+end = content.index("也可以直接告诉我你想部署什么应用。", start)
 actual_bullets = [line for line in content[start:end].splitlines() if line.startswith("- ")]
 expected_bullets = [line for line in expected.splitlines() if line.startswith("- ")]
 if actual_bullets != expected_bullets:
@@ -900,15 +902,15 @@ test_installer_configures_both_platforms_and_shell_autoload() {
 
   assert_file_exists "$tmpdir/home/.codex/config.toml"
   assert_contains "$tmpdir/home/.codex/config.toml" 'command = "npx"'
-  assert_contains "$tmpdir/home/.codex/config.toml" 'rainskills@0.1.0-rc.64'
+  assert_contains "$tmpdir/home/.codex/config.toml" "rainskills@${CURRENT_PACKAGE_VERSION}"
   assert_file_exists "$tmpdir/home/.claude.json"
   assert_contains "$tmpdir/home/.claude.json" '"command": "npx"'
-  assert_contains "$tmpdir/home/.claude.json" 'rainskills@0.1.0-rc.64'
+  assert_contains "$tmpdir/home/.claude.json" "rainskills@${CURRENT_PACKAGE_VERSION}"
   assert_contains "$tmpdir/logs/curl.log" "http://rainbond.internal/console/users/login"
   assert_contains "$tmpdir/logs/curl.log" "http://rainbond.internal/console/mcp/rainskills/codex/query"
   assert_contains "$tmpdir/logs/curl.log" "http://rainbond.internal/console/mcp/rainskills/claude-code/query"
-  assert_contains "$tmpdir/logs/codex.log" "mcp add rainbond -- npx --yes rainskills@0.1.0-rc.64 mcp serve --client codex"
-  assert_contains "$tmpdir/logs/claude.log" "mcp add --scope user rainbond -- npx --yes rainskills@0.1.0-rc.64 mcp serve --client claude"
+  assert_contains "$tmpdir/logs/codex.log" "mcp add rainbond -- npx --yes rainskills@${CURRENT_PACKAGE_VERSION} mcp serve --client codex"
+  assert_contains "$tmpdir/logs/claude.log" "mcp add --scope user rainbond -- npx --yes rainskills@${CURRENT_PACKAGE_VERSION} mcp serve --client claude"
 }
 
 test_dedicated_mcp_url_input_is_normalized_to_console_base() {
@@ -1121,7 +1123,7 @@ test_mcp_renewed_token_is_persisted_after_validation() {
     >/tmp/rainbond-install-renewed.out 2>&1
 
   assert_contains "$tmpdir/home/.rainbond/mcp.env" "export RAINBOND_JWT='$renewed_token'"
-  assert_contains "$tmpdir/logs/codex.log" "mcp add rainbond -- npx --yes rainskills@0.1.0-rc.64 mcp serve --client codex"
+  assert_contains "$tmpdir/logs/codex.log" "mcp add rainbond -- npx --yes rainskills@${CURRENT_PACKAGE_VERSION} mcp serve --client codex"
   grep -F -- "已保存后端滑动续期返回的新 JWT" /tmp/rainbond-install-renewed.out >/dev/null || fail "expected renewal guidance"
 }
 
@@ -1166,9 +1168,9 @@ EOF
   [[ "$(file_mode "$tmpdir/home/.rainbond/mcp.env")" == "600" ]] || fail "refresh should keep mcp.env permissions at 600"
 
   assert_contains "$tmpdir/home/.codex/config.toml" 'command = "npx"'
-  assert_contains "$tmpdir/home/.codex/config.toml" 'rainskills@0.1.0-rc.64'
+  assert_contains "$tmpdir/home/.codex/config.toml" "rainskills@${CURRENT_PACKAGE_VERSION}"
   assert_contains "$tmpdir/home/.claude.json" '"command": "npx"'
-  assert_contains "$tmpdir/home/.claude.json" 'rainskills@0.1.0-rc.64'
+  assert_contains "$tmpdir/home/.claude.json" "rainskills@${CURRENT_PACKAGE_VERSION}"
   assert_file_exists "$tmpdir/home/.codex/config.toml.rainskills-backup"
   assert_file_exists "$tmpdir/home/.claude.json.rainskills-backup"
 
@@ -1330,7 +1332,7 @@ test_old_rainbond_falls_back_to_generic_mcp_endpoint() {
 
   assert_contains "$tmpdir/logs/curl.log" "http://rainbond.internal/console/mcp/rainskills/codex/query"
   assert_contains "$tmpdir/logs/curl.log" "http://rainbond.internal/console/mcp/query"
-  assert_contains "$tmpdir/logs/codex.log" "mcp add rainbond -- npx --yes rainskills@0.1.0-rc.64 mcp serve --client codex"
+  assert_contains "$tmpdir/logs/codex.log" "mcp add rainbond -- npx --yes rainskills@${CURRENT_PACKAGE_VERSION} mcp serve --client codex"
   assert_contains "$output_file" "兼容 MCP 地址"
 }
 

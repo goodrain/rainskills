@@ -50,17 +50,15 @@ Claude Code：
 ```text
 Rainskills 安装完成，下一条消息即可直接使用。
 
-现在可以帮你：
+下一步可以直接说：
 
-- 分析项目的技术栈和部署结构
-- 将当前项目或 Git 仓库部署上线
-- 通过源码、镜像或安装包部署应用
-- 分析项目结构
-- 识别技术栈
-- 从应用模板安装应用
-- 给出部署结构建议
+- 帮我部署当前项目
+- 帮我部署一个 Git 仓库
+- 帮我通过镜像或安装包部署应用
+- 帮我安装一个应用模板
+- 帮我分析当前项目应该如何部署
 
-直接告诉我你想做什么即可。
+也可以直接告诉我你想部署什么应用。
 ```
 
 用户第一次提出部署、查询、排障、验证、快照或模板安装等需要运行环境的动作时，Rainskills 才检查和连接运行环境。
@@ -74,7 +72,7 @@ Rainskills 安装完成，下一条消息即可直接使用。
 固定 launcher 来自当前 `package.json` 版本：
 
 ```json
-["npx", "--yes", "rainskills@0.1.0-rc.64"]
+["npx", "--yes", "rainskills@0.1.0-rc.66"]
 ```
 
 所有调用都把 launcher 与参数合并成 argv 数组后直接执行；不得使用 `rainskills@latest`，不得把参数拼成 shell 字符串。
@@ -127,10 +125,10 @@ Rainskills 安装完成，下一条消息即可直接使用。
 常用管理命令：
 
 ```bash
-npx --yes rainskills@0.1.0-rc.64 environment list --json
-npx --yes rainskills@0.1.0-rc.64 environment rename --environment-id <uuid> --name <name>
-npx --yes rainskills@0.1.0-rc.64 environment set-default --environment-id <uuid>
-npx --yes rainskills@0.1.0-rc.64 environment remove --environment-id <uuid>
+npx --yes rainskills@0.1.0-rc.66 environment list --json
+npx --yes rainskills@0.1.0-rc.66 environment rename --environment-id <uuid> --name <name>
+npx --yes rainskills@0.1.0-rc.66 environment set-default --environment-id <uuid>
+npx --yes rainskills@0.1.0-rc.66 environment remove --environment-id <uuid>
 ```
 
 ### 已有应用环境选择
@@ -167,19 +165,19 @@ Windows 本地安装是预览能力，也可以改选 Linux 服务器。它要�
 
 ```bash
 # 本地单机
-npx --yes rainskills@0.1.0-rc.64 platform install --onboarding-id <id> \
+npx --yes rainskills@0.1.0-rc.66 platform install --onboarding-id <id> \
   --location local --mode single-node
 
 # Linux 服务器单机
-npx --yes rainskills@0.1.0-rc.64 platform install --onboarding-id <id> \
+npx --yes rainskills@0.1.0-rc.66 platform install --onboarding-id <id> \
   --location server --mode single-node --ssh <user@host>
 
 # 服务器主机集群（交互生成配置，或导入已有 ROI cluster.yaml）
-npx --yes rainskills@0.1.0-rc.64 platform install --onboarding-id <id> \
+npx --yes rainskills@0.1.0-rc.66 platform install --onboarding-id <id> \
   --location server --mode host-cluster --cluster-config <path>
 
 # 已有 Kubernetes
-npx --yes rainskills@0.1.0-rc.64 platform install --onboarding-id <id> \
+npx --yes rainskills@0.1.0-rc.66 platform install --onboarding-id <id> \
   --location server --mode existing-kubernetes \
   --kubeconfig <path> --kube-context <name> --chart-version <version>
 ```

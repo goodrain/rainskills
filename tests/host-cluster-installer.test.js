@@ -841,7 +841,7 @@ test("ROI execution transfers fixed bytes, invokes attached roi up, redacts logs
   const states = [];
   const calls = [];
   const output = [];
-  const resumeArgv = ["npx", "rainskills@0.1.0-rc.64", "platform", "install", "--onboarding-id", "1d6754d6-6fb3-4bda-9a04-15c2d261d178"];
+  const resumeArgv = ["npx", `rainskills@${packageVersion}`, "platform", "install", "--onboarding-id", "1d6754d6-6fb3-4bda-9a04-15c2d261d178"];
   const result = await executeRoiInstall({
     bootstrap: host("node1", "10.0.0.1", { bootstrap: true }),
     configPath,

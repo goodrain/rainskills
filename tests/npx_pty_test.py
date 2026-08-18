@@ -22,17 +22,16 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 TTY_PATTERN = re.compile(rb"RAINSKILLS_TTY stdin=1 stdout=1 stderr=1")
 APPROVED_CAPABILITY_SUMMARY = """Rainskills 安装完成，下一条消息即可直接使用。
 
-现在可以帮你：
+下一步可以直接说：
 
-- 分析项目的技术栈和部署结构
-- 将当前项目或 Git 仓库部署上线
-- 通过源码、镜像或安装包部署应用
-- 分析项目结构
-- 识别技术栈
-- 从应用模板安装应用
-- 给出部署结构建议
+- 帮我部署当前项目
+- 帮我部署一个 Git 仓库
+- 帮我通过镜像或安装包部署应用
+- 帮我安装一个应用模板
+- 帮我分析当前项目应该如何部署
 
-直接告诉我你想做什么即可。"""
+也可以直接告诉我你想部署什么应用。"""
+AGENT_SUMMARY_REQUIREMENT = "[RAINSKILLS_AGENT_SUMMARY_REQUIRED:include-next-actions]"
 
 
 def read_process_output(pid: int, master_fd: int, timeout: float) -> tuple[bytes, int]:
@@ -162,6 +161,8 @@ exit 0
             )
             assert TTY_PATTERN.search(output), decoded
             assert decoded.count(APPROVED_CAPABILITY_SUMMARY) == 1, decoded
+            assert decoded.count(AGENT_SUMMARY_REQUIREMENT) == 1, decoded
+            assert decoded.index(APPROVED_CAPABILITY_SUMMARY) < decoded.index(AGENT_SUMMARY_REQUIREMENT), decoded
             assert "[RAINSKILLS_USER_MESSAGE_BEGIN:install.completed]" in decoded, decoded
             assert "[RAINSKILLS_USER_MESSAGE_END:install.completed]" in decoded, decoded
             for forbidden in (

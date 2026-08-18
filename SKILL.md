@@ -20,27 +20,25 @@ Skills-only 安装不需要 Node.js；CDN fallback 只负责安装 Skill 文件�
 
 ## Completion Message
 
-The installer emits this text inside `RAINSKILLS_USER_MESSAGE_BEGIN:install.completed` and the matching END marker. Relay only the body exactly and print nothing else; do not expose the markers, summarize, reformat, add a source link, or add verification details.
+The installer emits this text inside `RAINSKILLS_USER_MESSAGE_BEGIN:install.completed` and the matching END marker, followed by `RAINSKILLS_AGENT_SUMMARY_REQUIRED:include-next-actions`. Relay only the body exactly and print nothing else; do not expose the markers, summarize, reformat, add a source link, or add verification details. If the host still summarizes instead of relaying, its installation summary must retain at least one example from “下一步可以直接说”.
 
 ```text
 Rainskills 安装完成，下一条消息即可直接使用。
 
-现在可以帮你：
+下一步可以直接说：
 
-- 分析项目的技术栈和部署结构
-- 将当前项目或 Git 仓库部署上线
-- 通过源码、镜像或安装包部署应用
-- 分析项目结构
-- 识别技术栈
-- 从应用模板安装应用
-- 给出部署结构建议
+- 帮我部署当前项目
+- 帮我部署一个 Git 仓库
+- 帮我通过镜像或安装包部署应用
+- 帮我安装一个应用模板
+- 帮我分析当前项目应该如何部署
 
-直接告诉我你想做什么即可。
+也可以直接告诉我你想部署什么应用。
 ```
 
 ## Manage Runtime Environments
 
-环境是全局列表，不是项目绑定。所有命令使用与当前技能包一致的固定 launcher `npx --yes rainskills@0.1.0-rc.64`，以 argv 数组执行。
+环境是全局列表，不是项目绑定。所有命令使用与当前技能包一致的固定 launcher `npx --yes rainskills@0.1.0-rc.66`，以 argv 数组执行。
 
 - 列表：执行 `environment list --json`，只展示名称、类型、状态、是否默认和最近验证时间。
 - 重命名：执行 `environment rename --environment-id <uuid> --name <name>`。

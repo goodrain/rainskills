@@ -23,17 +23,16 @@ const skillNames = [
 ];
 const approvedCapabilitySummary = `Rainskills 安装完成，下一条消息即可直接使用。
 
-现在可以帮你：
+下一步可以直接说：
 
-- 分析项目的技术栈和部署结构
-- 将当前项目或 Git 仓库部署上线
-- 通过源码、镜像或安装包部署应用
-- 分析项目结构
-- 识别技术栈
-- 从应用模板安装应用
-- 给出部署结构建议
+- 帮我部署当前项目
+- 帮我部署一个 Git 仓库
+- 帮我通过镜像或安装包部署应用
+- 帮我安装一个应用模板
+- 帮我分析当前项目应该如何部署
 
-直接告诉我你想做什么即可。`;
+也可以直接告诉我你想部署什么应用。`;
+const agentSummaryRequirement = "[RAINSKILLS_AGENT_SUMMARY_REQUIRED:include-next-actions]";
 
 function packPackage(destination) {
   const result = spawnSync(
@@ -244,6 +243,11 @@ test("the packed default installer installs only Skills and prints the approved 
   assert.equal(result.status, 0, result.stderr || result.stdout);
   const output = `${result.stdout}\n${result.stderr}`.replace(/\r\n/g, "\n");
   assert.equal(output.split(approvedCapabilitySummary).length - 1, 1);
+  assert.equal(output.split(agentSummaryRequirement).length - 1, 1);
+  assert(
+    output.indexOf(approvedCapabilitySummary) < output.indexOf(agentSummaryRequirement),
+    "the next-action summary requirement must follow the user-facing message"
+  );
   assert.match(output, /\[RAINSKILLS_USER_MESSAGE_BEGIN:install\.completed\]/);
   assert.match(output, /\[RAINSKILLS_USER_MESSAGE_END:install\.completed\]/);
   for (const forbidden of [

@@ -251,5 +251,6 @@ test("generated marketplace guidance installs Skills without eager runtime setup
   assert.doesNotMatch(plugin.description, /connect|authoriz|MCP/i);
   assert.doesNotMatch(plugin.interface.longDescription, /choose Rainbond Cloud|authorize access|configure MCP/i);
   const completion = skill.slice(skill.indexOf("## Completion Message"));
-  assert.doesNotMatch(completion, /reload|restart|重新加载|重启|下一步/i);
+  assert.match(completion, /下一步可以直接说/);
+  assert.doesNotMatch(completion, /reload|restart|重新加载|重启/i);
 });

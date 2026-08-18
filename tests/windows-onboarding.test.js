@@ -28,17 +28,16 @@ const platformInstallerPath = path.join(
 );
 const approvedCapabilitySummary = `Rainskills 安装完成，下一条消息即可直接使用。
 
-现在可以帮你：
+下一步可以直接说：
 
-- 分析项目的技术栈和部署结构
-- 将当前项目或 Git 仓库部署上线
-- 通过源码、镜像或安装包部署应用
-- 分析项目结构
-- 识别技术栈
-- 从应用模板安装应用
-- 给出部署结构建议
+- 帮我部署当前项目
+- 帮我部署一个 Git 仓库
+- 帮我通过镜像或安装包部署应用
+- 帮我安装一个应用模板
+- 帮我分析当前项目应该如何部署
 
-直接告诉我你想做什么即可。`;
+也可以直接告诉我你想部署什么应用。`;
+const agentSummaryRequirement = "[RAINSKILLS_AGENT_SUMMARY_REQUIRED:include-next-actions]";
 const forbiddenDefaultInstallText = [
   "Rainbond Cloud",
   "私有",
@@ -52,10 +51,11 @@ const forbiddenDefaultInstallText = [
 function assertApprovedCapabilitySummary(output) {
   const content = output.join("\n").replace(/\r\n/g, "\n");
   assert.equal(content.split(approvedCapabilitySummary).length - 1, 1);
-  assert.equal(content.trim(), approvedCapabilitySummary);
+  assert.equal(content.split(agentSummaryRequirement).length - 1, 1);
+  assert.equal(content.trim(), `${approvedCapabilitySummary}\n${agentSummaryRequirement}`);
   assert.doesNotMatch(content, /reload|restart|重新加载|重启/i);
   const actualBullets = content
-    .slice(content.indexOf("现在可以帮你："), content.indexOf("直接告诉我你想做什么即可。"))
+    .slice(content.indexOf("下一步可以直接说："), content.indexOf("也可以直接告诉我你想部署什么应用。"))
     .split("\n")
     .filter((line) => line.startsWith("- "));
   const expectedBullets = approvedCapabilitySummary.split("\n").filter((line) => line.startsWith("- "));
@@ -82,7 +82,8 @@ test("native Windows verbose mode keeps technical installation diagnostics opt-i
 
   assert.equal(output.some((line) => line.startsWith("[install]")), true);
   assert.equal(output.some((line) => line.includes("项新装")), true);
-  assert.equal(output.at(-1), approvedCapabilitySummary);
+  assert.equal(output.at(-2), approvedCapabilitySummary);
+  assert.equal(output.at(-1), agentSummaryRequirement);
 });
 
 test("native main ends every default target with the approved Skills-only completion", async (t) => {

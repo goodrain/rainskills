@@ -7,6 +7,7 @@ const test = require("node:test");
 const { pathToFileURL } = require("node:url");
 
 const repoRoot = path.resolve(__dirname, "..");
+const packageVersion = require(path.join(repoRoot, "package.json")).version;
 const extensionPath = path.join(repoRoot, "pi", "rainskills-mcp.ts");
 const extensionTestDir = fs.mkdtempSync(
   path.join(os.tmpdir(), "rainskills-pi-module-")
@@ -38,7 +39,7 @@ test("Pi extension starts the version-pinned local Rainskills router without cre
   assert.deepEqual(config, {
     command: "npx",
     args: [
-      "--yes", "rainskills@0.1.0-rc.64", "mcp", "serve", "--client", "pi",
+      "--yes", `rainskills@${packageVersion}`, "mcp", "serve", "--client", "pi",
     ],
   });
   assert.deepEqual(extension.publicConfig(config), config);
