@@ -15500,7 +15500,7 @@ function serializeMessage(message) {
 // package.json
 var package_default = {
   name: "rainskills",
-  version: "0.1.0-rc.64",
+  version: "0.1.0-rc.65",
   description: "Interactive Rainbond skill installer for Codex and Claude Code",
   license: "Apache-2.0",
   homepage: "https://github.com/goodrain/rainskills#readme",
