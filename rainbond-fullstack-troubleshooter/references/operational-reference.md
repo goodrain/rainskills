@@ -68,4 +68,3 @@ Primary stop conditions:
 
 Symptom-to-branch lookup:
 - pod `FailedMount` with `configmap ... not found` → Rule J (`config_file_configmap_missing`)
-

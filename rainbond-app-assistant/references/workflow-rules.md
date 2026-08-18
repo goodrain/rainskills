@@ -341,4 +341,3 @@
   - the cluster is capacity-blocked and a human must decide whether to scale capacity or reduce requests
   - a required secret source is missing
   - a code/build handoff is required and the user has not asked for code changes
-

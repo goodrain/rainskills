@@ -75,4 +75,3 @@ Load this reference only when checking a proposed route or reviewing a completed
   6. if strict delivered and promotion was requested, snapshot and create testing app
   7. verify the testing app once
   8. report one next step
-
