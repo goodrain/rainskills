@@ -21,10 +21,10 @@ AppAssistantResult:
       team_name: demo-team
       region_name: cn
       app_name: inventory-app
-      app_id: app-202
+      app_id: 202
     linked: true
     selected_environment: preview
-    deployment_location_url: https://run.rainbond.com/#/team/demo-team/region/cn/apps/app-202/overview
+    deployment_location_url: https://run.rainbond.com/#/team/demo-team/region/cn/apps/202/overview
   environment:
     name: preview
     source: local_preference

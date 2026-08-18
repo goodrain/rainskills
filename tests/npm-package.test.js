@@ -18,6 +18,7 @@ const skillNames = [
   "rainbond-fullstack-bootstrap",
   "rainbond-fullstack-troubleshooter",
   "rainbond-platform-installer",
+  "rainbond-platform-query",
   "rainbond-project-init",
   "rainbond-template-installer",
 ];
@@ -26,7 +27,11 @@ function packPackage(destination) {
   const result = spawnSync(
     npmCommand,
     ["pack", "--json", "--pack-destination", destination],
-    { cwd: repoRoot, encoding: "utf8" }
+    {
+      cwd: repoRoot,
+      encoding: "utf8",
+      env: { ...process.env, npm_config_cache: path.join(destination, "npm-cache") },
+    }
   );
   assert.equal(result.status, 0, result.stderr || result.stdout);
   const [packed] = JSON.parse(result.stdout);
@@ -62,11 +67,15 @@ test("package metadata defines a public, runtime-dependency-free npx command", (
   );
   assert.equal(
     manifest.scripts.test,
-    "npm run test:launcher && npm run test:api-bridge && npm run test:mcp-priority && npm run test:skill-profile && npm run test:marketplace && npm run test:platform && npm run test:windows && npm run test:package-upload && npm run test:package && npm run test:installer && npm run test:signal && npm run test:npx-pty"
+    "npm run test:launcher && npm run test:api-bridge && npm run test:mcp-priority && npm run test:routing && npm run test:skill-profile && npm run test:marketplace && npm run test:platform && npm run test:windows && npm run test:package-upload && npm run test:package && npm run test:installer && npm run test:signal && npm run test:npx-pty"
   );
   assert.equal(
     manifest.scripts["test:mcp-priority"],
-    "node --test tests/mcp-priority-cleanup.test.js tests/transport-resolution.test.js"
+    "node --test tests/mcp-priority-cleanup.test.js tests/transport-resolution.test.js tests/skill-console-contract.test.js"
+  );
+  assert.equal(
+    manifest.scripts["test:routing"],
+    "python3 tests/run_skill_routing_evals.py"
   );
   assert.equal(
     manifest.scripts["test:platform"],

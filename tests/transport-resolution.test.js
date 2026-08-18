@@ -18,6 +18,7 @@ const businessSkills = [
   "rainbond-env-sync",
   "rainbond-fullstack-bootstrap",
   "rainbond-fullstack-troubleshooter",
+  "rainbond-platform-query",
   "rainbond-project-init",
   "rainbond-template-installer",
 ];
@@ -26,6 +27,7 @@ const allSkills = fs
   .filter((entry) => entry.isDirectory() && entry.name.startsWith("rainbond-"))
   .map((entry) => entry.name)
   .sort();
+const workflowSkills = businessSkills.filter((skillName) => skillName !== "rainbond-platform-query");
 
 function read(relativePath) {
   return fs.readFileSync(path.join(repoRoot, relativePath), "utf8");
@@ -119,7 +121,7 @@ test("top-level preflight initializes CLI once and lower skills inherit", () => 
   assert.doesNotMatch(preflight, /rainbond_query_enterprises/);
   assert.doesNotMatch(top, /Step 0 — Probe MCP availability/);
 
-  for (const skillName of businessSkills.slice(1)) {
+  for (const skillName of workflowSkills.slice(1)) {
     const skill = read(path.join(skillName, "SKILL.md"));
     assert.match(skill, /## Rainbond (CLI|传输)/);
     assert.match(skill, /上游已初始化.*RainSkills CLI.*直接复用/);
@@ -143,7 +145,7 @@ test("both phase-loading gates use relative reads before writes", () => {
     assert.match(section, /未加载.*禁止.*写|没加载.*不允许.*写|未读取时禁止执行该阶段写操作/s);
   }
 
-  for (const skillName of businessSkills.slice(1)) {
+  for (const skillName of workflowSkills.slice(1)) {
     assert.match(top, new RegExp(`\.\./${skillName}/SKILL\\.md`));
   }
 });
@@ -174,7 +176,11 @@ test("business skills contain no operational MCP-only source or stop rules", () 
 });
 
 test("project-init schema YAML parses and edited list items retain peer indentation", () => {
-  const projectInit = read(path.join("rainbond-project-init", "SKILL.md"));
+  const projectInit = [
+    read(path.join("rainbond-project-init", "SKILL.md")),
+    read(path.join("rainbond-project-init", "references", "output-contract.md")),
+    read(path.join("rainbond-project-init", "references", "operational-reference.md")),
+  ].join("\n");
   const schemaMatch = projectInit.match(/Proposed schema:\s*```yaml\n([\s\S]*?)\n```/);
   assert(schemaMatch, "ProjectInitResult proposed schema block is missing");
   const parsed = spawnSync(

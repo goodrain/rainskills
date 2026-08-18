@@ -13,6 +13,7 @@ const EMBEDDED_SKILLS = [
   "rainbond-delivery-verifier",
   "rainbond-fullstack-bootstrap",
   "rainbond-fullstack-troubleshooter",
+  "rainbond-platform-query",
   "rainbond-template-installer",
 ];
 const EXCLUDED_SUBTREES = new Set([
@@ -112,7 +113,7 @@ function transformEmbeddedNarrative(content) {
   return content.replace(
     "user-level home directories as a whole (`~/.codex`, `~/.claude`, `~/.rainbond`, `~/.cache`, etc.). Only specific named files such as `~/.rainbond/credentials.env` are allowed when explicitly required by a configured workflow step.",
     "user-level home directories (`~/.codex`, `~/.claude`, `~/.rainbond`, `~/.cache`, etc.) and all named files under them. The embedded runtime never reads client credential files."
-  );
+  ).replace(/\[([^\]]+)\]\((?:scripts|evals)\/[^)]*\)/g, "$1");
 }
 
 function replaceRequired(content, expression, replacement, label) {

@@ -1,0 +1,10 @@
+expected_skill: rainbond-platform-query
+prompt: 帮我查询当前企业的信息
+allowed_tools:
+  - rainbond_get_current_user
+  - rainbond_query_enterprises
+forbidden_tools:
+  - rainbond_query_teams
+  - rainbond_query_regions
+  - list
+  - describe

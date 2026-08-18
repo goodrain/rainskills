@@ -14,7 +14,7 @@ Skill 市场命令当前要求 Node.js 22.20.0 或更高版本。无法升级时
 
 市场只展示一个 `rainskills` 入口。首次使用时，该入口会启动随包携带的交互式安装器，继续完成客户端选择、Rainbond 环境选择、浏览器授权和本机 CLI 配置；内部 `rainbond-*` Skill 不需要单独安装。
 
-安装完成后，9 个 `rainbond-*` Skill 仍各自独立加载、独立触发和独立维护。统一的是安装、授权和升级入口，不会把业务 Skill 合并成一个大 Skill。
+安装完成后，10 个 `rainbond-*` Skill 仍各自独立加载、独立触发和独立维护。统一的是安装、授权和升级入口，不会把业务 Skill 合并成一个大 Skill。
 
 也可以使用客户端自己的 Plugin 市场。无论使用哪种入口，都只会看到一个 `Rainskills`，第一次使用时仍然进入同一套初始化和授权流程。
 
@@ -69,6 +69,7 @@ bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh)
 - `rainbond-fullstack-bootstrap`
 - `rainbond-fullstack-troubleshooter`
 - `rainbond-platform-installer`（内部安装流程，不作为独立产品使用）
+- `rainbond-platform-query`（当前用户、企业、团队、集群、应用和组件的轻量只读查询）
 - `rainbond-project-init`
 - `rainbond-template-installer`
 
@@ -464,7 +465,7 @@ rainbond-skills/
 
 ## 产品对象模型
 
-`docs/product-object-model.md` 描述了 skills 之间共享的产品对象（project、app、component、environment、delivery 等）和跨-skill 边界。如果你要扩展某个 skill 的输入/输出，或新增一个 skill，先看它。
+`rainbond-app-assistant/references/product-object-model.md` 是可安装的 canonical 文档，描述 skills 之间共享的产品对象（project、app、component、environment、delivery 等）和跨-skill 边界；`docs/product-object-model.md` 只保留仓库索引。如果你要扩展某个 skill 的输入/输出，或新增一个 skill，先看 canonical reference。
 
 ## 仓库维护约定
 
@@ -522,7 +523,7 @@ npx --yes rainskills refresh
 如果你要新增或修改 skill，建议流程如下：
 
 1. 在仓库里直接修改对应 skill 目录
-2. 先查看 `docs/product-object-model.md`，它是当前产品对象模型和跨-skill 边界的主文档
+2. 先查看 `rainbond-app-assistant/references/product-object-model.md`，它是安装包内的产品对象模型和跨-skill 边界主文档
 3. 在虚拟环境中执行 `python3 -m pip install -r requirements-test.txt`，再执行 `npm test` 跑 helper、评测、安装器、包内容和 PTY 信号测试；测试在隔离临时目录中运行，无需输入，也不应打开真实浏览器
 4. 执行 `./install.sh --dest /tmp/rainbond-skills-test --force` 做一次本地验证
 5. 确认无误后再提交到 Git 仓库

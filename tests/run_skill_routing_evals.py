@@ -16,6 +16,7 @@ SKILL_FILES = {
     "rainbond-fullstack-bootstrap": ROOT / "rainbond-fullstack-bootstrap" / "SKILL.md",
     "rainbond-fullstack-troubleshooter": ROOT / "rainbond-fullstack-troubleshooter" / "SKILL.md",
     "rainbond-delivery-verifier": ROOT / "rainbond-delivery-verifier" / "SKILL.md",
+    "rainbond-platform-query": ROOT / "rainbond-platform-query" / "SKILL.md",
 }
 BUSINESS_SKILL_FILES = sorted(ROOT.glob("rainbond-*/SKILL.md"))
 
@@ -31,10 +32,28 @@ def classify_prompt(prompt: str) -> str | None:
             "rainbond-fullstack-troubleshooter",
         ],
         "rainbond-delivery-verifier": ["$rainbond-delivery-verifier", "rainbond-delivery-verifier"],
+        "rainbond-platform-query": ["$rainbond-platform-query", "rainbond-platform-query"],
     }
     for skill, needles in explicit_names.items():
         if any(needle in text for needle in needles):
             return skill
+
+    platform_query_needles = [
+        "当前企业",
+        "当前登录的用户",
+        "有哪些团队",
+        "有哪些集群",
+        "团队里的应用",
+        "应用有哪些组件",
+        "current enterprise",
+        "current user",
+        "list teams",
+        "list regions",
+        "list apps",
+        "list components",
+    ]
+    if any(needle in text for needle in platform_query_needles):
+        return "rainbond-platform-query"
 
     bootstrap_needles = [
         "只帮我创建应用和组件",

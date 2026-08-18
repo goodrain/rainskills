@@ -12,6 +12,9 @@ $defs:
     anyOf:
       - $ref: "#/$defs/non_empty_string"
       - type: "null"
+  positive_integer:
+    type: integer
+    minimum: 1
   environment_name:
     type: string
     enum:
@@ -124,7 +127,9 @@ $defs:
       app_name:
         $ref: "#/$defs/nullable_non_empty_string"
       app_id:
-        $ref: "#/$defs/nullable_non_empty_string"
+        anyOf:
+          - $ref: "#/$defs/positive_integer"
+          - type: "null"
   runtime_state:
     type: object
     additionalProperties: false

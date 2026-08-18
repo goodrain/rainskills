@@ -20,6 +20,24 @@ cases:
   - id: explicit_delivery_verification
     prompt: 只帮我确认当前应用是否已经交付成功，并给我访问地址
     expected_skill: rainbond-delivery-verifier
+  - id: current_enterprise_query
+    prompt: 帮我查询当前企业的信息
+    expected_skill: rainbond-platform-query
+  - id: current_user_query
+    prompt: 查询我当前登录的用户信息
+    expected_skill: rainbond-platform-query
+  - id: team_query
+    prompt: 查询我有哪些团队
+    expected_skill: rainbond-platform-query
+  - id: region_query
+    prompt: 查询当前企业有哪些集群
+    expected_skill: rainbond-platform-query
+  - id: app_query
+    prompt: 查询团队里的应用
+    expected_skill: rainbond-platform-query
+  - id: component_query
+    prompt: 查询这个应用有哪些组件
+    expected_skill: rainbond-platform-query
 
 required_markers:
   rainbond-app-assistant:
@@ -36,6 +54,9 @@ required_markers:
   rainbond-delivery-verifier:
     - "Do not use as the first or default response to a generic current-project deployment request"
     - "route that to `rainbond-app-assistant`"
+  rainbond-platform-query:
+    - "explicit, read-only platform questions"
+    - "Do not expand a narrow question"
 
 forbidden_operational_markers:
   - MCP 不可用，无法完成 online verification
