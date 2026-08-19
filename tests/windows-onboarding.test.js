@@ -188,11 +188,21 @@ test("Windows bridge installation is atomic, protected, updatable, and reparse-s
   const home = temporaryHome();
   const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-package-bridge-"));
   const source = writeBridge(packageRoot, "v1\n");
+  writeSkill(packageRoot, "rainbond-test");
+  fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({
+    name: "rainskills",
+    version: "0.1.0-test",
+  }));
   const stateStore = createPortableSecureStateStore(home);
 
   const destination = installBridge({ home, packageRoot, stateStore });
   assert.equal(fs.readFileSync(destination, "utf8"), "v1\n");
   assert.equal(fs.lstatSync(destination).mode & 0o777, 0o600);
+  const manifestPath = path.join(home, ".rainbond", "bin", "rainskills-skill-manifest.json");
+  assert.equal(fs.lstatSync(manifestPath).mode & 0o777, 0o600);
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  assert.equal(manifest.schema, "rainskills.skill-manifest.v1");
+  assert.deepEqual(manifest.skills.map((entry) => entry.id), ["rainbond-test"]);
   fs.writeFileSync(source, "v2\n");
   assert.equal(installBridge({ home, packageRoot, stateStore }), destination);
   assert.equal(fs.readFileSync(destination, "utf8"), "v2\n");

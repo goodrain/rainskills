@@ -167,6 +167,10 @@ RAINSKILLS_BROWSER_LOGIN_RESULT_FILE=""
 RAINSKILLS_DEVICE_FLOW_TEMP_DIR=""
 RAINSKILLS_API_VALIDATION_TEMP_DIR=""
 RAINSKILLS_API_BRIDGE_TEMP_FILE=""
+RAINSKILLS_SKILL_MANIFEST_TEMP_FILE=""
+RAINSKILLS_SKILL_MANIFEST_BACKUP_FILE=""
+RAINSKILLS_SKILL_MANIFEST_DESTINATION=""
+RAINSKILLS_SKILL_MANIFEST_INSTALLED=0
 RAINSKILLS_CODEX_RULE_TEMP_FILE=""
 RAINSKILLS_API_BRIDGE_AVAILABLE=0
 TRANSPORT_VALIDATION_ERROR=""
@@ -490,7 +494,23 @@ cleanup_api_bridge_install() {
   if [[ -n "$RAINSKILLS_API_BRIDGE_TEMP_FILE" ]]; then
     rm -f "$RAINSKILLS_API_BRIDGE_TEMP_FILE"
   fi
+  if [[ -n "$RAINSKILLS_SKILL_MANIFEST_TEMP_FILE" ]]; then
+    rm -f "$RAINSKILLS_SKILL_MANIFEST_TEMP_FILE"
+  fi
+  if [[ "$RAINSKILLS_SKILL_MANIFEST_INSTALLED" -eq 1 && -n "$RAINSKILLS_API_BRIDGE_TEMP_FILE" ]]; then
+    if [[ -n "$RAINSKILLS_SKILL_MANIFEST_BACKUP_FILE" && -f "$RAINSKILLS_SKILL_MANIFEST_BACKUP_FILE" ]]; then
+      mv -f "$RAINSKILLS_SKILL_MANIFEST_BACKUP_FILE" "$RAINSKILLS_SKILL_MANIFEST_DESTINATION" || true
+    elif [[ -n "$RAINSKILLS_SKILL_MANIFEST_DESTINATION" ]]; then
+      rm -f "$RAINSKILLS_SKILL_MANIFEST_DESTINATION"
+    fi
+  elif [[ -n "$RAINSKILLS_SKILL_MANIFEST_BACKUP_FILE" ]]; then
+    rm -f "$RAINSKILLS_SKILL_MANIFEST_BACKUP_FILE"
+  fi
   RAINSKILLS_API_BRIDGE_TEMP_FILE=""
+  RAINSKILLS_SKILL_MANIFEST_TEMP_FILE=""
+  RAINSKILLS_SKILL_MANIFEST_BACKUP_FILE=""
+  RAINSKILLS_SKILL_MANIFEST_DESTINATION=""
+  RAINSKILLS_SKILL_MANIFEST_INSTALLED=0
 }
 
 cleanup_codex_rule_install() {
@@ -643,12 +663,15 @@ assert_safe_private_directory() {
 
 install_api_bridge() {
   local source="$SCRIPT_DIR/bin/rainskills-tools.js"
+  local manifest_builder="$SCRIPT_DIR/scripts/build-skill-manifest.mjs"
   local rainbond_dir="$HOME/.rainbond"
   local bridge_dir="$rainbond_dir/bin"
   local destination="$bridge_dir/rainskills-tools.js"
-  local temporary
+  local manifest_destination="$bridge_dir/rainskills-skill-manifest.json"
+  local temporary manifest_temporary manifest_backup
 
   [[ -f "$source" && ! -L "$source" ]] || die "安装包中缺少安全的 API Bridge：$source"
+  [[ -f "$manifest_builder" && ! -L "$manifest_builder" ]] || die "安装包中缺少 Skill manifest 生成器：$manifest_builder"
   if ! can_install_api_bridge; then
     RAINSKILLS_API_BRIDGE_AVAILABLE=0
     if [[ "$API_ONLY" -eq 1 ]]; then
@@ -665,9 +688,24 @@ install_api_bridge() {
   if [[ -e "$destination" && ! -f "$destination" ]]; then
     die "Bridge 目标不是普通文件：$destination"
   fi
+  if [[ -L "$manifest_destination" ]]; then
+    die "拒绝覆盖符号链接 Skill manifest：$manifest_destination"
+  fi
+  if [[ -e "$manifest_destination" && ! -f "$manifest_destination" ]]; then
+    die "Skill manifest 目标不是普通文件：$manifest_destination"
+  fi
 
   temporary="$(mktemp "$bridge_dir/.rainskills-tools.js.XXXXXX")"
   RAINSKILLS_API_BRIDGE_TEMP_FILE="$temporary"
+  manifest_temporary="$(mktemp "$bridge_dir/.rainskills-skill-manifest.json.XXXXXX")"
+  RAINSKILLS_SKILL_MANIFEST_TEMP_FILE="$manifest_temporary"
+  RAINSKILLS_SKILL_MANIFEST_DESTINATION="$manifest_destination"
+  if ! node "$manifest_builder" --source-root "$SCRIPT_DIR" --output "$manifest_temporary"; then
+    die "生成 Skill manifest 失败"
+  fi
+  if ! chmod 600 "$manifest_temporary"; then
+    die "设置 Skill manifest 暂存权限失败"
+  fi
   if ! chmod 700 "$temporary"; then
     rm -f "$temporary"
     die "设置 API Bridge 暂存权限失败"
@@ -676,11 +714,30 @@ install_api_bridge() {
     rm -f "$temporary"
     die "复制 API Bridge 失败"
   fi
+  manifest_backup=""
+  if [[ -f "$manifest_destination" ]]; then
+    manifest_backup="$(mktemp "$bridge_dir/.rainskills-skill-manifest.json.backup.XXXXXX")"
+    if ! cp "$manifest_destination" "$manifest_backup"; then
+      die "备份 Skill manifest 失败"
+    fi
+    chmod 600 "$manifest_backup" || die "保护 Skill manifest 备份失败"
+    RAINSKILLS_SKILL_MANIFEST_BACKUP_FILE="$manifest_backup"
+  fi
+  if ! mv -f "$manifest_temporary" "$manifest_destination"; then
+    die "原子替换 Skill manifest 失败"
+  fi
+  RAINSKILLS_SKILL_MANIFEST_TEMP_FILE=""
+  RAINSKILLS_SKILL_MANIFEST_INSTALLED=1
   if ! mv -f "$temporary" "$destination"; then
-    rm -f "$temporary"
     die "原子替换 API Bridge 失败"
   fi
   RAINSKILLS_API_BRIDGE_TEMP_FILE=""
+  RAINSKILLS_SKILL_MANIFEST_INSTALLED=0
+  if [[ -n "$manifest_backup" ]]; then
+    rm -f "$manifest_backup"
+  fi
+  RAINSKILLS_SKILL_MANIFEST_BACKUP_FILE=""
+  RAINSKILLS_SKILL_MANIFEST_DESTINATION=""
   RAINSKILLS_API_BRIDGE_AVAILABLE=1
   log "[install] 已安装 RainSkills CLI 到 $destination"
 }

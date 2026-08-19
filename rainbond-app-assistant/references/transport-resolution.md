@@ -21,7 +21,7 @@ lock transport until workflow ends
 | 需求 | CLI |
 |---|---|
 | 调用已知只读能力 | `read <tool> --input -` |
-| 调用写入或破坏性能力 | `call <tool> --input -` |
+| 调用写入或破坏性能力 | `call <tool> --input - --skill-id <active_leaf_skill_id>` |
 | Schema 不确定 | `describe <tool>`，同一工作流对该 Tool 最多一次 |
 | 探索候选能力 | `list --prefix <prefix>` |
 | 检查能力目录 | `status`，每个工作流一次 |
@@ -32,7 +32,9 @@ lock transport until workflow ends
 - `read` 在联网前校验 Tool 必须属于只读分类；不得用 `read` 调用写入或破坏性能力，也不得把只读查询改回 `call`。
 - Tool 名称来自 Skill 固定规则或 `list` / `describe` 结果，不猜测名字。
 - 不在命令行传 URL、JWT、Authorization 或其他 Secret，不读取或回显 `~/.rainbond/credentials.env`。
-- 写/破坏性能力首次调用只会返回 `operation_id`。展示目标和影响摘要并获得用户确认后，用同一输入加 `--confirm <operation_id>` 执行一次；不得伪造、复用或绕过确认。
+- `active_leaf_skill_id` 是当前实际承载该业务阶段规则的 leaf Skill 目录名，不是用户自然语言、Tool 名或猜测值；顶层编排存在时追加 `--root-skill-id <root_skill_id>`，否则 CLI 将 leaf 同时作为 root。
+- 写/破坏性能力首次调用只会返回 `operation_id`。首次调用与确认调用必须传同一 `--skill-id`、可选 `--root-skill-id` 和完全相同的 stdin；展示目标和影响摘要并获得用户确认后，再追加 `--confirm <operation_id>` 执行一次。不得伪造、复用或绕过确认。
+- CLI 只从安装器保护的 Skill manifest 读取版本、摘要和 `SKILL.md` 正文，并在确认调用中发送给 Console 审计；不得自行构造 `_meta`，也不得把 Skill 正文放入业务 arguments、stdout 或用户摘要。
 
 ## 常用只读契约
 

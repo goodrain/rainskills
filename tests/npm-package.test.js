@@ -67,7 +67,7 @@ test("package metadata defines a public, runtime-dependency-free npx command", (
   );
   assert.equal(
     manifest.scripts.test,
-    "npm run test:launcher && npm run test:api-bridge && npm run test:mcp-priority && npm run test:routing && npm run test:skill-profile && npm run test:marketplace && npm run test:platform && npm run test:windows && npm run test:package-upload && npm run test:package && npm run test:installer && npm run test:signal && npm run test:npx-pty"
+    "npm run test:launcher && npm run test:api-bridge && npm run test:mcp-priority && npm run test:routing && npm run test:skill-profile && npm run test:skill-manifest && npm run test:marketplace && npm run test:platform && npm run test:windows && npm run test:package-upload && npm run test:package && npm run test:installer && npm run test:signal && npm run test:npx-pty"
   );
   assert.equal(
     manifest.scripts["test:mcp-priority"],
@@ -97,6 +97,7 @@ test("packed artifact contains the installer and all skills but no development f
   assert(filePaths.has("agents/openai.yaml"));
   assert(filePaths.has("bin/rainskills.js"));
   assert(filePaths.has("bin/rainskills-tools.js"));
+  assert(filePaths.has("scripts/build-skill-manifest.mjs"));
   assert(filePaths.has("install.sh"));
   assert(!filePaths.has("pi/rainskills-mcp.ts"));
   assert(filePaths.has("rainbond-platform-installer/scripts/platform-installer.js"));

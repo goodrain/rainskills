@@ -1,0 +1,172 @@
+meta:
+  name: "rainskills-audit-semantics"
+  version: "1.0"
+  repo: "multi:/Users/guox/Desktop/Project/rainskills,/Users/guox/Desktop/Project/rainbond-console,/Users/guox/Desktop/Project/rainbond-agent,/Users/guox/Desktop/Project/rainbond-agent-ui"
+  branch: "console:agent-dev-8.17,agent:main-7.9,ui:agent-dev"
+  design_doc: "docs/plans/2026-08-19-rainskills-audit-semantics-design.md"
+  execution: "local-main-agent-only"
+  commit_policy: "do-not-commit"
+  invariants:
+    - "Do not modify the non-RainSkills approval/projector audit path."
+    - "Do not rewrite historical operation records."
+    - "Keep operation_type, operation_content, approval, risk and stats behavior unchanged for non-RainSkills sources."
+    - "All new event and target fields are optional and have legacy fallbacks."
+
+sprints:
+  - id: sprint-0
+    name: "CLI confirmation classification"
+    commits:
+      - id: commit-rainskills
+        message: "fix: classify mixed rainskills operations"
+        execute_commit: false
+        tasks: [task-0.1]
+    tasks:
+      - id: task-0.1
+        name: "Classify from tool arguments before preparing confirmation"
+        status: completed
+        files:
+          modify:
+            - path: "bin/rainskills-tools.js:30-37,298-304,699-709"
+            - path: "tests/api-bridge.test.js:405-468"
+        steps:
+          - action: write-test
+            description: "Cover mixed read aliases, side-effecting get tools, exec and destructive suboperations."
+            run: "node --test --test-name-pattern='argument-aware classification' tests/api-bridge.test.js"
+            expect: "FAIL before argument-aware classification"
+          - action: implement
+            description: "Read arguments first and use explicit tables matching Console implementation aliases."
+            run: "node --test --test-name-pattern='argument-aware classification' tests/api-bridge.test.js"
+            expect: "PASS"
+
+  - id: sprint-1
+    name: "Console authoritative semantics"
+    commits:
+      - id: commit-console
+        message: "fix: describe rainskills audit operations"
+        execute_commit: false
+        tasks: [task-1.1, task-1.2, task-1.3]
+    tasks:
+      - id: task-1.1
+        name: "Classify mixed tools from actual operation arguments"
+        status: completed
+        files:
+          modify:
+            - path: "console/services/rainskills_tool_audit_policy.py:1-136"
+            - path: "console/tests/rainskills_tool_audit_policy_test.py:1-50"
+        steps:
+          - action: write-test
+            description: "Cover mixed read aliases, exec/check-result writes, dynamic operate_app scope and unknown fail-safe."
+            run: "pytest -q console/tests/rainskills_tool_audit_policy_test.py"
+            expect: "FAIL before argument-aware policy"
+          - action: implement
+            description: "Add arguments to classify_tool and explicit resolver tables backed by MCP implementation branches."
+            run: "pytest -q console/tests/rainskills_tool_audit_policy_test.py"
+            expect: "PASS"
+      - id: task-1.2
+        name: "Resolve structured component targets"
+        status: completed
+        files:
+          modify:
+            - path: "console/services/rainskills_audit_service.py:28-180"
+            - path: "console/tests/rainskills_audit_service_test.py:1-180"
+        steps:
+          - action: write-test
+            description: "Assert single, multiple and all target descriptors with long ID, navigation ID and name."
+            run: "pytest -q console/tests/rainskills_audit_service_test.py"
+            expect: "FAIL before descriptor builder"
+          - action: implement
+            description: "Batch resolve service_ids, dynamically select scope, and persist a bounded descriptor in target_context."
+            run: "pytest -q console/tests/rainskills_audit_service_test.py"
+            expect: "PASS"
+      - id: task-1.3
+        name: "Export optional descriptor"
+        status: completed
+        files:
+          modify:
+            - path: "console/repositories/rainskills_audit_repo.py:120-178"
+            - path: "console/tests/internal_rainskills_audit_view_test.py:1-100"
+        steps:
+          - action: write-test
+            description: "Require operation_descriptor without changing the v1 schema literal or existing fields."
+            run: "pytest -q console/tests/internal_rainskills_audit_view_test.py"
+            expect: "FAIL before event projection"
+          - action: implement
+            description: "Copy the server-owned descriptor from target_context into the optional event field."
+            run: "pytest -q console/tests/internal_rainskills_audit_view_test.py"
+            expect: "PASS"
+
+  - id: sprint-2
+    name: "Agent RainSkills-only projection"
+    commits:
+      - id: commit-agent
+        message: "fix: project structured rainskills audit semantics"
+        execute_commit: false
+        tasks: [task-2.1, task-2.2]
+    tasks:
+      - id: task-2.1
+        name: "Validate the optional descriptor contract"
+        status: completed
+        files:
+          modify:
+            - path: "src/server/operation-records/rainskills-audit-client.ts:17-55"
+            - path: "src/server/operation-records/rainskills-audit-client.test.ts:1-180"
+        steps:
+          - action: write-test
+            description: "Accept old events and bounded valid descriptors; reject invalid scope/mode/target values."
+            run: "npx vitest run src/server/operation-records/rainskills-audit-client.test.ts"
+            expect: "FAIL before schema extension"
+          - action: implement
+            description: "Add strict descriptor/target Zod schemas as an optional operation field."
+            run: "npx vitest run src/server/operation-records/rainskills-audit-client.test.ts"
+            expect: "PASS"
+      - id: task-2.2
+        name: "Render single, multiple and all RainSkills operations"
+        status: completed
+        files:
+          modify:
+            - path: "src/server/operation-records/rainskills-audit-importer.ts:35-75"
+            - path: "src/server/operation-records/rainskills-audit-importer.test.ts:1-220"
+        steps:
+          - action: write-test
+            description: "Assert exact restart/start/stop wording plus real subresource aliases such as delete_volume, create_rule, add_reverse and open_outer."
+            run: "npx vitest run src/server/operation-records/rainskills-audit-importer.test.ts"
+            expect: "FAIL before descriptor rendering"
+          - action: implement
+            description: "Use descriptor action families and resource types only in the RainSkills importer; retain the unchanged shared formatOperationContent as the legacy fallback."
+            run: "npx vitest run src/server/operation-records/rainskills-audit-importer.test.ts"
+            expect: "PASS"
+
+  - id: sprint-3
+    name: "UI structured targets and verification"
+    commits:
+      - id: commit-ui
+        message: "fix: render structured rainskills audit targets"
+        execute_commit: false
+        tasks: [task-3.1, task-3.2]
+    tasks:
+      - id: task-3.1
+        name: "Prefer descriptor targets with legacy fallback"
+        status: completed
+        files:
+          modify:
+            - path: "src/pages/content/helpers.js:344-625"
+            - path: "tests/audit-rainskills.test.js:1-80"
+        steps:
+          - action: write-test
+            description: "Require navigation_id for links and keep legacy scalar fallback."
+            run: "node tests/audit-rainskills.test.js"
+            expect: "FAIL before descriptor target support"
+          - action: implement
+            description: "Read operation_descriptor.targets first and preserve existing fallback functions."
+            run: "node tests/audit-rainskills.test.js"
+            expect: "PASS"
+      - id: task-3.2
+        name: "Run repository and contract gates"
+        status: completed
+        steps:
+          - action: verify
+            run: "console pytest + agent vitest/build + UI test/build"
+            expect: "PASS"
+          - action: api-compat
+            run: "Compare Console event keys, Agent Zod schema and UI target_context consumption"
+            expect: "No required-field or enum mismatch"

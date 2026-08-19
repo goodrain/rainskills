@@ -2,6 +2,8 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REAL_NODE="$(command -v node)"
+export TEST_REAL_NODE="$REAL_NODE"
 unset RAINBOND_JWT RAINBOND_URL RAINBOND_USERNAME RAINBOND_PASSWORD
 
 fail() {
@@ -254,6 +256,9 @@ if [[ "${1:-}" == "-p" ]]; then
   printf '20\n'
   exit 0
 fi
+if [[ "${1:-}" == *"build-skill-manifest.mjs" ]]; then
+  exec "${TEST_REAL_NODE}" "$@"
+fi
 exit 0
 EOF
   chmod +x "$bin_dir/node"
@@ -291,6 +296,7 @@ run_installer() {
     HOME="$workdir/home" \
     SHELL="/bin/zsh" \
     TEST_LOG_DIR="$workdir/logs" \
+    TEST_REAL_NODE="$REAL_NODE" \
     PATH="$workdir/bin:/usr/bin:/bin" \
     TEST_FAKE_API_HTTP_CODE="${TEST_FAKE_API_HTTP_CODE:-}" \
     TEST_FAKE_LOGIN_TOKEN="${TEST_FAKE_LOGIN_TOKEN:-}" \
@@ -462,10 +468,12 @@ test_cli_install_writes_private_credentials_without_client_mcp() {
 
   assert_file_exists "$tmpdir/home/.pi/agent/skills/rainbond-app-assistant/SKILL.md"
   assert_file_exists "$tmpdir/home/.rainbond/bin/rainskills-tools.js"
+  assert_file_exists "$tmpdir/home/.rainbond/bin/rainskills-skill-manifest.json"
   assert_file_exists "$tmpdir/home/.rainbond/credentials.env"
   assert_contains "$tmpdir/home/.rainbond/credentials.env" "export RAINBOND_JWT='$default_token'"
   assert_contains "$tmpdir/home/.rainbond/credentials.env" "RAINBOND_ALLOW_INSECURE_HTTP='true'"
   [[ "$(file_mode "$tmpdir/home/.rainbond/credentials.env")" == "600" ]] || fail "expected credentials permissions to be 600"
+  [[ "$(file_mode "$tmpdir/home/.rainbond/bin/rainskills-skill-manifest.json")" == "600" ]] || fail "expected Skill manifest permissions to be 600"
   assert_contains "$tmpdir/logs/curl.log" "/console/mcp/rainskills/api/query"
   [[ ! -f "$tmpdir/logs/codex.log" ]] || fail "CLI-only install must not invoke Codex MCP"
   [[ ! -f "$tmpdir/logs/claude.log" ]] || fail "CLI-only install must not invoke Claude MCP"

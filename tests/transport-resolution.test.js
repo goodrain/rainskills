@@ -60,6 +60,10 @@ test("one compact shared policy defines the deterministic CLI state machine", ()
     "只返回能力名称",
     "read <tool> --input -",
     "call <tool> --input -",
+    "--skill-id <active_leaf_skill_id>",
+    "--root-skill-id <root_skill_id>",
+    "首次调用与确认调用必须传同一",
+    "不得自行构造 `_meta`",
     "outcome_unknown",
     "/console/mcp/rainskills/api/query",
   ]) {
@@ -89,7 +93,8 @@ test("common read intents use fixed CLI contracts without per-call discovery", (
     assert.match(policy, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
   assert.match(policy, /只读能力.*`read <tool> --input -`/);
-  assert.match(policy, /写入或破坏性能力.*`call <tool> --input -`/);
+  assert.match(policy, /写入或破坏性能力.*`call <tool> --input - --skill-id <active_leaf_skill_id>`/);
+  assert.match(policy, /rainbond-platform-query|只读/);
 });
 
 test("exactly the eight business skills load the shared policy", () => {

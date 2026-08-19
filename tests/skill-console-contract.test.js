@@ -97,6 +97,17 @@ test("platform query fixes Console-required arguments for CLI and embedded execu
   assert.match(query, /rainbond_query_regions.*enterprise_id/s);
 });
 
+test("CLI writes bind the active leaf Skill while read-only query keeps read transport", () => {
+  const transport = read("rainbond-app-assistant/references/transport-resolution.md");
+  const query = read("rainbond-platform-query/SKILL.md");
+  assert.match(transport, /--skill-id <active_leaf_skill_id>/);
+  assert.match(transport, /--root-skill-id <root_skill_id>/);
+  assert.match(transport, /首次调用与确认调用必须传同一/);
+  assert.match(transport, /Skill manifest/);
+  assert.match(query, /read <tool> --input -|只读/);
+  assert.doesNotMatch(query, /call <tool> --input - --skill-id/);
+});
+
 test("failure context stays secret-safe and canonical blocker vocabularies agree", () => {
   const appAssistant = read("rainbond-app-assistant/SKILL.md");
   const troubleshooter = read("rainbond-fullstack-troubleshooter/SKILL.md");

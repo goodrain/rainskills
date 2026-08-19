@@ -1,0 +1,517 @@
+meta:
+  name: "rainskills-write-audit"
+  version: "1.0"
+  repo: "multi:/Users/guox/Desktop/Project/rainbond-console,/Users/guox/Desktop/Project/rainskills,/Users/guox/Desktop/Project/rainbond-agent,/Users/guox/Desktop/Project/rainbond-agent-ui"
+  branch: "codex/rainskills-write-audit"
+  design_doc: "docs/plans/2026-08-18-rainskills-write-audit-design.md"
+  execution: "local-main-agent-only"
+  commit_policy: "do-not-commit"
+  invariants:
+    - "The existing Agent approval/projector audit path is not modified."
+    - "Only RainSkills-origin mutable tools enter the new Console audit gate."
+    - "Console derives actor, enterprise, risk, scope, and target context server-side."
+    - "A mutable tool is not executed unless its started audit record is durable."
+    - "RainSkills CLI confirmation is not represented as an Agent approval."
+    - "RainSkills imported rows are isolated by enterprise although Agent tenant_id is shared."
+
+sprints:
+  - id: sprint-1
+    name: "Console authoritative audit"
+    commits:
+      - id: commit-console
+        repo: "/Users/guox/Desktop/Project/rainbond-console"
+        message: "feat: audit rainskills write operations"
+        execute_commit: false
+        tasks: [task-1.1, task-1.2, task-1.3, task-1.4]
+    tasks:
+      - id: task-1.1
+        name: "Define metadata validation and authoritative tool policy"
+        status: completed
+        files:
+          create:
+            - path: "console/services/rainskills_audit_contract.py"
+            - path: "console/services/rainskills_tool_audit_policy.py"
+            - path: "console/tests/rainskills_audit_contract_test.py"
+            - path: "console/tests/rainskills_tool_audit_policy_test.py"
+        steps:
+          - action: "write-test"
+            description: "Reject malformed metadata and prove every RainSkills-visible tool has one classification."
+            code: |
+              self.assertEqual(validate_operation_meta(valid_meta)["operation_id"], operation_id)
+              with self.assertRaises(ServiceHandleException):
+                  validate_operation_meta({**valid_meta, "operation_id": "bad"})
+              names = {item["name"] for item in mcp_query_service.list_tools(admin)}
+              self.assertEqual(names, READ_ONLY_TOOL_NAMES | set(MUTABLE_TOOL_POLICY))
+              self.assertFalse(READ_ONLY_TOOL_NAMES & set(MUTABLE_TOOL_POLICY))
+            run: "pytest -q console/tests/rainskills_audit_contract_test.py console/tests/rainskills_tool_audit_policy_test.py"
+            expect: "FAIL before contract and policy exist"
+          - action: "implement"
+            description: "Add strict metadata schema, size limits, explicit policy, and unknown-tool write fallback."
+            code: |
+              @dataclass(frozen=True)
+              class ToolAuditSpec:
+                  operation_class: str
+                  risk: str
+                  scope: str
+
+              def classify_tool(tool_name: str) -> ToolAuditSpec:
+                  if tool_name in READ_ONLY_TOOL_NAMES:
+                      return ToolAuditSpec("read", "none", "enterprise")
+                  return MUTABLE_TOOL_POLICY.get(
+                      tool_name, ToolAuditSpec("write", "medium", "enterprise")
+                  )
+            run: "pytest -q console/tests/rainskills_audit_contract_test.py console/tests/rainskills_tool_audit_policy_test.py"
+            expect: "PASS"
+        acceptance:
+          - cmd: "pytest -q console/tests/rainskills_audit_contract_test.py console/tests/rainskills_tool_audit_policy_test.py"
+            expect: "PASS"
+        references:
+          - path: "console/services/mcp_query_service.py:271-333"
+            note: "Authoritative visible Tool catalog"
+          - path: "/Users/guox/Desktop/Project/rainbond-agent/src/server/integrations/rainbond-mcp/mutable-tool-policy.ts:16-82"
+            note: "Initial mutable risk/scope review input, not a runtime dependency"
+
+      - id: task-1.2
+        name: "Persist snapshots, operations, and append-only events"
+        status: completed
+        files:
+          modify:
+            - path: "console/models/main.py"
+          create:
+            - path: "console/migrations/<generated>_rainskills_operation_audit.py"
+            - path: "console/repositories/rainskills_audit_repo.py"
+            - path: "console/tests/rainskills_audit_repo_test.py"
+        steps:
+          - action: "write-test"
+            description: "Cover enterprise isolation, snapshot dedupe, operation ownership, and cursor ordering."
+            code: |
+              first, owner = repo.begin_operation(enterprise_id="e1", operation_id=op_id, **payload)
+              second, second_owner = repo.begin_operation(enterprise_id="e1", operation_id=op_id, **payload)
+              self.assertTrue(owner)
+              self.assertFalse(second_owner)
+              self.assertEqual(first.pk, second.pk)
+              self.assertEqual([e.id for e in repo.list_events("e1", 0, 100)], sorted(event_ids))
+            run: "pytest -q console/tests/rainskills_audit_repo_test.py"
+            expect: "FAIL before models and repository exist"
+          - action: "implement"
+            description: "Add Django models, constraints, repository singleton, and transactional begin/finalize APIs."
+            code: |
+              class RainSkillsOperation(models.Model):
+                  operation_id = models.CharField(max_length=64)
+                  enterprise_id = models.CharField(max_length=64)
+                  status = models.CharField(max_length=32)
+                  class Meta:
+                      db_table = "rainskills_operation"
+                      constraints = [models.UniqueConstraint(
+                          fields=("enterprise_id", "operation_id"),
+                          name="uk_rainskills_operation_enterprise_id",
+                      )]
+            run: "pytest -q console/tests/rainskills_audit_repo_test.py"
+            expect: "PASS"
+        acceptance:
+          - cmd: "python manage.py makemigrations --check --dry-run"
+            expect: "No uncommitted model changes"
+        references:
+          - path: "console/models/main.py:1292-1320"
+            note: "Existing operation model location"
+          - path: "console/repositories/rainskills_deployment_repo.py:12-79"
+            note: "Repository singleton and IntegrityError pattern"
+
+      - id: task-1.3
+        name: "Wrap RainSkills mutable tools with fail-closed audit"
+        status: completed
+        files:
+          modify:
+            - path: "console/views/mcp_query.py"
+            - path: "console/tests/mcp_deployment_invocation_test.py"
+          create:
+            - path: "console/services/rainskills_audit_service.py"
+            - path: "console/tests/mcp_query_rainskills_audit_test.py"
+        steps:
+          - action: "write-test"
+            description: "Prove started failure blocks Tool execution, metadata is not forwarded, and legacy calls remain compatible."
+            code: |
+              with patch.object(audit_service, "begin", side_effect=AuditUnavailable()):
+                  response = view._dispatch_rpc(payload, user)
+              tool_call.assert_not_called()
+              self.assertEqual(response["result"]["structuredContent"]["error_code"], "audit_unavailable")
+            run: "pytest -q console/tests/mcp_query_rainskills_audit_test.py console/tests/mcp_deployment_invocation_test.py"
+            expect: "FAIL before the audit gate exists"
+          - action: "implement"
+            description: "Pass namespaced metadata separately and audit only RainSkills mutable calls."
+            code: |
+              metadata = params.get("_meta") or {}
+              data = self._call_tool(user, tool_name, arguments, request_meta=metadata)
+              # _call_tool delegates immutable calls unchanged; mutable calls use
+              # begin -> existing tracker/call_tool -> finalize without adding _meta to arguments.
+            run: "pytest -q console/tests/mcp_query_rainskills_audit_test.py console/tests/mcp_deployment_invocation_test.py"
+            expect: "PASS"
+        acceptance:
+          - cmd: "pytest -q console/tests/mcp_query_rainskills_audit_test.py console/tests/mcp_deployment_invocation_test.py"
+            expect: "PASS"
+        references:
+          - path: "console/views/mcp_query.py:274-437"
+            note: "Existing JSON-RPC and RainSkills deployment wrapper"
+
+      - id: task-1.4
+        name: "Expose enterprise-bound internal events and snapshot reads"
+        status: completed
+        files:
+          modify:
+            - path: "console/services/auth/authentication.py"
+            - path: "console/urls/__init__.py"
+          create:
+            - path: "console/views/internal_rainskills_audit.py"
+            - path: "console/tests/internal_rainskills_audit_view_test.py"
+        steps:
+          - action: "write-test"
+            description: "Reject proxy/global tokens and isolate event/snapshot reads by the enterprise-bound token."
+            code: |
+              request.META["HTTP_X_INTERNAL_TOKEN"] = enterprise.enterprise_id
+              response = view.get(request)
+              self.assertEqual(response.status_code, 200)
+              request.META["HTTP_X_INTERNAL_TOKEN"] = settings.INTERNAL_API_TOKEN
+              self.assertEqual(view.get(request).status_code, 401)
+            run: "pytest -q console/tests/internal_rainskills_audit_view_test.py"
+            expect: "FAIL before enterprise-bound auth and views exist"
+          - action: "implement"
+            description: "Reuse cluster-internal checks but bind request.audit_enterprise_id only from a TenantEnterprise token."
+            code: |
+              class EnterpriseBoundAgentRuntimeAuthentication(AgentRuntimeAuthentication):
+                  def authenticate(self, request):
+                      token = request.META.get("HTTP_X_INTERNAL_TOKEN")
+                      if not token or not self._is_cluster_internal(request):
+                          return None
+                      enterprise = TenantEnterprise.objects.filter(enterprise_id=token).first()
+                      if not enterprise:
+                          raise exceptions.AuthenticationFailed("enterprise-bound token required")
+                      request.audit_enterprise_id = token
+                      return super().authenticate(request)
+            run: "pytest -q console/tests/internal_rainskills_audit_view_test.py"
+            expect: "PASS"
+        acceptance:
+          - cmd: "make check"
+            expect: "PASS"
+        references:
+          - path: "console/services/auth/authentication.py:46-102"
+            note: "Existing cluster-internal authentication checks"
+
+  - id: sprint-2
+    name: "RainSkills manifest and call metadata"
+    commits:
+      - id: commit-rainskills
+        repo: "/Users/guox/Desktop/Project/rainskills"
+        message: "feat: attach skill snapshots to write operations"
+        execute_commit: false
+        tasks: [task-2.1, task-2.2, task-2.3]
+    tasks:
+      - id: task-2.1
+        name: "Generate deterministic CLI Skill manifests"
+        status: completed
+        files:
+          modify:
+            - path: "package.json"
+            - path: "tests/npm-package.test.js"
+          create:
+            - path: "scripts/build-skill-manifest.mjs"
+            - path: "tests/skill-manifest-builder.test.js"
+        steps:
+          - action: "write-test"
+            description: "Require exact SKILL.md content digest, bundle digest, package version, and no absolute paths."
+            code: |
+              assert.equal(entry.content_sha256, sha256(Buffer.from(entry.content, "utf8")))
+              assert.equal(entry.package_version, pkg.version)
+              assert.doesNotMatch(JSON.stringify(manifest), new RegExp(repoRoot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))
+            run: "node --test tests/skill-manifest-builder.test.js"
+            expect: "FAIL before builder exists"
+          - action: "implement"
+            description: "Build a schema-versioned manifest from package-root rainbond-* Skill directories."
+            code: |
+              const manifest = {
+                schema: "rainskills.skill-manifest.v1",
+                profile: "cli",
+                package_version: packageJson.version,
+                skills: entries.sort((a, b) => a.id.localeCompare(b.id)),
+              };
+            run: "node --test tests/skill-manifest-builder.test.js tests/npm-package.test.js"
+            expect: "PASS"
+        acceptance:
+          - cmd: "node --test tests/skill-manifest-builder.test.js tests/npm-package.test.js"
+            expect: "PASS"
+        references:
+          - path: "scripts/build-skill-profile.mjs:268-313"
+            note: "Existing deterministic profile-manifest pattern"
+
+      - id: task-2.2
+        name: "Install the manifest safely on POSIX and Windows"
+        status: completed
+        files:
+          modify:
+            - path: "install.sh"
+            - path: "rainbond-platform-installer/scripts/windows-onboarding.js"
+            - path: "tests/install.sh.test"
+            - path: "tests/windows-onboarding.test.js"
+        steps:
+          - action: "write-test"
+            description: "Require a protected manifest beside the Bridge and rollback on partial failure."
+            code: |
+              assert_file_exists "$tmpdir/home/.rainbond/bin/rainskills-skill-manifest.json"
+              assert_file_mode "$tmpdir/home/.rainbond/bin/rainskills-skill-manifest.json" "600"
+            run: "bash tests/install.sh.test && node --test tests/windows-onboarding.test.js"
+            expect: "FAIL before installers create the manifest"
+          - action: "implement"
+            description: "Generate to a temporary path, validate schema, and atomically replace Bridge and manifest with backup recovery."
+            code: |
+              node "$SCRIPT_DIR/scripts/build-skill-manifest.mjs" --output "$temporary_manifest"
+              chmod 600 "$temporary_manifest"
+              mv -f "$temporary_manifest" "$bridge_dir/rainskills-skill-manifest.json"
+            run: "bash tests/install.sh.test && node --test tests/windows-onboarding.test.js"
+            expect: "PASS"
+        acceptance:
+          - cmd: "bash tests/install.sh.test && node --test tests/windows-onboarding.test.js"
+            expect: "PASS"
+        references:
+          - path: "install.sh:643-684"
+            note: "POSIX Bridge atomic replacement"
+          - path: "rainbond-platform-installer/scripts/windows-onboarding.js:330-394"
+            note: "Windows Bridge atomic replacement"
+
+      - id: task-2.3
+        name: "Bind active Skill to CLI confirmation and tools/call metadata"
+        status: completed
+        files:
+          modify:
+            - path: "bin/rainskills-tools.js"
+            - path: "tests/api-bridge.test.js"
+            - path: "rainbond-app-assistant/references/transport-resolution.md"
+            - path: "tests/transport-resolution.test.js"
+            - path: "tests/skill-console-contract.test.js"
+        steps:
+          - action: "write-test"
+            description: "Require Skill on mutable calls, bind it to confirmation, and inspect namespaced metadata without leaking it into arguments."
+            code: |
+              assert.equal(request.params._meta["com.rainbond/rainskills"].operation_id, operationId)
+              assert.equal(request.params._meta["com.rainbond/rainskills"].skill.id, "rainbond-fullstack-bootstrap")
+              assert.equal(request.params.arguments._meta, undefined)
+            run: "node --test tests/api-bridge.test.js tests/transport-resolution.test.js tests/skill-console-contract.test.js"
+            expect: "FAIL before CLI metadata support"
+          - action: "implement"
+            description: "Parse --skill-id/root, load the protected manifest, extend journal binding, and attach metadata only after confirmation."
+            code: |
+              const params = { name: command.toolName, arguments: argumentsValue };
+              if (operation) {
+                params._meta = { "com.rainbond/rainskills": buildAuditMetadata(operation, manifestEntry) };
+              }
+              return rpcRequest(config, "tools/call", params);
+            run: "node --test tests/api-bridge.test.js tests/transport-resolution.test.js tests/skill-console-contract.test.js"
+            expect: "PASS"
+        acceptance:
+          - cmd: "npm test"
+            expect: "PASS"
+        references:
+          - path: "bin/rainskills-tools.js:151-169,267-350,605-666"
+            note: "Existing parser, confirmation journal, and call boundary"
+
+  - id: sprint-3
+    name: "Agent external audit projection"
+    commits:
+      - id: commit-agent
+        repo: "/Users/guox/Desktop/Project/rainbond-agent"
+        message: "feat: import rainskills audit records"
+        execute_commit: false
+        tasks: [task-3.1, task-3.2, task-3.3]
+    tasks:
+      - id: task-3.1
+        name: "Extend operation schema and every Store implementation"
+        status: completed
+        files:
+          modify:
+            - path: "src/server/db/schema.ts"
+            - path: "src/server/stores/operation-record-store.ts"
+            - path: "src/server/db/stores/mysql-operation-record-store.ts"
+            - path: "src/server/stores/file-stores.ts"
+            - path: "src/server/stores/store-factory.ts"
+            - path: "src/server/stores/operation-record-store.test.ts"
+            - path: "tests/server/db/migrator.test.ts"
+          create:
+            - path: "migrations/025_rainskills_operation_audit.sql"
+        steps:
+          - action: "write-test"
+            description: "Require RainSkills source, nullable Skill fields, idempotent external batches, cursor progression, and external-only enterprise filtering."
+            code: |
+              await store.importExternalAuditBatch({ tenantId: "shared", enterpriseId: "e1", events, nextCursor: 2 })
+              await store.importExternalAuditBatch({ tenantId: "shared", enterpriseId: "e1", events, nextCursor: 2 })
+              expect((await store.getDetail("shared", operationId))?.traces).toHaveLength(3)
+            run: "npx vitest run src/server/stores/operation-record-store.test.ts tests/server/db/migrator.test.ts"
+            expect: "FAIL before schema and Store APIs exist"
+          - action: "implement"
+            description: "Add SQL migration/types/Zod mappings and implement batch/cursor/filter behavior for memory, file, MySQL, and double-write."
+            code: |
+              export interface ExternalAuditCursor {
+                tenantId: string;
+                enterpriseId: string;
+                source: "rainskills_cli";
+                lastCursor: number;
+                updatedAt: string;
+              }
+            run: "npx vitest run src/server/stores/operation-record-store.test.ts tests/server/db/migrator.test.ts"
+            expect: "PASS"
+        acceptance:
+          - cmd: "npm run build:server"
+            expect: "PASS"
+        references:
+          - path: "migrations/003_operation_records.sql:1-58"
+            note: "Current operation DDL"
+          - path: "src/server/stores/store-factory.ts:531-704"
+            note: "All Store modes and double-write adapter"
+
+      - id: task-3.2
+        name: "Implement Console client and deterministic importer"
+        status: completed
+        files:
+          create:
+            - path: "src/server/operation-records/rainskills-audit-client.ts"
+            - path: "src/server/operation-records/rainskills-audit-client.test.ts"
+            - path: "src/server/operation-records/rainskills-audit-importer.ts"
+            - path: "src/server/operation-records/rainskills-audit-importer.test.ts"
+          modify:
+            - path: "src/server/http.ts"
+        steps:
+          - action: "write-test"
+            description: "Validate response schemas, enterprise headers, timeout fallback, status mapping, deterministic IDs, and replay idempotency."
+            code: |
+              expect(fetchImpl).toHaveBeenCalledWith(expect.stringContaining("after_cursor=0"), expect.objectContaining({
+                headers: expect.objectContaining({ "X-Internal-Token": "e1" }),
+              }))
+              expect(imported.log.source).toBe("rainskills_cli")
+              expect(imported.traces.some((trace) => trace.eventType === "skill_selected")).toBe(true)
+            run: "npx vitest run src/server/operation-records/rainskills-audit-client.test.ts src/server/operation-records/rainskills-audit-importer.test.ts"
+            expect: "FAIL before client and importer exist"
+          - action: "implement"
+            description: "Add Zod-validated internal client, defense-in-depth sanitization, bounded sync, and cleanup-managed background continuation."
+            code: |
+              async syncEnterprise(tenantId: string, enterpriseId: string, budgetMs = 300) {
+                if (!enterpriseId || this.running.has(enterpriseId)) return;
+                // load cursor -> fetch page -> map deterministic records -> atomic batch import
+              }
+            run: "npx vitest run src/server/operation-records/rainskills-audit-client.test.ts src/server/operation-records/rainskills-audit-importer.test.ts"
+            expect: "PASS"
+        acceptance:
+          - cmd: "npm run build:server"
+            expect: "PASS"
+        references:
+          - path: "src/server/runtime/service-mcp-credential-provider.ts:93-132"
+            note: "Existing enterprise-token Console GET client"
+          - path: "src/server/http.ts:2658-2733"
+            note: "Existing timer cleanup pattern"
+
+      - id: task-3.3
+        name: "Extend existing operation list/detail responses"
+        status: completed
+        files:
+          modify:
+            - path: "src/server/controllers/copilot-controller.ts"
+            - path: "src/server/http.ts"
+            - path: "tests/server/http.test.ts"
+        steps:
+          - action: "write-test"
+            description: "Require bounded sync, cross-enterprise 404, optional snapshot content, and unchanged historical response shapes."
+            code: |
+              expect(body.data.skills[0]).toMatchObject({
+                skill_id: "rainbond-fullstack-bootstrap",
+                package_version: "1.0.0",
+                content_available: true,
+              })
+              expect(body.data.confirmation).toEqual({ type: "rainskills_cli" })
+            run: "npx vitest run tests/server/http.test.ts"
+            expect: "FAIL before response expansion"
+          - action: "implement"
+            description: "Inject importer/client, sync before list, enforce RainSkills enterprise ownership on detail, and enrich skills without changing approvals."
+            code: |
+              if (detail.log.source === "rainskills_cli" && detail.log.enterpriseId !== request.actor.enterpriseId) {
+                throw operationRecordNotFound();
+              }
+            run: "npx vitest run tests/server/http.test.ts"
+            expect: "PASS"
+        acceptance:
+          - cmd: "npm test"
+            expect: "PASS"
+        references:
+          - path: "src/server/controllers/copilot-controller.ts:600-675,4064-4135"
+            note: "Existing serializers and operation APIs"
+
+  - id: sprint-4
+    name: "Agent UI audit presentation"
+    commits:
+      - id: commit-ui
+        repo: "/Users/guox/Desktop/Project/rainbond-agent-ui"
+        message: "feat: display rainskills audit details"
+        execute_commit: false
+        tasks: [task-4.1]
+    tasks:
+      - id: task-4.1
+        name: "Render source, confirmation, Skill metadata, and escaped content"
+        status: completed
+        files:
+          modify:
+            - path: "src/pages/content/AuditTab.js"
+            - path: "src/pages/content/helpers.js"
+            - path: "package.json"
+          create:
+            - path: "tests/audit-rainskills.test.js"
+        steps:
+          - action: "write-test"
+            description: "Assert source filter/label, confirmation separation, content availability fallback, and plain-text rendering."
+            code: |
+              assert.match(auditSource, /RainSkills CLI/)
+              assert.match(auditSource, /content_available/)
+              assert.match(auditSource, /<pre[^>]*>\{[^}]*content/)
+              assert.doesNotMatch(auditSource, /dangerouslySetInnerHTML/)
+            run: "node tests/audit-rainskills.test.js"
+            expect: "FAIL before UI support"
+          - action: "implement"
+            description: "Extend the existing AuditTab only; do not add a UI-to-Console API."
+            code: |
+              const sourceOptions = [
+                ...existingSourceOptions,
+                { label: "RainSkills CLI", value: "rainskills_cli" },
+              ]
+              // Render content in React-escaped <pre>, not raw HTML Markdown.
+            run: "node tests/audit-rainskills.test.js && npm run build"
+            expect: "PASS"
+        acceptance:
+          - cmd: "npm run test:configuration && npm run build"
+            expect: "PASS"
+        references:
+          - path: "src/pages/content/AuditTab.js:61-68,268-326"
+            note: "Current source and Skills UI"
+          - path: "src/pages/content/helpers.js:55-63,701-763"
+            note: "Current labels and normalization"
+
+  - id: sprint-5
+    name: "Cross-repository verification"
+    commits: []
+    tasks:
+      - id: task-5.1
+        name: "Verify security, compatibility, tests, and builds without committing"
+        status: pending
+        files: {}
+        steps:
+          - action: "verify"
+            description: "Run repository gates and inspect the final API field matrix."
+            code: |
+              # No git add/commit/push commands are allowed for this execution.
+            run: "See acceptance commands"
+            expect: "All pass"
+        acceptance:
+          - cmd: "cd /Users/guox/Desktop/Project/rainbond-console && make format && make check && pytest -q console/tests/rainskills_* console/tests/internal_rainskills_audit_view_test.py"
+            expect: "PASS"
+          - cmd: "cd /Users/guox/Desktop/Project/rainskills && npm test"
+            expect: "PASS"
+          - cmd: "cd /Users/guox/Desktop/Project/rainbond-agent && npm test && npm run build:server"
+            expect: "PASS"
+          - cmd: "cd /Users/guox/Desktop/Project/rainbond-agent-ui && npm run test:configuration && npm run build"
+            expect: "PASS"
+        references:
+          - path: "docs/plans/2026-08-18-rainskills-write-audit-design.md:327-524"
+            note: "Cross-repository contracts and compatibility rules"

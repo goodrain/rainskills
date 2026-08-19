@@ -6,6 +6,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const readline = require("node:readline/promises");
+const { spawnSync } = require("node:child_process");
 const { stdin, stdout } = require("node:process");
 const { detectControlEnvironment } = require("./control-environment.js");
 const { createSecureStateStore } = require("./secure-state.js");
@@ -350,10 +351,17 @@ function installBridge({ home, packageRoot, stateStore }) {
   assertNoSymlinkPath(directory);
   store.ensurePrivateDirectory(directory);
   const destination = path.join(directory, "rainskills-tools.js");
+  const manifestDestination = path.join(directory, "rainskills-skill-manifest.json");
   if (fs.existsSync(destination)) {
     const existing = fs.lstatSync(destination);
     if (!existing.isFile() || existing.isSymbolicLink()) {
       throw new Error(`拒绝覆盖符号链接或 reparse point Bridge：${destination}`);
+    }
+  }
+  if (fs.existsSync(manifestDestination)) {
+    const existing = fs.lstatSync(manifestDestination);
+    if (!existing.isFile() || existing.isSymbolicLink()) {
+      throw new Error(`拒绝覆盖符号链接或 reparse point Skill manifest：${manifestDestination}`);
     }
   }
   const temporary = path.join(
@@ -364,28 +372,67 @@ function installBridge({ home, packageRoot, stateStore }) {
     directory,
     `.rainskills-tools.js.backup.${process.pid}.${crypto.randomBytes(6).toString("hex")}`
   );
+  const manifestTemporary = path.join(
+    directory,
+    `.rainskills-skill-manifest.json.${process.pid}.${crypto.randomBytes(6).toString("hex")}`
+  );
+  const manifestBackup = path.join(
+    directory,
+    `.rainskills-skill-manifest.json.backup.${process.pid}.${crypto.randomBytes(6).toString("hex")}`
+  );
   let backedUp = false;
+  let installed = false;
+  let manifestBackedUp = false;
+  let manifestInstalled = false;
   try {
+    const packagedBuilder = path.join(packageRoot, "scripts", "build-skill-manifest.mjs");
+    const fallbackBuilder = path.resolve(__dirname, "..", "..", "scripts", "build-skill-manifest.mjs");
+    const builder = fs.existsSync(packagedBuilder) ? packagedBuilder : fallbackBuilder;
+    const build = spawnSync(process.execPath, [
+      builder,
+      "--source-root", packageRoot,
+      "--output", manifestTemporary,
+    ], { encoding: "utf8" });
+    if (build.status !== 0) {
+      throw new Error(`生成 Skill manifest 失败：${String(build.stderr || build.stdout || "unknown error").trim()}`);
+    }
+    store.protectRegularFile(manifestTemporary);
     fs.copyFileSync(source, temporary, fs.constants.COPYFILE_EXCL);
     store.protectRegularFile(temporary);
+    if (fs.existsSync(manifestDestination)) {
+      fs.renameSync(manifestDestination, manifestBackup);
+      manifestBackedUp = true;
+    }
+    fs.renameSync(manifestTemporary, manifestDestination);
+    manifestInstalled = true;
+    store.protectRegularFile(manifestDestination);
     if (fs.existsSync(destination)) {
       fs.renameSync(destination, backup);
       backedUp = true;
     }
     fs.renameSync(temporary, destination);
+    installed = true;
     store.protectRegularFile(destination);
     if (backedUp) fs.rmSync(backup, { force: true });
+    if (manifestBackedUp) fs.rmSync(manifestBackup, { force: true });
   } catch (error) {
     try {
       fs.rmSync(temporary, { force: true });
+      fs.rmSync(manifestTemporary, { force: true });
     } catch {
       // Preserve the original installation error.
     }
-    if (backedUp && fs.existsSync(destination)) {
+    if (installed && fs.existsSync(destination)) {
       fs.rmSync(destination, { force: true });
     }
     if (backedUp && fs.existsSync(backup)) {
       fs.renameSync(backup, destination);
+    }
+    if (manifestInstalled && fs.existsSync(manifestDestination)) {
+      fs.rmSync(manifestDestination, { force: true });
+    }
+    if (manifestBackedUp && fs.existsSync(manifestBackup)) {
+      fs.renameSync(manifestBackup, manifestDestination);
     }
     throw error;
   }
