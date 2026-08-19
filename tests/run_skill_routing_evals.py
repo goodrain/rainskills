@@ -17,6 +17,7 @@ SKILL_FILES = {
     "rainbond-fullstack-bootstrap": ROOT / "rainbond-fullstack-bootstrap" / "SKILL.md",
     "rainbond-fullstack-troubleshooter": ROOT / "rainbond-fullstack-troubleshooter" / "SKILL.md",
     "rainbond-delivery-verifier": ROOT / "rainbond-delivery-verifier" / "SKILL.md",
+    "rainbond-platform-query": ROOT / "rainbond-platform-query" / "SKILL.md",
     "rainbond-app-version-assistant": ROOT / "rainbond-app-version-assistant" / "SKILL.md",
     "rainbond-env-sync": ROOT / "rainbond-env-sync" / "SKILL.md",
     "rainbond-project-init": ROOT / "rainbond-project-init" / "SKILL.md",
@@ -65,6 +66,23 @@ def classify_prompt(prompt: str, metadata_by_skill: dict[str, dict[str, str]]) -
         return explicit[0]
     if explicit:
         return None
+
+    platform_query_needles = [
+        "当前企业",
+        "当前登录的用户",
+        "有哪些团队",
+        "有哪些集群",
+        "团队里的应用",
+        "应用有哪些组件",
+        "current enterprise",
+        "current user",
+        "list teams",
+        "list regions",
+        "list apps",
+        "list components",
+    ]
+    if any(needle in text for needle in platform_query_needles):
+        return "rainbond-platform-query"
 
     scores = sorted(
         (

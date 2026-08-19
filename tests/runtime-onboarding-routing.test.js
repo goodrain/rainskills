@@ -63,6 +63,12 @@ const runtimeSkills = [
     intentTypes: ["troubleshoot-phase"],
   },
   {
+    file: "rainbond-platform-query/SKILL.md",
+    action: "查询 Rainbond 平台信息",
+    route: "existing",
+    intentTypes: ["platform-query"],
+  },
+  {
     file: "rainbond-project-init/SKILL.md",
     action: "识别并接入当前项目",
     route: "new",
@@ -142,6 +148,7 @@ const intentSamples = {
     { type: "create", project_root: "/workspace/app", source_kind: "local", service_id: "service" },
   ],
   query: [{ type: "query", operation: "summary", app_id: "app" }],
+  "platform-query": [{ type: "platform-query", resource: "components", enterprise_id: "enterprise", app_id: "app" }],
   troubleshoot: [{ type: "troubleshoot", operation: "build", app_id: "app" }],
   modify: [{ type: "modify", team_id: "team", app_id: "app", operation: "env" }],
   snapshot: [{ type: "snapshot", team_id: "team", app_id: "app", operation: "create" }],
@@ -496,6 +503,7 @@ test("protected runtime intents directly cover every business skill and survive 
     "env-sync": { type: "env-sync", project_root: "/workspace/app", environment: "production", app_id: "app" },
     bootstrap: { type: "bootstrap", project_root: "/workspace/app", app_id: "app" },
     "troubleshoot-phase": { type: "troubleshoot-phase", operation: "build", app_id: "app" },
+    "platform-query": { type: "platform-query", resource: "teams", enterprise_id: "enterprise" },
     "project-init": { type: "project-init", project_root: "/workspace/app", source_kind: "local" },
     "template-install": { type: "template-install", template_id: "template", install_scope: "new-app" },
   };

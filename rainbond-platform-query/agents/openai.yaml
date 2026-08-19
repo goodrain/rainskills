@@ -1,0 +1,4 @@
+interface:
+  display_name: "Rainbond 平台查询"
+  short_description: "只读查询当前 Rainbond 用户、企业、团队、集群、应用或组件"
+  default_prompt: "Use $rainbond-platform-query to answer this explicit read-only Rainbond platform query without expanding its scope."

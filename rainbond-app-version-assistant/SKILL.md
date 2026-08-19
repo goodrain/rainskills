@@ -64,7 +64,7 @@ This skill is **not** the market-app upgrade flow under `/upgrade`.
 
 ## Canonical Model Reference
 
-Use `docs/product-object-model.md` as the repository-level source of truth for:
+Use [product object model](../rainbond-app-assistant/references/product-object-model.md) as the repository-level source of truth for:
 
 - `Release`, `Snapshot`, and `Rollback` object boundaries
 - the distinction between delivery acceptance and version-center operations
@@ -141,7 +141,7 @@ Resolve in this order:
 Required context:
 - `team_name`
 - `region_name`
-- `app_id`
+- `app_id` (at every Rainbond MCP tool boundary, normalize a decimal session string to a positive integer; reject non-numeric IDs)
 
 Common optional context:
 - `version_id`
@@ -341,7 +341,7 @@ VersionCenterSession:
   context:
     team_name: string
     region_name: string
-    app_id: string
+    app_id: positive integer
   state_snapshot:
     baseline_version: string | null
     unsaved_runtime_changes: boolean
@@ -361,7 +361,7 @@ VersionCenterSession:
   context:
     team_name: rainbond-demo
     region_name: singapore
-    app_id: app-4fd2
+    app_id: 42
   state_snapshot:
     baseline_version: v12
     unsaved_runtime_changes: false
@@ -376,7 +376,7 @@ VersionCenterSession:
   action_plan:
     - rainbond_get_app_version_overview
     - rainbond_create_app_share_record
-    - rainbond_submit_app_share
+    - rainbond_submit_app_share_info
   next_step: submit_publish_draft
 ```
 
@@ -390,7 +390,7 @@ App `rainbond-demo`, flow type `publish`.
 Current baseline version is `v12`, unsaved runtime changes do not exist, and there is one unfinished publish record: `share-102`.
 
 ### Action Plan
-Next MCP tools: `rainbond_get_app_version_overview`, `rainbond_create_app_share_record`, `rainbond_submit_app_share`. The flow is draft-based.
+Next MCP tools: `rainbond_get_app_version_overview`, `rainbond_create_app_share_record`, `rainbond_submit_app_share_info`. The flow is draft-based.
 
 ### Result
 Prepared the publish session, reused snapshot `version-12`, and confirmed the draft share record `share-102` remains the active publish target.
@@ -405,7 +405,7 @@ VersionCenterSession:
   context:
     team_name: rainbond-demo
     region_name: singapore
-    app_id: app-4fd2
+    app_id: 42
   state_snapshot:
     baseline_version: v12
     unsaved_runtime_changes: false
@@ -420,7 +420,7 @@ VersionCenterSession:
   action_plan:
     - rainbond_get_app_version_overview
     - rainbond_create_app_share_record
-    - rainbond_submit_app_share
+    - rainbond_submit_app_share_info
   next_step: submit_publish_draft
 ```
 ````

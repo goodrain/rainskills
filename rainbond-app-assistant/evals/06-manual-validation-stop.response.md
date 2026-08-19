@@ -1,5 +1,5 @@
 ### Project State
-The project is `linked-and-needs-manual-url-validation` for the `preview` environment with team `demo-team`, region `cn`, app `manual-check-app`, and app_id `app-206`.
+The project is `linked-and-needs-manual-url-validation` for the `preview` environment with team `demo-team`, region `cn`, app `manual-check-app`, and app_id `206`.
 
 ### Actions Performed
 This run resolved the linked source app state and completed `rainbond-delivery-verifier`. The user asked for the dev-to-test mainline, but the source app only reached manual URL validation, so promotion was not entered.
@@ -21,10 +21,10 @@ AppAssistantResult:
       team_name: demo-team
       region_name: cn
       app_name: manual-check-app
-      app_id: app-206
+      app_id: 206
     linked: true
     selected_environment: preview
-    deployment_location_url: https://run.rainbond.com/#/team/demo-team/region/cn/apps/app-206/overview
+    deployment_location_url: https://run.rainbond.com/#/team/demo-team/region/cn/apps/206/overview
   environment:
     name: preview
     source: explicit

@@ -13,6 +13,7 @@ const embeddedSkills = [
   "rainbond-delivery-verifier",
   "rainbond-fullstack-bootstrap",
   "rainbond-fullstack-troubleshooter",
+  "rainbond-platform-query",
   "rainbond-template-installer",
 ];
 
@@ -121,6 +122,7 @@ test("embedded profile is explicit, transport-safe, and contains only Agent-comp
   assert.equal(fs.existsSync(path.join(output, "rainbond-project-init")), false);
   assert.equal(fs.existsSync(path.join(output, "rainbond-env-sync")), false);
   assert.equal(fs.existsSync(path.join(output, "rainbond-platform-installer")), false);
+  assert.equal(fs.existsSync(path.join(output, "rainbond-platform-query")), true);
   assert.equal(
     fs.existsSync(
       path.join(output, "rainbond-fullstack-bootstrap", "scripts", "upload_local_package.py")

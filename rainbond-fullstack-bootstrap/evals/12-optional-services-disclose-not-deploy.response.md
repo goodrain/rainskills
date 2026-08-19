@@ -18,7 +18,7 @@ BootstrapResult:
       team_name: demo-team
       region_name: rainbond
       app_name: dify-style-demo
-      app_id: app-compose-012
+      app_id: 12
     environment:
       name: preview
       source: default

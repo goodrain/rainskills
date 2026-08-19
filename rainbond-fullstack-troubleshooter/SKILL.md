@@ -89,6 +89,23 @@ When describing observed runtime state, use the canonical terms from the product
 
 Keep the canonical `RuntimeState` explicit in both prose and structured output. Do not collapse it into ad hoc labels such as "mostly healthy" or "repair complete."
 
+## Console failure classification mapping
+
+Use `rainbond_get_operation_failure_context` after a write failure or when a component becomes abnormal immediately afterwards. Map `classified_reason` once before choosing a repair; `unknown` uses the existing evidence chain and never authorizes a replay. Treat `event_log_tail` as sensitive evidence: never copy, quote, or display its raw 原文.
+
+| Console classified_reason | Troubleshoot blocker_bucket | stop_reason |
+| --- | --- | --- |
+| `config_file_configmap_missing` | `config_file_configmap_missing` | `api_startup_issue` |
+| `volume_mount_failed` | resolve from affected component role and storage evidence | existing evidence chain |
+| `image_pull_failed` | `external artifact unreachable` | `external_artifact_unreachable` |
+| `crash_loop` | resolve from affected component role and runtime evidence | existing evidence chain |
+| `probe_failed` | resolve from affected component role and probe evidence | existing evidence chain |
+| `unschedulable` | `cluster capacity blocked` | `cluster_capacity_blocked` |
+| `k8s_api_rejected` | `platform backend issue` | `platform_backend_issue` |
+| `unknown` | existing evidence chain | existing evidence chain |
+
+For normal runtime inspection, call `rainbond_get_app_health_overview` first. Only abnormal or unknown components need component summaries, events, logs, or storage detail.
+
 ## When to Use
 
 Use when:
@@ -572,7 +589,7 @@ Action:
 - read the component storage summary and locate every config-file volume and its mount path
 - read `rainbond_get_config_file` for each config-file volume to confirm the platform-side content exists
 - read pod detail and extract the missing ConfigMap name from the `FailedMount` event
-- apply at most one low-risk repair: re-save the config-file volume content via `rainbond_manage_component_storage(update_volume)` (remember `new_volume_path` is required even when the path is unchanged), then restart once
+- apply at most one low-risk repair: re-save the config-file volume content via `rainbond_manage_component_storage(update_volume)`; when the path is unchanged, omit `new_volume_path`, while `new_file_content` is required, then restart once
 - if the ConfigMap is still missing after one repair attempt, or the storage update returns a 5xx error, stop. Report a platform-side sync blocker; do not loop on config edits
 
 Expected result:
@@ -828,6 +845,10 @@ Also:
 - render `TroubleshootResult`
 - keep enum values and field names aligned with the schema above
 - use canonical blocker buckets and runtime labels only
+
+## On-demand references
+
+After the overview and evidence chain identify the dominant class, load only [root-cause rules](references/root-cause-rules.md), [output contract](references/output-contract.md), or [operational reference](references/operational-reference.md) as needed.
 
 ## Common Mistakes
 

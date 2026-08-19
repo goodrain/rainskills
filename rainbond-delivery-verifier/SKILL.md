@@ -61,7 +61,7 @@ The goal is to:
 
 ## Canonical Model Reference
 
-Use `docs/product-object-model.md` as the repository-level source of truth for:
+Use [product object model](../rainbond-app-assistant/references/product-object-model.md) as the repository-level source of truth for:
 
 - `RuntimeState` versus `DeliveryState`
 - shared component convergence labels and blocker buckets
@@ -180,6 +180,10 @@ exists.
 ## Workflow
 
 Follow this order.
+
+### Fixed Tool fast path
+
+Call `rainbond_get_app_detail`, then `rainbond_get_app_health_overview` before per-component inspection. Use `rainbond_query_components` and component/storage summaries only for abnormal or unknown components. Do not run `list` or `describe` to discover these known Tool names.
 
 1. Resolve app context
 - determine `team_name`, `region_name`, `app_name`, and `app_id`

@@ -136,6 +136,8 @@ This skill should describe how onboarding produces or resolves those objects. It
 
 ## 主线流程
 
+使用已知的 Rainbond MCP 工具。每个工具边界都要把十进制字符串 `app_id` 规范化为正整数，并拒绝非数字 ID。
+
 1. 读取当前项目目录里的 manifest / local binding。
 2. 如果没有 manifest，就按仓库结构推断生成 `rainbond.app.json`。
 3. 如果推断出的源码地址是原始 GitHub URL，且用户未显式给出代理地址，先询问是否改用 GitHub 代理。
@@ -971,6 +973,10 @@ Always respond using exactly these sections:
   - `ProjectInitResult:`
   - `...`
   - ````
+
+## On-demand references
+
+根据当前初始化阶段按需加载 [manifest rules](references/manifest-rules.md)、[workflow and verification](references/workflow-and-verification.md)、[output contract](references/output-contract.md) 或 [operational reference](references/operational-reference.md)。
 
 ## Common Mistakes
 

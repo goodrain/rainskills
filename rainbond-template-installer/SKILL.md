@@ -91,7 +91,7 @@ This skill is the correct execution path when a component or app is sourced from
 
 ## Canonical Model Reference
 
-Use `docs/product-object-model.md` as the repository-level source of truth for:
+Use [product object model](../rainbond-app-assistant/references/product-object-model.md) as the repository-level source of truth for:
 
 - `ComponentSource.kind = template`
 - `template_install` as a handoff path rather than bootstrap execution
@@ -141,7 +141,7 @@ Resolve values in this order:
 Required installation context:
 - `team_name`
 - `region_name`
-- target `app_id` or enough information to create a target app
+- target `app_id` or enough information to create a target app. At every Rainbond Tool boundary, normalize a decimal session string to a positive integer; reject non-numeric IDs.
 - template source:
   - `local`
   - `cloud`
@@ -322,7 +322,7 @@ TemplateInstallResult:
     target_app:
       team_name: string
       region_name: string
-      app_id: string
+      app_id: positive integer
       app_reused: boolean
   install_status: pending | success | failed
   services_summary: string[]
@@ -342,7 +342,7 @@ TemplateInstallResult:
     target_app:
       team_name: rainbond-demo
       region_name: singapore
-      app_id: app-88
+      app_id: 88
       app_reused: true
   install_status: success
   services_summary:
@@ -362,7 +362,7 @@ Installation source is `cloud`, `market_name` is `official-market`.
 `app_model_id` model-123, `app_model_version` 1.0.3, version selection reason `latest_stable`.
 
 ### Target App
-`team_name` rainbond-demo, `region_name` singapore, `app_id` app-88, target app was reused.
+`team_name` rainbond-demo, `region_name` singapore, `app_id` 88, target app was reused.
 
 ### Install Result
 Install succeeded. Installed services: `postgres`, `api`, `web`.
@@ -382,7 +382,7 @@ TemplateInstallResult:
     target_app:
       team_name: rainbond-demo
       region_name: singapore
-      app_id: app-88
+      app_id: 88
       app_reused: true
   install_status: success
   services_summary:

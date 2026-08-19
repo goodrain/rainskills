@@ -17,6 +17,7 @@ const cases = [
   ["create", "rainbond-app-assistant", { project_root: "/workspace/app", source_kind: "git", source_url: "https://github.com/example/app.git" }, "project-analysis"],
   ["template-install", "rainbond-template-installer", { template_id: "wordpress", install_scope: "new-app" }, "lookup"],
   ["query", "rainbond-app-assistant", { operation: "summary" }, "resolve-target"],
+  ["platform-query", "rainbond-platform-query", { resource: "teams", enterprise_id: "enterprise-1" }, "resolve-context"],
   ["troubleshoot", "rainbond-app-assistant", { operation: "runtime", app_id: "app-1" }, "resolve-target"],
   ["modify", "rainbond-app-assistant", { team_id: "team-1", app_id: "app-1", operation: "env" }, "resolve-target"],
   ["delivery-verify", "rainbond-delivery-verifier", { operation: "full", app_id: "app-1" }, "resolve-target"],
@@ -136,6 +137,7 @@ test("operation and destination values are closed enums", () => {
   const { validateIntent } = require(modulePath);
   for (const intent of [
     { type: "query", operation: "delete" },
+    { type: "platform-query", resource: "credentials" },
     { type: "troubleshoot", operation: "shell" },
     { type: "modify", team_id: "team-1", app_id: "app-1", operation: "exec" },
     { type: "delivery-verify", operation: "credentials" },
@@ -180,6 +182,11 @@ test("new platform setup rejects intents that require an existing app", () => {
     type: "query",
     operation: "summary",
     app_id: "app-1",
+  })), /existing|已有|现有/i);
+  assert.throws(() => assertIntentCanInstallNewPlatform(validateIntent({
+    type: "platform-query",
+    resource: "teams",
+    enterprise_id: "enterprise-1",
   })), /existing|已有|现有/i);
   assert.throws(() => assertIntentCanInstallNewPlatform(validateIntent({
     type: "env-sync",

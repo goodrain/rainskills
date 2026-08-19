@@ -1,0 +1,79 @@
+---
+name: rainbond-platform-query
+description: Use for a user-requested, read-only Rainbond platform query about the current user, enterprise, team, region, app, or component. Do not use for deployment, changes, publishing, troubleshooting, or installation.
+---
+
+# Rainbond Platform Query
+
+<!-- rainskills-runtime-gate:start -->
+## 运行环境门禁（最高优先级）
+
+### 多运行环境操作契约
+
+Node.js 前置检查通过后，每次请求先执行固定 launcher + `["environment", "list", "--json"]`，按用户明确指定的运行环境选择不可变环境 ID；未指定时只用全局默认环境，默认环境不可用时停止且不回退。生成 UUID 后执行 `["operation", "begin", "--operation-id", "<uuid>", "--environment-id", "<id>", "--intent-json", "<intent-json>"]`，并在之后每个 Rainbond MCP 调用中加入 `rainskills_operation_id`。环境、团队和应用只属于本次操作，禁止保存项目级默认环境或绑定；同一项目可以在多个环境中查询。明确“团队”表示环境内团队；明确“运行环境/平台”表示环境；裸名称同时匹配环境和团队时必须询问。
+
+第一步检查 Node.js 是否存在且主版本不低于 18。Node.js 缺失或低于 18 时，只说明“Rainskills 执行组件需要 Node.js 18 或更高版本”并停止：不选择运行环境，不调用 MCP，不猜测替代命令。只有用户或 agent 明确同意后才安装或升级 Node.js，再从同一原始 intent 继续。
+
+固定 launcher 是 `["npx", "--yes", "rainskills@0.1.0-rc.66"]`；版本必须与本技能包 `package.json` 一致。把 launcher 与参数拼成 argv 数组直接执行，禁止 `rainskills@latest` 或执行 shell 字符串。
+
+<!-- rainskills-runtime-contract:start -->
+```json
+{
+  "schema": "rainskills.skill-runtime-contract.v1",
+  "launcher": ["npx", "--yes", "rainskills@0.1.0-rc.66"],
+  "intents": {
+    "platform-query": {"required": ["resource"], "optional": ["enterprise_id", "team_id", "app_id"], "enums": {"resource": ["current-user", "current-enterprise", "teams", "regions", "apps", "team-apps", "components"]}}
+  },
+  "routes": {"existing": ["saas", "private-existing"]},
+  "connect_argv": {
+    "saas": ["npx", "--yes", "rainskills@0.1.0-rc.66", "runtime", "connect", "<target>", "--saas", "--intent-json", "<intent-json>"],
+    "private-existing": ["npx", "--yes", "rainskills@0.1.0-rc.66", "runtime", "connect", "<target>", "--rainbond-url", "<rainbond-url>", "--intent-json", "<intent-json>"]
+  }
+}
+```
+<!-- rainskills-runtime-contract:end -->
+
+target 只允许 `codex`、`claude`、`all`。校验 intent 后只执行 existing scope 的完整 argv；只消费 schema 为 `rainskills.next-action.v1` 且校验后的 `argv` 数组。
+
+连接完成后用固定 `onboarding-id` 执行 launcher + `["intent", "resume", "--onboarding-id", "<同一 onboarding-id>"]`，恢复原始 intent 和 `resume_step`。401 先执行 launcher + `["runtime", "record-failure", "--onboarding-id", "<同一 onboarding-id>", "--step", "<当前固定步骤>", "--reason", "credential-expired"]`，再仅一次执行 launcher + `["runtime", "reconnect", "--onboarding-id", "<同一 onboarding-id>"]` 后 resume，只重试该步骤；第二次 401 停止。403 执行 launcher + `["runtime", "record-failure", "--onboarding-id", "<同一 onboarding-id>", "--step", "<当前固定步骤>", "--reason", "permission-denied"]` 后停止，不得 reconnect、重新授权或自动重试。
+<!-- rainskills-runtime-gate:end -->
+
+<!-- rainskills-runtime-routing:start -->
+## 缺少运行环境时
+
+先说：“可以，我会帮你查询 Rainbond 平台信息。不过目前还没有可用的应用运行环境。你刚安装的 Rainskills 是 AI 部署助手；应用实际运行在 Rainbond 上。Rainbond 是一套应用运行和管理平台，你不需要了解 Kubernetes。”
+
+只让用户选择 `Rainbond Cloud` 或承载目标应用或待查询平台信息的`已有私有 Rainbond`。选择已有私有 Rainbond 时执行固定 launcher + `["runtime", "message", "--id", "private-console-origin"]` 并原样输出。不得为只读查询安装私有 Rainbond。
+<!-- rainskills-runtime-routing:end -->
+
+## Scope and routing
+
+This lightweight skill handles only explicit, read-only platform questions. Route deployment or project delivery to `rainbond-app-assistant`; creation to `rainbond-project-init` or `rainbond-fullstack-bootstrap`; repair to `rainbond-fullstack-troubleshooter`; final acceptance to `rainbond-delivery-verifier`; publishing to `rainbond-app-version-assistant`.
+
+Do not expand a narrow question into related resource queries. Never change resources, credentials, access control, or configuration.
+
+## Fixed query contract
+
+1. Reuse current session identity when available. If it is absent, call `rainbond_get_current_user` once.
+2. For “current enterprise”, an administrator calls `rainbond_query_enterprises` with `{}` and selects the enterprise matching session `enterprise_id`. Do not then query teams or regions.
+3. If enterprise or cluster-management Tools are not visible, state that the user can only view their current permission scope. Do not guess a Tool name or attempt discovery.
+4. Resolve required context before the resource query and pass the exact Console-backed arguments below. A session may supply these values, but it does not make required arguments optional at the Tool boundary:
+   - enterprises: `rainbond_query_enterprises({})`
+   - teams: `rainbond_query_teams({enterprise_id})`
+   - regions/clusters: `rainbond_query_regions({enterprise_id})`
+   - all accessible apps: `rainbond_query_apps({enterprise_id})`
+   - apps in one team/region: `rainbond_get_team_apps({team_name, region_name})`
+   - components: `rainbond_query_components({enterprise_id, app_id})`
+5. `enterprise_id`, `team_name`, and `region_name` must come from current session identity, an earlier query result, or explicit user context. `app_id` must be a positive integer; normalize a decimal string before the Tool call and reject values such as `app-123`.
+6. Use the read contract `read <tool> --input -` when using the CLI. Keep stdout JSON separate from stderr; do not use `2>&1`, `grep`, or `head` to process its output.
+7. Report only fields needed for the question. Avoid email addresses, internal IDs, connection addresses, and configuration unless explicitly requested.
+
+## Examples
+
+- “帮我查询当前企业的信息” → current identity if needed, then one `rainbond_query_enterprises {}` call for an administrator; no team or region query.
+- “我有哪些团队？” → resolve `enterprise_id`, then `rainbond_query_teams({enterprise_id})` only.
+- “这个应用有哪些组件？” → resolve `enterprise_id` and positive-integer `app_id`, then `rainbond_query_components({enterprise_id, app_id})` only.
+
+## Result
+
+State the requested scope, the observed facts, and any permission boundary. When facts are unavailable, say which required context is missing instead of inferring it.

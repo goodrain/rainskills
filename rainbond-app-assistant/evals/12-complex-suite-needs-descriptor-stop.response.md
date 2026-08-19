@@ -21,10 +21,10 @@ AppAssistantResult:
       team_name: demo-team
       region_name: cn
       app_name: registry-app
-      app_id: app-301
+      app_id: 301
     linked: true
     selected_environment: preview
-    deployment_location_url: https://run.rainbond.com/#/team/demo-team/region/cn/apps/app-301/overview
+    deployment_location_url: https://run.rainbond.com/#/team/demo-team/region/cn/apps/301/overview
   environment:
     name: preview
     source: default

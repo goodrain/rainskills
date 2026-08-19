@@ -18,7 +18,7 @@ BootstrapResult:
       team_name: demo-team
       region_name: rainbond
       app_name: docs-site
-      app_id: app-docs-006
+      app_id: 6
     environment:
       name: preview
       source: explicit

@@ -1,6 +1,6 @@
 # Rainskills
 
-Rainskills 是一组面向应用识别、部署、排障和交付的 AI Skills，支持 Codex 和 Claude Code。用户在市场中只会看到一个 `Rainskills` 产品，安装后 9 个 `rainbond-*` Skill 仍会独立触发。
+Rainskills 是一组面向应用识别、部署、排障和交付的 AI Skills，支持 Codex 和 Claude Code。用户在市场中只会看到一个 `Rainskills` 产品，安装后 10 个 `rainbond-*` Skill 仍会独立触发。
 
 ## 安装
 
@@ -216,6 +216,7 @@ Rainskills 会在用户下一次发起业务动作时静默检查更新，且只
 - `rainbond-fullstack-bootstrap`
 - `rainbond-fullstack-troubleshooter`
 - `rainbond-platform-installer`
+- `rainbond-platform-query`
 - `rainbond-project-init`
 - `rainbond-template-installer`
 

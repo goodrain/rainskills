@@ -4,7 +4,7 @@ const path = require("node:path");
 
 const CONTROL_PATTERN = /[\u0000-\u001f\u007f-\u009f]/u;
 const CREDENTIAL_KEY_PATTERN = /(?:^|_)(?:auth|authorization|cookie|credential|jwt|password|secret|token)(?:_|$)|(?:api|private)[_-]?key/i;
-const IDENTIFIER_FIELDS = new Set(["team_id", "app_id", "service_id", "template_id", "snapshot_id", "market_id"]);
+const IDENTIFIER_FIELDS = new Set(["enterprise_id", "team_id", "app_id", "service_id", "template_id", "snapshot_id", "market_id"]);
 const MAX_IDENTIFIER_LENGTH = 128;
 const MAX_PATH_LENGTH = 2048;
 const MAX_VERSION_LENGTH = 128;
@@ -50,6 +50,13 @@ const INTENT_DEFINITIONS = deepFreeze({
     optional: ["team_id", "app_id", "service_id"],
     enums: { operation: ["summary", "components", "events", "logs", "access"] },
     steps: ["resolve-target", "read"],
+  },
+  "platform-query": {
+    skillId: "rainbond-platform-query",
+    required: ["resource"],
+    optional: ["enterprise_id", "team_id", "app_id"],
+    enums: { resource: ["current-user", "current-enterprise", "teams", "regions", "apps", "team-apps", "components"] },
+    steps: ["resolve-context", "read"],
   },
   troubleshoot: {
     skillId: "rainbond-app-assistant",
@@ -204,7 +211,7 @@ function validateIntent(input, { pathApi = path } = {}) {
 }
 
 function isExistingAppIntent(intent) {
-  if (["query", "troubleshoot", "troubleshoot-phase", "env-sync", "modify", "delivery-verify", "snapshot", "publish", "rollback"].includes(intent.type)) {
+  if (["query", "platform-query", "troubleshoot", "troubleshoot-phase", "env-sync", "modify", "delivery-verify", "snapshot", "publish", "rollback"].includes(intent.type)) {
     return true;
   }
   if (intent.type === "template-install") return intent.install_scope === "existing-app";

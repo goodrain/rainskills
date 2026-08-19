@@ -62,7 +62,7 @@ The goal is to:
 
 ## Canonical Model Reference
 
-Use `docs/product-object-model.md` as the repository-level source of truth for:
+Use [product object model](../rainbond-app-assistant/references/product-object-model.md) as the repository-level source of truth for:
 
 - the `Environment` object boundary
 - `.rainbond/env.<env>.json` as a non-sensitive delta projection
@@ -230,6 +230,10 @@ then skip it.
 
 Follow this order.
 
+### Fixed Tool fast path and conflict gate
+
+Read `rainbond_query_components`, `rainbond_manage_component_envs(operation=summary)`, and `rainbond_manage_component_connection_envs(operation=summary)` for the requested components. Before any write, call `rainbond_analyze_env_conflicts`; if it reports a conflict, stop and show only non-sensitive key names. Do not overwrite automatically and do not run `list` or `describe` to discover known Tools.
+
 1. Resolve context
 - read user explicit target environment if provided
 - read `.rainbond/local.json`
@@ -336,7 +340,7 @@ EnvironmentSyncResult:
     team_name: string
     region_name: string
     app_name: string
-    app_id: string | null
+    app_id: positive integer | null # normalize a decimal session string at every Rainbond Tool boundary; reject non-numeric IDs
   env_delta:
     component_env_overrides: map
   skip_reasons:

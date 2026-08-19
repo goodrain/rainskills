@@ -155,6 +155,7 @@ description: "Use whenever a user asks to deploy, run, deliver, publish, inspect
      - 多个 team 且无 manifest 提示 → 停下来询问用户，**禁止**静默选 `default` / 第一个 / 任意已有 team。
      - app 选择同上逻辑：manifest 指定且可解析 → 直接用；无提示且多候选 → 询问。
      - 任何自动选择的结果都必须在最终报告里以"已选 X（理由：来自 manifest / 单一可选）"形式告知，邀请用户覆盖。
+     - 每个 Rainbond MCP 工具边界都要把十进制字符串 `app_id` 规范化为正整数；非数字 ID 必须拒绝。
   3. 单入口主线一旦触发：
      `project-init -> bootstrap -> troubleshooter -> delivery-verifier -> version-assistant -> testing-app delivery-verifier`
      应按 gate 自动继续，不要在中途停成“下一步建议”。
@@ -203,6 +204,7 @@ description: "Use whenever a user asks to deploy, run, deliver, publish, inspect
 16. 如果用户要求调整源码构建参数，优先走 `rainbond_manage_component_envs(operation=replace_build_envs, build_env_dict=...)`。
     不要把语言构建参数塞进 `build_info`。
 17. 如果源码检测同时命中 Dockerfile 和语言构建，按 `rainbond-fullstack-bootstrap` 的 Build Mode Selection 优先级链解决：manifest `source.build.strategy` 优先 → 启发式按 Dockerfile 分类 + 意图信号判断（"语言 buildpack 能否产生等价运行时行为"，原则驱动而非固定清单）→ 真正模糊时才问一次并建议用户写回 manifest。决策必须双轨可审计：prose 输出"Build mode for `<name>`: `<picked>` (`<source>` — `<reason>`; to override: `<hint>`)"逐组件展示，且 bootstrap 的结构化输出 `deployment_plan.workflow.build_strategy_decisions[<name>]` 同步记录（仅给有 dual detection 的组件填）。`dockerfile` 决策映射到 `rainbond_create_component_from_source` 的 `prefer_dockerfile_when_detected = true`。详见 `rainbond-fullstack-bootstrap/references/source-build-parameter-guide.md § Build Mode Selection`。
+    - **恢复例外按状态决定**：`checking` / `checked` / 未完成组件可以通过 `rainbond_get_component_check_result(prefer_dockerfile_when_detected=true)` 在原拓扑中取得 Dockerfile 证据，禁止删除。只有 `create_status=complete` 的 CNB 组件不存在通用原地切换能力时，才允许在已保存 topology and configuration snapshot、已向用户展示该完成状态并获得 explicit user confirmation 后删除并重建；任一证据缺失时只读停止。
 18. 当前 MCP 不支持显式 `dockerfile_path` 时，不要在顶层编排里承诺该能力。
 19. 对 reverse-proxy full-stack 项目，不要只因为根路径 URL 存在就把它当作最终交付成功或 Fast Path 的可信 URL；同 host 的 backend 路径（通常是 `/api`）必须也一致可用，或明确停在 blocker。
 20. **组件依赖与连接变量管理**（合并自原 20-23 四条）：多组件拓扑里，provider/consumer 关系必须用显式依赖 + provider 侧连接变量管理，不要让 consumer 端硬编码或重复声明。
@@ -229,7 +231,10 @@ description: "Use whenever a user asks to deploy, run, deliver, publish, inspect
 28. `rbd-*` 组件（rbd-gateway、rbd-api、rbd-worker、rbd-chaos、rbd-db、rbd-mq、rbd-monitor、rbd-node 等）是 Rainbond 平台自身的基础设施组件，不是用户应用组件。
     - 可以用 `rainbond_query_region_rbd_components` 查询并展示它们的状态
     - 不能通过 MCP 对它们执行重启、部署、修改等写操作；当前 MCP 工具集不支持此类操作
-    - 如果用户要求操作这些组件，明确告知：需要通过 Kubernetes 命令（如 `kubectl rollout restart deployment/<name> -n rbd-system`）或 Rainbond 集群管理控制台进行，超出本技能的操作范围，不要假装可以执行
+     - 如果用户要求操作这些组件，明确告知：需要通过 Kubernetes 命令（如 `kubectl rollout restart deployment/<name> -n rbd-system`）或 Rainbond 集群管理控制台进行，超出本技能的操作范围，不要假装可以执行
+28a. 写操作失败或结果异常时，先调用 `rainbond_get_operation_failure_context`，按其 `classified_reason` 决定停下、只读核实或低风险修复；`unknown` 回退既有证据链，禁止盲目重放写操作。
+    `event_log_tail` 只作为敏感诊断证据使用，绝不能复制、引用或向用户展示其原文；输出只能使用 `classified_reason`、非敏感摘要和已脱敏字段。
+28b. 运行态或交付健康检查先调用 `rainbond_get_app_health_overview`；仅 `abnormal` 或 `unknown` 组件再读取 component summary、日志、事件或存储明细。
 29. **仅给 bare Git URL 时默认 root + 空 `subdirectories`**：当用户给的只是一个 Git URL（无本地 manifest、无明确子目录提示），默认 `subdirectories=""`（仓库根）进入 source 检测，让后端判断这个仓库结构。**不要**先问用户"根目录还是子目录"。
     - 单项目仓库（一个 buildable root）→ 后端检测通过，正常 build
     - 多组件 / 多 example 仓库 → 后端返回 `multiple services detected` 或等价歧义信号 → 按 Iron Law 10 停下问用户选哪个子目录
@@ -1287,6 +1292,10 @@ description: "Use whenever a user asks to deploy, run, deliver, publish, inspect
   - the heading itself must be exactly `### Structured Output`
   - the opening fence must be exactly ````yaml` immediately after the heading
   - the closing fence must be the last non-whitespace line of the whole reply
+
+  ## On-demand references
+
+  根据当前阶段按需加载 [workflow rules](references/workflow-rules.md)、[operational reference](references/operational-reference.md)、[output contract](references/output-contract.md) 或 [product object model](references/product-object-model.md)。
 
   ## Common Mistakes
 

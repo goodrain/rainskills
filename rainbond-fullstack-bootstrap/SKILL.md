@@ -97,7 +97,7 @@ entry for generic current-project deployment requests.
 
 ## Canonical Model Reference
 
-Use [../docs/product-object-model.md](../docs/product-object-model.md) as the repository-level source of truth for:
+Use [product object model](../rainbond-app-assistant/references/product-object-model.md) as the repository-level source of truth for:
 
 - `ComponentSource` resolution outcomes and execution-path intent
 - `DeploymentPlan` action semantics such as create, reuse, skip, handoff, and wait

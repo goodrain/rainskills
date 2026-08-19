@@ -5,7 +5,7 @@ description: Use when a user asks to install, set up, initialize, update, repair
 
 # Rainskills
 
-This is the single marketplace entry for the complete Rainskills product. The installer deploys every bundled `rainbond-*` Skill as an independent Skill with its own trigger and responsibility. Do not ask the user to choose only one of them.
+This is the single marketplace entry for the complete Rainskills product. The installer deploys every bundled `rainbond-*` Skill as an independent Skill with its own trigger and responsibility, including the lightweight read-only `rainbond-platform-query` skill. Do not ask the user to choose only one of them.
 
 ## Initialize
 
