@@ -1,0 +1,4 @@
+interface:
+  display_name: "Rainbond Open-source App Deploy"
+  short_description: "Deploy open-source compose, Helm, or image apps"
+  default_prompt: "Use $rainbond-opensource-app-deploy to deploy an open-source compose stack on Rainbond and verify its UI."
