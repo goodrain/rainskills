@@ -28,14 +28,10 @@ test("obsolete MCP-first specifications are absent", () => {
     ".claude/specs/api-fallback-transport.md",
     ".claude/specs/api-fallback-transport.yaml",
     "docs/plans/2026-08-12-api-fallback-transport-design.md",
+    "docs/plans/2026-08-13-cli-only-rainskills-and-agent-skill-coordination.md",
   ]) {
     assert.equal(fs.existsSync(path.join(repoRoot, relativePath)), false, relativePath);
   }
-
-  assert.doesNotMatch(
-    read("docs/plans/2026-08-13-cli-only-rainskills-and-agent-skill-coordination.md"),
-    /native MCP preferred \+ CLI bridge fallback/i
-  );
 });
 
 test("shared CLI instructions use transport-neutral Rainbond Tool wording", () => {
