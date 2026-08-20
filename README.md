@@ -68,10 +68,17 @@ bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh)
 - `rainbond-env-sync`
 - `rainbond-fullstack-bootstrap`
 - `rainbond-fullstack-troubleshooter`
+- `rainbond-opensource-app-deploy`
 - `rainbond-platform-installer`（内部安装流程，不作为独立产品使用）
 - `rainbond-platform-query`（当前用户、企业、团队、集群、应用和组件的轻量只读查询）
 - `rainbond-project-init`
 - `rainbond-template-installer`
+
+## 部署类 skill 怎么选
+
+- 应用市场里有的应用 → `rainbond-template-installer`（一键安装商店模板）
+- 市场里没有的开源软件（有 docker-compose、Helm 或镜像）→ `rainbond-opensource-app-deploy`
+- 部署你自己写的项目（源码或私有镜像）→ `rainbond-app-assistant`
 
 ## 适用场景
 
