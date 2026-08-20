@@ -377,11 +377,7 @@ function closeSshSession(session, runner = runCommand) {
 }
 
 async function establishSshSession(target, {
-  platform = process.platform,
-  interactive = process.stdin.isTTY && process.stdout.isTTY,
   runner = runCommand,
-  attachedRunner = spawnAttached,
-  createTempDirectory = createSshTempDirectory,
   write = (value) => process.stdout.write(value),
 } = {}) {
   const normalized = normalizeRemoteTarget(target.host, target.port);
@@ -404,96 +400,40 @@ async function establishSshSession(target, {
   if (!/(Permission denied|Host key verification failed|authentication failed|no supported authentication methods)/i.test(detail)) {
     throw new Error(`无法通过 SSH 连接 ${normalized.host}：${detail}`);
   }
-  if (!interactive) {
-    write("\n[RAINSKILLS_USER_INPUT_REQUIRED:ssh_authentication]\n");
-    writeUserMessage(
-      write,
-      "platform.ssh-authentication",
-      "该服务器需要确认主机指纹或输入 SSH 密码，请在交互终端继续。",
-    );
-    return null;
-  }
-
-  if (platform === "win32") {
-    write("\nWindows 自带 OpenSSH 不支持 ControlMaster 连接复用；后续远程步骤会继续由系统 SSH 读取认证，可能再次请求密码。\n");
-    const result = await attachedRunner(
-      "ssh",
-      [
-        "-o", "BatchMode=no",
-        "-o", "ConnectTimeout=10",
-        "-p", String(normalized.port),
-        normalized.host,
-        "true",
-      ],
-      { env: process.env, interactive: true },
-      null
-    );
-    if (result.signal || result.code !== 0) {
-      if (result.signal) throw new Error(`SSH 认证被信号 ${result.signal} 中断`);
-      throw new Error(`SSH 认证未完成，无法连接 ${normalized.host}`);
-    }
-    return {
-      target: normalized,
-      controlPath: null,
-      tempDirectory: null,
-      multiplexed: false,
-      interactive: true,
-      closed: false,
-    };
-  }
-
-  const tempDirectory = createTempDirectory();
-  fs.chmodSync(tempDirectory, 0o700);
-  const controlPath = path.join(tempDirectory, "control");
-  write("\n首次连接可能需要确认服务器指纹，并输入一次 SSH 密码。\n");
-  write("密码由系统 ssh 直接读取，Rainskills 不会保存。完成后安装将自动继续。\n\n");
-  const result = await attachedRunner(
-    "ssh",
+  write("\n[RAINSKILLS_USER_INPUT_REQUIRED:ssh_authentication]\n");
+  writeUserMessage(
+    write,
+    "platform.ssh-authentication",
     [
-      "-o", "ControlMaster=yes",
-      "-o", "ControlPersist=600",
-      "-o", `ControlPath=${controlPath}`,
-      "-o", "BatchMode=no",
-      "-o", "ConnectTimeout=10",
-      "-p", String(normalized.port),
-      normalized.host,
-      "true",
-    ],
-    { env: process.env, interactive: true },
-    null
+      "当前还不能通过 SSH 免密连接服务器。",
+      "",
+      "请打开你电脑上的系统终端，执行下面这一条命令：",
+      `npx --yes rainskills@${packageManifest.version} ssh prepare --ssh ${normalized.host} --ssh-port ${normalized.port}`,
+      "",
+      "这一步只准备 SSH 连接，不会安装 Rainbond。服务器指纹确认和 SSH 密码只会由系统 ssh 读取。",
+      "完成后回到这里回复“已完成”，我会在当前任务中继续安装，不会重新选择流程。",
+    ].join("\n"),
   );
-  if (result.signal || result.code !== 0) {
-    removeSshTempDirectory(tempDirectory);
-    if (result.signal) throw new Error(`SSH 认证被信号 ${result.signal} 中断`);
-    throw new Error(`SSH 认证未完成，无法连接 ${normalized.host}`);
-  }
-  return {
-    target: normalized,
-    controlPath,
-    tempDirectory,
-    multiplexed: true,
-    interactive: false,
-    closed: false,
-  };
+  return null;
 }
 
 function targetChoicesForPlatform(platform) {
   if (platform === "linux") {
     return [
-      { value: "local-linux", label: "安装到本地" },
-      { value: "remote-linux", label: "安装到 Linux 服务器" },
+      { value: "local-linux", label: "部署到本机" },
+      { value: "remote-linux", label: "部署到独立服务器" },
     ];
   }
   if (platform === "darwin") {
     return [
-      { value: "local-macos", label: "安装到本地" },
-      { value: "remote-linux", label: "安装到 Linux 服务器" },
+      { value: "local-macos", label: "部署到本机" },
+      { value: "remote-linux", label: "部署到独立服务器" },
     ];
   }
   if (platform === "win32") {
     return [
-      { value: "local-windows", label: "安装到本地" },
-      { value: "remote-linux", label: "安装到 Linux 服务器" },
+      { value: "local-windows", label: "部署到本机" },
+      { value: "remote-linux", label: "部署到独立服务器" },
     ];
   }
   return [];
@@ -690,7 +630,7 @@ async function resolveRemoteConsole({
 
 function sshArgs(target, session = null) {
   return [
-    "-o", `BatchMode=${session?.interactive ? "no" : "yes"}`,
+    "-o", "BatchMode=yes",
     "-o", "ConnectTimeout=10",
     ...sshSessionOptions(session),
     "-p", String(target.port),
@@ -698,31 +638,8 @@ function sshArgs(target, session = null) {
   ];
 }
 
-function shellQuote(value) {
-  return `'${String(value).replace(/'/g, "'\\''")}'`;
-}
-
-function remoteScriptInvocationArgs(script, scriptArgs = []) {
-  const encoded = Buffer.from(script, "utf8").toString("base64");
-  const argumentsText = scriptArgs.map(shellQuote).join(" ");
-  const command = `printf '%s' '${encoded}' | base64 -d | bash -s --${argumentsText ? ` ${argumentsText}` : ""}`;
-  return [
-    "bash",
-    "-lc",
-    shellQuote(command),
-  ];
-}
-
 function remoteScriptInvocation(target, session, script, scriptArgs = [], options = {}) {
   const normalized = normalizeRemoteTarget(target.host, target.port);
-  if (session?.interactive) {
-    return {
-      args: [...sshArgs(normalized, session), ...remoteScriptInvocationArgs(script, scriptArgs)],
-      // Native Windows OpenSSH reads the password from the attached terminal.
-      // Do not let spawnSync kill that prompt while the user is typing it.
-      options: { ...options, timeout: null, interactive: true },
-    };
-  }
   return {
     args: [...sshArgs(normalized, session), "bash", "-s", "--", ...scriptArgs],
     options: { ...options, input: script },
@@ -890,13 +807,13 @@ function prepareRemoteInstaller(target, operationId, installerPath, runner = run
   assertCommandResult(prepare, `无法在 ${normalized.host} 创建安装目录`);
 
   const copy = runner("scp", [
-    "-o", `BatchMode=${session?.interactive ? "no" : "yes"}`,
+    "-o", "BatchMode=yes",
     "-o", "ConnectTimeout=10",
     ...sshSessionOptions(session),
     "-P", String(normalized.port),
     installerPath,
     `${normalized.host}:${workspace}/rainbond-install.sh`,
-  ], session?.interactive ? { timeout: null, interactive: true } : { timeout: 120000 });
+  ], { timeout: 120000 });
   assertCommandResult(copy, `无法把官方安装脚本传输到 ${normalized.host}`);
   return workspace;
 }
@@ -1765,6 +1682,10 @@ function probeConsole(url) {
   });
 }
 
+function singleNodeResourceEstimate() {
+  return "- 需要安装运行环境所需要的依赖（预计占用：2 GB 内存 / 10 GB 磁盘）";
+}
+
 function preflightMessage(facts, assessment, target) {
   const location = target.kind === "remote-linux"
     ? `Linux 服务器 ${target.host}`
@@ -1779,14 +1700,7 @@ function preflightMessage(facts, assessment, target) {
     lines.push("", "需要先处理：", ...assessment.blockers.map((blocker) => `- ${blocker}`));
     return lines.join("\n");
   }
-  if (assessment.warnings?.length) {
-    lines.push(
-      "",
-      "资源低于推荐配置，仍会继续安装；最终以 Rainbond 实际部署验证结果为准：",
-      ...assessment.warnings.map((warning) => `- ${warning}`),
-    );
-  }
-  lines.push("", "确认后将执行：", "- 需要安装运行环境所需要的依赖（预估多少资源等等）");
+  lines.push("", "确认后将执行：", singleNodeResourceEstimate());
   return lines.join("\n");
 }
 
@@ -1808,14 +1722,7 @@ function printWindowsPreflight(facts, assessment, {
   if (!assessment.ok) {
     lines.push("", "需要先处理：", ...assessment.blockers.map((blocker) => `- ${blocker}`));
   } else {
-    if (assessment.warnings?.length) {
-      lines.push(
-        "",
-        "资源低于推荐配置，仍会继续安装；最终以 Rainbond 实际部署验证结果为准：",
-        ...assessment.warnings.map((warning) => `- ${warning}`),
-      );
-    }
-    lines.push("", "确认后将执行：", "- 需要安装运行环境所需要的依赖（预估多少资源等等）");
+    lines.push("", "确认后将执行：", singleNodeResourceEstimate());
   }
   write("\n");
   writeUserMessage(write, "platform.preflight", lines.join("\n"));
@@ -1831,13 +1738,13 @@ async function confirmInstall(assumeYes, {
     writeUserMessage(
       write,
       "platform.install-confirmation",
-      "确认上述系统变更后，重新执行相同命令并添加 --yes。",
+      "是否开始安装 Rainbond？请回复 y 或 n。",
     );
     return false;
   }
   const prompt = readline.createInterface({ input: process.stdin, output: process.stdout });
   try {
-    const answer = await prompt.question("\n是否开始安装 Rainbond？[y/N]: ");
+    const answer = await prompt.question("\n是否开始安装 Rainbond？请回复 y 或 n：");
     return /^(y|yes)$/i.test(answer.trim());
   } finally {
     prompt.close();
@@ -2749,7 +2656,7 @@ async function waitForHostClusterConfiguration({ write = (value) => process.stdo
   writeUserMessage(
     write,
     "platform.host-cluster-configuration",
-    "多节点主机集群模式已选择。请继续提供或生成 cluster.yaml。",
+    "多节点主机集群模式已选择。Rainskills 将生成受保护的 cluster.yaml 示例文件，编辑完成后会一次检查全部节点和集群拓扑。",
   );
   return { waiting: true };
 }
@@ -2969,7 +2876,7 @@ async function runInstallOperation(options, {
       return;
     }
     state = stateUpdater(paths.state, state, {
-      stage: "mode-configuration",
+      stage: result?.waitingStage || "mode-configuration",
       status: "waiting_user",
     });
     activeOperation.state = state;
@@ -3093,7 +3000,6 @@ async function runInstallOperation(options, {
         status: "waiting_user",
       });
       appendEvent(paths, state, "ssh-authentication", "waiting_user");
-      process.stdout.write(`请在交互终端继续：\n  npx rainskills@${packageManifest.version} platform install --onboarding-id ${options.onboardingId} --target remote-linux --ssh ${remoteTarget.host} --ssh-port ${remoteTarget.port}\n`);
       return;
     }
     activeSshSession = sshSession;

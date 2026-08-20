@@ -54,6 +54,17 @@ test("runtime onboarding messages come from the launcher as fixed bounded blocks
     /message id/i,
   );
 
+  const addEnvironment = [];
+  assert.equal(await runBuiltin([
+    "runtime", "message", "--id", "add-environment-location",
+  ], { write: (value) => addEnvironment.push(value) }), true);
+  assert.equal(
+    boundedUserMessage(addEnvironment.join(""), "runtime.add-environment-location"),
+    "请选择要添加的运行环境：\n\n"
+      + "1) 云端环境（免费体验）\n"
+      + "2) 私有环境（去对接）",
+  );
+
   const second = [];
   assert.equal(await runBuiltin([
     "runtime", "message", "--id", "private-deployment-location",
@@ -64,9 +75,9 @@ test("runtime onboarding messages come from the launcher as fixed bounded blocks
   assert.equal(
     boundedUserMessage(second.join(""), "runtime.private-deployment-location"),
     "请选择部署位置：\n\n"
-      + "1、对接到本地\n"
-      + "2、对接到独立服务器\n"
-      + "3、对接已有私有环境",
+      + "1、部署到本机\n"
+      + "2、部署到独立服务器\n"
+      + "3、部署到已有 Rainbond",
   );
   for (const controlPlatform of ["linux", "win32"]) {
     const output = [];
@@ -79,9 +90,9 @@ test("runtime onboarding messages come from the launcher as fixed bounded blocks
     assert.equal(
       boundedUserMessage(output.join(""), "runtime.private-deployment-location"),
       "请选择部署位置：\n\n"
-        + "1、对接到本地\n"
-        + "2、对接到独立服务器\n"
-        + "3、对接已有私有环境",
+        + "1、部署到本机\n"
+        + "2、部署到独立服务器\n"
+        + "3、部署到已有 Rainbond",
     );
   }
 
@@ -770,7 +781,7 @@ test("runtime connect uses fixed POSIX argv and marks connected only after the l
   assert.deepEqual(events[2][1], events[0][1]);
 });
 
-test("runtime connect registers and binds one environment without changing an existing default", async () => {
+test("environment add connects directly and returns every environment without changing the default", async () => {
   const { runBuiltin } = require(launcherPath);
   const { createEnvironmentRegistry } = require(path.join(
     repoRoot, "rainbond-platform-installer", "scripts", "environment-registry.js"
@@ -826,7 +837,7 @@ test("runtime connect registers and binds one environment without changing an ex
     "runtime", "connect", "codex",
     "--rainbond-url", "https://test.example.com",
     "--onboarding-id", operationId,
-    "--intent-json", JSON.stringify({ type: "deploy", project_root: "/workspace/demo" }),
+    "--intent-json", JSON.stringify({ type: "environment-add" }),
   ], {
     runtimeStateManager,
     environmentRegistry: registry,
@@ -847,6 +858,19 @@ test("runtime connect registers and binds one environment without changing an ex
 
   const result = JSON.parse(output.at(-1));
   assert.equal(result.environment_id, "22222222-2222-4222-8222-222222222222");
+  assert.equal(result.default_environment_id, production.id);
+  assert.deepEqual(result.environments.map((environment) => environment.id), [
+    production.id,
+    result.environment_id,
+  ]);
+  assert.equal(
+    boundedUserMessage(result.user_message, "runtime.environment-connected-list"),
+    "新环境已对接成功。\n\n"
+      + "当前运行环境：\n\n"
+      + "- 生产环境（私有环境，已连接，默认）\n"
+      + "- 私有环境-test.example.com（私有环境，已连接，刚新增）\n\n"
+      + "全局默认环境仍是：生产环境",
+  );
   assert.equal(registry.read().default_environment_id, production.id);
   assert.equal(registry.list().length, 2);
   assert.equal(operations.read(operationId).environment_id, result.environment_id);

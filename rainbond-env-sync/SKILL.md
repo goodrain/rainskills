@@ -10,24 +10,33 @@ description: "Use when a user explicitly asks to sync non-sensitive preview or p
 
   ### 多运行环境操作契约
 
-  Node.js 前置检查通过后，每次请求先执行固定 launcher + `["environment", "list", "--json"]`，按用户明确指定的运行环境选择不可变环境 ID；未指定时只用全局默认环境，默认不可用时停止且不回退。生成 UUID 后执行 `["operation", "begin", "--operation-id", "<uuid>", "--environment-id", "<id>", "--intent-json", "<intent-json>"]`，并在之后每个 Rainbond MCP 调用中加入 `rainskills_operation_id`。环境、团队和应用只属于本次操作，禁止保存项目绑定；同一项目可以部署到多个环境。明确“团队”表示环境内团队；明确“运行环境/平台”表示环境；裸名称同时匹配环境和团队时必须询问。
+  Node.js 前置检查通过后，每次请求先执行本地 launcher + `["environment", "list", "--json"]`，按用户明确指定的运行环境选择不可变环境 ID；未指定时只用全局默认环境，默认不可用时停止且不回退。生成 UUID 后执行本地 launcher + `["operation", "begin", "--operation-id", "<uuid>", "--environment-id", "<id>", "--intent-json", "<intent-json>"]`，并在之后每个 Rainbond MCP 调用中加入 `rainskills_operation_id`。环境、团队和应用只属于本次操作，禁止保存项目绑定；同一项目可以部署到多个环境。明确“团队”表示环境内团队；明确“运行环境/平台”表示环境；裸名称同时匹配环境和团队时必须询问。
 
 第一步检查 Node.js 是否存在且主版本不低于 18。Node.js 缺失或低于 18 时，只说明“Rainskills 执行组件需要 Node.js 18 或更高版本”并停止：不选择运行环境，不调用 MCP，不猜测替代命令。只有用户或 agent 明确同意后才安装或升级 Node.js，再从同一原始 intent 继续。
 
-固定 launcher 是 `["npx", "--yes", "rainskills@0.1.0-rc.66"]`；版本必须与本技能包 `package.json` 一致。把 launcher 与参数拼成 argv 数组直接执行，禁止 `rainskills@latest` 或执行 shell 字符串。
+固定 launcher 是 `["npx", "--yes", "rainskills@0.1.0-rc.68"]`；版本必须与本技能包 `package.json` 一致。把 launcher 与参数拼成 argv 数组直接执行，禁止 `rainskills@latest` 或执行 shell 字符串。
+
+本地 launcher 必须从当前 Skill 所在目录的同级目录定位 `rainbond-platform-installer/scripts/local-runtime.js`，解析为绝对路径后使用 `["node", "<绝对路径>"]` 执行。`environment list`、`operation begin`、`operation complete` 和 `runtime message` 只能使用本地 launcher；本地 launcher 只读取已安装文件和本机受保护状态，不得访问 npm 或其它网络。只有用户选定连接运行环境后，才使用上面的固定 npx launcher。
 
 <!-- rainskills-runtime-contract:start -->
 ```json
 {
   "schema": "rainskills.skill-runtime-contract.v1",
-  "launcher": ["npx", "--yes", "rainskills@0.1.0-rc.66"],
+  "launcher": ["npx", "--yes", "rainskills@0.1.0-rc.68"],
+  "local_launcher": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js"],
+  "local_argv": {
+    "environment-list": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js", "environment", "list", "--json"],
+    "operation-begin": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js", "operation", "begin", "--operation-id", "<uuid>", "--intent-json", "<intent-json>"],
+    "operation-complete": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js", "operation", "complete", "--operation-id", "<uuid>"],
+    "runtime-message": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js", "runtime", "message", "--id", "<message-id>"]
+  },
   "intents": {
     "env-sync": {"required": ["project_root", "environment"], "optional": ["team_id", "app_id", "service_id"], "enums": {"environment": ["preview", "production"]}}
   },
   "routes": {"existing": ["saas", "private-existing"]},
   "connect_argv": {
-    "saas": ["npx", "--yes", "rainskills@0.1.0-rc.66", "runtime", "connect", "<target>", "--saas", "--intent-json", "<intent-json>"],
-    "private-existing": ["npx", "--yes", "rainskills@0.1.0-rc.66", "runtime", "connect", "<target>", "--rainbond-url", "<rainbond-url>", "--intent-json", "<intent-json>"]
+    "saas": ["npx", "--yes", "rainskills@0.1.0-rc.68", "runtime", "connect", "<target>", "--saas", "--intent-json", "<intent-json>"],
+    "private-existing": ["npx", "--yes", "rainskills@0.1.0-rc.68", "runtime", "connect", "<target>", "--rainbond-url", "<rainbond-url>", "--intent-json", "<intent-json>"]
   }
 }
 ```
@@ -43,7 +52,7 @@ target 只允许 `codex`、`claude`、`all`。校验 intent 后只执行 existin
 
 先说：“可以，我会帮你同步已有应用的环境配置。不过目前还没有可用的应用运行环境。你刚安装的 Rainskills 是 AI 部署助手；应用实际运行在 Rainbond 上。Rainbond 是一套应用运行和管理平台，你不需要了解 Kubernetes。”
 
-只让用户选择 `Rainbond Cloud` 或承载目标应用的`已有私有 Rainbond`。选择已有私有 Rainbond 时执行固定 launcher + `["runtime", "message", "--id", "private-console-origin"]` 并原样输出。不得为环境同步安装私有 Rainbond，也不得用新平台代替原应用。
+只让用户选择 `Rainbond Cloud` 或承载目标应用的`已有私有 Rainbond`。选择已有私有 Rainbond 时执行本地 launcher + `["runtime", "message", "--id", "private-console-origin"]` 并原样输出。不得为环境同步安装私有 Rainbond，也不得用新平台代替原应用。
 <!-- rainskills-runtime-routing:end -->
 
 ## Overview

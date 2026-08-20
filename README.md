@@ -72,7 +72,7 @@ Rainskills 安装完成，下一条消息即可直接使用。
 固定 launcher 来自当前 `package.json` 版本：
 
 ```json
-["npx", "--yes", "rainskills@0.1.0-rc.66"]
+["npx", "--yes", "rainskills@0.1.0-rc.68"]
 ```
 
 所有调用都把 launcher 与参数合并成 argv 数组后直接执行；不得使用 `rainskills@latest`，不得把参数拼成 shell 字符串。
@@ -107,11 +107,32 @@ Rainskills 安装完成，下一条消息即可直接使用。
 
 请选择部署位置：
 
-1、对接到本地
-2、对接到独立服务器
-3、对接已有私有环境
+1、部署到本机
+2、部署到独立服务器
+3、部署到已有 Rainbond
 
 选择 1 时执行 `install-private` route 并传入 `--location local`；选择 2 时执行 `install-private` route 并传入 `--location server`；选择 3 时询问已有私有环境地址并执行 `private-existing` route。不会再显示额外的接入方式中间步骤。不得在进入平台安装器后重复询问部署位置，也不得在环境准备完成前询问应用来源。
+
+选择“部署到独立服务器”后，只显示：
+
+请选择服务器类型：
+
+1、单台服务器（Linux）
+2、三台及以上服务器（Linux）
+3、已有 Kubernetes 集群
+
+### 服务器 SSH 固定流程
+
+部署到独立服务器或主机集群时，流程不再根据 Agent 是否提供可见终端而变化：
+
+1. Rainskills 先使用 `BatchMode=yes` 检查 SSH 免密连接。
+2. 已可连接时直接继续服务器预检；不可连接时固定停止，不在 Agent 任务终端里等待密码。
+3. 用户只在自己电脑的系统终端执行安装器显示的精确 `npx --yes rainskills@<当前版本> ssh prepare --ssh <user@host> --ssh-port <port>` 命令。指纹和一次服务器密码由系统 SSH 读取；该命令只准备公钥连接，不安装 Rainbond。
+4. 用户回到原任务回复“已完成”后，Agent 使用同一版本、同一 `onboarding-id` 和原安装参数继续。不得重新询问环境、安装模式、节点或应用来源。
+5. 后续预检、传输、安装和验收全部使用免密 SSH；系统终端不会继续安装或授权。
+6. Rainbond 验收通过后只进行一次浏览器授权，随后自动恢复最初的应用任务；不得回到 Agent 后再次授权。
+
+主机密钥发生变化时直接阻断并要求人工核对，不自动替换 `known_hosts`。聊天中永远不接收密码、私钥或 Token。
 
 ## 多运行环境
 
@@ -119,17 +140,21 @@ Rainskills 安装完成，下一条消息即可直接使用。
 - 用户未指定环境时使用默认环境；用户明确指定时只覆盖本次 operation。
 - 环境名称自动生成，可重命名；内部不可变 ID 不随重命名改变。
 - 添加、重命名、重新授权或删除环境不改项目配置，也不需要为每个环境重新配置 Agent MCP。
+- 新增环境直接建立独立连接，不读取或恢复旧版单环境状态；HTTPS 直接进入授权，明文 HTTP 只增加一次可信网络确认。
+- 新增环境与首次部署复用同一套固定选择：先选“云端环境（免费体验）/私有环境（去对接）”；选择私有环境后直接选“部署到本机/部署到独立服务器/部署到已有 Rainbond”，不再出现旧的接入方式中间步骤。
 - Agent 始终连接一个本地 Rainskills MCP。Rainskills 按 `operation_id` 从隔离凭据存储中选择目标 Rainbond。
 - 明确说“团队”表示默认或指定运行环境中的 Rainbond 团队；明确说“运行环境/平台”表示环境。裸名称同时匹配两者时必须询问。
 
 常用管理命令：
 
 ```bash
-npx --yes rainskills@0.1.0-rc.66 environment list --json
-npx --yes rainskills@0.1.0-rc.66 environment rename --environment-id <uuid> --name <name>
-npx --yes rainskills@0.1.0-rc.66 environment set-default --environment-id <uuid>
-npx --yes rainskills@0.1.0-rc.66 environment remove --environment-id <uuid>
+node <已安装的 Skills 根目录>/rainbond-platform-installer/scripts/local-runtime.js environment list --json
+node <已安装的 Skills 根目录>/rainbond-platform-installer/scripts/local-runtime.js environment rename --environment-id <uuid> --name <name>
+node <已安装的 Skills 根目录>/rainbond-platform-installer/scripts/local-runtime.js environment set-default --environment-id <uuid>
+node <已安装的 Skills 根目录>/rainbond-platform-installer/scripts/local-runtime.js environment remove --environment-id <uuid>
 ```
+
+这些本地状态命令不访问 npm 或网络。Agent 从当前已加载 Skill 的同级目录解析实际绝对路径；只有连接或安装运行环境时才调用固定版本的 npx launcher。
 
 ### 已有应用环境选择
 
@@ -153,11 +178,11 @@ npx --yes rainskills@0.1.0-rc.66 environment remove --environment-id <uuid>
 
 环境选择按渐进流程展示：
 
-1. 用户选择“私有环境”后，直接选择对接到本地、独立服务器或已有私有环境。
-2. 对接已有私有环境只询问环境地址，不执行平台安装。
-3. 对接到本地直接进入单机版，不展示 ROI 或 Kubernetes；只有选择独立服务器后，再选单机版、主机集群或已有 Kubernetes。
+1. 用户选择“私有环境”后，直接选择部署到本机、独立服务器或已有 Rainbond。
+2. 部署到已有 Rainbond 只询问环境地址，不执行平台安装。
+3. 部署到本机直接进入单机版，不展示 ROI 或 Kubernetes；只有选择独立服务器后，再选择单台 Linux、三台及以上 Linux 或已有 Kubernetes。
 
-主机集群支持 1、2 或 N 台 Linux 服务器，不要求固定三台；etcd 节点数必须是正奇数。已有 Kubernetes 分支使用指定 kubeconfig 和 context 安装，要求 Kubernetes 1.24 或更高版本。
+主机集群支持 1、2 或 N 台 Linux 服务器，不要求固定三台；etcd 节点数必须是正奇数。首次进入该分支时，Rainskills 会生成一份受保护的 `cluster.yaml` 示例文件。用户一次性修改服务器地址、SSH 端口和节点角色后回复“已完成”，Rainskills 会一次列出全部可确定的配置问题；校验通过后直接进入 SSH 预检，不再逐台询问。生成的文件中不得填写密码、私钥或 Token，SSH 密码仍只由系统 `ssh` 在终端中读取。已有 Kubernetes 分支使用指定 kubeconfig 和 context 安装，要求 Kubernetes 1.24 或更高版本。
 
 Windows 本地安装是预览能力，也可以改选 Linux 服务器。它要求 Windows 10 build 19041+ 或 Windows 11 x64、已开启虚拟化并允许 UAC；安装器使用受管 WSL2 环境。macOS 本地路径使用 OrbStack。用户不需要理解这些底层实现。
 
@@ -165,19 +190,21 @@ Windows 本地安装是预览能力，也可以改选 Linux 服务器。它要�
 
 ```bash
 # 本地单机
-npx --yes rainskills@0.1.0-rc.66 platform install --onboarding-id <id> \
+npx --yes rainskills@0.1.0-rc.68 platform install --onboarding-id <id> \
   --location local --mode single-node
 
 # Linux 服务器单机
-npx --yes rainskills@0.1.0-rc.66 platform install --onboarding-id <id> \
+npx --yes rainskills@0.1.0-rc.68 platform install --onboarding-id <id> \
   --location server --mode single-node --ssh <user@host>
 
-# 服务器主机集群（交互生成配置，或导入已有 ROI cluster.yaml）
-npx --yes rainskills@0.1.0-rc.66 platform install --onboarding-id <id> \
-  --location server --mode host-cluster --cluster-config <path>
+# 服务器主机集群（自动生成受保护示例文件）
+npx --yes rainskills@0.1.0-rc.68 platform install --onboarding-id <id> \
+  --location server --mode host-cluster
+
+# 已有高级 ROI cluster.yaml 才追加：--cluster-config <path>
 
 # 已有 Kubernetes
-npx --yes rainskills@0.1.0-rc.66 platform install --onboarding-id <id> \
+npx --yes rainskills@0.1.0-rc.68 platform install --onboarding-id <id> \
   --location server --mode existing-kubernetes \
   --kubeconfig <path> --kube-context <name> --chart-version <version>
 ```

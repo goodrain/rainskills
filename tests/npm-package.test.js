@@ -90,7 +90,7 @@ test("package metadata defines a public npx command with pinned runtime dependen
   assert.equal(manifest.scripts["test:auto-update"], "node --test tests/auto-update.test.js");
   assert.equal(
     manifest.scripts["test:platform"],
-    "node --test tests/platform-installer.test.js tests/host-cluster-installer.test.js tests/existing-kubernetes-installer.test.js"
+    "node --test tests/platform-installer.test.js tests/host-cluster-installer.test.js tests/existing-kubernetes-installer.test.js tests/ssh-key-setup.test.js"
   );
   assert.equal(
     manifest.scripts["test:windows"],
@@ -114,6 +114,7 @@ test("packed artifact contains the installer and all skills but no development f
   assert(filePaths.has("rainbond-platform-installer/scripts/auto-update.js"));
   assert(filePaths.has("rainbond-platform-installer/scripts/host-cluster-installer.js"));
   assert(filePaths.has("rainbond-platform-installer/scripts/existing-kubernetes-installer.js"));
+  assert(filePaths.has("rainbond-platform-installer/scripts/ssh-key-setup.js"));
   assert(filePaths.has("rainbond-platform-installer/agents/openai.yaml"));
   assert(filePaths.has("rainbond-platform-installer/references/installation-policy.json"));
   assert(filePaths.has("rainbond-platform-installer/references/installation-policy.md"));
@@ -130,6 +131,9 @@ test("packed artifact contains the installer and all skills but no development f
     "environment-credentials.js",
     "environment-registry.js",
     "runtime-operations.js",
+    "local-runtime-commands.js",
+    "local-runtime.js",
+    "ssh-key-setup.js",
     "mcp-router.js",
     "mcp-server.js",
     "user-message.js",

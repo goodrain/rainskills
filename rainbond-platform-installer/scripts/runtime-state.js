@@ -200,13 +200,19 @@ function createRuntimeStateManager({
   platform = process.platform,
   home = os.homedir(),
   stateStore = createDefaultStore(platform, home),
+  operationId,
   liveProbe,
   fetchImpl = globalThis.fetch,
   env = process.env,
   credentialWriter,
   now = () => new Date().toISOString(),
 } = {}) {
-  const statePath = path.join(home, ".rainbond", "rainskills", "runtime-connection-v1.json");
+  if (operationId !== undefined && !UUID_PATTERN.test(operationId || "")) {
+    throw new Error("runtime state operation_id 无效");
+  }
+  const statePath = operationId
+    ? path.join(home, ".rainbond", "rainskills", "runtime-connections-v1", `${operationId}.json`)
+    : path.join(home, ".rainbond", "rainskills", "runtime-connection-v1.json");
   const writeCredential = credentialWriter || (platform === "win32"
     ? ({ token, baseUrl }) => persistWindowsEnvironment({ token, baseUrl })
     : ({ token, baseUrl }) => persistPosixCredential({ home, stateStore, token, baseUrl }));

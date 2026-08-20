@@ -25,6 +25,10 @@ const { createPortableSecureStateStore } = require("./helpers/portable-secure-st
 const repoRoot = path.resolve(__dirname, "..");
 const packageVersion = require("../package.json").version;
 const launcher = `["npx", "--yes", "rainskills@${packageVersion}"]`;
+const localLauncher = [
+  "node",
+  "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js",
+];
 const runtimeSkills = [
   {
     file: "rainbond-app-assistant/SKILL.md",
@@ -129,9 +133,9 @@ function assertTwoLevelNewRuntimeChoice(routing) {
   assert.match(firstChoice, /1\)\s*云端环境（免费体验）/);
   assert.match(firstChoice, /2\)\s*私有环境（去对接）/);
   assert.match(firstChoice, /请选择部署位置/);
-  assert.match(firstChoice, /1、\s*对接到本地/);
-  assert.match(firstChoice, /2、\s*对接到独立服务器/);
-  assert.match(firstChoice, /3、\s*对接已有私有环境/);
+  assert.match(firstChoice, /1、\s*部署到本机/);
+  assert.match(firstChoice, /2、\s*部署到独立服务器/);
+  assert.match(firstChoice, /3、\s*部署到已有 Rainbond/);
   assert.doesNotMatch(firstChoice, /连接已有环境.*帮我准备一个新环境/s);
   assert.match(firstChoice, /private-existing/);
   assert.match(firstChoice, /install-private/);
@@ -346,6 +350,33 @@ for (const skill of runtimeSkills) {
 
     assert.equal(contract.schema, "rainskills.skill-runtime-contract.v1");
     assert.deepEqual(contract.launcher, ["npx", "--yes", `rainskills@${packageVersion}`]);
+    assert.deepEqual(contract.local_launcher, localLauncher);
+    assert.deepEqual(contract.local_argv, {
+      "environment-list": [...localLauncher, "environment", "list", "--json"],
+      "operation-begin": [
+        ...localLauncher,
+        "operation", "begin",
+        "--operation-id", "<uuid>",
+        "--intent-json", "<intent-json>",
+      ],
+      "operation-complete": [
+        ...localLauncher,
+        "operation", "complete",
+        "--operation-id", "<uuid>",
+      ],
+      "runtime-message": [
+        ...localLauncher,
+        "runtime", "message",
+        "--id", "<message-id>",
+      ],
+    });
+    const gate = markedSection(read(skill.file), "runtime-gate");
+    assert.match(gate, /本地 launcher.*不得访问 npm|本地 launcher.*不访问 npm/s);
+    assert.match(gate, /(相邻|同级).*rainbond-platform-installer.*local-runtime\.js/s);
+    assert.match(gate, /environment.*list.*本地 launcher/s);
+    assert.match(gate, /operation.*begin.*本地 launcher/s);
+    assert.match(gate, /operation.*complete.*本地 launcher/s);
+    assert.match(gate, /runtime.*message.*本地 launcher/s);
     assert.deepEqual(Object.keys(contract.routes).sort(), expectedScopes.sort());
     for (const scope of expectedScopes) {
       assert.deepEqual([...contract.routes[scope]].sort(), expectedEnvironments[scope]);
@@ -462,6 +493,13 @@ test("root Rainskills manages a global default and adds later environments witho
   assert.match(management, /第二个环境不得自动改成默认环境/);
   assert.match(management, /同一项目可以部署到任意多个环境和团队/);
   assert.match(management, /裸名称同时匹配两者时必须询问/);
+  assert.match(management, /新增环境.*直接.*runtime connect/s);
+  assert.match(management, /不得.*runtime status.*旧.*runtime.*状态/s);
+  assert.match(management, /授权成功.*完整环境列表.*原样/s);
+  assert.match(management, /不得.*迁移、备份.*runtime-connection/s);
+  assert.match(management, /add-environment-location.*private-deployment-location/s);
+  assert.match(management, /部署到本机.*部署到独立服务器.*部署到已有 Rainbond/s);
+  assert.doesNotMatch(management, /own-environment-connection|连接已有环境.*准备新环境/s);
 });
 
 test("CDN Skills-only installation works without Node and keeps completion unchanged", () => {
@@ -556,6 +594,35 @@ test("app assistant frontmatter is a pure generic trigger without MCP preference
   assert.doesNotMatch(frontmatter.description, /prefer.*MCP|full lifecycle|project-init.*bootstrap/is);
 });
 
+test("deployment-facing skills keep internal diagnostics out of normal user results", () => {
+  const files = [
+    "rainbond-app-assistant/SKILL.md",
+    "rainbond-fullstack-troubleshooter/SKILL.md",
+    "rainbond-delivery-verifier/SKILL.md",
+  ];
+
+  for (const file of files) {
+    const skill = read(file);
+    const protocol = markedSection(skill, "user-result");
+    assert.match(protocol, /最高优先级/);
+    assert.match(protocol, /部署成功.*运行环境地址.*应用访问地址/s);
+    assert.match(protocol, /项目：.*运行环境：.*工作空间：.*应用：.*已完成操作/s);
+    assert.doesNotMatch(protocol, /团队：/);
+    assert.match(protocol, /无法.*确认.*省略.*不得.*(?:猜测|推测)/s);
+    assert.match(protocol, /部署失败.*失败原因/s);
+    assert.match(protocol, /只有.*解决办法.*确实.*可执行/s);
+    assert.match(protocol, /不得.*Problem Judgment.*Actions Taken.*Verification Result.*Structured Output/s);
+    assert.match(protocol, /不得.*内部状态码.*YAML.*JSON/s);
+    assert.match(protocol, /用户明确要求.*结构化|自动化.*明确要求.*结构化/s);
+  }
+
+  const appAssistant = read("rainbond-app-assistant/SKILL.md");
+  assert.doesNotMatch(appAssistant, /结果仍在构建或异常.*才把.*fenced `yaml`/s);
+  assert.doesNotMatch(appAssistant, /Do not make non-success output terse/);
+  assert.doesNotMatch(read("rainbond-fullstack-troubleshooter/SKILL.md"), /Always respond using exactly these sections:/);
+  assert.doesNotMatch(read("rainbond-delivery-verifier/SKILL.md"), /Always respond using exactly these sections:/);
+});
+
 test("generated Rainskills completion has actionable next prompts without reload guidance", () => {
   const skill = read("marketplace/rainskills/skills/rainskills/SKILL.md");
   const completion = headingSection(skill, "## Completion Message", "## Manage Runtime Environments");
@@ -613,12 +680,24 @@ test("README introduces runtime only after an application action and documents r
 
 test("platform installer guidance reveals modes progressively", () => {
   const skill = read("rainbond-platform-installer/SKILL.md");
+  const policy = read("rainbond-platform-installer/references/installation-policy.md");
   const progressive = markedSection(skill, "platform-routing");
 
-  assert.match(progressive, /先.*安装到本地.*安装到服务器/s);
-  assert.match(progressive, /本地.*直接.*单机/s);
-  assert.match(progressive, /本地.*不.*ROI.*Kubernetes/s);
-  assert.match(progressive, /服务器.*单机.*主机集群.*已有 Kubernetes/s);
+  assert.match(progressive, /请选择部署位置：.*1、部署到本机.*2、部署到独立服务器.*3、部署到已有 Rainbond/s);
+  assert.doesNotMatch(skill, /请选择安装位置|安装到本地|安装到 Linux 服务器/);
+  assert.doesNotMatch(policy, /请选择安装位置|安装到本地|安装到 Linux 服务器/);
+  for (const file of [
+    "rainbond-platform-installer/scripts/platform-installer.js",
+    "rainbond-platform-installer/scripts/platform-routing.js",
+  ]) {
+    assert.doesNotMatch(read(file), /请选择安装位置|安装到本地|安装到 Linux 服务器/);
+  }
+  assert.match(skill, /runtime["',\s]+message["',\s]+--id["',\s]+private-deployment-location/);
+  assert.match(skill, /选择 1.*--location["'`,\s]+local.*选择 2.*--location["'`,\s]+server.*选择 3.*private-console-origin/s);
+  assert.doesNotMatch(skill, /detect the control machine and ask for the installation target/i);
+  assert.match(progressive, /请选择服务器类型：.*1、单台服务器（Linux）.*2、三台及以上服务器（Linux）.*3、已有 Kubernetes 集群/s);
+  assert.match(progressive, /本机.*直接.*单机/s);
+  assert.match(progressive, /本机.*不.*ROI.*Kubernetes/s);
   assert.match(progressive, /1、2 或 N|1\/2\/N/);
   assert.match(progressive, /etcd.*正奇数/i);
   assert.match(skill, /--cluster-config/);

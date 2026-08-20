@@ -1,6 +1,9 @@
 const os = require("node:os");
 const readline = require("node:readline/promises");
-const { writeUserMessage } = require("./user-message.js");
+const {
+  privateDeploymentLocationMessage,
+  writeUserMessage,
+} = require("./user-message.js");
 
 const LOCATIONS = new Set(["local", "server"]);
 const SERVER_MODES = new Set(["single-node", "host-cluster", "existing-kubernetes"]);
@@ -160,20 +163,16 @@ function waitingRoute(missing, values = {}) {
 
 function writeMissingLocation(write) {
   write("\n[RAINSKILLS_USER_INPUT_REQUIRED:platform_install_location]\n");
-  writeUserMessage(write, "platform.location", [
-    "请选择应用运行环境的部署位置后重新执行：",
-    "- 安装到本地：--location local",
-    "- 安装到服务器：--location server",
-  ].join("\n"));
+  writeUserMessage(write, "platform.location", privateDeploymentLocationMessage());
 }
 
 function writeMissingServerMode(write) {
   write("\n[RAINSKILLS_USER_INPUT_REQUIRED:platform_install_server_mode]\n");
   writeUserMessage(write, "platform.server-mode", [
-    "请选择服务器安装模式后重新执行：",
-    "- 快速单机安装",
-    "- 多节点主机集群",
-    "- 已有 Kubernetes 集群",
+    "请选择服务器类型：",
+    "1、单台服务器（Linux）",
+    "2、三台及以上服务器（Linux）",
+    "3、已有 Kubernetes 集群",
   ].join("\n"));
 }
 
@@ -215,12 +214,13 @@ async function selectPlatformRoute({
         writeMissingLocation(write);
         return waitingRoute("location");
       }
-      write("\n请选择应用运行环境的部署位置：\n  1) 安装到本地\n  2) 安装到服务器\n");
+      writeMissingLocation(write);
       while (!location) {
-        const answer = (await ask("请输入选项 [1-2，回车默认 1]: ")).trim();
-        if (answer === "" || answer === "1") location = "local";
+        const answer = (await ask("请输入选项 [1-3]: ")).trim();
+        if (answer === "1") location = "local";
         else if (answer === "2") location = "server";
-        else write("请输入 1 或 2。\n");
+        else if (answer === "3") return waitingRoute("existing-rainbond");
+        else write("请输入 1、2 或 3。\n");
       }
     }
 
@@ -253,8 +253,8 @@ async function selectPlatformRoute({
         writeMissingServerMode(write);
         return waitingRoute("mode", { location });
       }
-      write("\n请选择服务器安装模式：\n");
-      write("  1) 快速单机安装\n  2) 多节点主机集群\n  3) 安装到已有 Kubernetes 集群\n");
+      write("\n请选择服务器类型：\n");
+      write("  1、单台服务器（Linux）\n  2、三台及以上服务器（Linux）\n  3、已有 Kubernetes 集群\n");
       while (!mode) {
         const answer = (await ask("请输入选项 [1-3，回车默认 1]: ")).trim();
         if (answer === "" || answer === "1") mode = "single-node";

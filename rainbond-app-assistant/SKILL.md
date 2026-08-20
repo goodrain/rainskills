@@ -55,24 +55,65 @@ description: "Use whenever a user asks to deploy, run, deliver, publish, inspect
   - 规则说明、流程说明、人类可读结论：优先中文
   - `### Structured Output` 里的对象名、字段名、enum：保持英文 canonical 形式
 
+  <!-- rainskills-user-result:start -->
+  ## 用户可见结果协议（最高优先级）
+
+  普通用户请求部署、排障或交付验证时，内部可以维护结构化结果，但最终用户回复必须简短、中文、只呈现用户能直接使用的信息。若本节与后文 Output Format、示例或评测格式冲突，以本节为准。
+
+  部署成功时按下面的内容输出；所有名称和地址必须来自本轮真实返回值。某项无法确认时省略该项，不得猜测或推测：
+
+  ```text
+  部署成功。
+
+  - 项目：<用户项目名称>
+  - 运行环境：<本次实际使用的运行环境名称>
+  - 工作空间：<本次实际部署到的 Rainbond 工作空间名称>
+  - 应用：<创建或使用的 Rainbond 应用名称>
+  - 运行环境地址：<Rainbond Console 或应用管理页面地址>
+  - 应用访问地址：<部署完成后真实可访问的应用地址>
+  - 已完成操作：<用一句话概括本轮实际完成的项目识别、应用创建、组件构建、启动和访问验证；只列真实执行过的操作>
+  ```
+
+  部署失败或未完成时只输出：
+
+  ```text
+  部署失败。
+
+  失败原因：<用用户能理解的一句话说明直接原因>
+
+  解决办法：<确实存在安全、可执行的解决方案时才输出；没有就省略整项>
+  ```
+
+  只有“解决办法”确实存在并且可执行时才输出该项。默认用户回复不得出现 `Problem Judgment`、`Actions Taken`、`Verification Result`、`Follow-up Advice`、`Structured Output` 等诊断标题；不得展示内部状态码、枚举、对象字段、YAML、JSON、工具调用记录或英文状态表。只有用户明确要求结构化结果，或者自动化/评测明确要求结构化契约时，才允许输出后文的结构化格式。
+  <!-- rainskills-user-result:end -->
+
   <!-- rainskills-runtime-gate:start -->
   ## 运行环境门禁（最高优先级）
 
   ### 多运行环境操作契约
 
-  Node.js 前置检查通过后，每次用户业务请求都创建独立操作，不把项目绑定到任何环境、团队或应用。先执行固定 launcher + `["environment", "list", "--json"]`：用户明确说“运行环境/平台”时按环境名选择；明确说“团队”时表示默认环境中的团队；裸名称同时匹配环境和团队时必须让用户确认。未指定环境时使用全局默认环境；默认环境不可用时停止，禁止自动切换到其他环境。
+  Node.js 前置检查通过后，每次用户业务请求都创建独立操作，不把项目绑定到任何环境、团队或应用。先执行本地 launcher + `["environment", "list", "--json"]`：用户明确说“运行环境/平台”时按环境名选择；明确说“团队”时表示默认环境中的团队；裸名称同时匹配环境和团队时必须让用户确认。未指定环境时使用全局默认环境；默认环境不可用时停止，禁止自动切换到其他环境。
 
-  生成新的 UUID，并执行 launcher + `["operation", "begin", "--operation-id", "<uuid>", "--intent-json", "<intent-json>"]`；用户明确指定已有环境时在 `--intent-json` 前加入 `["--environment-id", "<immutable-environment-id>"]`。保存返回的 `operation_id`，此后每个 Rainbond MCP 工具调用都必须在参数中加入 `rainskills_operation_id`。环境改名或修改全局默认值不能改变已开始操作的目标。同一项目可以在多个环境和团队分别部署，禁止写入或推断项目级默认环境。
+  生成新的 UUID，并执行本地 launcher + `["operation", "begin", "--operation-id", "<uuid>", "--intent-json", "<intent-json>"]`；用户明确指定已有环境时在 `--intent-json` 前加入 `["--environment-id", "<immutable-environment-id>"]`。保存返回的 `operation_id`，此后每个 Rainbond MCP 工具调用都必须在参数中加入 `rainskills_operation_id`。环境改名或修改全局默认值不能改变已开始操作的目标。同一项目可以在多个环境和团队分别部署，禁止写入或推断项目级默认环境。
 
   第一步检查 Node.js 是否存在且主版本不低于 18。Node.js 缺失或低于 18 时，只说明“Rainskills 执行组件需要 Node.js 18 或更高版本”并停止：不选择运行环境，不调用 MCP，不猜测替代命令。只有用户或 agent 明确同意后才安装或升级 Node.js，再从同一原始 intent 继续。
 
-  固定 launcher 是 `["npx", "--yes", "rainskills@0.1.0-rc.66"]`；版本必须与本技能包 `package.json` 一致。把 launcher 与参数拼成 argv 数组直接执行，禁止使用 `rainskills@latest`，禁止拼接或执行 shell 字符串。
+  固定 launcher 是 `["npx", "--yes", "rainskills@0.1.0-rc.68"]`；版本必须与本技能包 `package.json` 一致。把 launcher 与参数拼成 argv 数组直接执行，禁止使用 `rainskills@latest`，禁止拼接或执行 shell 字符串。
+
+  本地 launcher 必须从当前 Skill 所在目录的同级目录定位 `rainbond-platform-installer/scripts/local-runtime.js`，解析为绝对路径后使用 `["node", "<绝对路径>"]` 执行。`environment list`、`operation begin`、`operation complete` 和 `runtime message` 只能使用本地 launcher；本地 launcher 只读取已安装文件和本机受保护状态，不得访问 npm 或其它网络。只有用户选定连接或安装运行环境后，才使用上面的固定 npx launcher。
 
   <!-- rainskills-runtime-contract:start -->
   ```json
   {
     "schema": "rainskills.skill-runtime-contract.v1",
-    "launcher": ["npx", "--yes", "rainskills@0.1.0-rc.66"],
+    "launcher": ["npx", "--yes", "rainskills@0.1.0-rc.68"],
+    "local_launcher": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js"],
+    "local_argv": {
+      "environment-list": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js", "environment", "list", "--json"],
+      "operation-begin": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js", "operation", "begin", "--operation-id", "<uuid>", "--intent-json", "<intent-json>"],
+      "operation-complete": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js", "operation", "complete", "--operation-id", "<uuid>"],
+      "runtime-message": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js", "runtime", "message", "--id", "<message-id>"]
+    },
     "intents": {
       "deploy": {"required": [], "optional": ["project_root", "source_kind", "source_url", "service_id"], "enums": {"source_kind": ["local", "git", "image", "package"]}},
       "create": {"required": [], "optional": ["project_root", "source_kind", "source_url", "service_id"], "enums": {"source_kind": ["local", "git", "image", "package"]}},
@@ -85,9 +126,9 @@ description: "Use whenever a user asks to deploy, run, deliver, publish, inspect
       "existing": ["saas", "private-existing"]
     },
     "connect_argv": {
-      "saas": ["npx", "--yes", "rainskills@0.1.0-rc.66", "runtime", "connect", "<target>", "--saas", "--intent-json", "<intent-json>"],
-      "private-existing": ["npx", "--yes", "rainskills@0.1.0-rc.66", "runtime", "connect", "<target>", "--rainbond-url", "<rainbond-url>", "--intent-json", "<intent-json>"],
-      "install-private": ["npx", "--yes", "rainskills@0.1.0-rc.66", "runtime", "connect", "<target>", "--install-private", "--location", "<private-location>", "--intent-json", "<intent-json>"]
+      "saas": ["npx", "--yes", "rainskills@0.1.0-rc.68", "runtime", "connect", "<target>", "--saas", "--intent-json", "<intent-json>"],
+      "private-existing": ["npx", "--yes", "rainskills@0.1.0-rc.68", "runtime", "connect", "<target>", "--rainbond-url", "<rainbond-url>", "--intent-json", "<intent-json>"],
+      "install-private": ["npx", "--yes", "rainskills@0.1.0-rc.68", "runtime", "connect", "<target>", "--install-private", "--location", "<private-location>", "--intent-json", "<intent-json>"]
     }
   }
   ```
@@ -111,7 +152,7 @@ description: "Use whenever a user asks to deploy, run, deliver, publish, inspect
 
   ### 新应用
 
-  用户明确要部署新应用后，先执行固定 launcher + `["runtime", "message", "--id", "new-application-environment"]`。收到 `[RAINSKILLS_USER_MESSAGE_BEGIN:<id>]` 与对应 END marker 后，只原样输出两者之间的正文，不输出 marker，不得总结、改写、调整项目符号或追加其它说明。下方文案仅用于核对，不得由 agent 自行生成：
+  用户明确要部署新应用后，先执行本地 launcher + `["runtime", "message", "--id", "new-application-environment"]`。收到 `[RAINSKILLS_USER_MESSAGE_BEGIN:<id>]` 与对应 END marker 后，只原样输出两者之间的正文，不输出 marker，不得总结、改写、调整项目符号或追加其它说明。下方文案仅用于核对，不得由 agent 自行生成：
 
   > 可以，我会帮你完成应用识别、构建、部署和访问验证。
   >
@@ -128,19 +169,19 @@ description: "Use whenever a user asks to deploy, run, deliver, publish, inspect
   1) 云端环境（免费体验）
   2) 私有环境（去对接）
 
-  用户选择私有环境后，立即执行固定 launcher + `["runtime", "message", "--id", "private-deployment-location"]`，并按同一消息协议原样输出块内正文：
+  用户选择私有环境后，立即执行本地 launcher + `["runtime", "message", "--id", "private-deployment-location"]`，并按同一消息协议原样输出块内正文：
 
   请选择部署位置：
 
-  1、对接到本地
-  2、对接到独立服务器
-  3、对接已有私有环境
+  1、部署到本机
+  2、部署到独立服务器
+  3、部署到已有 Rainbond
 
-  选择 1 时执行 `install-private` route，并在完整 argv 中使用 `["--location", "local"]`；选择 2 时执行 `install-private` route，并使用 `["--location", "server"]`；选择 3 时执行固定 launcher + `["runtime", "message", "--id", "private-console-origin"]`，收到地址后执行 `private-existing`。不得显示额外的接入方式中间步骤，不得在平台安装器中重复询问部署位置，也不得在环境准备完成前询问应用来源。
+  选择 1 时执行 `install-private` route，并在完整 argv 中使用 `["--location", "local"]`；选择 2 时执行 `install-private` route，并使用 `["--location", "server"]`；选择 3 时执行本地 launcher + `["runtime", "message", "--id", "private-console-origin"]`，收到地址后执行 `private-existing`。不得显示额外的接入方式中间步骤，不得在平台安装器中重复询问部署位置，也不得在环境准备完成前询问应用来源。
 
   ### 已有应用
 
-  用户明确要查询、排障、修改或验证已有应用时，使用与动作匹配的第一句话，只提供 `Rainbond Cloud` 或承载目标应用的`已有私有 Rainbond`。选择已有私有 Rainbond 时执行固定 launcher + `["runtime", "message", "--id", "private-console-origin"]` 并原样输出。已有应用不得安装新平台，也不得进入 install-private。
+  用户明确要查询、排障、修改或验证已有应用时，使用与动作匹配的第一句话，只提供 `Rainbond Cloud` 或承载目标应用的`已有私有 Rainbond`。选择已有私有 Rainbond 时执行本地 launcher + `["runtime", "message", "--id", "private-console-origin"]` 并原样输出。已有应用不得安装新平台，也不得进入 install-private。
   <!-- rainskills-runtime-routing:end -->
 
   ## 硬规则
@@ -225,7 +266,7 @@ description: "Use whenever a user asks to deploy, run, deliver, publish, inspect
 24. 不要自动拉起本地 Docker Desktop/OrbStack、执行本地 Docker build/push、或推送临时镜像作为兜底；这属于 delivery-mode 策略切换，必须先得到用户明确确认。
 25. 每次运行内部仍必须形成 `AppAssistantResult` 结果对象，但默认用户答复不一定暴露 YAML。
     当 `source_app_delivery` 的 runtime healthy、没有 blocker、控制台部署位置和公网访问地址都已确定，且 delivery 已 `delivered` 或只剩浏览器人工确认时，默认使用简洁中文交付报告，不追加 `### Structured Output`。
-26. 只有在自动化/评测/调试明确要求结构化结果、用户明确要求 YAML/JSON、结果仍在构建或异常、存在 blocker/handoff/身份歧义、或进入 dev-to-test promotion 时，才把 `AppAssistantResult` 渲染为最终 fenced `yaml`。仅因当前 agent 无法打开公网地址而需要用户确认，不是暴露 YAML 的理由。
+26. 只有在自动化/评测明确要求结构化契约，或用户明确要求 YAML、JSON、调试详情、内部状态对象时，才把 `AppAssistantResult` 渲染为最终 fenced `yaml`。部署失败、仍在构建、存在 blocker/handoff/身份歧义或进入 dev-to-test promotion 都不是默认暴露 YAML 的理由。
 27. 如果本次使用了 Git、镜像仓库或其他传输代理，必须在默认交付报告的处理记录或注意事项中说明；在结构化模式下也必须写入 `actions_performed[].details`。
     代理事实属于执行记录，不是强制暴露 YAML 的理由。
 28. `rbd-*` 组件（rbd-gateway、rbd-api、rbd-worker、rbd-chaos、rbd-db、rbd-mq、rbd-monitor、rbd-node 等）是 Rainbond 平台自身的基础设施组件，不是用户应用组件。
@@ -933,13 +974,9 @@ description: "Use whenever a user asks to deploy, run, deliver, publish, inspect
   Use this mode when any of the following is true:
   - the user asks for structured output, YAML, JSON, debug details, or machine-readable output
   - an eval, wrapper, or automation flow explicitly needs deterministic structured schema validation
-  - any concise delivery report condition above is not met
-  - the app is building, unhealthy, blocked, identity-ambiguous, or requires handoff
-  - `promotion_result` is non-null or the user requested dev-to-test promotion
-  - there is any unresolved blocker or handoff
   - another skill or wrapper will consume the result as input
 
-  Building, unhealthy, blocked, ambiguous, handoff, and incomplete promotion states should keep the detailed human-readable sections and evidence below. Do not make non-success output terse merely because successful output is concise.
+  普通对话中的 building、unhealthy、blocked、ambiguous、handoff 和 incomplete promotion 结果仍使用“用户可见结果协议”，不得因为内部状态复杂就暴露结构化报告。
 
   In structured contract mode:
   - the human-readable sections below are the narrative view over `AppAssistantResult`

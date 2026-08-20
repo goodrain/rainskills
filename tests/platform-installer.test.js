@@ -49,9 +49,9 @@ function userMessageBody(output, messageId) {
 test("user-message protocol renders one stable bounded message and rejects marker injection", () => {
   const { renderUserMessage } = require(userMessagePath);
   assert.equal(
-    renderUserMessage("platform.location", "请选择部署位置：\n\n1. 安装到本地\n2. 安装到服务器"),
+    renderUserMessage("platform.location", "请选择部署位置：\n\n1、部署到本机\n2、部署到独立服务器\n3、部署到已有 Rainbond"),
     "[RAINSKILLS_USER_MESSAGE_BEGIN:platform.location]\n"
-      + "请选择部署位置：\n\n1. 安装到本地\n2. 安装到服务器\n"
+      + "请选择部署位置：\n\n1、部署到本机\n2、部署到独立服务器\n3、部署到已有 Rainbond\n"
       + "[RAINSKILLS_USER_MESSAGE_END:platform.location]\n"
   );
   assert.throws(() => renderUserMessage("bad id", "message"), /message id/i);
@@ -74,7 +74,10 @@ test("preflight and non-interactive confirmation are fixed bounded user messages
     {
       ok: true,
       blockers: [],
-      warnings: ["内存 7.6 GB 低于推荐配置 8 GB"],
+      warnings: [
+        "内存 7.6 GB 低于推荐配置 8 GB",
+        "可用磁盘 44.1 GB 低于推荐配置 50 GB",
+      ],
       effects: ["安装并启动 Docker 运行环境", "启动 privileged rainbond 容器并写入持久化数据"],
     },
     { kind: "remote-linux", host: "root@example.com" },
@@ -84,11 +87,10 @@ test("preflight and non-interactive confirmation are fixed bounded user messages
     userMessageBody(preflightOutput.join(""), "platform.preflight"),
     "Linux 服务器 root@example.com 环境检查已通过：\n\n"
       + "4 核 CPU / 7.6 GB 内存 / 44.1 GB 可用磁盘\n\n"
-      + "资源低于推荐配置，仍会继续安装；最终以 Rainbond 实际部署验证结果为准：\n"
-      + "- 内存 7.6 GB 低于推荐配置 8 GB\n\n"
       + "确认后将执行：\n"
-      + "- 需要安装运行环境所需要的依赖（预估多少资源等等）",
+      + "- 需要安装运行环境所需要的依赖（预计占用：2 GB 内存 / 10 GB 磁盘）",
   );
+  assert.doesNotMatch(preflightOutput.join(""), /推荐配置|低于推荐|预计占用：.*CPU|预估多少资源|等等/);
 
   const windowsOutput = [];
   printWindowsPreflight(
@@ -101,8 +103,9 @@ test("preflight and non-interactive confirmation are fixed bounded user messages
     "本地（Windows / WSL2）环境检查已通过：\n\n"
       + "8 核 CPU / 16.0 GB 内存 / 100.0 GB 可用磁盘\n\n"
       + "确认后将执行：\n"
-      + "- 需要安装运行环境所需要的依赖（预估多少资源等等）",
+      + "- 需要安装运行环境所需要的依赖（预计占用：2 GB 内存 / 10 GB 磁盘）",
   );
+  assert.doesNotMatch(windowsOutput.join(""), /推荐配置|低于推荐|预计占用：.*CPU|预估多少资源|等等/);
 
   const confirmationOutput = [];
   assert.equal(await confirmInstall(false, {
@@ -111,7 +114,7 @@ test("preflight and non-interactive confirmation are fixed bounded user messages
   }), false);
   assert.equal(
     userMessageBody(confirmationOutput.join(""), "platform.install-confirmation"),
-    "确认上述系统变更后，重新执行相同命令并添加 --yes。",
+    "是否开始安装 Rainbond？请回复 y 或 n。",
   );
 });
 
@@ -128,7 +131,7 @@ test("platform branch handoffs and completion text are fixed by the helper", asy
   );
   assert.equal(
     userMessageBody(hostOutput.join(""), "platform.host-cluster-configuration"),
-    "多节点主机集群模式已选择。请继续提供或生成 cluster.yaml。",
+    "多节点主机集群模式已选择。Rainskills 将生成受保护的 cluster.yaml 示例文件，编辑完成后会一次检查全部节点和集群拓扑。",
   );
 
   const kubernetesOutput = [];
@@ -190,6 +193,12 @@ function writeLegacyRecoveryBundle(bundleRoot) {
 test("launcher routes platform and resume commands to the bundled helper", () => {
   const { resolveInvocation } = require(launcherPath);
   const fakeNode = path.join(repoRoot, "fake-node");
+  const sshSetupPath = path.join(
+    repoRoot,
+    "rainbond-platform-installer",
+    "scripts",
+    "ssh-key-setup.js"
+  );
 
   assert.deepEqual(resolveInvocation(["platform", "install", "--onboarding-id", "abc"], {
     control: {
@@ -213,6 +222,17 @@ test("launcher routes platform and resume commands to the bundled helper", () =>
   }), {
     executable: fakeNode,
     args: [platformInstallerPath, "resume", "--onboarding-id", "abc"],
+  });
+  assert.deepEqual(resolveInvocation(["ssh", "prepare", "--ssh", "root@example.com", "--ssh-port", "22"], {
+    control: {
+      mode: "windows-native",
+      hostPlatform: "win32",
+      controlPlatform: "win32",
+    },
+    execPath: fakeNode,
+  }), {
+    executable: fakeNode,
+    args: [sshSetupPath, "prepare", "--ssh", "root@example.com", "--ssh-port", "22"],
   });
 });
 
@@ -1433,16 +1453,16 @@ test("target choices follow the detected control machine", () => {
   const { targetChoicesForPlatform } = require(platformInstallerPath);
 
   assert.deepEqual(targetChoicesForPlatform("linux"), [
-    { value: "local-linux", label: "安装到本地" },
-    { value: "remote-linux", label: "安装到 Linux 服务器" },
+    { value: "local-linux", label: "部署到本机" },
+    { value: "remote-linux", label: "部署到独立服务器" },
   ]);
   assert.deepEqual(targetChoicesForPlatform("darwin"), [
-    { value: "local-macos", label: "安装到本地" },
-    { value: "remote-linux", label: "安装到 Linux 服务器" },
+    { value: "local-macos", label: "部署到本机" },
+    { value: "remote-linux", label: "部署到独立服务器" },
   ]);
   assert.deepEqual(targetChoicesForPlatform("win32"), [
-    { value: "local-windows", label: "安装到本地" },
-    { value: "remote-linux", label: "安装到 Linux 服务器" },
+    { value: "local-windows", label: "部署到本机" },
+    { value: "remote-linux", label: "部署到独立服务器" },
   ]);
   for (const platform of ["linux", "darwin", "win32"]) {
     assert.doesNotMatch(JSON.stringify(targetChoicesForPlatform(platform)), /推荐/);
@@ -1600,14 +1620,8 @@ test("SSH session reuses existing non-interactive authentication", async () => {
   assert(calls[0].args.includes("BatchMode=yes"));
 });
 
-test("SSH session falls back to one native interactive authentication and reuses it", async () => {
-  const {
-    closeSshSession,
-    establishSshSession,
-    inspectRemoteSystem,
-  } = require(platformInstallerPath);
-  const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-ssh-test-"));
-  const probeCalls = [];
+test("SSH session always pauses for the fixed system-terminal key setup flow", async () => {
+  const { establishSshSession } = require(platformInstallerPath);
   const attachedCalls = [];
   const output = [];
   const session = await establishSshSession(
@@ -1615,75 +1629,32 @@ test("SSH session falls back to one native interactive authentication and reuses
     {
       platform: "linux",
       interactive: true,
-      runner: (command, args) => {
-        probeCalls.push({ command, args });
-        return {
-          status: 255,
-          stdout: "",
-          stderr: "Permission denied (publickey,password).",
-        };
-      },
+      runner: () => ({
+        status: 255,
+        stdout: "",
+        stderr: "Permission denied (publickey,password).",
+      }),
       attachedRunner: async (command, args, options) => {
         attachedCalls.push({ command, args, options });
         return { code: 0, signal: null };
       },
-      createTempDirectory: () => tempDirectory,
       write: (value) => output.push(value),
     }
   );
 
-  assert.equal(session.controlPath, path.join(tempDirectory, "control"));
-  assert.equal(session.multiplexed, true);
-  assert.equal(attachedCalls.length, 1);
-  assert.equal(attachedCalls[0].command, "ssh");
-  assert(attachedCalls[0].args.includes("ControlMaster=yes"));
-  assert(attachedCalls[0].args.includes("ControlPersist=600"));
-  assert(attachedCalls[0].args.includes("BatchMode=no"));
-  assert.equal(attachedCalls[0].options.interactive, true);
-  assert.match(output.join(""), /一次 SSH 密码/);
-  assert.match(output.join(""), /不会保存/);
-
-  const commandCalls = [];
-  inspectRemoteSystem(
-    { host: "root@192.168.1.20", port: 22 },
-    (command, args) => {
-      commandCalls.push({ command, args });
-      return {
-        status: 0,
-        stdout: [
-          "PLATFORM=linux",
-          "ARCH=x64",
-          "CPU_CORES=8",
-          `MEMORY_BYTES=${16 * 1024 ** 3}`,
-          `DISK_BYTES=${96 * 1024 ** 3}`,
-          "HAS_PRIVILEGE=true",
-          "HAS_DOCKER=false",
-          "HAS_RAINBOND=false",
-          "FIREWALL=inactive",
-          "SWAP_ENABLED=false",
-          "NETWORK_REACHABLE=true",
-          "",
-        ].join("\n"),
-        stderr: "",
-      };
-    },
-    session
-  );
-  assert(commandCalls[0].args.includes(`ControlPath=${session.controlPath}`));
-
-  const closeCalls = [];
-  closeSshSession(session, (command, args) => {
-    closeCalls.push({ command, args });
-    return { status: 0, stdout: "", stderr: "" };
-  });
-  assert.equal(closeCalls[0].command, "ssh");
-  assert(closeCalls[0].args.includes("exit"));
-  assert.equal(fs.existsSync(tempDirectory), false);
+  assert.equal(session, null);
+  assert.equal(attachedCalls.length, 0, "agent task must never read the SSH password");
+  const message = userMessageBody(output.join(""), "platform.ssh-authentication");
+  assert.match(message, /系统终端/);
+  assert.match(message, /只准备 SSH 连接，不会安装 Rainbond/);
+  assert.match(message, /npx --yes rainskills@0\.1\.0-rc\.68 ssh prepare --ssh root@192\.168\.1\.20 --ssh-port 22/);
+  assert.match(message, /完成后回到这里回复“已完成”/);
 });
 
-test("Windows SSH authentication does not request unsupported ControlMaster sockets", async () => {
+test("Windows SSH authentication also uses the same fixed external preparation flow", async () => {
   const { establishSshSession } = require(platformInstallerPath);
   const attachedCalls = [];
+  const output = [];
   const session = await establishSshSession(
     { host: "root@192.168.1.20", port: 22 },
     {
@@ -1699,16 +1670,16 @@ test("Windows SSH authentication does not request unsupported ControlMaster sock
         return { code: 0, signal: null };
       },
       createTempDirectory: () => assert.fail("Windows must not create a ControlMaster socket"),
-      write: () => {},
+      write: (value) => output.push(value),
     }
   );
 
-  assert.equal(session.controlPath, null);
-  assert.equal(session.multiplexed, false);
-  assert.equal(session.interactive, true);
-  assert.equal(attachedCalls.length, 1);
-  assert(!attachedCalls[0].args.includes("ControlMaster=yes"));
-  assert(!attachedCalls[0].args.some((argument) => argument.startsWith("ControlPath=")));
+  assert.equal(session, null);
+  assert.equal(attachedCalls.length, 0);
+  assert.match(
+    userMessageBody(output.join(""), "platform.ssh-authentication"),
+    /npx --yes rainskills@0\.1\.0-rc\.68 ssh prepare --ssh root@192\.168\.1\.20 --ssh-port 22/
+  );
 });
 
 test("interactive SSH commands inherit terminal input without piping scripts to stdin", () => {
@@ -1750,7 +1721,15 @@ test("SSH authentication pauses cleanly when no interactive terminal is availabl
   assert.match(output.join(""), /RAINSKILLS_USER_INPUT_REQUIRED:ssh_authentication/);
   assert.equal(
     userMessageBody(output.join(""), "platform.ssh-authentication"),
-    "该服务器需要确认主机指纹或输入 SSH 密码，请在交互终端继续。",
+    [
+      "当前还不能通过 SSH 免密连接服务器。",
+      "",
+      "请打开你电脑上的系统终端，执行下面这一条命令：",
+      "npx --yes rainskills@0.1.0-rc.68 ssh prepare --ssh root@192.168.1.20 --ssh-port 22",
+      "",
+      "这一步只准备 SSH 连接，不会安装 Rainbond。服务器指纹确认和 SSH 密码只会由系统 ssh 读取。",
+      "完成后回到这里回复“已完成”，我会在当前任务中继续安装，不会重新选择流程。",
+    ].join("\n"),
   );
 });
 
@@ -1906,7 +1885,7 @@ test("remote Console selection pauses for an AI when every candidate fails witho
   );
 });
 
-test("location is the first choice and local resolves directly without server modes", async () => {
+test("location is the first explicit choice and local resolves directly without server modes", async () => {
   const { selectPlatformRoute } = require(platformRoutingPath);
   const output = [];
   const questions = [];
@@ -1916,7 +1895,7 @@ test("location is the first choice and local resolves directly without server mo
     interactive: true,
     ask: async (question) => {
       questions.push(question);
-      return "";
+      return "1";
     },
     hostname: () => "developer-machine",
     write: (value) => output.push(value),
@@ -1931,8 +1910,8 @@ test("location is the first choice and local resolves directly without server mo
     sshPort: null,
   });
   assert.equal(questions.length, 1);
-  assert.match(output.join(""), /安装到本地/);
-  assert.match(output.join(""), /安装到服务器/);
+  assert.match(output.join(""), /部署到本机/);
+  assert.match(output.join(""), /部署到独立服务器/);
   assert.doesNotMatch(output.join(""), /多节点|Kubernetes|host-cluster|existing-kubernetes/i);
 });
 
@@ -1956,8 +1935,8 @@ test("server location reveals a separate explicit server mode choice", async () 
     host: null,
     sshPort: null,
   });
-  assert.match(output.join(""), /快速单机安装/);
-  assert.match(output.join(""), /多节点主机集群/);
+  assert.match(output.join(""), /单台服务器（Linux）/);
+  assert.match(output.join(""), /三台及以上服务器（Linux）/);
   assert.match(output.join(""), /已有 Kubernetes 集群/);
 });
 
@@ -1983,12 +1962,12 @@ test("non-interactive routing emits stable missing-input actions and never defau
   assert.match(locationOutput.join(""), /RAINSKILLS_USER_INPUT_REQUIRED:platform_install_location/);
   assert.equal(
     userMessageBody(locationOutput.join(""), "platform.location"),
-    "请选择应用运行环境的部署位置后重新执行：\n"
-      + "- 安装到本地：--location local\n"
-      + "- 安装到服务器：--location server"
+    "请选择部署位置：\n\n"
+      + "1、部署到本机\n"
+      + "2、部署到独立服务器\n"
+      + "3、部署到已有 Rainbond"
   );
-  assert.match(locationOutput.join(""), /--location local/);
-  assert.match(locationOutput.join(""), /--location server/);
+  assert.doesNotMatch(locationOutput.join(""), /--location/);
   assert.doesNotMatch(locationOutput.join(""), /host-cluster|existing-kubernetes|Kubernetes|多节点/i);
 
   const modeOutput = [];
@@ -2006,10 +1985,10 @@ test("non-interactive routing emits stable missing-input actions and never defau
   assert.match(modeOutput.join(""), /RAINSKILLS_USER_INPUT_REQUIRED:platform_install_server_mode/);
   assert.equal(
     userMessageBody(modeOutput.join(""), "platform.server-mode"),
-    "请选择服务器安装模式后重新执行：\n"
-      + "- 快速单机安装\n"
-      + "- 多节点主机集群\n"
-      + "- 已有 Kubernetes 集群"
+    "请选择服务器类型：\n"
+      + "1、单台服务器（Linux）\n"
+      + "2、三台及以上服务器（Linux）\n"
+      + "3、已有 Kubernetes 集群"
   );
   assert.doesNotMatch(modeOutput.join(""), /--location|--mode/);
 });
@@ -2088,7 +2067,7 @@ test("routing rejects invalid combinations and never infers a mode from node cou
   assert.match(output.join(""), /platform_install_server_mode/);
 });
 
-test("interactive target selection defaults Linux to local but supports another server", async () => {
+test("interactive target selection explicitly chooses Linux local or another server", async () => {
   const { selectInstallTarget } = require(platformInstallerPath);
 
   const localQuestions = [];
@@ -2098,7 +2077,7 @@ test("interactive target selection defaults Linux to local but supports another 
     interactive: true,
     ask: async (question) => {
       localQuestions.push(question);
-      return "";
+      return "1";
     },
     write: () => {},
   });
@@ -2130,10 +2109,10 @@ test("interactive target selection defaults Linux to local but supports another 
   });
 });
 
-test("macOS and Windows default to local while still offering a Linux server", async () => {
+test("macOS and Windows explicitly choose local while still offering a Linux server", async () => {
   const { selectInstallTarget } = require(platformInstallerPath);
   const macOutput = [];
-  const macAnswers = [""];
+  const macAnswers = ["1"];
   const mac = await selectInstallTarget({
     platform: "darwin",
     options: {},
@@ -2142,12 +2121,12 @@ test("macOS and Windows default to local while still offering a Linux server", a
     write: (value) => macOutput.push(value),
   });
   assert.equal(mac.kind, "local-macos");
-  assert.match(macOutput.join(""), /安装到本地/);
-  assert.match(macOutput.join(""), /安装到服务器/);
+  assert.match(macOutput.join(""), /部署到本机/);
+  assert.match(macOutput.join(""), /部署到独立服务器/);
   assert.doesNotMatch(macOutput.join(""), /推荐/);
 
   const windowsOutput = [];
-  const windowsAnswers = [""];
+  const windowsAnswers = ["1"];
   const windows = await selectInstallTarget({
     platform: "win32",
     options: {},
@@ -2163,8 +2142,8 @@ test("macOS and Windows default to local while still offering a Linux server", a
     host: os.hostname(),
     sshPort: null,
   });
-  assert.match(windowsOutput.join(""), /安装到本地/);
-  assert.match(windowsOutput.join(""), /安装到服务器/);
+  assert.match(windowsOutput.join(""), /部署到本机/);
+  assert.match(windowsOutput.join(""), /部署到独立服务器/);
   assert.doesNotMatch(windowsOutput.join(""), /推荐/);
 });
 
@@ -2182,8 +2161,40 @@ test("non-interactive target selection pauses for the AI instead of choosing for
   assert.equal(selection.waiting, true);
   assert.equal(selection.missing, "location");
   assert.match(output.join(""), /RAINSKILLS_USER_INPUT_REQUIRED:platform_install_location/);
-  assert.match(output.join(""), /--location local/);
-  assert.match(output.join(""), /--location server/);
+  assert.match(output.join(""), /1、部署到本机/);
+  assert.match(output.join(""), /2、部署到独立服务器/);
+  assert.match(output.join(""), /3、部署到已有 Rainbond/);
+  assert.doesNotMatch(output.join(""), /--location/);
+});
+
+test("interactive target selection uses the same third option for an existing Rainbond", async () => {
+  const { selectPlatformRoute } = require(platformRoutingPath);
+  const output = [];
+  const route = await selectPlatformRoute({
+    platform: "darwin",
+    options: {},
+    interactive: true,
+    ask: async () => "3",
+    write: (value) => output.push(value),
+  });
+
+  assert.deepEqual(route, {
+    waiting: true,
+    missing: "existing-rainbond",
+    location: null,
+    mode: null,
+    kind: null,
+    host: null,
+    sshPort: null,
+  });
+  assert.equal(
+    userMessageBody(output.join(""), "platform.location"),
+    "请选择部署位置：\n\n"
+      + "1、部署到本机\n"
+      + "2、部署到独立服务器\n"
+      + "3、部署到已有 Rainbond"
+  );
+  assert.doesNotMatch(output.join(""), /请选择服务器类型/);
 });
 
 test("host cluster dispatch persists routing, calls only ROI, and completes verified platform", async () => {
@@ -2253,6 +2264,52 @@ test("host cluster dispatch persists routing, calls only ROI, and completes veri
   assert.equal(state.stage, "mode-configuration");
   assert.equal(state.status, "running");
   assert.equal(state.target_kind, "host-cluster");
+});
+
+test("host cluster configuration waiting stage is mirrored by the platform state", async () => {
+  const { runInstallOperation } = require(platformInstallerPath);
+  const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-host-config-waiting-"));
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  const root = path.join(tempHome, ".rainbond", "platform-installer", operationId);
+  fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+  const paths = {
+    root,
+    state: path.join(root, "state.json"),
+    events: path.join(root, "events.jsonl"),
+    log: path.join(root, "install.log"),
+    installer: path.join(root, "rainbond-install.sh"),
+  };
+  const stateStore = createPortableSecureStateStore(tempHome);
+  const writeState = (filePath, value) => stateStore.atomicWriteJson(filePath, value);
+  const updateState = (filePath, current, values) => {
+    const next = { ...current, ...values };
+    writeState(filePath, next);
+    return next;
+  };
+  await runInstallOperation({ onboardingId: operationId, location: "server", mode: "host-cluster" }, {
+    onboardingPathResolver: () => path.join(tempHome, "onboarding.json"),
+    ensurePrivateDirectory: () => {},
+    onboardingReader: () => ({
+      operation_id: operationId,
+      stage: "awaiting-platform",
+      target: "codex",
+      deployment_mode: "self-hosted",
+      control_mode: "posix",
+      intent: { type: "deploy", project_root: "/workspace/app", source_kind: "local" },
+    }),
+    pathsResolver: () => paths,
+    stateWriter: writeState,
+    stateUpdater: updateState,
+    hostClusterInstaller: async () => ({
+      waiting: true,
+      waitingStage: "waiting-host-cluster-config",
+      configPath: path.join(root, "host-cluster", "cluster.yaml"),
+    }),
+    existingKubernetesInstaller: async () => assert.fail("must not dispatch Kubernetes"),
+  });
+  const state = stateStore.readProtectedJson(paths.state);
+  assert.equal(state.stage, "waiting-host-cluster-config");
+  assert.equal(state.status, "waiting_user");
 });
 
 test("existing Kubernetes dispatch calls only Helm driver with shared abort and completes verified platform", async () => {
@@ -2760,7 +2817,7 @@ test("remote preparation creates a protected workspace and copies the verified a
   );
 });
 
-test("Windows remote preparation keeps SSH and SCP password prompts attached", () => {
+test("remote preparation remains non-interactive even if a legacy session says interactive", () => {
   const { prepareRemoteInstaller } = require(platformInstallerPath);
   const calls = [];
   const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
@@ -2777,12 +2834,12 @@ test("Windows remote preparation keeps SSH and SCP password prompts attached", (
     { interactive: true }
   );
 
-  assert.equal(calls[0].options.interactive, true);
-  assert.equal(calls[0].options.timeout, null);
-  assert.equal(calls[0].options.input, undefined);
-  assert(calls[1].args.includes("BatchMode=no"));
-  assert.equal(calls[1].options.interactive, true);
-  assert.equal(calls[1].options.timeout, null);
+  assert.equal(calls[0].options.interactive, undefined);
+  assert.equal(calls[0].options.timeout, 30000);
+  assert.match(calls[0].options.input, /chmod 700/);
+  assert(calls[1].args.includes("BatchMode=yes"));
+  assert.equal(calls[1].options.interactive, undefined);
+  assert.equal(calls[1].options.timeout, 120000);
 });
 
 test("remote installer invocation verifies the transferred digest and Bash syntax", () => {
@@ -2815,7 +2872,7 @@ test("remote installer invocation verifies the transferred digest and Bash synta
   assert(invocation.args.includes(`ControlPath=${session.controlPath}`));
 });
 
-test("Windows remote installer invocation keeps SSH authentication on the terminal", () => {
+test("remote installer invocation never reopens SSH password authentication", () => {
   const { remoteInstallerInvocation } = require(platformInstallerPath);
   const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
   const digest = "b".repeat(64);
@@ -2827,12 +2884,11 @@ test("Windows remote installer invocation keeps SSH authentication on the termin
     { interactive: true }
   );
 
-  assert.equal(invocation.interactive, true);
-  assert.equal(invocation.input, undefined);
-  assert.deepEqual(invocation.args.slice(-2, -1), ["-lc"]);
-  assert.match(invocation.args.at(-1), /base64 -d \| bash -s/);
-  assert(invocation.args.at(-1).includes(operationId));
-  assert(invocation.args.at(-1).includes(digest));
+  assert.equal(invocation.interactive, false);
+  assert.match(invocation.input, /set -euo pipefail/);
+  assert(invocation.args.includes("BatchMode=yes"));
+  assert(invocation.args.some((argument) => argument.includes(operationId)));
+  assert(invocation.args.includes(digest));
   assert(!invocation.args.includes("ControlMaster=yes"));
 });
 
@@ -2946,12 +3002,16 @@ test("skill routes platform setup but excludes application delivery", () => {
   assert.match(skill, /Do not use it to deploy an application/i);
   assert.match(skill, /rainbond-app-assistant/);
   assert.match(skill, /explicit confirmation/i);
-  assert.match(skill, /Windows.*安装到本地.*安装到 Linux 服务器/is);
+  assert.match(skill, /Windows.*同一份三项部署位置消息/is);
   assert.match(skill, /local-windows/);
   assert.match(skill, /UAC/);
   assert.doesNotMatch(skill, /推荐/);
-  assert.match(skill, /SSH.*system.*ssh/is);
-  assert.match(skill, /password.*will not save/is);
+  assert.match(skill, /ssh prepare/);
+  assert.match(skill, /TTY availability must not change this behavior/);
+  assert.match(skill, /BatchMode=yes/);
+  assert.match(skill, /同一 `onboarding-id`/);
+  assert.match(skill, /授权仅.*一次/s);
+  assert.doesNotMatch(skill, /later steps may ask for the password again/i);
   assert.match(skill, /Never ask.*password.*in chat/is);
   assert.match(skill, /RAINSKILLS_USER_INPUT_REQUIRED:console_address/);
   assert.match(skill, /--console-host/);
@@ -3023,8 +3083,8 @@ test("published guidance describes local and remote target selection", () => {
   for (const blocker of ["19041", "虚拟化", "NAT", "端口", "UAC", "计划任务", "摘要"]) {
     assert.match(troubleshooting, new RegExp(blocker));
   }
-  assert.match(readme, /云端环境（免费体验）.*私有环境（去对接）.*对接到本地.*对接到独立服务器.*对接已有私有环境/s);
-  assert.match(readme, /对接到本地.*对接到独立服务器.*对接已有私有环境/s);
+  assert.match(readme, /云端环境（免费体验）.*私有环境（去对接）.*部署到本机.*部署到独立服务器.*部署到已有 Rainbond/s);
+  assert.match(readme, /部署到本机.*部署到独立服务器.*部署到已有 Rainbond/s);
   assert.match(policy, /远程 Linux/);
   assert.doesNotMatch(policy, /不支持远程 SSH/);
 });

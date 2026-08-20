@@ -49,6 +49,37 @@ test("historical mcp.env cannot bypass not_started", async () => {
   assert.equal(probes, 0);
 });
 
+test("adding an environment uses operation-scoped state and ignores stale legacy connecting state", () => {
+  const { createRuntimeStateManager } = require(runtimeStatePath);
+  const home = temporaryHome();
+  const legacy = createRuntimeStateManager({
+    home,
+    stateStore: createPortableSecureStateStore(home),
+    liveProbe: async () => true,
+  });
+  const stale = connectedInput();
+  legacy.startConnecting(stale);
+
+  const operationId = "b7c0af4f-5dd7-41ec-9d11-583203a71483";
+  const scoped = createRuntimeStateManager({
+    home,
+    stateStore: createPortableSecureStateStore(home),
+    operationId,
+    liveProbe: async () => true,
+  });
+  const next = {
+    ...connectedInput(),
+    operation_id: operationId,
+    console_origin: "https://second.example.com",
+    intent: { type: "environment-add" },
+  };
+
+  assert.deepEqual(scoped.read(), { state: "not_started" });
+  assert.equal(scoped.startConnecting(next).operation_id, operationId);
+  assert.equal(legacy.read().operation_id, stale.operation_id);
+  assert.notEqual(scoped.path, legacy.path);
+});
+
 test("runtime status is usable only after connected state passes a live probe", async () => {
   const { createRuntimeStateManager } = require(runtimeStatePath);
   const home = temporaryHome();

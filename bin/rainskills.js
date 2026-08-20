@@ -36,7 +36,7 @@ function runtimeChildEnvironment(source = process.env, extra = {}, expectedOrigi
     if (typeof source[key] === "string") environment[key] = source[key];
   }
   for (const key of Object.keys(extra)) {
-    if (!["RAINSKILLS_RUNTIME_CONNECT_COMPLETION", "RAINSKILLS_RUNTIME_OPERATION_ID"].includes(key)) {
+    if (!["RAINSKILLS_RUNTIME_CONNECT_COMPLETION", "RAINSKILLS_RUNTIME_OPERATION_ID", "RAINSKILLS_RUNTIME_STATE_SCOPE"].includes(key)) {
       throw new Error("runtime child environment 包含未知字段");
     }
     environment[key] = extra[key];
@@ -391,11 +391,15 @@ async function defaultConnectionRunner(invocation, {
     });
     return { code: 0, completesRuntimeState: true };
   }
+  const childEnvironment = {
+    RAINSKILLS_RUNTIME_CONNECT_COMPLETION: "1",
+    RAINSKILLS_RUNTIME_OPERATION_ID: operationId,
+  };
+  if (options.intent?.type === "environment-add") {
+    childEnvironment.RAINSKILLS_RUNTIME_STATE_SCOPE = "operation";
+  }
   const result = await runAttached(invocation.executable, invocation.args, {
-    env: runtimeChildEnvironment(process.env, {
-      RAINSKILLS_RUNTIME_CONNECT_COMPLETION: "1",
-      RAINSKILLS_RUNTIME_OPERATION_ID: operationId,
-    }, origin),
+    env: runtimeChildEnvironment(process.env, childEnvironment, origin),
   });
   return { ...result, completesRuntimeState: true };
 }
@@ -442,6 +446,16 @@ async function runBuiltin(args, {
   const getOperationStore = () => operationStore || getEnvironmentServices().operationStore;
   const getEnvironmentCredentialStore = () => environmentCredentialStore
     || getEnvironmentServices().environmentCredentialStore;
+  const getRuntimeStateManager = (operationId, { scoped = false } = {}) => {
+    if (runtimeStateManager) return runtimeStateManager;
+    const operationScoped = scoped || (
+      credentialEnvironment.RAINSKILLS_RUNTIME_STATE_SCOPE === "operation"
+      && credentialEnvironment.RAINSKILLS_RUNTIME_OPERATION_ID === operationId
+    );
+    return require(
+      "../rainbond-platform-installer/scripts/runtime-state.js"
+    ).createRuntimeStateManager(operationScoped ? { operationId } : {});
+  };
 
   if (args[0] === "mcp" && args[1] === "serve") {
     const { client } = parseMcpServeArgs(args);
@@ -686,9 +700,7 @@ async function runBuiltin(args, {
   }
   if (args[0] === "runtime" && args[1] === "assert-connect") {
     const expected = parseRuntimeAssertConnectArgs(args);
-    const manager = runtimeStateManager || require(
-      "../rainbond-platform-installer/scripts/runtime-state.js"
-    ).createRuntimeStateManager();
+    const manager = getRuntimeStateManager(expected.operationId);
     assertConnectingState(manager.read(), expected);
     return true;
   }
@@ -700,9 +712,7 @@ async function runBuiltin(args, {
     ) {
       throw new Error("runtime connect credential writer 参数无效");
     }
-    const manager = runtimeStateManager || require(
-      "../rainbond-platform-installer/scripts/runtime-state.js"
-    ).createRuntimeStateManager();
+    const manager = getRuntimeStateManager(args[3]);
     const current = manager.read();
     if (current.state !== "connecting" || current.operation_id !== args[3]) {
       throw new Error("runtime connect credential writer 与 connecting operation 不匹配");
@@ -791,9 +801,9 @@ async function runBuiltin(args, {
     if (inspection.httpConfirmationRequired && !options.allowInsecureHttp) {
       throw new Error("明文 HTTP 需要单独显式确认；确认可信内网后使用 --allow-insecure-http");
     }
-    const manager = runtimeStateManager || require(
-      "../rainbond-platform-installer/scripts/runtime-state.js"
-    ).createRuntimeStateManager();
+    const manager = getRuntimeStateManager(operationId, {
+      scoped: options.intent.type === "environment-add",
+    });
     const connection = {
       target_client: options.targetClient,
       environment_kind: options.environmentChoice === "saas" ? "saas" : "private",
@@ -892,6 +902,9 @@ async function runBuiltin(args, {
         throw new Error("runtime connect 不能改变已锁定的运行环境");
       }
     }
+    const environmentSnapshot = registeredEnvironment && options.intent.type === "environment-add"
+      ? getEnvironmentRegistry().read()
+      : null;
     write(`${JSON.stringify({
       schema: "rainskills.runtime-connect-result.v1",
       state: "connected",
@@ -901,6 +914,17 @@ async function runBuiltin(args, {
         environment_id: registeredEnvironment.id,
         environment_name: registeredEnvironment.name,
       } : {}),
+      ...(environmentSnapshot ? {
+        default_environment_id: environmentSnapshot.default_environment_id,
+        environments: environmentSnapshot.environments,
+        user_message: require(
+          "../rainbond-platform-installer/scripts/user-message.js"
+        ).renderEnvironmentConnectedList({
+          environments: environmentSnapshot.environments,
+          defaultEnvironmentId: environmentSnapshot.default_environment_id,
+          addedEnvironmentId: registeredEnvironment.id,
+        }),
+      } : {}),
     })}\n`);
     return true;
   }
@@ -908,9 +932,7 @@ async function runBuiltin(args, {
     if (args.length !== 4 || args[2] !== "--onboarding-id" || !UUID_PATTERN.test(args[3] || "")) {
       throw new Error("runtime complete-connect 参数无效");
     }
-    const manager = runtimeStateManager || require(
-      "../rainbond-platform-installer/scripts/runtime-state.js"
-    ).createRuntimeStateManager();
+    const manager = getRuntimeStateManager(args[3]);
     const current = manager.read();
     if (current.state !== "connecting" || current.operation_id !== args[3]) {
       throw new Error("runtime connecting operation 不匹配");
@@ -987,6 +1009,16 @@ function resolveInvocation(args, {
     return {
       executable: execPath,
       args: [platformInstallerPath, "install", ...args.slice(2)],
+    };
+  }
+  if (args[0] === "ssh" && args[1] === "prepare") {
+    return {
+      executable: execPath,
+      args: [
+        path.resolve(__dirname, "..", "rainbond-platform-installer", "scripts", "ssh-key-setup.js"),
+        "prepare",
+        ...args.slice(2),
+      ],
     };
   }
   if (args[0] === "resume") {

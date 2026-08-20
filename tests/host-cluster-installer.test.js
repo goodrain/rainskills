@@ -171,6 +171,158 @@ test("topology enforces nfs-server only for built-in NFS", () => {
   }), /nfs-server.*必须为空|must be empty/i);
 });
 
+test("one-shot cluster template is complete, secret-free, and marks example addresses for editing", () => {
+  const {
+    createHostClusterTemplate,
+    diagnoseClusterConfig,
+    parseClusterDocument,
+  } = moduleUnderTest();
+  const bytes = createHostClusterTemplate();
+  const text = bytes.toString("utf8");
+  assert.doesNotMatch(text, /password|private.?key|token|secret|credential/i);
+  const value = parseClusterDocument(bytes).value;
+  assert.equal(value.hosts.length, 3);
+  assert.deepEqual(value.roleGroups.etcd, ["node1", "node2", "node3"]);
+  const diagnostic = diagnoseClusterConfig(bytes, { source: "generated-template" });
+  assert.equal(diagnostic.value.hosts.length, 3);
+  assert.deepEqual(diagnostic.issues, [
+    "请把 hosts.node1.address 和 internalAddress 改为真实服务器地址",
+    "请把 hosts.node2.address 和 internalAddress 改为真实服务器地址",
+    "请把 hosts.node3.address 和 internalAddress 改为真实服务器地址",
+  ]);
+});
+
+test("one-shot diagnostics return all detectable topology problems in stable order", () => {
+  const { diagnoseClusterConfig } = moduleUnderTest();
+  const invalid = cluster({
+    hosts: [
+      host("node1", "10.0.0.1"),
+      host("node1", "10.0.0.1"),
+    ],
+    roleGroups: {
+      etcd: ["node1", "missing"],
+      master: [],
+      worker: ["missing"],
+      "rbd-gateway": [],
+      "rbd-chaos": [],
+      "nfs-server": [],
+    },
+  });
+  const diagnostic = diagnoseClusterConfig(Buffer.from(YAML.stringify(invalid)), { source: "generated-template" });
+  assert.equal(diagnostic.value.hosts.length, 2);
+  assert(diagnostic.issues.length >= 8, diagnostic.issues.join("\n"));
+  assert(diagnostic.issues.some((issue) => /节点名称.*重复/.test(issue)));
+  assert(diagnostic.issues.some((issue) => /节点地址.*重复/.test(issue)));
+  assert(diagnostic.issues.some((issue) => /etcd.*正奇数/.test(issue)));
+  assert(diagnostic.issues.some((issue) => /bootstrap.*恰好/.test(issue)));
+  assert(diagnostic.issues.some((issue) => /master.*至少/.test(issue)));
+  assert(diagnostic.issues.some((issue) => /不存在.*missing|missing.*不存在/.test(issue)));
+  assert.equal(new Set(diagnostic.issues).size, diagnostic.issues.length);
+});
+
+test("generated template diagnostics reject sensitive fields without echoing their values", () => {
+  const { diagnoseClusterConfig } = moduleUnderTest();
+  const sentinel = "MUST-NOT-LEAK-CLUSTER-SECRET";
+  const value = cluster({ registry: { external: { enabled: false, token: sentinel } } });
+  const diagnostic = diagnoseClusterConfig(Buffer.from(YAML.stringify(value)), { source: "generated-template" });
+  assert(diagnostic.issues.some((issue) => /密码|私钥|Token|敏感/.test(issue)));
+  assert.doesNotMatch(JSON.stringify(diagnostic), new RegExp(sentinel));
+  const imported = diagnoseClusterConfig(Buffer.from(YAML.stringify(value)), { source: "imported-file" });
+  assert.equal(imported.issues.some((issue) => /密码|私钥|Token|敏感/.test(issue)), false);
+});
+
+test("host cluster first entry creates one protected template and waits without SSH side effects", async () => {
+  const { installHostCluster } = moduleUnderTest();
+  const root = tempOperation("rainskills-host-template-");
+  const home = path.join(root, "home");
+  fs.mkdirSync(home, { mode: 0o700 });
+  const stateStore = require("./helpers/portable-secure-state.js").createPortableSecureStateStore(home);
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  const paths = { root: path.join(home, ".rainbond", "platform-installer", operationId) };
+  stateStore.ensurePrivateDirectory(paths.root);
+  const output = [];
+  let sessions = 0;
+  const result = await installHostCluster({
+    onboarding: { operation_id: operationId },
+    state: { operation_id: operationId },
+    paths,
+    options: { yes: false },
+  }, {
+    stateStore,
+    interactive: false,
+    write: (value) => output.push(value),
+    sessionFactory: async () => { sessions += 1; throw new Error("must not prepare SSH"); },
+  });
+  assert.equal(result.waiting, true);
+  assert.equal(result.waitingStage, "waiting-host-cluster-config");
+  assert.equal(sessions, 0);
+  const hostRoot = path.join(paths.root, "host-cluster");
+  const configPath = path.join(hostRoot, "cluster.yaml");
+  const statePath = path.join(hostRoot, "state.json");
+  assert.equal(fs.existsSync(configPath), true);
+  if (process.platform !== "win32") assert.equal(fs.statSync(configPath).mode & 0o777, 0o600);
+  const state = stateStore.readProtectedJson(statePath);
+  assert.equal(state.stage, "configuration");
+  assert.equal(state.status, "waiting_user");
+  assert.equal(state.config_source, "generated-template");
+  assert.match(output.join(""), /集群配置文件已生成/);
+  assert.match(output.join(""), /编辑完成后回复“已完成”/);
+});
+
+test("protected template creation is no-clobber and preserves competing files or symlinks", () => {
+  const { createProtectedBytesExclusive } = moduleUnderTest();
+  const root = tempOperation("rainskills-host-template-exclusive-");
+  const target = path.join(root, "cluster.yaml");
+  fs.writeFileSync(target, "competitor\n", { mode: 0o600 });
+  assert.throws(() => createProtectedBytesExclusive(target, Buffer.from("template\n")), /已存在|拒绝覆盖/);
+  assert.equal(fs.readFileSync(target, "utf8"), "competitor\n");
+
+  const symlink = path.join(root, "cluster-link.yaml");
+  const victim = path.join(root, "victim.txt");
+  fs.writeFileSync(victim, "victim\n", { mode: 0o600 });
+  fs.symlinkSync(victim, symlink);
+  assert.throws(() => createProtectedBytesExclusive(symlink, Buffer.from("template\n")), /已存在|拒绝覆盖/);
+  assert.equal(fs.readFileSync(victim, "utf8"), "victim\n");
+});
+
+test("valid edited one-shot config prints a topology summary and continues directly to SSH preflight", async () => {
+  const { installHostCluster } = moduleUnderTest();
+  const root = tempOperation("rainskills-host-template-resume-");
+  const home = path.join(root, "home");
+  fs.mkdirSync(home, { mode: 0o700 });
+  const stateStore = require("./helpers/portable-secure-state.js").createPortableSecureStateStore(home);
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  const paths = { root: path.join(home, ".rainbond", "platform-installer", operationId) };
+  stateStore.ensurePrivateDirectory(paths.root);
+  const context = {
+    onboarding: { operation_id: operationId },
+    state: { operation_id: operationId },
+    paths,
+    options: { yes: true },
+  };
+  await installHostCluster(context, { stateStore, interactive: false, write: () => {} });
+  const configPath = path.join(paths.root, "host-cluster", "cluster.yaml");
+  fs.writeFileSync(configPath, YAML.stringify(cluster()), { mode: 0o600 });
+  const output = [];
+  let sessions = 0;
+  let preflights = 0;
+  const result = await installHostCluster(context, {
+    stateStore,
+    interactive: false,
+    write: (value) => output.push(value),
+    sessionFactory: async () => { sessions += 1; return { controlPath: null, interactive: false }; },
+    closeSession: () => {},
+    runPreflight: async () => { preflights += 1; return { interrupted: true, signal: "SIGINT", blockers: [], nodes: [] }; },
+  });
+  assert.equal(result.interrupted, true);
+  assert.equal(sessions, 1);
+  assert.equal(preflights, 1);
+  assert.match(output.join(""), /集群配置检查通过/);
+  assert.match(output.join(""), /节点：1 个/);
+  assert.match(output.join(""), /etcd：1 个/);
+  assert.match(output.join(""), /bootstrap：node1/);
+});
+
 test("import preserves unknown fields byte-for-byte and blocks symlinks or unsafe sensitive permissions", () => {
   const { importClusterConfig } = moduleUnderTest();
   const root = tempOperation();
@@ -439,40 +591,38 @@ test("preflight uses fixed SSH argv concurrently and returns stable redacted sum
   assert.doesNotMatch(JSON.stringify(result), /must-not-leak|password|stdout|stderr/i);
 });
 
-test("host SSH sessions reuse key or one attached password authentication and pause safely without a TTY", async () => {
+test("host SSH sessions accept only prepared key access and pause consistently in every TTY mode", async () => {
   const { prepareHostSshSessions, validateClusterTopology } = moduleUnderTest();
   const topology = validateClusterTopology(cluster());
-  for (const kind of ["key", "password"]) {
-    const calls = [];
-    const result = await prepareHostSshSessions(topology, {
-      interactive: true,
-      sessionFactory: async (item, options) => {
-        calls.push({ item, options });
-        return {
-          target: { host: `root@${item.address}`, port: item.port },
-          controlPath: kind === "password" ? "/protected/one-attached-auth" : null,
-          interactive: false,
-          authentication: kind,
-        };
-      },
-    });
-    assert.equal(result.waiting, false);
-    assert.equal(calls.length, 1, `${kind} authentication must be established once per host`);
-    assert.equal(calls[0].options.interactive, true);
-    assert.equal(result.sessions.get("node1").authentication, kind);
-  }
-
-  const output = [];
-  let prompts = 0;
-  const waiting = await prepareHostSshSessions(topology, {
-    interactive: false,
-    write: (value) => output.push(value),
-    sessionFactory: async () => { prompts += 1; return null; },
+  const calls = [];
+  const result = await prepareHostSshSessions(topology, {
+    interactive: true,
+    sessionFactory: async (item, options) => {
+      calls.push({ item, options });
+      return {
+        target: { host: `root@${item.address}`, port: item.port },
+        controlPath: null,
+        interactive: false,
+        authentication: "key",
+      };
+    },
   });
-  assert.equal(waiting.waiting, true);
-  assert.equal(prompts, 1);
-  assert.match(output.join(""), /RAINSKILLS_USER_INPUT_REQUIRED:host_cluster_ssh_authentication/);
-  assert.doesNotMatch(output.join(""), /password\s*=|密码[:：]\s*\S+/i);
+  assert.equal(result.waiting, false);
+  assert.equal(calls.length, 1);
+  assert.equal(result.sessions.get("node1").authentication, "key");
+
+  for (const interactive of [true, false]) {
+    const output = [];
+    let prompts = 0;
+    const waiting = await prepareHostSshSessions(topology, {
+      interactive,
+      write: (value) => output.push(value),
+      sessionFactory: async () => { prompts += 1; return null; },
+    });
+    assert.equal(waiting.waiting, true);
+    assert.equal(prompts, 1);
+    assert.doesNotMatch(output.join(""), /等待认证|输入.*密码|交互终端继续/i);
+  }
 });
 
 test("preflight classifies root, platform, architecture, resources, network, ports, and conflicts", async () => {

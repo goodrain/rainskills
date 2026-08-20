@@ -27,6 +27,11 @@ const REQUIRED_PORTS = [80, 443, 6060, 7070];
 const CRITICAL_WORKLOADS = ["rbd-api", "rbd-gateway", "rbd-app-ui"];
 const MAX_CHILD_OUTPUT_BYTES = 4 * 1024 * 1024;
 const CHILD_OUTPUT_LIMIT_ERROR = "子进程输出超过安全上限";
+const TEMPLATE_ADDRESSES = new Map([
+  ["node1.example.invalid", "node1"],
+  ["node2.example.invalid", "node2"],
+  ["node3.example.invalid", "node3"],
+]);
 const HOST_PREFLIGHT_SCRIPT = String.raw`set -eu
 root=false
 [ "$(id -u)" = 0 ] && root=true
@@ -221,6 +226,113 @@ function parseClusterDocument(input) {
     throw new Error("cluster.yaml 顶层必须是映射对象");
   }
   return { document, value };
+}
+
+function createHostClusterTemplate() {
+  return Buffer.from(YAML.stringify({
+    hosts: [
+      { name: "node1", address: "node1.example.invalid", internalAddress: "node1.example.invalid", user: "root", port: 22, bootstrap: true },
+      { name: "node2", address: "node2.example.invalid", internalAddress: "node2.example.invalid", user: "root", port: 22 },
+      { name: "node3", address: "node3.example.invalid", internalAddress: "node3.example.invalid", user: "root", port: 22 },
+    ],
+    roleGroups: {
+      etcd: ["node1", "node2", "node3"],
+      master: ["node1", "node2", "node3"],
+      worker: ["node1", "node2", "node3"],
+      "rbd-gateway": ["node1", "node2"],
+      "rbd-chaos": ["node1", "node2", "node3"],
+      "nfs-server": ["node1"],
+    },
+    storage: {
+      nfs: { enabled: true, sharePath: "/nfs-data/k8s", storageClass: { enabled: true } },
+      existingStorageClass: { enabled: false },
+    },
+    registry: { external: { enabled: false } },
+    database: { mysql: { enabled: false }, custom: { enabled: false } },
+  }, { lineWidth: 0 }), "utf8");
+}
+
+function diagnoseClusterConfig(input, { source = "generated-template" } = {}) {
+  let value;
+  try {
+    value = parseClusterDocument(input).value;
+  } catch {
+    return { value: null, issues: ["cluster.yaml 解析失败，请检查 YAML 语法"] };
+  }
+  if (source === "generated-template" && hasSensitiveFields(value)) {
+    return { value: null, issues: ["集群配置文件不能包含密码、私钥、Token 或其他敏感字段"] };
+  }
+
+  const issues = [];
+  const add = (message) => { if (message && !issues.includes(message)) issues.push(message); };
+  const hosts = Array.isArray(value.hosts) ? value.hosts : [];
+  if (!Array.isArray(value.hosts) || hosts.length === 0) add("hosts 至少需要配置一个节点");
+  const names = new Set();
+  const addresses = new Set();
+  const normalized = [];
+  for (let index = 0; index < hosts.length; index += 1) {
+    const raw = hosts[index];
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      add(`hosts[${index}] 必须是对象`);
+      continue;
+    }
+    const name = String(raw.name || "");
+    const address = String(raw.address || "");
+    const internalAddress = String(raw.internalAddress || raw.address || "");
+    const port = raw.port === undefined ? 22 : Number(raw.port);
+    if (!SAFE_NAME.test(name)) add(`hosts[${index}].name 无效`);
+    if (names.has(name) && name) add(`节点名称重复：${name}`);
+    if (name) names.add(name);
+    if (!SAFE_ADDRESS.test(address) || address.startsWith("-") || /\.\./.test(address)) add(`节点 ${name || index} 的 address 无效`);
+    if (!SAFE_ADDRESS.test(internalAddress) || internalAddress.startsWith("-") || /\.\./.test(internalAddress)) add(`节点 ${name || index} 的 internalAddress 无效`);
+    for (const candidate of new Set([address, internalAddress])) {
+      if (!candidate) continue;
+      if (addresses.has(candidate)) add(`节点地址重复：${candidate}`);
+      addresses.add(candidate);
+    }
+    if (String(raw.user || "root") !== "root") add(`节点 ${name || index} 只支持 root SSH 用户`);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) add(`节点 ${name || index} 的 SSH 端口无效`);
+    if (raw.bootstrap !== undefined && typeof raw.bootstrap !== "boolean") add(`节点 ${name || index} 的 bootstrap 必须是布尔值`);
+    if (TEMPLATE_ADDRESSES.get(address) === name || TEMPLATE_ADDRESSES.get(internalAddress) === name) {
+      add(`请把 hosts.${name}.address 和 internalAddress 改为真实服务器地址`);
+    }
+    normalized.push({ name, bootstrap: raw.bootstrap === true });
+  }
+
+  const roleGroups = value.roleGroups;
+  if (!roleGroups || typeof roleGroups !== "object" || Array.isArray(roleGroups)) {
+    add("cluster.yaml 缺少 roleGroups");
+  } else {
+    for (const role of ALL_ROLES) {
+      const members = roleGroups[role] === undefined && role === "nfs-server" ? [] : roleGroups[role];
+      if (!Array.isArray(members)) {
+        add(`roleGroups.${role} 必须是数组`);
+        continue;
+      }
+      if (role === "etcd" && (members.length === 0 || members.length % 2 === 0)) add("etcd 节点数必须是正奇数（1、3、5……）");
+      if (role !== "nfs-server" && members.length === 0) add(`roleGroups.${role} 至少需要一个节点`);
+      if (new Set(members).size !== members.length) add(`roleGroups.${role} 不能重复引用节点`);
+      for (const member of members) if (!names.has(member)) add(`roleGroups.${role} 引用了不存在的节点：${member}`);
+    }
+  }
+
+  const bootstraps = normalized.filter(({ bootstrap }) => bootstrap);
+  if (bootstraps.length !== 1) add("bootstrap 节点必须恰好配置一个");
+  if (bootstraps.length === 1 && Array.isArray(roleGroups?.master) && !roleGroups.master.includes(bootstraps[0].name)) {
+    add("bootstrap 节点必须属于 master 角色组");
+  }
+  try {
+    const storageMode = storageModeFor(value);
+    const nfsMembers = Array.isArray(roleGroups?.["nfs-server"]) ? roleGroups["nfs-server"] : [];
+    if (storageMode === "builtin-nfs" && nfsMembers.length !== 1) add("使用内置 NFS 时 nfs-server 必须恰好包含一个节点");
+    if (storageMode !== "builtin-nfs" && nfsMembers.length !== 0) add("使用外部 NFS、existing StorageClass 或外部存储时 nfs-server 必须为空");
+  } catch (error) {
+    add(error.message);
+  }
+  if (issues.length === 0) {
+    try { validateClusterTopology(value); } catch (error) { add(error.message); }
+  }
+  return { value, issues };
 }
 
 function hasSensitiveFields(value) {
@@ -475,6 +587,40 @@ function atomicWriteProtectedBytes(destinationPath, bytes, { stateStore, mode = 
   return target;
 }
 
+function createProtectedBytesExclusive(destinationPath, bytes, { stateStore, mode = 0o600 } = {}) {
+  const target = path.resolve(destinationPath);
+  const directory = path.dirname(target);
+  if (stateStore) stateStore.ensurePrivateDirectory(directory);
+  else {
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    if (process.platform !== "win32") fs.chmodSync(directory, 0o700);
+  }
+  let fd;
+  try {
+    fd = fs.openSync(target, "wx", mode);
+    fs.writeFileSync(fd, bytes);
+    fs.fsyncSync(fd);
+  } catch (error) {
+    if (fd !== undefined) {
+      try { fs.closeSync(fd); } catch {}
+      fd = undefined;
+    }
+    if (error.code === "EEXIST") throw new Error("受保护的 cluster.yaml 已存在，拒绝覆盖");
+    try { fs.unlinkSync(target); } catch (cleanupError) { if (cleanupError.code !== "ENOENT") throw cleanupError; }
+    throw error;
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+  try {
+    if (process.platform !== "win32") fs.chmodSync(target, mode);
+    if (stateStore) stateStore.protectRegularFile(target);
+  } catch (error) {
+    try { fs.unlinkSync(target); } catch (cleanupError) { if (cleanupError.code !== "ENOENT") throw cleanupError; }
+    throw error;
+  }
+  return target;
+}
+
 function importClusterConfig({
   sourcePath,
   destinationPath,
@@ -487,7 +633,7 @@ function importClusterConfig({
   if (source === destination) throw new Error("不能把用户 cluster.yaml 直接作为受保护副本使用");
   const { bytes, value } = readSafeClusterSource(source, { platform, sourceStateStore });
   validateClusterTopology(value);
-  atomicWriteProtectedBytes(destination, bytes, { stateStore });
+  createProtectedBytesExclusive(destination, bytes, { stateStore });
   return { path: destination, sha256: sha256(bytes), topology: summarizeTopology(value) };
 }
 
@@ -704,7 +850,7 @@ function defaultSshRunner(command, args, options = {}) {
 
 function sshOptionsForSession(session) {
   return [
-    "-o", `BatchMode=${session?.interactive ? "no" : "yes"}`,
+    "-o", "BatchMode=yes",
     ...(session?.controlPath ? ["-o", `ControlPath=${session.controlPath}`] : []),
   ];
 }
@@ -719,8 +865,6 @@ async function prepareHostSshSessions(topology, {
   for (const item of topology.hosts) {
     const session = await sessionFactory(item, { interactive, write });
     if (!session) {
-      write("\n[RAINSKILLS_USER_INPUT_REQUIRED:host_cluster_ssh_authentication]\n");
-      write(`节点 ${item.name} 需要系统 SSH 认证，请在交互终端继续。\n`);
       return { waiting: true, sessions };
     }
     sessions.set(item.name, session);
@@ -1665,7 +1809,8 @@ async function installHostCluster({ onboarding, state, paths, options }, depende
   const configPath = path.join(hostRoot, "cluster.yaml");
   const driverStatePath = path.join(hostRoot, "state.json");
   const logPath = path.join(hostRoot, "roi.log");
-  let driverState = loadDriverState(driverStatePath, stateStore) || {
+  const loadedDriverState = loadDriverState(driverStatePath, stateStore);
+  let driverState = loadedDriverState || {
     schema: "rainskills.host-cluster-state.v1", version: 1, operation_id: state.operation_id,
     stage: "configuration", status: "running", config_path: configPath,
   };
@@ -1674,31 +1819,81 @@ async function installHostCluster({ onboarding, state, paths, options }, depende
     stateStore.atomicWriteJson(driverStatePath, driverState);
   };
 
+  const write = dependencies.write || ((value) => process.stdout.write(value));
+  if (!loadedDriverState) {
+    if (fs.existsSync(configPath)) {
+      throw new Error("发现来源不明的受保护 cluster.yaml，已停止；请将其作为外部文件重新导入，或移走后重新生成模板");
+    }
+    persistDriverState({
+      config_source: options.clusterConfig ? "imported-file" : "generated-template",
+      ...(options.clusterConfig ? { import_source_path: path.resolve(options.clusterConfig) } : {}),
+    });
+  } else if (!driverState.config_source) {
+    if (driverState.stage !== "configuration" && driverState.config_sha256) {
+      persistDriverState({ config_source: "imported-file" });
+    } else {
+      throw new Error("主机集群配置来源状态不完整，拒绝读取 cluster.yaml");
+    }
+  }
+  if (driverState.operation_id !== state.operation_id) throw new Error("主机集群配置 operation 不匹配");
+  if (driverState.config_source === "generated-template" && options.clusterConfig) {
+    throw new Error("当前流程已绑定自动生成的 cluster.yaml，不能切换为外部导入配置");
+  }
+  if (driverState.config_source === "imported-file" && options.clusterConfig
+    && path.resolve(options.clusterConfig) !== driverState.import_source_path) {
+    throw new Error("当前流程已绑定另一份外部 cluster.yaml，不能切换配置来源");
+  }
+
   let config;
-  if (fs.existsSync(configPath)) {
-    stateStore.assertProtectedRegularFile(configPath);
-    config = parseClusterDocument(fs.readFileSync(configPath)).value;
-  } else if (options.clusterConfig) {
-    importClusterConfig({ sourcePath: options.clusterConfig, destinationPath: configPath, stateStore });
-    config = parseClusterDocument(fs.readFileSync(configPath)).value;
-  } else if (!(dependencies.interactive ?? (process.stdin.isTTY && process.stdout.isTTY))) {
-    (dependencies.write || ((value) => process.stdout.write(value)))("\n[RAINSKILLS_USER_INPUT_REQUIRED:host_cluster_config]\n请提供 --cluster-config <cluster.yaml>，或在交互终端运行基础向导。\n");
-    persistDriverState({ status: "waiting_user" });
-    return { waiting: true };
-  } else {
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    try {
-      const wizard = await runClusterWizard({
-        prompt: dependencies.prompt || ((context) => promptWizardAnswer(rl, context)),
-        persist: (bytes) => atomicWriteProtectedBytes(configPath, bytes, { stateStore }),
-        write: dependencies.write || ((value) => process.stdout.write(value)),
+  if (driverState.config_source === "generated-template") {
+    if (!fs.existsSync(configPath)) {
+      const template = createHostClusterTemplate();
+      createProtectedBytesExclusive(configPath, template, { stateStore });
+      persistDriverState({
+        stage: "configuration",
+        status: "waiting_user",
+        template_sha256: sha256(template),
       });
-      if (wizard.cancelled) {
-        persistDriverState({ status: "cancelled" });
-        return { waiting: true, cancelled: true };
+      write(`\n[RAINSKILLS_USER_INPUT_REQUIRED:host_cluster_config]\n集群配置文件已生成：${configPath}\n\n请一次性修改文件中的服务器地址、SSH 端口和节点角色。\n不要在文件中填写密码、私钥或 Token。\n\n编辑完成后回复“已完成”，我会检查全部节点和集群拓扑。\n`);
+      return { waiting: true, waitingStage: "waiting-host-cluster-config", configPath };
+    }
+    stateStore.assertProtectedRegularFile(configPath);
+    const { bytes } = readSafeClusterSource(configPath, {
+      platform: dependencies.platform || process.platform,
+      sourceStateStore: stateStore,
+    });
+    const diagnostic = diagnoseClusterConfig(bytes, { source: "generated-template" });
+    if (diagnostic.issues.length > 0) {
+      persistDriverState({ stage: "configuration", status: "waiting_user" });
+      write(`\n[RAINSKILLS_USER_INPUT_REQUIRED:host_cluster_config]\n集群配置还需要调整：\n${diagnostic.issues.map((issue, index) => `${index + 1}. ${issue}`).join("\n")}\n\n请修改同一个配置文件，完成后回复“已完成”。\n`);
+      return { waiting: true, waitingStage: "waiting-host-cluster-config", configPath, issues: diagnostic.issues };
+    }
+    config = diagnostic.value;
+  } else if (driverState.config_source === "imported-file") {
+    if (!fs.existsSync(configPath)) {
+      const requestedSource = String(options.clusterConfig || driverState.import_source_path || "").trim();
+      if (!requestedSource) throw new Error("外部 cluster.yaml 来源缺失，无法继续导入");
+      const sourcePath = path.resolve(requestedSource);
+      if (sourcePath === configPath) throw new Error("外部 cluster.yaml 不能指向当前 onboarding 的受保护副本");
+      const source = readSafeClusterSource(sourcePath, {
+        platform: dependencies.platform || process.platform,
+        sourceStateStore: stateStore,
+      });
+      validateClusterTopology(source.value);
+      const sourceSha256 = sha256(source.bytes);
+      if (driverState.import_source_sha256 && driverState.import_source_sha256 !== sourceSha256) {
+        throw new Error("外部 cluster.yaml 在导入恢复期间发生变化，拒绝继续");
       }
-      config = wizard.config;
-    } finally { rl.close(); }
+      if (!driverState.import_source_sha256) persistDriverState({ import_source_path: sourcePath, import_source_sha256: sourceSha256 });
+      createProtectedBytesExclusive(configPath, source.bytes, { stateStore });
+    }
+    stateStore.assertProtectedRegularFile(configPath);
+    config = readSafeClusterSource(configPath, {
+      platform: dependencies.platform || process.platform,
+      sourceStateStore: stateStore,
+    }).value;
+  } else {
+    throw new Error("不支持的主机集群配置来源");
   }
 
   const topology = validateClusterTopology(config);
@@ -1711,6 +1906,10 @@ async function installHostCluster({ onboarding, state, paths, options }, depende
     return { waiting: true, interrupted: true, signal, resumeArgv };
   };
   if (driverState.config_sha256 && driverState.config_sha256 !== configSha256) throw new Error("恢复时 cluster.yaml 字节发生变化，拒绝继续");
+  if (!driverState.config_sha256) persistDriverState({ config_sha256: configSha256 });
+  if (driverState.stage === "configuration") {
+    write(`\n[RAINSKILLS_STATUS:host_cluster_config_valid]\n集群配置检查通过：\n- 节点：${topology.hosts.length} 个\n- etcd：${topology.roleGroups.etcd.length} 个\n- bootstrap：${topology.bootstrap.name}\n- 存储模式：${topology.storageMode}\n\n正在检查所有服务器的 SSH 连接和运行条件。\n`);
+  }
   const prepared = await prepareHostSshSessions(topology, dependencies);
   const closeSessions = () => {
     if (typeof dependencies.closeSession !== "function") return;
@@ -1901,10 +2100,13 @@ module.exports = {
   acquireRoiArtifact,
   atomicWriteProtectedBytes,
   confirmRoiInstall,
+  createHostClusterTemplate,
+  createProtectedBytesExclusive,
   defaultSshRunner,
   defaultTransfer,
   evaluateHostFacts,
   executeRoiInstall,
+  diagnoseClusterConfig,
   hasSensitiveFields,
   importClusterConfig,
   inspectRemoteCluster,
