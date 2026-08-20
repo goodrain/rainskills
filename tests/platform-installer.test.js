@@ -1647,7 +1647,7 @@ test("SSH session always pauses for the fixed system-terminal key setup flow", a
   const message = userMessageBody(output.join(""), "platform.ssh-authentication");
   assert.match(message, /系统终端/);
   assert.match(message, /只准备 SSH 连接，不会安装 Rainbond/);
-  assert.match(message, /npx --yes rainskills@0\.1\.0-rc\.68 ssh prepare --ssh root@192\.168\.1\.20 --ssh-port 22/);
+  assert.match(message, /npx --yes rainskills@0\.1\.0-rc\.69 ssh prepare --ssh root@192\.168\.1\.20 --ssh-port 22/);
   assert.match(message, /完成后回到这里回复“已完成”/);
 });
 
@@ -1678,7 +1678,7 @@ test("Windows SSH authentication also uses the same fixed external preparation f
   assert.equal(attachedCalls.length, 0);
   assert.match(
     userMessageBody(output.join(""), "platform.ssh-authentication"),
-    /npx --yes rainskills@0\.1\.0-rc\.68 ssh prepare --ssh root@192\.168\.1\.20 --ssh-port 22/
+    /npx --yes rainskills@0\.1\.0-rc\.69 ssh prepare --ssh root@192\.168\.1\.20 --ssh-port 22/
   );
 });
 
@@ -1725,7 +1725,7 @@ test("SSH authentication pauses cleanly when no interactive terminal is availabl
       "当前还不能通过 SSH 免密连接服务器。",
       "",
       "请打开你电脑上的系统终端，执行下面这一条命令：",
-      "npx --yes rainskills@0.1.0-rc.68 ssh prepare --ssh root@192.168.1.20 --ssh-port 22",
+      "npx --yes rainskills@0.1.0-rc.69 ssh prepare --ssh root@192.168.1.20 --ssh-port 22",
       "",
       "这一步只准备 SSH 连接，不会安装 Rainbond。服务器指纹确认和 SSH 密码只会由系统 ssh 读取。",
       "完成后回到这里回复“已完成”，我会在当前任务中继续安装，不会重新选择流程。",
