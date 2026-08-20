@@ -1,4 +1,4 @@
 interface:
   display_name: "Rainbond 平台安装"
-  short_description: "在本机或远程 Linux 上安全部署并验证 Rainbond 单机版"
-  default_prompt: "Use $rainbond-platform-installer to select a supported target, then install and verify a single-node Rainbond platform."
+  short_description: "在本地、服务器或已有 Kubernetes 集群中安装 Rainbond"
+  default_prompt: "Use $rainbond-platform-installer to select, install, and verify a supported private Rainbond target."

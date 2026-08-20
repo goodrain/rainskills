@@ -207,5 +207,5 @@ test("release workflow publishes an isolated embedded artifact and channel manif
     workflow,
     /TARBALL="\$\{\{ steps\.meta\.outputs\.tarball \}\}"[\s\S]{0,100}cat > stable\.json <<EOF/
   );
-  assert.doesNotMatch(workflow, /build-pi-extension\.mjs/);
+  assert.match(workflow, /build-pi-extension\.mjs --check/);
 });

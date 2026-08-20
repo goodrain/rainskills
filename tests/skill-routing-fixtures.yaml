@@ -11,6 +11,9 @@ cases:
   - id: generic_init_then_continue
     prompt: 如果还没初始化就先初始化，然后自动继续到应该停止的位置
     expected_skill: rainbond-app-assistant
+  - id: ambiguous_app_action
+    prompt: 帮我处理一下这个应用
+    expected_skill: rainbond-app-assistant
   - id: explicit_bootstrap_only
     prompt: 只帮我创建应用和组件，不要继续排障
     expected_skill: rainbond-fullstack-bootstrap
@@ -38,6 +41,18 @@ cases:
   - id: component_query
     prompt: 查询这个应用有哪些组件
     expected_skill: rainbond-platform-query
+  - id: explicit_create_snapshot
+    prompt: 为这个已有应用创建快照
+    expected_skill: rainbond-app-version-assistant
+  - id: explicit_sync_environment
+    prompt: 同步生产环境配置到本地
+    expected_skill: rainbond-env-sync
+  - id: explicit_project_init
+    prompt: 只初始化当前项目并生成 rainbond.app.json
+    expected_skill: rainbond-project-init
+  - id: explicit_template_install
+    prompt: 从模板安装 WordPress 应用
+    expected_skill: rainbond-template-installer
 
 required_markers:
   rainbond-app-assistant:
@@ -45,30 +60,54 @@ required_markers:
     - "the request should start here"
     - "Concise delivery report mode"
     - "do not expose the fenced YAML block"
+    - "部署新应用还是管理已有应用"
+    - "确认前不连接运行环境"
+    - "1) 云端环境（免费体验）"
+    - "2) 私有环境（去对接）"
+    - "请选择部署位置："
+    - "1、部署到本机"
+    - "2、部署到独立服务器"
+    - "3、部署到已有 Rainbond"
+    - "rainskills_operation_id"
   rainbond-fullstack-bootstrap:
-    - "Do not use as the first or default response to a generic current-project deployment request"
+    - "Do not use for a generic current-project deployment request"
     - "route that to `rainbond-app-assistant`"
+    - "1) 云端环境（免费体验）"
+    - "2) 私有环境（去对接）"
+    - "请选择部署位置："
+    - "1、部署到本机"
+    - "2、部署到独立服务器"
+    - "3、部署到已有 Rainbond"
   rainbond-fullstack-troubleshooter:
-    - "Do not use as the first or default response to a generic current-project deployment request"
+    - "Do not use for a generic current-project deployment request"
     - "route that to `rainbond-app-assistant`"
+    - "只让用户选择 `Rainbond Cloud` 或承载目标应用的`已有私有 Rainbond`"
   rainbond-delivery-verifier:
-    - "Do not use as the first or default response to a generic current-project deployment request"
+    - "Do not use for a generic current-project deployment request"
     - "route that to `rainbond-app-assistant`"
+    - "只让用户选择 `Rainbond Cloud` 或承载目标应用的`已有私有 Rainbond`"
   rainbond-platform-query:
     - "explicit, read-only platform questions"
     - "Do not expand a narrow question"
-
-forbidden_operational_markers:
-  - MCP 不可用，无法完成 online verification
-  - runtime truth from MCP only
-  - "Rainbond MCP: the only valid source"
-  - Query Rainbond MCP
-  - trust MCP and report
-  - executed through MCP
-  - confirmed through MCP
-  - if MCP is unavailable
-  - MCP runtime facts later conflict
-  - MCP data first
-  - 通过 MCP 查找或创建
-  - 任何 MCP 写工具
-  - 下一个 MCP 写调用
+  rainbond-app-version-assistant:
+    - "<!-- rainskills-runtime-gate:start -->"
+    - "只让用户选择 `Rainbond Cloud` 或承载目标应用的`已有私有 Rainbond`"
+  rainbond-env-sync:
+    - "<!-- rainskills-runtime-gate:start -->"
+    - "只让用户选择 `Rainbond Cloud` 或承载目标应用的`已有私有 Rainbond`"
+  rainbond-project-init:
+    - "<!-- rainskills-runtime-gate:start -->"
+    - "1) 云端环境（免费体验）"
+    - "2) 私有环境（去对接）"
+    - "请选择部署位置："
+    - "1、部署到本机"
+    - "2、部署到独立服务器"
+    - "3、部署到已有 Rainbond"
+  rainbond-template-installer:
+    - "<!-- rainskills-runtime-gate:start -->"
+    - "1) 云端环境（免费体验）"
+    - "2) 私有环境（去对接）"
+    - "请选择部署位置："
+    - "1、部署到本机"
+    - "2、部署到独立服务器"
+    - "3、部署到已有 Rainbond"

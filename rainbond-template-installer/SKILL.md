@@ -1,13 +1,86 @@
 ---
 name: rainbond-template-installer
-description: Use when installing a local or cloud Rainbond app template into an existing or newly created target app through the current Rainbond template-install workflow.
+description: "Use when the user explicitly asks to install a local or cloud Rainbond application template into a new or existing target app. Trigger phrases include: 从模板安装 WordPress 应用 / 安装应用模板 / install app template."
 ---
 
 # Rainbond Template Installer
 
-## Rainbond 传输
+  <!-- rainskills-runtime-gate:start -->
+  ## 运行环境门禁（最高优先级）
 
-如果上游已初始化本次工作流的 RainSkills CLI，直接复用，不重新探测。否则在第一次 Rainbond 调用前读取 [../rainbond-app-assistant/references/transport-resolution.md](../rainbond-app-assistant/references/transport-resolution.md) 并初始化一次。CLI 锁定后，认证、网络、超时和业务错误均不得触发替代调用通道。
+  ### 多运行环境操作契约
+
+  Node.js 前置检查通过后，每次请求先执行本地 launcher + `["environment", "list", "--json"]`，按用户明确指定的运行环境选择不可变环境 ID；未指定时只用全局默认环境，默认不可用时停止且不回退。生成 UUID 后执行本地 launcher + `["operation", "begin", "--operation-id", "<uuid>", "--environment-id", "<id>", "--intent-json", "<intent-json>"]`，并在之后每个 Rainbond MCP 调用中加入 `rainskills_operation_id`。环境、团队和应用只属于本次操作，禁止保存项目绑定；同一项目可以部署到多个环境。明确“团队”表示环境内团队；明确“运行环境/平台”表示环境；裸名称同时匹配环境和团队时必须询问。
+
+第一步检查 Node.js 是否存在且主版本不低于 18。Node.js 缺失或低于 18 时，只说明“Rainskills 执行组件需要 Node.js 18 或更高版本”并停止：不选择运行环境，不调用 MCP，不猜测替代命令。只有用户或 agent 明确同意后才安装或升级 Node.js，再从同一原始 intent 继续。
+
+固定 launcher 是 `["npx", "--yes", "rainskills@0.1.0-rc.68"]`；版本必须与本技能包 `package.json` 一致。把 launcher 与参数拼成 argv 数组直接执行，禁止 `rainskills@latest` 或执行 shell 字符串。
+
+本地 launcher 必须从当前 Skill 所在目录的同级目录定位 `rainbond-platform-installer/scripts/local-runtime.js`，解析为绝对路径后使用 `["node", "<绝对路径>"]` 执行。`environment list`、`operation begin`、`operation complete` 和 `runtime message` 只能使用本地 launcher；本地 launcher 只读取已安装文件和本机受保护状态，不得访问 npm 或其它网络。只有用户选定连接或安装运行环境后，才使用上面的固定 npx launcher。
+
+<!-- rainskills-runtime-contract:start -->
+```json
+{
+  "schema": "rainskills.skill-runtime-contract.v1",
+  "launcher": ["npx", "--yes", "rainskills@0.1.0-rc.68"],
+  "local_launcher": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js"],
+  "local_argv": {
+    "environment-list": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js", "environment", "list", "--json"],
+    "operation-begin": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js", "operation", "begin", "--operation-id", "<uuid>", "--intent-json", "<intent-json>"],
+    "operation-complete": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js", "operation", "complete", "--operation-id", "<uuid>"],
+    "runtime-message": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js", "runtime", "message", "--id", "<message-id>"]
+  },
+  "intents": {
+    "template-install": {"required": ["template_id", "install_scope"], "optional": ["team_id", "app_id"], "enums": {"install_scope": ["new-app", "existing-app"]}}
+  },
+  "routes": {
+    "new": ["saas", "private-existing", "install-private"],
+    "existing": ["saas", "private-existing"]
+  },
+  "connect_argv": {
+    "saas": ["npx", "--yes", "rainskills@0.1.0-rc.68", "runtime", "connect", "<target>", "--saas", "--intent-json", "<intent-json>"],
+    "private-existing": ["npx", "--yes", "rainskills@0.1.0-rc.68", "runtime", "connect", "<target>", "--rainbond-url", "<rainbond-url>", "--intent-json", "<intent-json>"],
+    "install-private": ["npx", "--yes", "rainskills@0.1.0-rc.68", "runtime", "connect", "<target>", "--install-private", "--location", "<private-location>", "--intent-json", "<intent-json>"]
+  }
+}
+```
+<!-- rainskills-runtime-contract:end -->
+
+`install_scope=new-app` 使用 new route，`install_scope=existing-app` 使用 existing route；existing 路径绝不执行 `install-private`。target 只允许 `codex`、`claude`、`all`。校验 intent 后只执行对应 scope 的完整 argv；只消费 schema 为 `rainskills.next-action.v1` 且校验后的 `argv` 数组。
+
+连接完成后用固定 `onboarding-id` 执行 launcher + `["intent", "resume", "--onboarding-id", "<同一 onboarding-id>"]`，恢复原始 intent 和 `resume_step`。401 先执行 launcher + `["runtime", "record-failure", "--onboarding-id", "<同一 onboarding-id>", "--step", "<当前固定步骤>", "--reason", "credential-expired"]`，再仅一次执行 launcher + `["runtime", "reconnect", "--onboarding-id", "<同一 onboarding-id>"]` 后 resume，只重试该步骤；第二次 401 停止。403 执行 launcher + `["runtime", "record-failure", "--onboarding-id", "<同一 onboarding-id>", "--step", "<当前固定步骤>", "--reason", "permission-denied"]` 后停止，不得 reconnect、重新授权或自动重试。
+<!-- rainskills-runtime-gate:end -->
+
+<!-- rainskills-runtime-routing:start -->
+## 缺少运行环境时
+
+先说：“可以，我会帮你从模板安装应用。不过目前还没有可用的应用运行环境。你刚安装的 Rainskills 是 AI 部署助手，它负责分析项目并执行部署；应用实际会运行在 Rainbond 上。Rainbond 是一套应用运行和管理平台，负责源码构建、容器运行、域名访问、日志和存储等工作，你不需要了解 Kubernetes。”
+
+先根据 `install_scope` 确认 scope，确认前不展示环境选项：`new-app` 使用 new scope，`existing-app` 使用 existing scope。
+
+### 新应用
+
+#### 选择运行环境
+
+请提示“请选择应用要运行的环境：”，并只显示：
+
+1) 云端环境（免费体验）
+2) 私有环境（去对接）
+
+用户选择私有环境后，立即执行本地 launcher + `["runtime", "message", "--id", "private-deployment-location"]`，并原样输出固定消息：
+
+请选择部署位置：
+
+1、部署到本机
+2、部署到独立服务器
+3、部署到已有 Rainbond
+
+选择 1 时执行 `install-private` route，并使用 `["--location", "local"]`；选择 2 时执行 `install-private` route，并使用 `["--location", "server"]`；选择 3 时执行本地 launcher + `["runtime", "message", "--id", "private-console-origin"]`，收到地址后执行 `private-existing`。不得显示额外的接入方式中间步骤，不得重复询问部署位置，也不得在环境准备完成前询问应用来源。
+
+### 已有应用
+
+已有应用的 template-install intent 不得进入 install-private：只让用户选择 Rainbond Cloud 或承载目标应用的已有私有 Rainbond；选择已有私有 Rainbond 时执行本地 launcher + `["runtime", "message", "--id", "private-console-origin"]` 并原样输出。已有应用不得安装新平台。
+<!-- rainskills-runtime-routing:end -->
 
 ## Overview
 
@@ -33,7 +106,7 @@ Use [product object model](../rainbond-app-assistant/references/product-object-m
 - `template_install` as a handoff path rather than bootstrap execution
 - the boundary between template-install intent, deployment planning, and downstream runtime/delivery stages
 
-This skill should describe how template-install intent is executed through the locked Rainbond transport. It should not redefine the canonical object boundaries independently.
+This skill should describe how template-install intent is executed through MCP. It should not redefine the canonical object boundaries independently.
 
 ## When to Use
 
@@ -50,7 +123,7 @@ Do not use when:
 - the template source or target app context is completely unknown and cannot be resolved
 - the user wants only template discovery without installation
 
-## Preferred Rainbond Tools
+## Preferred MCP Tools
 
 Prefer this tool chain:
 - `rainbond_query_cloud_markets`
@@ -396,5 +469,5 @@ Local flow:
 3. create app if needed
 4. install
 
-Current install capability:
+Current install MCP:
 - `rainbond_install_app_model`

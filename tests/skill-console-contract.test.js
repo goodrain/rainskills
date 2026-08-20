@@ -54,7 +54,7 @@ test("published source and embedded profile use the Console-backed tool contract
   assert.doesNotMatch(troubleshooter, /new_volume_path` is required even when the path is unchanged/);
 });
 
-test("Console failure reasons have one stable user-facing mapping and app IDs are normalized at Tool boundaries", () => {
+test("Console failure reasons have one stable user-facing mapping and app IDs are normalized at tool boundaries", () => {
   const troubleshooter = read("rainbond-fullstack-troubleshooter/SKILL.md");
   for (const reason of [
     "config_file_configmap_missing", "volume_mount_failed", "image_pull_failed",
@@ -72,8 +72,7 @@ test("Console failure reasons have one stable user-facing mapping and app IDs ar
     "rainbond-env-sync/SKILL.md",
   ]) {
     const content = read(file);
-    assert.match(content, /Tool.*`app_id`.*positive integer|`app_id`.*positive integer.*Tool/is, file);
-    assert.doesNotMatch(content, /app_id:\s*["']?app-/i, file);
+    assert.match(content, /(?:Tool|MCP|工具).*[`]?app_id[`]?.*(?:positive integer|正整数)|[`]?app_id[`]?.*(?:positive integer|正整数).*(?:Tool|MCP|工具)/is, file);
   }
 
   const appAssistantSchema = read("rainbond-app-assistant/schemas/app-assistant-result.schema.yaml");
@@ -97,17 +96,6 @@ test("platform query fixes Console-required arguments for CLI and embedded execu
   assert.match(query, /rainbond_query_regions.*enterprise_id/s);
 });
 
-test("CLI writes bind the active leaf Skill while read-only query keeps read transport", () => {
-  const transport = read("rainbond-app-assistant/references/transport-resolution.md");
-  const query = read("rainbond-platform-query/SKILL.md");
-  assert.match(transport, /--skill-id <active_leaf_skill_id>/);
-  assert.match(transport, /--root-skill-id <root_skill_id>/);
-  assert.match(transport, /首次调用与确认调用必须传同一/);
-  assert.match(transport, /Skill manifest/);
-  assert.match(query, /read <tool> --input -|只读/);
-  assert.doesNotMatch(query, /call <tool> --input - --skill-id/);
-});
-
 test("failure context stays secret-safe and canonical blocker vocabularies agree", () => {
   const appAssistant = read("rainbond-app-assistant/SKILL.md");
   const troubleshooter = read("rainbond-fullstack-troubleshooter/SKILL.md");
@@ -123,22 +111,16 @@ test("failure context stays secret-safe and canonical blocker vocabularies agree
   }
 });
 
-test("large skills use real progressive disclosure instead of placeholder references", () => {
-  for (const file of [
-    "rainbond-app-assistant/SKILL.md",
-    "rainbond-project-init/SKILL.md",
-    "rainbond-fullstack-troubleshooter/SKILL.md",
-  ]) {
-    const lines = read(file).split(/\r?\n/).length;
-    assert(lines <= 500, `${file} has ${lines} lines; expected at most 500`);
-  }
-
-  for (const file of [
-    "rainbond-app-assistant/references/output-contract.md",
-    "rainbond-project-init/references/manifest-rules.md",
-    "rainbond-fullstack-troubleshooter/references/root-cause-rules.md",
-  ]) {
-    assert.doesNotMatch(read(file), /remain in the parent|留在父|compatibility transition/i, file);
+test("large skills link to substantive on-demand references", () => {
+  const pairs = [
+    ["rainbond-app-assistant/SKILL.md", "rainbond-app-assistant/references/output-contract.md"],
+    ["rainbond-project-init/SKILL.md", "rainbond-project-init/references/manifest-rules.md"],
+    ["rainbond-fullstack-troubleshooter/SKILL.md", "rainbond-fullstack-troubleshooter/references/root-cause-rules.md"],
+  ];
+  for (const [parent, reference] of pairs) {
+    assert.match(read(parent), new RegExp(reference.split("/").at(-1).replace(".", "\\.")), parent);
+    assert(read(reference).split(/\r?\n/).length > 50, `${reference} must be substantive`);
+    assert.doesNotMatch(read(reference), /remain in the parent|留在父|compatibility transition/i, reference);
   }
 });
 

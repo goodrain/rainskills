@@ -1,19 +1,44 @@
-# Rainbond 单机安装策略
+# Rainbond 私有平台安装策略
 
-本 Skill 只支持 Rainbond 官方单机快速安装流程。机器可执行策略以同目录下的 `installation-policy.json` 为准，更新官方来源、允许域名或资源基线时必须发布新的 Rainskills 版本。官方安装脚本内容可以在固定 HTTPS 来源上独立优化，不与 Rainskills 版本绑定。
+本 Skill 支持 Rainbond 官方单机快速安装、ROI 主机集群安装和已有 Kubernetes 集群的 Helm 安装流程。机器可执行策略以同目录下的 `installation-policy.json` 为准，更新官方来源、允许域名或资源基线时必须发布新的 Rainskills 版本。官方安装脚本、ROI 和 Helm Chart 内容可以在固定 HTTPS 来源上独立优化，不与 Rainskills 版本绑定。
 
 ## 支持范围
 
 - 控制端支持 Linux、macOS 和 Windows；Rainbond 目标支持 Linux、macOS，以及 Windows 本地预览路径中的专用 WSL2 环境。
-- Linux `x64` / `arm64`：可安装到当前设备，也可通过 SSH 安装到其他 Linux 服务器，回车默认当前设备。
+- Linux `x64` / `arm64`：选择“部署到本机”时安装到当前设备；选择“部署到独立服务器”时通过 SSH 安装到其他 Linux 服务器。不提供回车默认项。
 - macOS `x64` / `arm64`：优先推荐远程 Linux，也可安装到当前 Mac；本机安装依赖 OrbStack，准备时间通常更长。
-- Windows：可选择“安装到本地”或“安装到 Linux 服务器”。本地路径目前为 preview，只支持 Windows 10 build 19041+ / Windows 11 x64 工作站。
+- Windows：与其他控制端使用同一份“部署到本机 / 部署到独立服务器 / 部署到已有 Rainbond”选择；本机路径目前为 preview，只支持 Windows 10 build 19041+ / Windows 11 x64 工作站。
 - 推荐资源：4 核 CPU、8 GB 内存、50 GB 可用磁盘；预检最低门槛为 2 核 CPU、4 GB 内存、30 GB 可用磁盘。低于推荐值时会提示风险但继续安装，最终以 Rainbond 实际部署验证为准。
 - 安装前端口 `80`、`443`、`7070` 必须空闲。
 
-远程 Linux 只接受 `user@host` 或 `~/.ssh/config` 主机别名，使用系统 `ssh` / `scp`。安装器先尝试已有的非交互认证；需要时由 OpenSSH 在附着终端中确认主机指纹并读取 SSH 密码。Linux/macOS 通过临时控制连接复用认证；Windows 自带 OpenSSH 不支持 ControlMaster，后续步骤会保持终端附着并可能再次请求密码。Rainskills 不接收或保存密码、私钥，也不支持多节点、高可用、离线安装、已有 Kubernetes 或自动清理冲突环境。
+远程单机只接受 `user@host` 或 `~/.ssh/config` 主机别名；ROI 主机集群逐节点使用配置中的 root 地址和端口。两种方式都先用 `BatchMode=yes` 检查现有免密连接。检查失败时固定暂停，用户只在自己电脑的系统终端执行版本锁定的 `ssh prepare` 命令，由 OpenSSH 读取指纹确认和一次密码；该命令只准备公钥连接，不安装 Rainbond。恢复后所有 `ssh` / `scp` 均为免密非交互调用。Rainskills 不接收或保存 SSH 密码、私钥，也不支持离线安装或自动清理冲突环境。
 
-远程安装使用 `ssh -G` 解析的实际主机作为新平台 EIP，不再优先使用 `hostname -I` 的首个内网地址。完成后从控制端依次验证显式 Console 主机、SSH 实际主机、SSH 字面主机、Rainbond 上报 EIP 和远端主网卡地址，保存第一个可访问的 `http://<host>:7070`。手动补充只接受 IP 或 DNS 域名。
+远程单机安装使用 `ssh -G` 解析的实际主机作为新平台 EIP，不再优先使用 `hostname -I` 的首个内网地址。完成后从控制端依次验证显式 Console 主机、SSH 实际主机、SSH 字面主机、Rainbond 上报 EIP 和远端主网卡地址，保存第一个可访问的 `http://<host>:7070`。手动补充只接受 IP 或 DNS 域名。
+
+## ROI 主机集群策略
+
+- 支持 1 台、2 台或任意数量的 Linux 节点，不把“三台以上”作为安装阻断条件。少于三个控制面或 etcd 节点时明确提示不具备高可用。
+- etcd 必须至少一个且数量为奇数；恰好一个 bootstrap，并且 bootstrap 必须属于 master。master、worker、rbd-gateway、rbd-chaos 均至少包含一个合法节点。
+- 内置 NFS 必须恰好选择一个 nfs-server；外部 NFS、已有 StorageClass 或外部存储不能配置 nfs-server。
+- 基础向导只生成内置 NFS、内置数据库和内置镜像仓库的最小配置，不询问或保存密码。高级配置通过 `--cluster-config` 导入。
+- 导入时只解析配置用于校验和摘要，受保护副本保留原始字节，不重新序列化未知 ROI 字段。拒绝符号链接、非普通文件、非当前用户文件，以及权限宽于 `0600` 的敏感配置。
+- 对所有节点并发执行只读 SSH 预检，但按 cluster.yaml 中的顺序展示结果。阻断非 root、非 Linux/amd64/arm64、资源不足、端口冲突、安装源不可达以及已有 RKE2/Rainbond，不自动清理或覆盖。
+- 非交互执行必须显式提供 `--yes`。确认前不下载 ROI，也不传输配置或启动远端命令。
+- ROI 只允许 `https://get.rainbond.com/roi/roi-amd64` 和 `roi-arm64`，最多三次 `get.rainbond.com/roi/` 同源跳转，下载上限 128 MiB。校验 ELF 类型和架构，并运行固定的 `roi version`。
+- 安装器会主动探测策略中的官方 checksum 地址；发布 checksum 时必须匹配。官方明确未发布 checksum 时记录该事实，并锁定本次下载的最终 URL、版本和 SHA-256。
+- 恢复时必须复用字节完全相同的受保护 cluster.yaml 和 ROI。bootstrap 上再次校验两份文件的 SHA-256，然后通过已准备的免密 SSH 执行固定的 `roi up -f <protected-cluster.yaml>`。
+- 状态、事件和遥测不保存原始 YAML、SSH/ROI 原始输出或凭据。日志对 password、database、registry、token、secret 等字段脱敏。
+- ROI 正常退出后仍需验证所有预期节点 Ready、rbd-api/rbd-gateway/rbd-app-ui 等关键组件就绪，以及 Console 从当前控制端可访问；全部通过后才能进入授权。
+
+## 已有 Kubernetes 集群策略
+
+- kubeconfig 使用显式路径或当前用户的 `~/.kube/config`，context 必须显式指定。kubeconfig 和可选 values 在受保护操作目录中保留原始字节；拒绝符号链接、非普通文件、非当前用户文件和不安全权限/ACL。
+- 状态只记录受保护文件路径和 SHA-256、context、脱敏后的 HTTPS API origin、kube-system UID，以及 Chart 的名称、精确版本和摘要；不保存 kubeconfig/values 内容、凭据或命令原始输出。
+- 每个 `kubectl` 都固定传入同一 `--kubeconfig` 和 `--context`，每个 Helm 命令都固定传入同一 `--kubeconfig` 和 `--kube-context`。预检、下载、lint、template、dry-run、install 和验收阶段均复核 API origin、集群 UID 和受保护文件摘要，漂移时立即停止。
+- 只读预检要求 Kubernetes 1.24+、Helm 3、节点 Ready 且使用 containerd、至少一个 StorageClass、入口和运行时路径可用、Chart/镜像来源可达。已有 `rbd-system`、`rainbond` release、Rainbond CRD、Ingress/controller 或 hostPort 冲突均阻断；安装器不覆盖、不卸载，也不静默修改或重启 containerd。
+- Chart 只从 `https://chart.rainbond.com` 获取 `rainbond/rainbond`，解析并锁定一个精确版本，最多三次同源跳转，下载上限 128 MiB。index 发布 digest 时必须匹配；本地受保护 `.tgz` 在状态发布前写入 crash-safe partial 并锁定 SHA-256，恢复只允许复用相同字节。
+- lint、template 和 dry-run 全部使用同一受保护 Chart、values、kubeconfig 和 context。dry-run 后再次展示 context、集群 UID、Chart 版本/摘要、values 摘要、namespace/release、资源和手动处理项，并要求明确确认；非交互模式缺少 `--yes` 时不会调用 `helm install`。
+- 安装命令固定为 `helm install rainbond <protected.tgz> --kubeconfig ... --kube-context ... --create-namespace -n rbd-system`（可选受保护 values）。完成后必须验证 release、operator、rbd-system 核心 Pod、`rbd-app-ui` 和 Console 可访问，才能进入授权。
 
 ## Windows 本地预览策略
 

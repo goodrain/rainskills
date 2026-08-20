@@ -4,7 +4,7 @@
 - **端口占用**：停止安装，提示用户处理占用 `80`、`443`、`7070` 的服务，不主动停止服务。
 - **已有 Rainbond**：停止新安装，建议返回 Rainskills 选择“已经有，填写平台地址”。
 - **权限不足**：Linux 需要 root 或已经可用的 `sudo -n`，不得在聊天中索取密码。
-- **远程连接失败**：确认控制端有 `ssh` 和 `scp`。安装器会先尝试已有的 SSH Key；Linux/macOS 需要密码时会通过一次系统 SSH 认证并自动复用临时连接，Windows 自带 OpenSSH 不支持 ControlMaster，因此后续远程步骤可能再次请求密码。密码必须输入到终端的 OpenSSH 提示中，不要发送到聊天。如果提示主机密钥发生变化，先通过可信渠道核对服务器指纹并修复 `known_hosts`，安装器不会绕过该校验。
+- **远程连接失败**：确认控制端有 `ssh`、`scp` 和 `ssh-keygen`。安装器只接受可由 `BatchMode=yes` 验证的免密连接；失败时必须原样执行它显示的版本锁定 `ssh prepare` 命令。指纹确认和一次服务器密码只在用户自己的系统终端中由 OpenSSH 读取；该命令不会安装 Rainbond。完成后回到原 AI 任务回复“已完成”，让同一 `onboarding-id` 继续。不要在外部终端执行完整平台安装，也不要把密码发到聊天。如果提示主机密钥发生变化，先通过可信渠道核对服务器指纹并修复 `known_hosts`，安装器不会绕过该校验。
 - **Windows 版本**：本地预览要求 Windows 10 build 19041+ 或 Windows 11 x64 工作站；旧版本和 Windows Server 停止安装。
 - **Windows 虚拟化**：在任务管理器或 BIOS/UEFI 中确认 CPU 虚拟化已启用。安装器不会代替用户修改固件设置。
 - **Windows UAC / 管理员权限**：当前用户必须属于 Administrators 且 UAC 开启。普通预检不需要以管理员身份启动终端；确认安装后固定 helper 才会请求 UAC。拒绝 UAC 后保留断点，重新执行原命令即可。
@@ -21,3 +21,4 @@
 - **启动失败**：保留 `~/.rainbond/platform-installer/<operation-id>/install.log`，不要自动删除容器或数据后重试。
 - **Console 健康检查失败**：区分 Rainbond 运行状态和控制端访问地址。安装器会尝试 SSH 实际主机、Rainbond 上报 EIP 和远端主网卡地址；全部失败时提供公网 IP 或域名，不要包含 `http://`、端口或路径。已有 Rainbond 只重新验证，不重新安装。
 - **授权失败**：Rainbond 已部署成功时保留 Console 地址，稍后执行输出中的 `npx rainskills resume` 命令继续，不重新部署平台。
+- **生命周期诊断**：平台安装和授权的固定阶段事件保存在 `~/.rainbond/rainskills/telemetry/events.jsonl`，并尽力发送到 `log.rainbond.com`。日志服务不可用不会阻塞业务；事件不包含 Token、密码、完整地址或原始命令输出。应用部署统计继续由 Rainbond Console 负责。

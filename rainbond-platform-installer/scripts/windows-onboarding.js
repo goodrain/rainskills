@@ -3,99 +3,62 @@
 
 const crypto = require("node:crypto");
 const fs = require("node:fs");
+const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 const readline = require("node:readline/promises");
-const { spawnSync } = require("node:child_process");
 const { stdin, stdout } = require("node:process");
-const { detectControlEnvironment } = require("./control-environment.js");
 const { createSecureStateStore } = require("./secure-state.js");
+const { assertIntentCanInstallNewPlatform } = require("./runtime-intents.js");
 const { createWindowsSecureStateStore } = require("./windows-platform.js");
 const {
   authorizeWithDeviceFlow,
   authorizeWithLoopback,
   openWindowsBrowser,
 } = require("./windows-auth.js");
+const {
+  configureSelectedClients,
+  validateMcp,
+} = require("./windows-client-config.js");
+const { createLifecycleTelemetry } = require("./telemetry.js");
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CONTROL_MODES = new Set(["windows-native", "wsl", "posix"]);
-const API_VALIDATION_TIMEOUT_MS = 180000;
-const API_VALIDATION_MAX_BYTES = 10 * 1024 * 1024;
+const CAPABILITY_SUMMARY = `Rainskills 安装完成，下一条消息即可直接使用。
 
-async function validateApi({
-  url,
-  token,
-  fetchImpl = globalThis.fetch,
-  timeoutMs = API_VALIDATION_TIMEOUT_MS,
-  maxResponseBytes = API_VALIDATION_MAX_BYTES,
-}) {
-  const controller = new AbortController();
-  let reader;
-  let wallClockTimer;
-  const timeoutError = new Error("Rainbond API Bridge 校验超时");
-  const wallClock = new Promise((_, reject) => {
-    wallClockTimer = setTimeout(() => {
-      controller.abort();
-      if (reader) void reader.cancel().catch(() => {});
-      reject(timeoutError);
-    }, timeoutMs);
-  });
+下一步可以直接说：
+
+- 帮我部署当前项目
+- 帮我部署一个 Git 仓库
+- 帮我通过镜像或安装包部署应用
+- 帮我安装一个应用模板
+- 帮我分析当前项目应该如何部署
+
+也可以直接告诉我你想部署什么应用。`;
+const AGENT_SUMMARY_REQUIREMENT = "[RAINSKILLS_AGENT_SUMMARY_REQUIRED:include-next-actions]";
+
+function isLocalHttpUrl(value) {
+  let parsed;
   try {
-    return await Promise.race([(async () => {
-      const response = await fetchImpl(url, {
-        method: "POST",
-        signal: controller.signal,
-        headers: {
-          accept: "application/json",
-          Authorization: `GRJWT ${token}`,
-          "content-type": "application/json",
-          "mcp-protocol-version": "2025-03-26",
-        },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: 1,
-          method: "tools/list",
-          params: {},
-        }),
-      });
-      if (!response.ok) throw new Error(`Rainbond API Bridge 校验失败，HTTP ${response.status}`);
-      if (!response.body || typeof response.body.getReader !== "function") {
-        throw new Error("Rainbond API Bridge 校验返回了无法识别的响应");
-      }
-      reader = response.body.getReader();
-      const chunks = [];
-      let total = 0;
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        total += value.byteLength;
-        if (total > maxResponseBytes) {
-          controller.abort();
-          await reader.cancel().catch(() => {});
-          throw new Error("Rainbond API Bridge 校验响应过大");
-        }
-        chunks.push(value);
-      }
-      const body = new Uint8Array(total);
-      let offset = 0;
-      for (const chunk of chunks) {
-        body.set(chunk, offset);
-        offset += chunk.byteLength;
-      }
-      let payload;
-      try {
-        payload = JSON.parse(new TextDecoder().decode(body));
-      } catch {
-        throw new Error("Rainbond API Bridge 校验返回了无法识别的响应");
-      }
-      if (!Array.isArray(payload?.result?.tools)) {
-        throw new Error("Rainbond API Bridge 校验返回了无法识别的响应");
-      }
-      return { token };
-    })(), wallClock]);
-  } finally {
-    clearTimeout(wallClockTimer);
+    parsed = new URL(value);
+  } catch {
+    return false;
   }
+  if (parsed.protocol !== "http:") return false;
+
+  const hostname = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (hostname === "localhost" || hostname.endsWith(".localhost")) return true;
+  if (net.isIP(hostname) === 6) {
+    return hostname === "::1" || hostname.startsWith("fc") || hostname.startsWith("fd");
+  }
+  if (net.isIP(hostname) !== 4) return false;
+
+  const octets = hostname.split(".").map(Number);
+  return octets[0] === 10
+    || octets[0] === 127
+    || (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31)
+    || (octets[0] === 192 && octets[1] === 168)
+    || (octets[0] === 169 && octets[1] === 254);
 }
 
 function requireValue(argv, index, option) {
@@ -110,8 +73,8 @@ function parseWindowsInstallerArgs(argv) {
     target: "",
     customDest: "",
     force: false,
+    verbose: false,
     skipMcp: false,
-    apiOnly: false,
     nonInteractive: false,
     rainbondUrl: "",
     deploymentMode: "",
@@ -122,17 +85,17 @@ function parseWindowsInstallerArgs(argv) {
 
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
-    if (["codex", "claude", "pi", "all"].includes(argument)) {
+    if (["codex", "claude", "all"].includes(argument)) {
       options.target = argument;
     } else if (argument === "--dest") {
       options.customDest = requireValue(argv, index, argument);
       index += 1;
     } else if (argument === "--force") {
       options.force = true;
+    } else if (argument === "--verbose") {
+      options.verbose = true;
     } else if (argument === "--skip-mcp") {
       options.skipMcp = true;
-    } else if (argument === "--api-only") {
-      options.apiOnly = true;
     } else if (argument === "--non-interactive") {
       options.nonInteractive = true;
     } else if (argument === "--rainbond-url") {
@@ -157,37 +120,9 @@ function parseWindowsInstallerArgs(argv) {
   return options;
 }
 
-function writeCliCredentials({ baseUrl, home, token, stateStore, allowInsecureHttp = false }) {
-  const store = stateStore || createWindowsSecureStateStore({ home });
-  const directory = store.ensurePrivateDirectory(path.join(home, ".rainbond"));
-  const target = path.join(directory, "credentials.env");
-  const temporary = path.join(directory, `.credentials.${process.pid}.${crypto.randomBytes(6).toString("hex")}.tmp`);
-  if (fs.existsSync(target) && fs.lstatSync(target).isSymbolicLink()) {
-    throw new Error(`拒绝覆盖 Windows reparse point：${target}`);
-  }
-  fs.writeFileSync(
-    temporary,
-    `export RAINBOND_JWT=${JSON.stringify(token)}\nexport RAINBOND_URL=${JSON.stringify(baseUrl)}\nexport RAINBOND_ALLOW_INSECURE_HTTP=${JSON.stringify(String(allowInsecureHttp))}\n`,
-    { mode: 0o600 }
-  );
-  try {
-    store.protectRegularFile(temporary);
-    fs.renameSync(temporary, target);
-    store.protectRegularFile(target);
-  } catch (error) {
-    try {
-      fs.unlinkSync(temporary);
-    } catch (cleanupError) {
-      if (cleanupError.code !== "ENOENT") throw cleanupError;
-    }
-    throw error;
-  }
-}
-
 function destinationsForTarget(target, home) {
   if (target === "codex") return [path.join(home, ".codex", "skills")];
   if (target === "claude") return [path.join(home, ".claude", "skills")];
-  if (target === "pi") return [path.join(home, ".pi", "agent", "skills")];
   if (target === "all") {
     return [
       path.join(home, ".claude", "skills"),
@@ -328,182 +263,6 @@ function copySkills({ skills, destinations, force = false, logger = () => {} }) 
   return counts;
 }
 
-function installBridge({ home, packageRoot, stateStore }) {
-  const source = path.join(packageRoot, "bin", "rainskills-tools.js");
-  const info = fs.lstatSync(source);
-  if (!info.isFile() || info.isSymbolicLink()) {
-    throw new Error(`API Bridge 必须是普通文件，不能是符号链接或 reparse point：${source}`);
-  }
-  const store = stateStore || (
-    process.platform === "win32"
-      ? createWindowsSecureStateStore({ home })
-      : createSecureStateStore({ platform: process.platform, home })
-  );
-  const directory = path.join(home, ".rainbond", "bin");
-  try {
-    const directoryInfo = fs.lstatSync(directory);
-    if (directoryInfo.isSymbolicLink()) {
-      throw new Error(`拒绝使用符号链接或 reparse point Bridge 目录：${directory}`);
-    }
-  } catch (error) {
-    if (error.code !== "ENOENT") throw error;
-  }
-  assertNoSymlinkPath(directory);
-  store.ensurePrivateDirectory(directory);
-  const destination = path.join(directory, "rainskills-tools.js");
-  const manifestDestination = path.join(directory, "rainskills-skill-manifest.json");
-  if (fs.existsSync(destination)) {
-    const existing = fs.lstatSync(destination);
-    if (!existing.isFile() || existing.isSymbolicLink()) {
-      throw new Error(`拒绝覆盖符号链接或 reparse point Bridge：${destination}`);
-    }
-  }
-  if (fs.existsSync(manifestDestination)) {
-    const existing = fs.lstatSync(manifestDestination);
-    if (!existing.isFile() || existing.isSymbolicLink()) {
-      throw new Error(`拒绝覆盖符号链接或 reparse point Skill manifest：${manifestDestination}`);
-    }
-  }
-  const temporary = path.join(
-    directory,
-    `.rainskills-tools.js.${process.pid}.${crypto.randomBytes(6).toString("hex")}`
-  );
-  const backup = path.join(
-    directory,
-    `.rainskills-tools.js.backup.${process.pid}.${crypto.randomBytes(6).toString("hex")}`
-  );
-  const manifestTemporary = path.join(
-    directory,
-    `.rainskills-skill-manifest.json.${process.pid}.${crypto.randomBytes(6).toString("hex")}`
-  );
-  const manifestBackup = path.join(
-    directory,
-    `.rainskills-skill-manifest.json.backup.${process.pid}.${crypto.randomBytes(6).toString("hex")}`
-  );
-  let backedUp = false;
-  let installed = false;
-  let manifestBackedUp = false;
-  let manifestInstalled = false;
-  try {
-    const packagedBuilder = path.join(packageRoot, "scripts", "build-skill-manifest.mjs");
-    const fallbackBuilder = path.resolve(__dirname, "..", "..", "scripts", "build-skill-manifest.mjs");
-    const builder = fs.existsSync(packagedBuilder) ? packagedBuilder : fallbackBuilder;
-    const build = spawnSync(process.execPath, [
-      builder,
-      "--source-root", packageRoot,
-      "--output", manifestTemporary,
-    ], { encoding: "utf8" });
-    if (build.status !== 0) {
-      throw new Error(`生成 Skill manifest 失败：${String(build.stderr || build.stdout || "unknown error").trim()}`);
-    }
-    store.protectRegularFile(manifestTemporary);
-    fs.copyFileSync(source, temporary, fs.constants.COPYFILE_EXCL);
-    store.protectRegularFile(temporary);
-    if (fs.existsSync(manifestDestination)) {
-      fs.renameSync(manifestDestination, manifestBackup);
-      manifestBackedUp = true;
-    }
-    fs.renameSync(manifestTemporary, manifestDestination);
-    manifestInstalled = true;
-    store.protectRegularFile(manifestDestination);
-    if (fs.existsSync(destination)) {
-      fs.renameSync(destination, backup);
-      backedUp = true;
-    }
-    fs.renameSync(temporary, destination);
-    installed = true;
-    store.protectRegularFile(destination);
-    if (backedUp) fs.rmSync(backup, { force: true });
-    if (manifestBackedUp) fs.rmSync(manifestBackup, { force: true });
-  } catch (error) {
-    try {
-      fs.rmSync(temporary, { force: true });
-      fs.rmSync(manifestTemporary, { force: true });
-    } catch {
-      // Preserve the original installation error.
-    }
-    if (installed && fs.existsSync(destination)) {
-      fs.rmSync(destination, { force: true });
-    }
-    if (backedUp && fs.existsSync(backup)) {
-      fs.renameSync(backup, destination);
-    }
-    if (manifestInstalled && fs.existsSync(manifestDestination)) {
-      fs.rmSync(manifestDestination, { force: true });
-    }
-    if (manifestBackedUp && fs.existsSync(manifestBackup)) {
-      fs.renameSync(manifestBackup, manifestDestination);
-    }
-    throw error;
-  }
-  return destination;
-}
-
-function installCodexReadRule({ home, bridge, stateStore }) {
-  const bridgeInfo = fs.lstatSync(bridge);
-  if (!bridgeInfo.isFile() || bridgeInfo.isSymbolicLink()) {
-    throw new Error(`RainSkills CLI 必须是普通文件，不能是符号链接或 reparse point：${bridge}`);
-  }
-  const store = stateStore || (
-    process.platform === "win32"
-      ? createWindowsSecureStateStore({ home })
-      : createSecureStateStore({ platform: process.platform, home })
-  );
-  const directory = path.join(home, ".codex", "rules");
-  assertNoSymlinkPath(directory);
-  store.ensurePrivateDirectory(directory);
-  const destination = path.join(directory, "rainskills.rules");
-  if (fs.existsSync(destination)) {
-    const existing = fs.lstatSync(destination);
-    if (!existing.isFile() || existing.isSymbolicLink()) {
-      throw new Error(`拒绝覆盖符号链接或 reparse point Codex 规则：${destination}`);
-    }
-  }
-  const rule = [
-    "# Managed by RainSkills. The CLI enforces the read-only boundary before network access.",
-    "prefix_rule(",
-    "    pattern = [",
-    "        \"node\",",
-    `        ${JSON.stringify(bridge)},`,
-    "        [\"status\", \"list\", \"describe\", \"read\"],",
-    "    ],",
-    "    decision = \"allow\",",
-    "    justification = \"Allow only RainSkills catalog inspection and CLI-enforced read-only Rainbond queries.\",",
-    ")",
-    "",
-  ].join("\n");
-  const temporary = path.join(
-    directory,
-    `.rainskills.rules.${process.pid}.${crypto.randomBytes(6).toString("hex")}`
-  );
-  const backup = path.join(
-    directory,
-    `.rainskills.rules.backup.${process.pid}.${crypto.randomBytes(6).toString("hex")}`
-  );
-  let backedUp = false;
-  try {
-    fs.writeFileSync(temporary, rule, { flag: "wx" });
-    store.protectRegularFile(temporary);
-    if (fs.existsSync(destination)) {
-      fs.renameSync(destination, backup);
-      backedUp = true;
-    }
-    fs.renameSync(temporary, destination);
-    store.protectRegularFile(destination);
-    if (backedUp) fs.rmSync(backup, { force: true });
-  } catch (error) {
-    try {
-      fs.rmSync(temporary, { force: true });
-    } catch {
-      // Preserve the original installation error.
-    }
-    if (backedUp && fs.existsSync(destination)) fs.rmSync(destination, { force: true });
-    if (backedUp && fs.existsSync(backup)) fs.renameSync(backup, destination);
-    throw error;
-  }
-  return destination;
-}
-
 function validateControl(control) {
   if (!control || !CONTROL_MODES.has(control.mode)) {
     throw new Error("不支持的 RainSkills control mode");
@@ -526,13 +285,10 @@ function createOnboardingCheckpoint({
   operationId = crypto.randomUUID(),
   now = () => new Date().toISOString(),
   stateStore,
-  transportMode = "cli",
+  intent,
 }) {
   if (!UUID_PATTERN.test(operationId)) throw new Error("operation id 不是有效的 UUID");
-  if (!["codex", "claude", "pi", "all"].includes(target)) throw new Error("安装目标无效");
-  // Existing interrupted onboardings may still carry the old transport label.
-  // New checkpoints are always written by main() with transportMode="cli".
-  if (!["cli", "mcp", "api"].includes(transportMode)) throw new Error("安装传输模式无效");
+  if (!["codex", "claude", "all"].includes(target)) throw new Error("安装目标无效");
   const controlDistro = validateControl(control);
   const store = stateStore || (
     process.platform === "win32"
@@ -550,7 +306,6 @@ function createOnboardingCheckpoint({
     stage: "awaiting-platform",
     target,
     deployment_mode: "self-hosted",
-    transport_mode: transportMode,
     control_mode: control.mode,
     control_distro: controlDistro,
     platform_state_path: path.join(
@@ -561,26 +316,28 @@ function createOnboardingCheckpoint({
     ),
     console_url: null,
   };
+  if (intent !== undefined) state.intent = assertIntentCanInstallNewPlatform(intent);
   store.atomicWriteJson(checkpointPath, state);
   return { path: checkpointPath, state };
 }
 
-function createNextAction(operationId) {
+function createNextAction(operationId, location = "") {
   if (!UUID_PATTERN.test(operationId || "")) throw new Error("operation id 不是有效的 UUID");
+  if (location && !["local", "server"].includes(location)) {
+    throw new Error("平台安装 location 只支持 local 或 server");
+  }
+  const argv = ["platform", "install", "--onboarding-id", operationId];
+  if (location) argv.push("--location", location);
   return {
     schema: "rainskills.next-action.v1",
     action: "install-platform",
     onboarding_id: operationId,
-    argv: ["platform", "install", "--onboarding-id", operationId],
+    argv,
   };
 }
 
 async function authorizeAndConfigure({
   target,
-  home = os.homedir(),
-  packageRoot = path.resolve(__dirname, "..", ".."),
-  stateStore,
-  allowInsecureHttp = false,
   baseUrl,
   noBrowser = false,
   signal,
@@ -588,14 +345,39 @@ async function authorizeAndConfigure({
   openBrowser = openWindowsBrowser,
   authorizeWithDeviceFlowImpl = authorizeWithDeviceFlow,
   authorizeWithLoopbackImpl = authorizeWithLoopback,
-  validateApiImpl = validateApi,
+  validateMcpImpl = validateMcp,
+  configureSelectedClientsImpl = configureSelectedClients,
   fetchImpl = globalThis.fetch,
   sleep,
   now,
   spawnImpl,
+  telemetryFactory = createLifecycleTelemetry,
+  onConfiguredCredential = () => {},
 }) {
+  const telemetry = telemetryFactory({
+    context: {
+      install_attempt_id: process.env.RAINSKILLS_INSTALL_ATTEMPT_ID || crypto.randomUUID(),
+      operation_id: process.env.RAINSKILLS_TELEMETRY_OPERATION_ID,
+      installation_id: process.env.RAINSKILLS_TELEMETRY_INSTALLATION_ID,
+      package_version: process.env.RAINSKILLS_PACKAGE_VERSION,
+      platform: "win32",
+      control_mode: process.env.RAINSKILLS_TELEMETRY_CONTROL_MODE || "windows-native",
+      target: process.env.RAINSKILLS_TELEMETRY_TARGET || "local-windows",
+      client: target,
+      action: "install",
+    },
+  });
   const browserOpener = noBrowser ? async () => {} : openBrowser;
   let token;
+  let authorizationMethod = "device_flow";
+  telemetry.record({
+    lifecycle_phase: "authorize_device_flow",
+    step: "device_code",
+    lifecycle_action: "authorize",
+    lifecycle_status: "started",
+    auth_method: "device_flow",
+    transport: "powershell",
+  });
   try {
     token = await authorizeWithDeviceFlowImpl({
       baseUrl,
@@ -607,34 +389,157 @@ async function authorizeAndConfigure({
       sleep,
     });
   } catch (error) {
-    if (error.code !== "DEVICE_FLOW_UNSUPPORTED") throw error;
+    if (error.code !== "DEVICE_FLOW_UNSUPPORTED") {
+      telemetry.record({
+        lifecycle_phase: "authorize_device_flow",
+        step: "device_code",
+        lifecycle_action: "authorize",
+        lifecycle_status: "failed",
+        error_code: "authorization_failed",
+        error_stage: "authorize_device_flow",
+        reason_code: "authorization_failed",
+        auth_method: "device_flow",
+        transport: "powershell",
+      });
+      throw error;
+    }
+    authorizationMethod = "browser_loopback";
+    telemetry.record({
+      lifecycle_phase: "authorize_device_flow",
+      step: "device_code",
+      lifecycle_action: "authorize",
+      lifecycle_status: "skipped",
+      auth_method: "device_flow",
+      transport: "powershell",
+    });
+    telemetry.record({
+      lifecycle_phase: "authorize_legacy",
+      step: "legacy_callback",
+      lifecycle_action: "authorize",
+      lifecycle_status: "started",
+      auth_method: "browser_loopback",
+      transport: "powershell",
+    });
     token = await authorizeWithLoopbackImpl({
       baseUrl,
       openBrowser: browserOpener,
       logger,
       signal,
     });
+    telemetry.record({
+      lifecycle_phase: "authorize_legacy",
+      step: "legacy_callback",
+      lifecycle_action: "authorize",
+      lifecycle_status: "completed",
+      auth_method: "browser_loopback",
+      transport: "powershell",
+    });
+  }
+  if (authorizationMethod === "device_flow") {
+    telemetry.record({
+      lifecycle_phase: "authorize_device_flow",
+      step: "device_code",
+      lifecycle_action: "authorize",
+      lifecycle_status: "completed",
+      auth_method: "device_flow",
+      transport: "powershell",
+    });
   }
 
-  const apiUrl = `${baseUrl}/console/mcp/rainskills/api/query`;
-  const validation = await validateApiImpl({ fetchImpl, token, url: apiUrl });
-  token = validation.token;
-  writeCliCredentials({ baseUrl, home, token, stateStore, allowInsecureHttp });
-  logger("RainSkills CLI 已授权并验证；未修改客户端 MCP 配置。");
-  return { status: "cli-configured" };
+  const endpoints = [];
+  if (target === "codex" || target === "all") {
+    endpoints.push(`${baseUrl}/console/mcp/rainskills/codex/query`);
+  }
+  if (target === "claude" || target === "all") {
+    endpoints.push(`${baseUrl}/console/mcp/rainskills/claude-code/query`);
+  }
+  if (endpoints.length === 0) throw new Error("安装目标无效");
+  const mcpUrls = {};
+  for (const url of endpoints) {
+    telemetry.record({
+      lifecycle_phase: "configure_mcp",
+      step: "verify_mcp",
+      lifecycle_action: "configure_mcp",
+      lifecycle_status: "started",
+      auth_method: authorizationMethod,
+      transport: "powershell",
+    });
+    try {
+      let selectedUrl = url;
+      let validation;
+      try {
+        validation = await validateMcpImpl({ fetchImpl, token, url });
+      } catch (error) {
+        if (error.code !== "MCP_ENDPOINT_UNSUPPORTED") throw error;
+        selectedUrl = `${baseUrl}/console/mcp/query`;
+        validation = await validateMcpImpl({ fetchImpl, token, url: selectedUrl });
+      }
+      token = validation.token;
+      if (url.includes("/codex/query")) mcpUrls.codex = selectedUrl;
+      else mcpUrls.claude = selectedUrl;
+    } catch (error) {
+      telemetry.record({
+        lifecycle_phase: "configure_mcp",
+        step: "verify_mcp",
+        lifecycle_action: "configure_mcp",
+        lifecycle_status: "failed",
+        error_code: "mcp_verification_failed",
+        error_stage: "configure_mcp",
+        reason_code: "mcp_verification_failed",
+        retryable: true,
+        auth_method: authorizationMethod,
+        transport: "powershell",
+      });
+      throw error;
+    }
+    telemetry.record({
+      lifecycle_phase: "configure_mcp",
+      step: "verify_mcp",
+      lifecycle_action: "configure_mcp",
+      lifecycle_status: "completed",
+      auth_method: authorizationMethod,
+      transport: "powershell",
+    });
+  }
+  try {
+    configureSelectedClientsImpl({ baseUrl, mcpUrls, spawnImpl, target, token });
+  } catch (error) {
+    telemetry.record({
+      lifecycle_phase: "configure_mcp",
+      step: "configure_mcp",
+      lifecycle_action: "configure_mcp",
+      lifecycle_status: "failed",
+      error_code: "configuration_failed",
+      error_stage: "configure_mcp",
+      reason_code: "configuration_failed",
+      retryable: true,
+      auth_method: authorizationMethod,
+      transport: "powershell",
+    });
+    throw error;
+  }
+  telemetry.record({
+    lifecycle_phase: "configure_mcp",
+    step: "configure_mcp",
+    lifecycle_action: "configure_mcp",
+    lifecycle_status: "completed",
+    auth_method: authorizationMethod,
+    transport: "powershell",
+  });
+  await onConfiguredCredential(token);
+  return { status: "configured" };
 }
 
 async function promptTarget() {
   const terminal = readline.createInterface({ input: stdin, output: stdout });
   try {
-    stdout.write("请选择要安装和配置的平台：\n  1) Codex\n  2) Claude Code\n  3) Pi\n  4) Codex 和 Claude Code\n");
+    stdout.write("请选择要安装和配置的平台：\n  1) Codex\n  2) Claude Code\n  3) 两者都要\n");
     for (;;) {
-      const answer = (await terminal.question("请输入选项 [1-4]: ")).trim();
+      const answer = (await terminal.question("请输入选项 [1-3]: ")).trim();
       if (answer === "1") return "codex";
       if (answer === "2") return "claude";
-      if (answer === "3") return "pi";
-      if (answer === "" || answer === "4") return "all";
-      stdout.write("请输入 1、2、3 或 4。\n");
+      if (answer === "" || answer === "3") return "all";
+      stdout.write("请输入 1、2 或 3。\n");
     }
   } finally {
     terminal.close();
@@ -707,7 +612,7 @@ async function resolveDeployment(options, {
 }
 
 function usage() {
-  stdout.write("Usage: npx rainskills [codex|claude|pi|all] [options]\n");
+  stdout.write("Usage: npx rainskills [codex|claude|all] [options]\n");
 }
 
 async function main(argv, dependencies = {}) {
@@ -718,116 +623,29 @@ async function main(argv, dependencies = {}) {
   }
   const home = dependencies.home || os.homedir();
   const packageRoot = dependencies.packageRoot || path.resolve(__dirname, "..", "..");
-  const nodeVersion = Object.hasOwn(dependencies, "nodeVersion")
-    ? dependencies.nodeVersion
-    : process.versions.node;
-  const nodeMajorText = typeof nodeVersion === "string" ? nodeVersion.split(".")[0] : "";
-  const nodeMajor = /^\d+$/.test(nodeMajorText) ? Number(nodeMajorText) : Number.NaN;
-  if (!Number.isInteger(nodeMajor) || nodeMajor < 18) {
-    throw new Error("RainSkills CLI 需要 Node.js 18 或更高版本；不会安装 Python/Shell Bridge");
-  }
   const target = options.target || (
     options.nonInteractive || !stdin.isTTY
       ? "all"
       : await (dependencies.promptTarget || promptTarget)()
   );
-  const logger = dependencies.logger || ((message) => stdout.write(`${message}\n`));
   const destinations = options.customDest
     ? [path.resolve(options.customDest)]
     : destinationsForTarget(target, home);
   const skills = discoverSkills(packageRoot);
+  const logger = dependencies.logger || ((message) => stdout.write(`${message}\n`));
+  const detailLogger = options.verbose ? logger : () => {};
   const counts = copySkills({
     skills,
     destinations,
     force: options.force,
-    logger,
+    logger: detailLogger,
   });
-  if (options.customDest) {
-    installBridge({ home, packageRoot, stateStore: dependencies.stateStore });
-    return { status: "skills-installed", counts };
-  }
-  const runtimePlatform = dependencies.platform || process.platform;
-  const stateStore = dependencies.stateStore || (
-    runtimePlatform === "win32"
-      ? createWindowsSecureStateStore({ home, runner: dependencies.runner })
-      : createSecureStateStore({ platform: runtimePlatform, home })
-  );
-  const bridge = installBridge({ home, packageRoot, stateStore });
-  if (target === "codex" || target === "all") {
-    const rule = installCodexReadRule({ home, bridge, stateStore });
-    logger(`[install] 已安装 Codex 只读网络规则到 ${rule}`);
-  }
-
-  const deployment = await resolveDeployment(options, {
-    isTty: dependencies.isTty,
-    promptDeployment: dependencies.promptDeployment,
-  });
-  if (deployment.needsUserInput) {
-    logger("[RAINSKILLS_USER_INPUT_REQUIRED:rainbond_environment]");
-    logger("请选择 Rainbond Cloud，或选择私有化部署并提供平台地址/继续平台安装。");
-    return { status: "waiting-user", counts };
-  }
-
-  if (deployment.needsPlatform) {
-    const packageManifest = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"));
-    const operationId = dependencies.operationId || crypto.randomUUID();
-    const operationLock = stateStore.acquireOperationLock({ operationId });
-    try {
-      const checkpoint = createOnboardingCheckpoint({
-        home,
-        target,
-        packageVersion: packageManifest.version,
-        control: dependencies.control || detectControlEnvironment(),
-        operationId,
-        stateStore,
-        transportMode: "cli",
-      });
-      const nextAction = createNextAction(operationId);
-      logger("");
-      logger("Rainbond 平台安装将在独立步骤中继续，前面的选择已经保存。");
-      logger("支持 Windows 本地安装，也可以安装到 Linux 服务器。");
-      logger("");
-      logger("如果由 AI 代为安装，请按下面的固定参数继续；终端用户可以直接执行：");
-      logger(`npx rainskills@${packageManifest.version} platform install --onboarding-id ${operationId}`);
-      return { status: "awaiting-platform", counts, checkpoint, nextAction };
-    } finally {
-      operationLock.release();
-    }
-  }
-
-  const baseUrl = deployment.baseUrl;
-  const parsedBase = new URL(baseUrl);
-  if (!["http:", "https:"].includes(parsedBase.protocol)) {
-    throw new Error("Rainbond Console 地址必须使用 HTTP 或 HTTPS");
-  }
-  parsedBase.pathname = parsedBase.pathname.replace(/\/$/, "");
-  parsedBase.search = "";
-  parsedBase.hash = "";
-  const normalizedBase = parsedBase.toString().replace(/\/$/, "");
-  if (parsedBase.protocol === "http:" && !options.allowInsecureHttp) {
-    throw new Error("默认禁用明文 HTTP；如需继续请添加 --allow-insecure-http");
-  }
-  const configure = dependencies.authorizeAndConfigure || authorizeAndConfigure;
-  const configuration = await configure({
-    target,
-    home,
-    packageRoot,
-    stateStore,
-    allowInsecureHttp: options.allowInsecureHttp,
-    baseUrl: normalizedBase,
-    noBrowser: options.noBrowser,
-    logger,
-    ...(dependencies.authorizationDependencies || {}),
-  });
-  const clientLabel = target === "codex"
-    ? "Codex"
-    : target === "claude"
-      ? "Claude Code"
-      : target === "pi"
-        ? "Pi（执行 /reload）"
-        : "Codex 和 Claude Code";
-  logger(`安装和授权已完成。请重新启动 ${clientLabel}，让新 Skills 生效。`);
-  return { status: "cli-configured", counts, configuration };
+  detailLogger("");
+  detailLogger(`安装完成。本次：${counts.installed} 项新装 / ${counts.updated} 项已更新 / ${counts.unchanged} 项已是最新 / ${counts.forced} 项强制覆盖`);
+  detailLogger("");
+  logger(CAPABILITY_SUMMARY);
+  logger(AGENT_SUMMARY_REQUIREMENT);
+  return { status: "skills-installed", counts };
 }
 
 module.exports = {
@@ -840,10 +658,7 @@ module.exports = {
   main,
   parseWindowsInstallerArgs,
   resolveDeployment,
-  installBridge,
-  installCodexReadRule,
-  writeCliCredentials,
-  validateApi,
+  isLocalHttpUrl,
 };
 
 if (require.main === module) {

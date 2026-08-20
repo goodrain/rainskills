@@ -34,7 +34,7 @@ const MACHINE_ACTIONS = Object.freeze([
   "InstallRainbond",
   "VerifyDeployment",
 ]);
-const STATE_ACTIONS = Object.freeze(["InspectState", "ProtectState"]);
+const STATE_ACTIONS = Object.freeze(["InspectState", "InspectSourceFile", "ProtectState"]);
 const FIXED_ACTIONS = Object.freeze([...USER_ACTIONS, ...MACHINE_ACTIONS, ...STATE_ACTIONS]);
 const WINDOWS_STAGES = Object.freeze([
   "target-selection",
@@ -155,8 +155,8 @@ function createWindowsSecureStateStore({
     platform: "win32",
     home,
     currentSid,
-    inspectWindowsAcl(targetPath, expectedKind) {
-      const execution = invokeStateAction("InspectState", targetPath, expectedKind);
+    inspectWindowsAcl(targetPath, expectedKind, { externalSource = false } = {}) {
+      const execution = invokeStateAction(externalSource ? "InspectSourceFile" : "InspectState", targetPath, expectedKind);
       try {
         return JSON.parse(String(execution.stdout || "").trim());
       } catch {

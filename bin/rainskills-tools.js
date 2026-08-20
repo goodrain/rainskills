@@ -14,44 +14,21 @@ const STDOUT_MAX_BYTES = 128 * 1024;
 const CATALOG_TTL_MS = 5 * 60 * 1000;
 const PROTOCOL_VERSION = "2025-03-26";
 const ENDPOINT_PATH = "/console/mcp/rainskills/api/query";
-const CLI_VERSION = "2.2.0";
+const CLI_VERSION = "2.1.0";
 const CONFIG_DIRECTORY = ".rainbond";
 const CREDENTIALS_FILENAME = "credentials.env";
 const LEGACY_CREDENTIALS_FILENAME = "mcp.env";
 const CATALOG_FILENAME = "capabilities.json";
 const OPERATIONS_DIRECTORY = "operations";
-const SKILL_MANIFEST_FILENAME = "rainskills-skill-manifest.json";
 const OPERATION_ID_PATTERN = /^[a-f0-9]{8}-[a-f0-9-]{27,}$/;
-const SKILL_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,127}$/;
-const SHA256_PATTERN = /^[a-f0-9]{64}$/;
-const SKILL_CONTENT_MAX_BYTES = 128 * 1024;
-const SKILL_MANIFEST_MAX_BYTES = 4 * 1024 * 1024;
 const SENSITIVE_RESPONSE_KEY_PATTERN = /(?:authorization|jwt|token|password|secret|credential|private[_-]?key|key[_-]?file|certificate|cert[_-]?file|ssl[_-]?ca[_-]?cert)/i;
 const RISK_POLICY = Object.freeze({
-  version: "2",
+  version: "1",
   readPrefixes: [
-    "rainbond_query_", "rainbond_get_", "rainbond_list_",
+    "rainbond_query_", "rainbond_get_", "rainbond_list_", "rainbond_check_",
     "rainbond_describe_", "rainbond_validate_", "rainbond_verify_", "rainbond_search_",
   ],
   destructiveFragments: ["delete", "remove", "purge", "destroy"],
-  writeTools: [
-    "rainbond_exec",
-    "rainbond_get_component_check_result",
-    "rainbond_get_yaml_app_check_result",
-  ],
-  mixedReadOperations: {
-    rainbond_manage_component_envs: ["summary", "list", "view"],
-    rainbond_manage_component_connection_envs: ["summary", "list", "view"],
-    rainbond_manage_component_ports: ["summary", "list", "view"],
-    rainbond_manage_component_storage: [
-      "summary", "list", "view", "list_unmounted", "list_available_mounts",
-    ],
-    rainbond_manage_component_autoscaler: [
-      "summary", "list", "view", "get_rule", "detail", "records", "history", "logs",
-    ],
-    rainbond_manage_component_probe: ["summary", "list", "view", "get", "detail"],
-    rainbond_manage_component_dependency: ["summary", "list", "view"],
-  },
 });
 
 const EXIT = Object.freeze({
@@ -187,23 +164,9 @@ function parseCommand(args) {
     return { command, toolName: args[1], input: args[3] };
   }
   if (command === "call" && args.length >= 4 && args[1] && args[2] === "--input" && args[3] === "-") {
-    const parsed = { command, toolName: args[1], input: args[3] };
-    if (args.length === 4) return parsed;
-    const allowed = new Set(["--confirm", "--skill-id", "--root-skill-id"]);
-    for (let index = 4; index < args.length; index += 2) {
-      const option = args[index];
-      const value = args[index + 1];
-      if (!allowed.has(option) || !value || value.startsWith("--")) break;
-      if (option === "--confirm" && !parsed.confirmation && OPERATION_ID_PATTERN.test(value)) {
-        parsed.confirmation = value;
-      } else if (option === "--skill-id" && !parsed.skillId && SKILL_ID_PATTERN.test(value)) {
-        parsed.skillId = value;
-      } else if (option === "--root-skill-id" && !parsed.rootSkillId && SKILL_ID_PATTERN.test(value)) {
-        parsed.rootSkillId = value;
-      } else {
-        break;
-      }
-      if (index + 2 === args.length) return parsed;
+    if (args.length === 4) return { command, toolName: args[1], input: args[3] };
+    if (args.length === 6 && args[4] === "--confirm" && OPERATION_ID_PATTERN.test(args[5])) {
+      return { command, toolName: args[1], input: args[3], confirmation: args[5] };
     }
   }
   throw new BridgeError("invalid command; use status, list, describe, read, or call", EXIT.USAGE);
@@ -270,64 +233,11 @@ function operationsPath(config) {
   return path.join(config.homeDir || os.homedir(), CONFIG_DIRECTORY, OPERATIONS_DIRECTORY);
 }
 
-function skillManifestPath(config) {
-  return path.join(config.homeDir || os.homedir(), CONFIG_DIRECTORY, "bin", SKILL_MANIFEST_FILENAME);
-}
-
-function loadSkillBinding(config, skillId, rootSkillId) {
-  const target = skillManifestPath(config);
-  let info;
-  let manifest;
-  try {
-    info = fs.lstatSync(target);
-    if (!info.isFile() || info.isSymbolicLink() ||
-      (process.platform !== "win32" && (info.mode & 0o077) !== 0) ||
-      info.size > SKILL_MANIFEST_MAX_BYTES) {
-      throw new Error("unsafe manifest");
-    }
-    manifest = JSON.parse(fs.readFileSync(target, "utf8"));
-  } catch (_error) {
-    throw new BridgeError("RainSkills Skill manifest is missing or unsafe", EXIT.CONFIG);
-  }
-  if (!manifest || manifest.schema !== "rainskills.skill-manifest.v1" || manifest.profile !== "cli" ||
-    typeof manifest.package_version !== "string" || !manifest.package_version || !Array.isArray(manifest.skills)) {
-    throw new BridgeError("RainSkills Skill manifest schema is incompatible", EXIT.CONFIG);
-  }
-  const entry = manifest.skills.find((candidate) => candidate && candidate.id === skillId);
-  if (!entry || entry.profile !== "cli" || entry.package_version !== manifest.package_version ||
-    typeof entry.content !== "string" || Buffer.byteLength(entry.content, "utf8") > SKILL_CONTENT_MAX_BYTES ||
-    !SHA256_PATTERN.test(entry.content_sha256) || !SHA256_PATTERN.test(entry.bundle_sha256) ||
-    createHash("sha256").update(entry.content, "utf8").digest("hex") !== entry.content_sha256 ||
-    (entry.source_revision !== null && entry.source_revision !== undefined &&
-      (typeof entry.source_revision !== "string" || !entry.source_revision || entry.source_revision.length > 128))) {
-    throw new BridgeError("RainSkills Skill manifest entry is invalid", EXIT.CONFIG);
-  }
-  return {
-    skillId,
-    rootSkillId: rootSkillId || skillId,
-    packageVersion: entry.package_version,
-    sourceRevision: entry.source_revision || null,
-    contentSha256: entry.content_sha256,
-    bundleSha256: entry.bundle_sha256,
-    content: entry.content,
-  };
-}
-
-function classifyTool(toolName, argumentsValue = {}) {
+function classifyTool(toolName) {
   const normalized = String(toolName || "").toLowerCase();
-  const operation = typeof argumentsValue.operation === "string"
-    ? argumentsValue.operation.trim().toLowerCase()
-    : typeof argumentsValue.action === "string"
-      ? argumentsValue.action.trim().toLowerCase()
-      : "";
-  if (RISK_POLICY.destructiveFragments.some(
-    (fragment) => normalized.includes(fragment) || operation.includes(fragment)
-  )) {
+  if (RISK_POLICY.destructiveFragments.some((fragment) => normalized.includes(fragment))) {
     return "destructive";
   }
-  const readOperations = RISK_POLICY.mixedReadOperations[normalized];
-  if (readOperations && readOperations.includes(operation)) return "read";
-  if (RISK_POLICY.writeTools.includes(normalized)) return "write";
   if (RISK_POLICY.readPrefixes.some((prefix) => normalized.startsWith(prefix))) return "read";
   return "write";
 }
@@ -388,19 +298,13 @@ function readOperation(config, operationId) {
   }
 }
 
-function prepareOperation(config, toolName, operationClass, argumentsValue, skillBinding) {
+function prepareOperation(config, toolName, operationClass, argumentsValue) {
   const operationId = randomUUID();
   const record = {
     operation_id: operationId,
     tool_name: toolName,
     operation_class: operationClass,
     arguments_digest: argumentsDigest(argumentsValue),
-    skill_id: skillBinding.skillId,
-    root_skill_id: skillBinding.rootSkillId,
-    skill_package_version: skillBinding.packageVersion,
-    skill_source_revision: skillBinding.sourceRevision,
-    skill_content_sha256: skillBinding.contentSha256,
-    skill_bundle_sha256: skillBinding.bundleSha256,
     policy_version: RISK_POLICY.version,
     created_at: new Date().toISOString(),
     status: "awaiting_confirmation",
@@ -414,19 +318,12 @@ function confirmOperation(
   operationId,
   toolName,
   operationClass,
-  argumentsValue,
-  skillBinding
+  argumentsValue
 ) {
   const record = readOperation(config, operationId);
   if (!record || record.status !== "awaiting_confirmation" || record.tool_name !== toolName ||
     record.operation_class !== operationClass ||
-    record.arguments_digest !== argumentsDigest(argumentsValue) ||
-    record.skill_id !== skillBinding.skillId ||
-    record.root_skill_id !== skillBinding.rootSkillId ||
-    record.skill_package_version !== skillBinding.packageVersion ||
-    record.skill_source_revision !== skillBinding.sourceRevision ||
-    record.skill_content_sha256 !== skillBinding.contentSha256 ||
-    record.skill_bundle_sha256 !== skillBinding.bundleSha256) {
+    record.arguments_digest !== argumentsDigest(argumentsValue)) {
     throw new BridgeError("operation confirmation is missing or does not match this tool", EXIT.USAGE);
   }
   let claim;
@@ -440,25 +337,6 @@ function confirmOperation(
   }
   updateOperation(config, record, "executing");
   return record;
-}
-
-function buildAuditMetadata(operation, skillBinding) {
-  return {
-    schema: "rainskills.operation-meta.v1",
-    operation_id: operation.operation_id,
-    cli_version: CLI_VERSION,
-    confirmation_type: "rainskills_cli",
-    root_skill_id: skillBinding.rootSkillId,
-    skill: {
-      id: skillBinding.skillId,
-      profile: "cli",
-      package_version: skillBinding.packageVersion,
-      source_revision: skillBinding.sourceRevision,
-      content_sha256: skillBinding.contentSha256,
-      bundle_sha256: skillBinding.bundleSha256,
-      content: skillBinding.content,
-    },
-  };
 }
 
 function updateOperation(config, record, status) {
@@ -724,28 +602,22 @@ async function execute(command, config) {
     };
   }
 
-  const argumentsValue = command.argumentsValue || readArguments(command.input);
-  const operationClass = classifyTool(command.toolName, argumentsValue);
+  const operationClass = classifyTool(command.toolName);
   if (command.command === "read" && operationClass !== "read") {
     throw new BridgeError(
       "read is read-only and rejects tools classified as write or destructive",
       EXIT.USAGE
     );
   }
+  const argumentsValue = command.argumentsValue || readArguments(command.input);
   let operation = null;
-  let skillBinding = null;
   if (operationClass !== "read") {
-    if (!command.skillId) {
-      throw new BridgeError("mutable calls require --skill-id <active-skill-id>", EXIT.USAGE);
-    }
-    skillBinding = loadSkillBinding(config, command.skillId, command.rootSkillId);
     if (!command.confirmation) {
       operation = prepareOperation(
         config,
         command.toolName,
         operationClass,
-        argumentsValue,
-        skillBinding
+        argumentsValue
       );
       return {
         requires_confirmation: true,
@@ -759,22 +631,15 @@ async function execute(command, config) {
       command.confirmation,
       command.toolName,
       operationClass,
-      argumentsValue,
-      skillBinding
+      argumentsValue
     );
   }
 
   try {
-    const params = {
+    const result = await rpcRequest(config, "tools/call", {
       name: command.toolName,
       arguments: argumentsValue,
-    };
-    if (operation) {
-      params._meta = {
-        "com.rainbond/rainskills": buildAuditMetadata(operation, skillBinding),
-      };
-    }
-    const result = await rpcRequest(config, "tools/call", params);
+    });
     if (!result || typeof result !== "object") {
       throw new BridgeError("Rainbond tool result is invalid", EXIT.TRANSPORT);
     }
@@ -839,7 +704,6 @@ module.exports = {
   loadConfig,
   parseEnvFile,
   parseCommand,
-  classifyTool,
   rpcRequest,
 };
 

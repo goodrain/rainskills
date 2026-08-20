@@ -1,13 +1,59 @@
 ---
 name: rainbond-env-sync
-description: Use when syncing non-sensitive Rainbond preview or production environment overrides for a linked project into local env files before bootstrap, release, or troubleshooting.
+description: "Use when a user explicitly asks to sync non-sensitive preview or production environment overrides for a linked Rainbond project into local env files. Trigger phrases include: 同步生产环境配置到本地 / 同步预览环境配置到本地 / sync environment overrides."
 ---
 
 # Rainbond Env Sync
 
-## Rainbond 传输
+  <!-- rainskills-runtime-gate:start -->
+  ## 运行环境门禁（最高优先级）
 
-如果上游已初始化本次工作流的 RainSkills CLI，直接复用，不重新探测。否则在第一次 Rainbond 调用前读取 [../rainbond-app-assistant/references/transport-resolution.md](../rainbond-app-assistant/references/transport-resolution.md) 并初始化一次。CLI 锁定后，认证、网络、超时和业务错误均不得触发替代调用通道。
+  ### 多运行环境操作契约
+
+  Node.js 前置检查通过后，每次请求先执行本地 launcher + `["environment", "list", "--json"]`，按用户明确指定的运行环境选择不可变环境 ID；未指定时只用全局默认环境，默认不可用时停止且不回退。生成 UUID 后执行本地 launcher + `["operation", "begin", "--operation-id", "<uuid>", "--environment-id", "<id>", "--intent-json", "<intent-json>"]`，并在之后每个 Rainbond MCP 调用中加入 `rainskills_operation_id`。环境、团队和应用只属于本次操作，禁止保存项目绑定；同一项目可以部署到多个环境。明确“团队”表示环境内团队；明确“运行环境/平台”表示环境；裸名称同时匹配环境和团队时必须询问。
+
+第一步检查 Node.js 是否存在且主版本不低于 18。Node.js 缺失或低于 18 时，只说明“Rainskills 执行组件需要 Node.js 18 或更高版本”并停止：不选择运行环境，不调用 MCP，不猜测替代命令。只有用户或 agent 明确同意后才安装或升级 Node.js，再从同一原始 intent 继续。
+
+固定 launcher 是 `["npx", "--yes", "rainskills@0.1.0-rc.68"]`；版本必须与本技能包 `package.json` 一致。把 launcher 与参数拼成 argv 数组直接执行，禁止 `rainskills@latest` 或执行 shell 字符串。
+
+本地 launcher 必须从当前 Skill 所在目录的同级目录定位 `rainbond-platform-installer/scripts/local-runtime.js`，解析为绝对路径后使用 `["node", "<绝对路径>"]` 执行。`environment list`、`operation begin`、`operation complete` 和 `runtime message` 只能使用本地 launcher；本地 launcher 只读取已安装文件和本机受保护状态，不得访问 npm 或其它网络。只有用户选定连接运行环境后，才使用上面的固定 npx launcher。
+
+<!-- rainskills-runtime-contract:start -->
+```json
+{
+  "schema": "rainskills.skill-runtime-contract.v1",
+  "launcher": ["npx", "--yes", "rainskills@0.1.0-rc.68"],
+  "local_launcher": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js"],
+  "local_argv": {
+    "environment-list": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js", "environment", "list", "--json"],
+    "operation-begin": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js", "operation", "begin", "--operation-id", "<uuid>", "--intent-json", "<intent-json>"],
+    "operation-complete": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js", "operation", "complete", "--operation-id", "<uuid>"],
+    "runtime-message": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js", "runtime", "message", "--id", "<message-id>"]
+  },
+  "intents": {
+    "env-sync": {"required": ["project_root", "environment"], "optional": ["team_id", "app_id", "service_id"], "enums": {"environment": ["preview", "production"]}}
+  },
+  "routes": {"existing": ["saas", "private-existing"]},
+  "connect_argv": {
+    "saas": ["npx", "--yes", "rainskills@0.1.0-rc.68", "runtime", "connect", "<target>", "--saas", "--intent-json", "<intent-json>"],
+    "private-existing": ["npx", "--yes", "rainskills@0.1.0-rc.68", "runtime", "connect", "<target>", "--rainbond-url", "<rainbond-url>", "--intent-json", "<intent-json>"]
+  }
+}
+```
+<!-- rainskills-runtime-contract:end -->
+
+target 只允许 `codex`、`claude`、`all`。校验 intent 后只执行 existing scope 的完整 argv；只消费 schema 为 `rainskills.next-action.v1` 且校验后的 `argv` 数组。
+
+连接完成后用固定 `onboarding-id` 执行 launcher + `["intent", "resume", "--onboarding-id", "<同一 onboarding-id>"]`，恢复原始 intent 和 `resume_step`。401 先执行 launcher + `["runtime", "record-failure", "--onboarding-id", "<同一 onboarding-id>", "--step", "<当前固定步骤>", "--reason", "credential-expired"]`，再仅一次执行 launcher + `["runtime", "reconnect", "--onboarding-id", "<同一 onboarding-id>"]` 后 resume，只重试该步骤；第二次 401 停止。403 执行 launcher + `["runtime", "record-failure", "--onboarding-id", "<同一 onboarding-id>", "--step", "<当前固定步骤>", "--reason", "permission-denied"]` 后停止，不得 reconnect、重新授权或自动重试。
+<!-- rainskills-runtime-gate:end -->
+
+<!-- rainskills-runtime-routing:start -->
+## 缺少运行环境时
+
+先说：“可以，我会帮你同步已有应用的环境配置。不过目前还没有可用的应用运行环境。你刚安装的 Rainskills 是 AI 部署助手；应用实际运行在 Rainbond 上。Rainbond 是一套应用运行和管理平台，你不需要了解 Kubernetes。”
+
+只让用户选择 `Rainbond Cloud` 或承载目标应用的`已有私有 Rainbond`。选择已有私有 Rainbond 时执行本地 launcher + `["runtime", "message", "--id", "private-console-origin"]` 并原样输出。不得为环境同步安装私有 Rainbond，也不得用新平台代替原应用。
+<!-- rainskills-runtime-routing:end -->
 
 ## Overview
 
@@ -18,7 +64,7 @@ This skill does **not** replace live runtime inspection. It maintains local envi
 The goal is to:
 1. resolve the linked Rainbond project
 2. select the target environment (`preview` or `production`)
-3. query current component env state through the locked Rainbond transport
+3. query current component env state from Rainbond MCP
 4. keep only **non-sensitive values that differ from the project baseline**
 5. treat provider connection envs and dependency-injected connection values as runtime connection metadata and skip them
 6. write the result into `.rainbond/env.preview.json` or `.rainbond/env.prod.json`
@@ -59,7 +105,7 @@ This skill reads context from:
 - user explicit input
 
 This skill trusts for runtime facts only:
-- responses from the locked Rainbond transport
+- Rainbond MCP responses
 
 This skill writes only:
 - project identity fields
@@ -77,8 +123,8 @@ Resolve context in this order:
 Rules:
 - environment selection: explicit input > `.rainbond/local.json.preferences.default_environment` > `preview`
 - app identity: explicit input > `.rainbond/local.json.binding` > `rainbond.app.json.project`
-- runtime env facts: the locked Rainbond transport only
-- if local files disagree with platform facts, trust the platform response and report the drift
+- runtime env facts: Rainbond MCP only
+- if local files disagree with MCP, trust MCP and report the drift
 
 ## Output File Model
 
@@ -215,12 +261,12 @@ Read `rainbond_query_components`, `rainbond_manage_component_envs(operation=summ
 3. Query Rainbond runtime state
 - query app detail
 - query component list
-- identify components from locked-transport data first
+- identify components from MCP data first
 - use local files only as hints for naming and roles
 
 4. Gather env candidates
 For each relevant component:
-- inspect current envs and connection envs through the locked Rainbond transport
+- inspect current envs and connection envs from Rainbond MCP
 - compare with project baseline in `rainbond.app.json`
 - identify values that represent meaningful non-sensitive overrides
 - classify provider connection envs and dependency-injected connection values as runtime connection metadata before delta evaluation
@@ -253,8 +299,8 @@ For each relevant component:
 ## Drift Reporting
 
 If Rainbond runtime differs from local files:
-- trust the locked Rainbond transport
-- update the env file based on platform-derived, filtered values
+- trust MCP
+- update the env file based on MCP-derived, filtered values
 - explicitly report the drift in output
 
 Examples:
@@ -460,7 +506,7 @@ Split into:
 - keeping platform-generated connection metadata
 - copying baseline values into the env file
 - guessing app identity when the project is not linked
-- using local files as runtime truth when the locked Rainbond transport says otherwise
+- using local files as runtime truth when MCP says otherwise
 
 ## Quick Reference
 
@@ -468,7 +514,7 @@ Priority summary:
 1. explicit input
 2. `.rainbond/local.json`
 3. `rainbond.app.json`
-4. runtime truth from the locked Rainbond transport only
+4. runtime truth from MCP only
 
 Keep:
 - durable, non-sensitive, app-meaningful deltas relative to baseline

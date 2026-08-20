@@ -9,49 +9,13 @@ const test = require("node:test");
 const repoRoot = path.resolve(__dirname, "..");
 const bridgePath = path.join(repoRoot, "bin", "rainskills-tools.js");
 
-function writeSkillManifest(home) {
-  const directory = path.join(home, ".rainbond", "bin");
-  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const skills = ["rainbond-app-assistant", "rainbond-fullstack-bootstrap"].map((id) => {
-    const content = `# ${id}\n`;
-    return {
-      id,
-      name: id,
-      profile: "cli",
-      package_version: "1.0.0",
-      source_revision: null,
-      content_sha256: require("node:crypto").createHash("sha256").update(content).digest("hex"),
-      bundle_sha256: "b".repeat(64),
-      content,
-    };
-  });
-  const target = path.join(directory, "rainskills-skill-manifest.json");
-  fs.writeFileSync(target, JSON.stringify({
-    schema: "rainskills.skill-manifest.v1",
-    profile: "cli",
-    package_version: "1.0.0",
-    source_revision: null,
-    skills,
-  }), { mode: 0o600 });
-  fs.chmodSync(target, 0o600);
-  return target;
-}
-
-function runBridge(args, {
-  env = {}, input = "", allowInsecureHttp = true, home, attachSkill = true,
-} = {}) {
+function runBridge(args, { env = {}, input = "", allowInsecureHttp = true, home } = {}) {
   return new Promise((resolve, reject) => {
-    const homeDirectory = home || fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-bridge-home-"));
-    let effectiveArgs = args;
-    if (args[0] === "call" && attachSkill && !args.includes("--skill-id")) {
-      writeSkillManifest(homeDirectory);
-      effectiveArgs = [...args, "--skill-id", "rainbond-app-assistant"];
-    }
-    const child = spawn(process.execPath, [bridgePath, ...effectiveArgs], {
+    const child = spawn(process.execPath, [bridgePath, ...args], {
       cwd: repoRoot,
       env: {
         ...process.env,
-        HOME: homeDirectory,
+        HOME: home || fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-bridge-home-")),
         ...(allowInsecureHttp ? { RAINBOND_ALLOW_INSECURE_HTTP: "true" } : {}),
         ...env,
       },
@@ -214,12 +178,10 @@ test("status, compact list, describe, and call use the dedicated JSON-RPC endpoi
       return;
     }
     assert.equal(record.body.method, "tools/call");
-    assert.equal(record.body.params.name, "rainbond_create_app");
-    assert.deepEqual(record.body.params.arguments, { app_name: "demo" });
-    assert.equal(
-      record.body.params._meta["com.rainbond/rainskills"].skill.id,
-      "rainbond-app-assistant"
-    );
+    assert.deepEqual(record.body.params, {
+      name: "rainbond_create_app",
+      arguments: { app_name: "demo" },
+    });
     rpcResult(response, record.body.id, {
       isError: false,
       content: [{ type: "text", text: "must not be printed" }],
@@ -233,7 +195,7 @@ test("status, compact list, describe, and call use the dedicated JSON-RPC endpoi
     assert.equal(status.code, 0, status.stderr);
     const statusPayload = JSON.parse(status.stdout);
     assert.equal(statusPayload.status, "ok");
-    assert.equal(statusPayload.cli_version, "2.2.0");
+    assert.equal(statusPayload.cli_version, "2.1.0");
     assert.equal(statusPayload.tool_count, 3);
     assert.equal(typeof statusPayload.catalog_age_ms, "number");
 
@@ -317,91 +279,6 @@ test("write confirmation can be claimed by only one concurrent process", async (
   });
 });
 
-test("confirmed writes bind the active Skill and send namespaced audit metadata", async () => {
-  await withRpcServer((record, response) => {
-    assert.equal(record.body.method, "tools/call");
-    assert.deepEqual(record.body.params.arguments, { app_name: "demo" });
-    assert.equal(record.body.params.arguments._meta, undefined);
-    const metadata = record.body.params._meta["com.rainbond/rainskills"];
-    assert.equal(metadata.schema, "rainskills.operation-meta.v1");
-    assert.equal(metadata.confirmation_type, "rainskills_cli");
-    assert.equal(metadata.root_skill_id, "rainbond-app-assistant");
-    assert.equal(metadata.skill.id, "rainbond-fullstack-bootstrap");
-    assert.equal(metadata.skill.profile, "cli");
-    assert.equal(metadata.skill.content, "# rainbond-fullstack-bootstrap\n");
-    rpcResult(response, record.body.id, {
-      isError: false,
-      structuredContent: { app_id: 42 },
-    });
-  }, async (baseUrl, requests) => {
-    const env = { RAINBOND_URL: baseUrl, RAINBOND_JWT: "jwt" };
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-bridge-skill-audit-"));
-    writeSkillManifest(home);
-    const skillArgs = [
-      "--skill-id", "rainbond-fullstack-bootstrap",
-      "--root-skill-id", "rainbond-app-assistant",
-    ];
-    const input = JSON.stringify({ app_name: "demo" });
-    const pending = await runBridge(
-      ["call", "rainbond_create_app", "--input", "-", ...skillArgs],
-      { env, home, input }
-    );
-    assert.equal(pending.code, 0, pending.stderr);
-    const operationId = JSON.parse(pending.stdout).operation_id;
-
-    const confirmed = await runBridge(
-      ["call", "rainbond_create_app", "--input", "-", ...skillArgs, "--confirm", operationId],
-      { env, home, input }
-    );
-    assert.equal(confirmed.code, 0, confirmed.stderr);
-    assert.equal(requests.length, 1);
-    assert.equal(
-      requests[0].body.params._meta["com.rainbond/rainskills"].operation_id,
-      operationId
-    );
-  });
-});
-
-test("mutable calls reject missing, changed, or unsafe Skill bindings before network access", async () => {
-  await withRpcServer((_record, response) => {
-    rpcResult(response, 1, { isError: false, structuredContent: { ok: true } });
-  }, async (baseUrl, requests) => {
-    const env = { RAINBOND_URL: baseUrl, RAINBOND_JWT: "jwt" };
-    const input = JSON.stringify({ app_name: "demo" });
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-bridge-skill-guard-"));
-    writeSkillManifest(home);
-
-    const missing = await runBridge(
-      ["call", "rainbond_create_app", "--input", "-"],
-      { env, home, input, attachSkill: false }
-    );
-    assert.equal(missing.code, 2);
-    assert.match(missing.stderr, /skill-id/i);
-
-    const pending = await runBridge(
-      ["call", "rainbond_create_app", "--input", "-", "--skill-id", "rainbond-app-assistant"],
-      { env, home, input }
-    );
-    assert.equal(pending.code, 0, pending.stderr);
-    const operationId = JSON.parse(pending.stdout).operation_id;
-    const changed = await runBridge([
-      "call", "rainbond_create_app", "--input", "-",
-      "--skill-id", "rainbond-fullstack-bootstrap", "--confirm", operationId,
-    ], { env, home, input });
-    assert.equal(changed.code, 2);
-    assert.match(changed.stderr, /confirmation|skill/i);
-
-    fs.chmodSync(path.join(home, ".rainbond", "bin", "rainskills-skill-manifest.json"), 0o644);
-    const unsafe = await runBridge(
-      ["call", "rainbond_create_app", "--input", "-", "--skill-id", "rainbond-app-assistant"],
-      { env, home, input }
-    );
-    assert.equal(unsafe.code, 3);
-    assert.match(unsafe.stderr, /manifest/i);
-    assert.equal(requests.length, 0);
-  });
-});
-
 test("read executes only read-classified tools and rejects writes before network access", async () => {
   await withRpcServer((record, response) => {
     assert.equal(record.body.method, "tools/call");
@@ -443,26 +320,6 @@ test("read executes only read-classified tools and rejects writes before network
     assert.match(destructive.stderr, /read-only/i);
     assert.equal(requests.length, 1, "destructive names must not reach Rainbond");
   });
-});
-
-test("argument-aware classification matches Console mixed and side-effecting tools", () => {
-  const { classifyTool } = require(bridgePath);
-
-  assert.equal(
-    classifyTool("rainbond_manage_component_envs", { operation: "summary" }),
-    "read"
-  );
-  assert.equal(
-    classifyTool("rainbond_manage_component_envs", { operation: "delete" }),
-    "destructive"
-  );
-  assert.equal(
-    classifyTool("rainbond_manage_component_probe", { operation: "get" }),
-    "read"
-  );
-  assert.equal(classifyTool("rainbond_get_component_check_result", {}), "write");
-  assert.equal(classifyTool("rainbond_get_yaml_app_check_result", {}), "write");
-  assert.equal(classifyTool("rainbond_exec", {}), "write");
 });
 
 test("call removes sensitive fields from successful tool results before stdout", async () => {

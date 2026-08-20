@@ -270,4 +270,3 @@ Always respond using exactly these sections:
   - `ProjectInitResult:`
   - `...`
   - ````
-

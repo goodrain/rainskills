@@ -203,20 +203,22 @@ function insertEmbeddedRuntimeContract(content, skillName) {
   );
 }
 
+function replaceClientRuntimeBlocks(content, replacement, skillName) {
+  return replaceRequired(
+    content,
+    /\s*<!-- rainskills-runtime-gate:start -->[\s\S]*?<!-- rainskills-runtime-gate:end -->\s*(?:<!-- rainskills-runtime-routing:start -->[\s\S]*?<!-- rainskills-runtime-routing:end -->)?/,
+    `\n\n${replacement.trimEnd()}\n`,
+    `${skillName} client runtime blocks`
+  );
+}
+
 function transformSkill(skillName, content) {
   let transformed = content;
   if (skillName === "rainbond-app-assistant") {
-    transformed = replaceRequired(
+    transformed = replaceClientRuntimeBlocks(
       transformed,
-      /  ## Rainbond Transport Preflight（最高优先级）[\s\S]*?(?=  ## Installation Intent（高优先级）)/,
-      embeddedTopLevelPreflight(),
-      "top-level transport preflight"
-    );
-    transformed = replaceRequired(
-      transformed,
-      /  ## Installation Intent（高优先级）[\s\S]*?(?=  ## 硬规则)/,
-      embeddedRuntimeSection(),
-      "top-level installation intent"
+      `${embeddedTopLevelPreflight()}\n${embeddedRuntimeSection()}`,
+      skillName
     );
     transformed = transformed.replace(
       "Uses the installed RainSkills CLI for platform actions.",
@@ -227,20 +229,17 @@ function transformSkill(skillName, content) {
       "主要服务本机 profile 使用者"
     );
   } else {
-    transformed = replaceRequired(
+    transformed = replaceClientRuntimeBlocks(
       transformed,
-      /## Rainbond 传输\n[\s\S]*?(?=## )/,
       embeddedTransportSection(),
-      `${skillName} transport section`
+      skillName
     );
   }
 
   if (skillName === "rainbond-fullstack-bootstrap") {
-    transformed = replaceRequired(
-      transformed,
+    transformed = transformed.replace(
       /- \*\*Profile before create\*\*: when the `rainbond_get_project_source_profile` tool is available in this session \(rainagent runtime\), you MUST call it once for the repository before the FIRST `rainbond_create_component_from_source` of that repository, and fill creation parameters from the profile \(subdirectories, default branch, dockerfile preference, ports, env keys\)\. In CLI runtimes without that tool, derive the same facts by reading the local project files before creating\. Creating source components by guess is forbidden\./,
-      "- **Profile before create**: call `rainbond_get_project_source_profile` once for the repository before the FIRST `rainbond_create_component_from_source`, and fill creation parameters from the profile (subdirectories, default branch, dockerfile preference, ports, env keys). If the Tool is unavailable or the profile is incomplete, stop and request the missing source facts; creating source components by guess is forbidden.",
-      "embedded source-profile prerequisite"
+      "- **Profile before create**: call `rainbond_get_project_source_profile` once for the repository before the FIRST `rainbond_create_component_from_source`, and fill creation parameters from the profile (subdirectories, default branch, dockerfile preference, ports, env keys). If the Tool is unavailable or the profile is incomplete, stop and request the missing source facts; creating source components by guess is forbidden."
     );
   }
   transformed = replaceRequired(
@@ -294,6 +293,7 @@ function buildEmbeddedProfile({ source_root: sourceRoot, output, revision }) {
     "references",
     "transport-resolution.md"
   );
+  fs.mkdirSync(path.dirname(referencePath), { recursive: true, mode: 0o700 });
   fs.writeFileSync(referencePath, embeddedTransportReference(), { encoding: "utf8", mode: 0o600 });
   assertEmbeddedSafe(resolvedOutput);
 

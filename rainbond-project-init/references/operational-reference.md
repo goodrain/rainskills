@@ -72,4 +72,3 @@ Stop-after-init rule:
 Verification rule:
 - if `.rainbond/local.json` was written without platform verification, mark it `pending_verification`
 - in that case, the correct next step is to reconnect the locked Rainbond transport and verify app existence before claiming full initialization
-

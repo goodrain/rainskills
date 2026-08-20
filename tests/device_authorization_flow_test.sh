@@ -99,6 +99,14 @@ if sed -n '/validate_mcp_connectivity()/,/^}/p' "$REPO_ROOT/install.sh" \
   fail "MCP JWT leaked into curl arguments"
 fi
 assert_contains "terminal code" "$TEST_ROOT/output.log" "BCDF-GHJK"
+assert_contains \
+  "fixed authorization message begin" \
+  "$TEST_ROOT/output.log" \
+  "[RAINSKILLS_USER_MESSAGE_BEGIN:runtime.device-authorization]"
+assert_contains \
+  "fixed authorization message end" \
+  "$TEST_ROOT/output.log" \
+  "[RAINSKILLS_USER_MESSAGE_END:runtime.device-authorization]"
 
 scoped_token="$(python3 - <<'PY'
 import base64

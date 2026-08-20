@@ -1,13 +1,90 @@
 ---
 name: rainbond-fullstack-bootstrap
-description: Use only when the next step is already known to be topology creation for the current project or manifest. Do not use as the first or default response to a generic current-project deployment request; route those to rainbond-app-assistant.
+description: "Use only when the user explicitly asks to create the Rainbond app and component topology for a known current project or manifest. Trigger phrases include: 只帮我创建应用和组件，不要继续排障 / create topology / bootstrap only. Do not use for a generic current-project deployment request; route that to rainbond-app-assistant."
 ---
 
 # Rainbond Fullstack Bootstrap
 
-## Rainbond 传输
+  <!-- rainskills-runtime-gate:start -->
+  ## 运行环境门禁（最高优先级）
 
-如果上游已初始化本次工作流的 RainSkills CLI，直接复用，不重新探测。否则在第一次 Rainbond 调用前读取 [../rainbond-app-assistant/references/transport-resolution.md](../rainbond-app-assistant/references/transport-resolution.md) 并初始化一次。CLI 锁定后，认证、网络、超时和业务错误均不得触发替代调用通道。
+  ### 多运行环境操作契约
+
+  Node.js 前置检查通过后，每次请求先执行本地 launcher + `["environment", "list", "--json"]`，按用户明确指定的运行环境选择不可变环境 ID；未指定时只用全局默认环境，默认不可用时停止且不回退。生成 UUID 后执行本地 launcher + `["operation", "begin", "--operation-id", "<uuid>", "--environment-id", "<id>", "--intent-json", "<intent-json>"]`，并在之后每个 Rainbond MCP 调用中加入 `rainskills_operation_id`。环境、团队和应用只属于本次操作，禁止保存项目绑定；同一项目可以部署到多个环境。明确“团队”表示环境内团队；明确“运行环境/平台”表示环境；裸名称同时匹配环境和团队时必须询问。
+
+第一步检查 Node.js 是否存在且主版本不低于 18。Node.js 缺失或低于 18 时，只说明“Rainskills 执行组件需要 Node.js 18 或更高版本”并停止：不选择运行环境，不调用 MCP，不猜测替代命令。只有用户或 agent 明确同意后才安装或升级 Node.js，再从同一原始 intent 继续。
+
+固定 launcher 是 `["npx", "--yes", "rainskills@0.1.0-rc.68"]`；版本必须与本技能包 `package.json` 一致。把 launcher 与参数拼成 argv 数组直接执行，禁止 `rainskills@latest` 或执行 shell 字符串。
+
+本地 launcher 必须从当前 Skill 所在目录的同级目录定位 `rainbond-platform-installer/scripts/local-runtime.js`，解析为绝对路径后使用 `["node", "<绝对路径>"]` 执行。`environment list`、`operation begin`、`operation complete` 和 `runtime message` 只能使用本地 launcher；本地 launcher 只读取已安装文件和本机受保护状态，不得访问 npm 或其它网络。只有用户选定连接或安装运行环境后，才使用上面的固定 npx launcher。
+
+<!-- rainskills-runtime-contract:start -->
+```json
+{
+  "schema": "rainskills.skill-runtime-contract.v1",
+  "launcher": ["npx", "--yes", "rainskills@0.1.0-rc.68"],
+  "local_launcher": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js"],
+  "local_argv": {
+    "environment-list": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js", "environment", "list", "--json"],
+    "operation-begin": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js", "operation", "begin", "--operation-id", "<uuid>", "--intent-json", "<intent-json>"],
+    "operation-complete": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js", "operation", "complete", "--operation-id", "<uuid>"],
+    "runtime-message": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js", "runtime", "message", "--id", "<message-id>"]
+  },
+  "intents": {
+    "bootstrap": {"required": ["project_root"], "optional": ["team_id", "app_id", "service_id"], "enums": {}}
+  },
+  "route_conditions": {
+    "new": {"app_id": "absent", "service_id": "absent"},
+    "existing": {"any_present": ["app_id", "service_id"]}
+  },
+  "routes": {
+    "new": ["saas", "private-existing", "install-private"],
+    "existing": ["saas", "private-existing"]
+  },
+  "connect_argv": {
+    "saas": ["npx", "--yes", "rainskills@0.1.0-rc.68", "runtime", "connect", "<target>", "--saas", "--intent-json", "<intent-json>"],
+    "private-existing": ["npx", "--yes", "rainskills@0.1.0-rc.68", "runtime", "connect", "<target>", "--rainbond-url", "<rainbond-url>", "--intent-json", "<intent-json>"],
+    "install-private": ["npx", "--yes", "rainskills@0.1.0-rc.68", "runtime", "connect", "<target>", "--install-private", "--location", "<private-location>", "--intent-json", "<intent-json>"]
+  }
+}
+```
+<!-- rainskills-runtime-contract:end -->
+
+target 只允许 `codex`、`claude`、`all`。校验 intent 后按 `route_conditions` 选择 scope：`app_id` 和 `service_id` 都没有时是 new；任一存在时是 existing。只执行该 scope 允许的完整 argv；只消费 schema 为 `rainskills.next-action.v1` 且校验后的 `argv` 数组。
+
+连接完成后用固定 `onboarding-id` 执行 launcher + `["intent", "resume", "--onboarding-id", "<同一 onboarding-id>"]`，恢复原始 intent 和 `resume_step`。401 先执行 launcher + `["runtime", "record-failure", "--onboarding-id", "<同一 onboarding-id>", "--step", "<当前固定步骤>", "--reason", "credential-expired"]`，再仅一次执行 launcher + `["runtime", "reconnect", "--onboarding-id", "<同一 onboarding-id>"]` 后 resume，只重试该步骤；第二次 401 停止。403 执行 launcher + `["runtime", "record-failure", "--onboarding-id", "<同一 onboarding-id>", "--step", "<当前固定步骤>", "--reason", "permission-denied"]` 后停止，不得 reconnect、重新授权或自动重试。
+<!-- rainskills-runtime-gate:end -->
+
+<!-- rainskills-runtime-routing:start -->
+## 缺少运行环境时
+
+先说：“可以，我会帮你创建应用和组件拓扑。不过目前还没有可用的应用运行环境。你刚安装的 Rainskills 是 AI 部署助手，它负责分析项目并执行部署；应用实际会运行在 Rainbond 上。Rainbond 是一套应用运行和管理平台，负责源码构建、容器运行、域名访问、日志和存储等工作，你不需要了解 Kubernetes。”
+
+先根据 intent 确认 scope，确认前不展示环境选项：`app_id` 和 `service_id` 都不存在是 new scope，任一存在是 existing scope。
+
+### 新建目标
+
+#### 选择运行环境
+
+intent 不含 `app_id` 和 `service_id` 时，请提示“请选择应用要运行的环境：”，并只显示：
+
+1) 云端环境（免费体验）
+2) 私有环境（去对接）
+
+用户选择私有环境后，立即执行本地 launcher + `["runtime", "message", "--id", "private-deployment-location"]`，并原样输出固定消息：
+
+请选择部署位置：
+
+1、部署到本机
+2、部署到独立服务器
+3、部署到已有 Rainbond
+
+选择 1 时执行 `install-private` route，并使用 `["--location", "local"]`；选择 2 时执行 `install-private` route，并使用 `["--location", "server"]`；选择 3 时执行本地 launcher + `["runtime", "message", "--id", "private-console-origin"]`，收到地址后执行 `private-existing`。不得显示额外的接入方式中间步骤，不得重复询问部署位置，也不得在环境准备完成前询问应用来源。
+
+### 已有目标
+
+intent 含 `app_id` 或 `service_id` 时，已有应用只让用户选择 `Rainbond Cloud` 或承载目标应用的`已有私有 Rainbond`。选择已有私有 Rainbond 时执行本地 launcher + `["runtime", "message", "--id", "private-console-origin"]` 并原样输出。
+<!-- rainskills-runtime-routing:end -->
 
 ## Overview
 
@@ -85,7 +162,7 @@ These rules are always in force. If any module, example, or lower-priority note 
 2. Once a component resolves to `source-backed`, preserve the source execution path for the current run. Do not silently downgrade it to `image` or `package`.
 3. Once a source ref is resolved, do not silently rewrite branch or ref names.
 4. If source creation or source detection returns `multiple services detected` or another multi-component ambiguity, stop and ask for an explicit strategy. Do not auto-switch to package upload, manual artifact upload, template install, or other workaround paths.
-5. If source creation hits Rainbond Tool / Console / control-plane exceptions, stop and report `platform backend issue`. Do not continue with fallback execution modes.
+5. If source creation hits MCP / Rainbond console / control-plane exceptions, stop and report `mcp backend issue`. Do not continue with fallback execution modes.
 6. `check_uuid` and `event_id` are optional passthrough fields for standard source creation unless the backend explicitly requires them for the current request.
 7. **Transport proxy: auto-apply for known pairs, ask only on failure for the rest.** Apply a proxy silently **only when there is a known-working proxy for the specific source registry / Git host**. Mention the substitution in the final report so the user can override.
 
@@ -110,10 +187,10 @@ These rules are always in force. If any module, example, or lower-priority note 
    1. **Manifest declaration wins**: if the component manifest sets `source.build.strategy` to `dockerfile` or `cnb`, honor it without re-deriving.
    2. **Heuristic by intent signal**: if the manifest is silent or `auto`, classify the Dockerfile (`needs-prebuilt` / `runtime-only` / `self-contained`); a `self-contained` Dockerfile with intent signals the language buildpack cannot express or would overwrite (custom runtime configs, system packages, non-standard base image, process-level details) defaults to Dockerfile. Otherwise default to language build.
    3. **Ask only when ambiguous**: if signals conflict or evidence is insufficient, ask one concrete question and recommend the user persist the answer in `source.build.strategy`.
-   The decision MUST be surfaced in BOTH the prose output (per-component "Build mode for `<name>`: …" line) and the structured output (populate `deployment_plan.workflow.build_strategy_decisions[<name>]` for components that actually had a dual detection); see the guide for the exact shape. The current Rainbond Tool surface exposes `prefer_dockerfile_when_detected` on `rainbond_create_component_from_source`, not `dockerfile_path`; map a `dockerfile` decision to that boolean.
+   The decision MUST be surfaced in BOTH the prose output (per-component "Build mode for `<name>`: …" line) and the structured output (populate `deployment_plan.workflow.build_strategy_decisions[<name>]` for components that actually had a dual detection); see the guide for the exact shape. The current MCP surface exposes `prefer_dockerfile_when_detected` on `rainbond_create_component_from_source`, not `dockerfile_path`; map a `dockerfile` decision to that boolean.
 9. Build parameters go through `rainbond_manage_component_envs(operation=replace_build_envs, build_env_dict=...)`. Runtime envs and connection envs must stay on their own tool paths.
 
-   **Build env keys must come from the documented allowed list** in `references/source-build-parameter-guide.md § Current Rainbond Tool Build Keys`. Do NOT fabricate keys based on training-data familiarity with buildpacks / Heroku-style naming conventions. The Rainbond build runtime silently ignores unrecognized keys — so a fabricated key looks like a successful tool call to the LLM but has zero effect on the actual build, wasting both the turn and the user's authorization.
+   **Build env keys must come from the documented allowed list** in `references/source-build-parameter-guide.md § Current MCP-Facing Build Keys`. Do NOT fabricate keys based on training-data familiarity with buildpacks / Heroku-style naming conventions. The Rainbond build runtime silently ignores unrecognized keys — so a fabricated key looks like a successful tool call to the LLM but has zero effect on the actual build, wasting both the turn and the user's authorization.
 
    Failure-mode signal: any key shaped like `CNB_<TOOL>_VERSION`, `CNB_<TOOL>_<OPTION>`, `BP_<UNKNOWN>`, or `BUILD_<UNKNOWN>` that you cannot point to a specific line of the reference doc for — that's a fabrication. Stop and consult the reference doc before calling `replace_build_envs`.
 
@@ -121,7 +198,7 @@ These rules are always in force. If any module, example, or lower-priority note 
 
    When a build failure points to something not controllable by any documented key (specific tool version mismatches, lockfile incompatibility, framework version pinning beyond what `CNB_NODE_VERSION` exposes, etc.), that's evidence the fix is **code-side**, not a missing build env. Route to `code_or_build_handoff_needed` rather than guessing env names.
 10. Component connection information must be configured on the provider component with `rainbond_manage_component_connection_envs`; do not use `rainbond_manage_component_envs(scope=outer)` for that path. Consumers receive those values through explicit dependencies.
-11. Explicit component dependencies are a required topology artifact, not just a runtime networking convenience. Use `rainbond_manage_component_dependency` for every declared `depends_on` edge and every inferred provider/consumer edge that bootstrap accepts into the topology. Do not claim Rainbond Tool lacks a component dependency capability; if the tool call fails, report the actual Rainbond Tool/control-plane failure.
+11. Explicit component dependencies are a required topology artifact, not just a runtime networking convenience. Use `rainbond_manage_component_dependency` for every declared `depends_on` edge and every inferred provider/consumer edge that bootstrap accepts into the topology. Do not claim MCP lacks a component dependency API; if the tool call fails, report the actual MCP/control-plane failure.
 12. Before bootstrap can hand off as structurally complete, run a dependency completeness gate for every multi-component topology, including manual component creation or fallback paths: list accepted provider/consumer edges, query current dependency evidence, add missing edges with `rainbond_manage_component_dependency`, then verify the dependency evidence again. If an accepted edge cannot be created yet, record it as a deferred dependency or blocker instead of treating runtime reachability as sufficient.
 13. Bootstrap has a retry budget: the same error signature may be retried at most once, and the same component-creation path may be attempted at most twice. After that, stop and report the blocker.
 14. If runtime has already converged enough and the remaining question is access URL or delivery acceptance, hand off to `rainbond-delivery-verifier` instead of stretching bootstrap or defaulting to troubleshooter.
@@ -131,7 +208,7 @@ These rules are always in force. If any module, example, or lower-priority note 
    - User mentioned Git URL / branch / commit / `subdirectories` → **source mode**
    - User mentioned an image tag or registry path (`<name>:<tag>`, `docker.io/...`, `harbor.../...`) → **image mode**
    - User gave only a component name and that name refers to a **well-known simple infrastructure service that is commonly deployed as one main container image** (databases, message queues, caches, object stores, web servers, reverse proxies, load balancers, service registries, secret stores, etc.) → **image mode** with default `<name>:latest` (then rewritten via rule 7). Use your own general knowledge to make this judgment — do not wait for an enumerated whitelist.
-   - User gave only a software/product name and that name refers to a **complex off-the-shelf app suite** (Harbor, GitLab, monitoring/observability stacks, or any product normally shipped as multiple coordinated services such as UI/API/core, registry, database, cache, worker/jobservice, proxy, scanner, metrics, etc.) → **complex suite mode**. Before any mutating Rainbond Tool call, require one of: `docker-compose` / compose profile (including a project source profile with `topologySource == "compose"`), `rainbond.app.json`, an official deployment descriptor supplied by user/tool, an explicit user-confirmed deployment plan, or — only when the user explicitly chooses the template path — a Rainbond app-market template.
+   - User gave only a software/product name and that name refers to a **complex off-the-shelf app suite** (Harbor, GitLab, monitoring/observability stacks, or any product normally shipped as multiple coordinated services such as UI/API/core, registry, database, cache, worker/jobservice, proxy, scanner, metrics, etc.) → **complex suite mode**. Before any mutating MCP call, require one of: `docker-compose` / compose profile (including a project source profile with `topologySource == "compose"`), `rainbond.app.json`, an official deployment descriptor supplied by user/tool, an explicit user-confirmed deployment plan, or — only when the user explicitly chooses the template path — a Rainbond app-market template.
 
      **Evidence arbitration:** once `rainbond_get_project_source_profile` returns compose/manifest topology evidence (`topologySource == "compose"`, a service-list `rainbond.app.json`, or an official descriptor), the complex-suite gate is already satisfied — that profile is the authoritative topology. Do not then go hunting templates (`rainbond_query_local_app_models` / `rainbond_query_cloud_app_models`) "for more reliable evidence", and do not promote a same-named template to the default path. When the user also gave an explicit Git URL, lock the source / compose-profile path per `rainbond-app-assistant` Iron Law 38; a market template is at most a one-line suggestion. Full compose-topology mapping: `modules/40-source-and-package-rules.md` § compose.
    - User gave a business-domain name (`my-api`, `order-service`, `payment-svc`) with no further signal → only then ask "image or source?"
@@ -147,18 +224,18 @@ These rules are always in force. If any module, example, or lower-priority note 
 
    **Stateful service follow-up**: when image mode is chosen for a stateful service (databases, persistent queues, search engines, time-series, object stores, vector / graph stores — any service whose data must survive container restart), persistence is required before deploy.
 
-   **Platform reality**: `rainbond_create_component_from_image` / `_from_source` do not accept `extend_method`, and the platform exposes no Rainbond Tool to convert stateless → stateful. Image/source-mode creation always yields a stateless component. Do not waste turns trying to "make it stateful" after creation — the tools to do so do not exist.
+   **Platform reality**: `rainbond_create_component_from_image` / `_from_source` do not accept `extend_method`, and the platform exposes no MCP tool to convert stateless → stateful. Image/source-mode creation always yields a stateless component. Do not waste turns trying to "make it stateful" after creation — the tools to do so do not exist.
 
    **What to do instead**:
    1. Call `rainbond_manage_component_storage(operation=create_volume, volume_name=<short-name>, volume_type=share-file, volume_path=<data-dir>)` to attach RWX shared-file persistence to the stateless component (`volume_name` is required — omitting it fails the call)
    2. Then `rainbond_operate_app(action=deploy)` — storage first, deploy second
    3. Do **not** attempt `volume_type=local` (platform returns HTTP 400 for stateless + local)
 
-   **If the user genuinely needs `local` (high-IOPS database)**: the only path is `rainbond_install_app_model` from the app market with a pre-configured stateful template. Image-mode cannot reach a stateful component on the current Rainbond Tool surface — report this as a delivery-mode limitation, not a step bootstrap can silently work around.
+   **If the user genuinely needs `local` (high-IOPS database)**: the only path is `rainbond_install_app_model` from the app market with a pre-configured stateful template. Image-mode cannot reach a stateful component on the current MCP surface — report this as a delivery-mode limitation, not a step bootstrap can silently work around.
 
    Full data-directory list per service and `volume_type` ↔ component-type compatibility matrix live in `modules/30-creation-rules.md § 5`. Deploying a stateful service via image mode without persistence is a real data-loss regression — do not skip this step because "I'm not sure if X is stateful." If unsure, ask the user; do not default to no-persistence image deployment for anything that might store data.
 
-18. **Deployment-plan readiness gate for multi-component image deployments.** Before any mutating Rainbond Tool call for a multi-component image topology, establish provenance for the service list, dependency edges, required env/secrets, ports, storage paths, external URL/TLS assumptions, and image tags. Accepted provenance is: Rainbond template, `rainbond.app.json`, `docker-compose` / compose profile, official deployment descriptor supplied by user/tool, existing Rainbond runtime state, or explicit user-confirmed plan. Inference-only critical fields are blockers, not TODOs.
+18. **Deployment-plan readiness gate for multi-component image deployments.** Before any mutating MCP call for a multi-component image topology, establish provenance for the service list, dependency edges, required env/secrets, ports, storage paths, external URL/TLS assumptions, and image tags. Accepted provenance is: Rainbond template, `rainbond.app.json`, `docker-compose` / compose profile, official deployment descriptor supplied by user/tool, existing Rainbond runtime state, or explicit user-confirmed plan. Inference-only critical fields are blockers, not TODOs.
 
    **Explicit user source intent overrides template installs.** When the user gave a Git URL (or said "deploy this repo's source"), the deploy path is locked to the source / compose-profile path; an app-market template is a suggestion to mention, never the default to install before the user explicitly picks it. Do not install a market template and then abandon it to hand-build image components — that strands a half-installed app. If you must switch strategy, first clean up the abandoned half-built app or tell the user it exists and ask. (Enforced at the routing layer by `rainbond-app-assistant` Iron Law 38.)
 
@@ -219,7 +296,7 @@ These are intentionally low-frequency references. Do not load them by default un
 - [references/manifest-v1-reference.md](references/manifest-v1-reference.md)
   - `rainbond.app.json` baseline example, role types, frontend access modes, v1/v2 source mapping summary
 - [references/source-build-parameter-guide.md](references/source-build-parameter-guide.md)
-  - current Rainbond Tool build keys and build-parameter routing guidance
+  - current MCP-facing build keys and build-parameter routing guidance
 - [references/quick-reference.md](references/quick-reference.md)
   - common mistakes, source/package shortcuts, debug order, stopping reminders
 
@@ -246,7 +323,7 @@ Additional rules:
 - the top-level object name must be `BootstrapResult`
 - `next_handoff` must agree with the prose handoff recommendation
 - use canonical runtime labels such as `building`, `waiting`, `running`, `abnormal`, and `capacity-blocked`
-- use canonical blocker buckets such as `source build failed`, `platform backend issue`, `external artifact unreachable`, and `cluster capacity blocked`
+- use canonical blocker buckets such as `source build failed`, `mcp backend issue`, `external artifact unreachable`, and `cluster capacity blocked`
 - mask all secrets, certificates, private keys, and tokens
 
 Read [modules/70-output-contract.md](modules/70-output-contract.md) before composing the final response.

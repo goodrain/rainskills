@@ -59,6 +59,14 @@ test("PowerShell source assertions treat CRLF and LF identically", () => {
   assert.equal(normalizeLineEndings("first\r\nsecond\r\n"), "first\nsecond\n");
 });
 
+test("Windows lifecycle telemetry stays in the outer Node process and carries the persisted attempt", () => {
+  const source = fs.readFileSync(platformInstallerPath, "utf8");
+  assert.match(source, /createLifecycleTelemetry/);
+  assert.match(source, /RAINSKILLS_INSTALL_ATTEMPT_ID: resumeState\.install_attempt_id/);
+  assert.match(source, /lifecycleTransportForState\(state\)/);
+  assert.doesNotMatch(readNormalizedSource(powershellPath), /lifecycle-event|log\.rainbond\.com/);
+});
+
 function passingFacts(overrides = {}) {
   return {
     productType: "workstation",
@@ -611,6 +619,7 @@ test("native Windows state storage hardens and inspects every path without comma
       aclByPath.set(path.resolve(targetPath), {
         ownerSid: USER_SID,
         writableSids: [USER_SID, "S-1-5-18", "S-1-5-32-544"],
+        readableSids: [USER_SID, "S-1-5-18", "S-1-5-32-544"],
         reparsePoint: false,
       });
       return { status: 0, stdout: "", stderr: "" };
@@ -627,6 +636,22 @@ test("native Windows state storage hardens and inspects every path without comma
   assert(calls.some((call) => call.args.includes("ProtectState")));
   assert(calls.some((call) => call.args.includes("InspectState")));
   for (const call of calls) assert(!call.args.includes("-Command"));
+  const helperSource = fs.readFileSync(powershellPath, "utf8");
+  assert.match(helperSource, /readableSids/);
+  assert.match(helperSource, /ReadData|ReadAndExecute|GenericRead/);
+  assert.match(helperSource, /fileIdentity/);
+  assert.match(helperSource, /SHA256|ComputeHash/);
+  assert.match(helperSource, /CreateFileW/);
+  assert.match(helperSource, /FILE_FLAG_OPEN_REPARSE_POINT/);
+  assert.match(helperSource, /GetFileInformationByHandle/);
+  assert.match(helperSource, /GetSecurityInfo/);
+  assert.match(helperSource, /SafeFileHandle/);
+  const sourceInspector = helperSource.match(/public static SourceFileFacts Inspect[\s\S]*?\n  \}/)?.[0];
+  assert(sourceInspector, "InspectSourceFile must use a fixed Win32 handle inspector");
+  assert.match(sourceInspector, /CreateFileW[\s\S]*GetFileInformationByHandle[\s\S]*GetSecurityInfo[\s\S]*FileStream[\s\S]*ComputeHash/);
+  assert.doesNotMatch(sourceInspector, /Get-Item|Get-StateAcl|GetAccessControl/);
+  const inspectAction = helperSource.match(/if \(\$Action -eq "InspectState"[\s\S]*?exit 0/)?.[0];
+  assert.match(inspectAction, /InspectSourceFile[\s\S]*SourceFileInspector\]::Inspect/);
 });
 
 test("Windows stages advance only in order with fresh matching evidence", () => {
@@ -1692,6 +1717,27 @@ test("Windows PowerShell parses the complete helper without syntax errors", {
     env: { ...process.env, RAINSKILLS_PS_PATH: powershellPath },
   });
   assert.equal(result.status, 0, result.stderr || result.stdout);
+});
+
+test("Windows source inspector executes the fixed no-follow handle path", {
+  skip: process.platform !== "win32",
+}, () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-source-handle-"));
+  const sourcePath = path.join(root, "cluster.yaml");
+  fs.writeFileSync(sourcePath, "hosts: []\n", "utf8");
+  const sid = spawnSync("whoami.exe", ["/user", "/fo", "csv", "/nh"], { encoding: "utf8" })
+    .stdout.match(/"(S-[^"]+)"/)?.[1];
+  assert(sid, "current user SID must be available");
+  const result = spawnSync("powershell.exe", [
+    "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", powershellPath,
+    "-Action", "InspectSourceFile", "-TargetPath", sourcePath, "-ExpectedKind", "file",
+    "-UserSid", sid, "-UserHome", os.homedir(),
+  ], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const facts = JSON.parse(result.stdout.trim());
+  assert.equal(facts.reparsePoint, false);
+  assert.equal(facts.fileIdentity, `sha256:${crypto.createHash("sha256").update(fs.readFileSync(sourcePath)).digest("hex")}:${fs.statSync(sourcePath).size}`);
+  assert.equal(facts.ownerSid, sid);
 });
 
 test("Windows executes the dynamically hashed installer instead of a package-pinned digest", () => {
