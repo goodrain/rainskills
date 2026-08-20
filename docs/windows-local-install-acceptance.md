@@ -45,7 +45,7 @@ npx --yes rainskills@0.1.0-rc.43 resume --onboarding-id <onboarding-id>
 - [ ] 固定 `/30` NAT、guest 地址和 `127.0.0.1` portproxy 在重启、DHCP 变化和 VPN 重连后仍一致。
 - [ ] 外层容器运行、K3s 节点 Ready、`rbd-system` 组件就绪、端口 `80/443/7070` 监听。
 - [ ] WSL 内和 Windows `http://127.0.0.1:7070` 都能访问 Console。
-- [ ] 原生 Windows和 WSL 控制端都能打开 Windows 浏览器、完成授权和 MCP 验证。
+- [ ] 原生 Windows 和 WSL 控制端都能打开 Windows 浏览器、完成授权和 RainSkills CLI 验证。
 - [ ] 成功输出只包含部署成功、部署位置、运行状态、Console 地址和授权交接。
 - [ ] 成功后一次性恢复/收尾任务和全局 lease 已清理，登录维护任务保留且权限正确。
 

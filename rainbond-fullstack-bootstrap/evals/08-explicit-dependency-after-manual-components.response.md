@@ -18,7 +18,7 @@ BootstrapResult:
       team_name: demo-team
       region_name: rainbond
       app_name: manual-dependency-demo
-      app_id: app-demo-008
+      app_id: 8
     environment:
       name: preview
       source: default

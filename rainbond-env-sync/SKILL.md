@@ -5,18 +5,9 @@ description: Use when syncing non-sensitive Rainbond preview or production envir
 
 # Rainbond Env Sync
 
-## MCP 认证失败恢复（JWT 过期 / 401 / 403）
+## Rainbond 传输
 
-当任何 `rainbond_*` MCP 工具返回 401 / 403 / `unauthorized` / `token expired` 类认证错误时，
-禁止重装 skills，也禁止手工改 `~/.rainbond/mcp.env`。先用下面任一命令刷新 JWT：
-
-```bash
-bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh) refresh
-# 或：bash ~/.rainbond/skills/install.sh refresh
-```
-
-刷新成功后按安装器输出执行客户端恢复动作：Codex / Claude Code 重启，Pi Agent 执行
-`/reload`；OpenClaw 当前 CLI 使用安装器触发 MCP 热加载，独立 Gateway / Agent 进程需重新加载配置或重启。在恢复完成前不要自动重试同一个 MCP 工具调用。
+如果上游已初始化本次工作流的 RainSkills CLI，直接复用，不重新探测。否则在第一次 Rainbond 调用前读取 [../rainbond-app-assistant/references/transport-resolution.md](../rainbond-app-assistant/references/transport-resolution.md) 并初始化一次。CLI 锁定后，认证、网络、超时和业务错误均不得触发替代调用通道。
 
 ## Overview
 
@@ -27,14 +18,14 @@ This skill does **not** replace live runtime inspection. It maintains local envi
 The goal is to:
 1. resolve the linked Rainbond project
 2. select the target environment (`preview` or `production`)
-3. query current component env state from Rainbond MCP
+3. query current component env state through the locked Rainbond transport
 4. keep only **non-sensitive values that differ from the project baseline**
 5. treat provider connection envs and dependency-injected connection values as runtime connection metadata and skip them
 6. write the result into `.rainbond/env.preview.json` or `.rainbond/env.prod.json`
 
 ## Canonical Model Reference
 
-Use `docs/product-object-model.md` as the repository-level source of truth for:
+Use [product object model](../rainbond-app-assistant/references/product-object-model.md) as the repository-level source of truth for:
 
 - the `Environment` object boundary
 - `.rainbond/env.<env>.json` as a non-sensitive delta projection
@@ -68,7 +59,7 @@ This skill reads context from:
 - user explicit input
 
 This skill trusts for runtime facts only:
-- Rainbond MCP responses
+- responses from the locked Rainbond transport
 
 This skill writes only:
 - project identity fields
@@ -86,8 +77,8 @@ Resolve context in this order:
 Rules:
 - environment selection: explicit input > `.rainbond/local.json.preferences.default_environment` > `preview`
 - app identity: explicit input > `.rainbond/local.json.binding` > `rainbond.app.json.project`
-- runtime env facts: Rainbond MCP only
-- if local files disagree with MCP, trust MCP and report the drift
+- runtime env facts: the locked Rainbond transport only
+- if local files disagree with platform facts, trust the platform response and report the drift
 
 ## Output File Model
 
@@ -202,6 +193,10 @@ then skip it.
 
 Follow this order.
 
+### Fixed Tool fast path and conflict gate
+
+Read `rainbond_query_components`, `rainbond_manage_component_envs(operation=summary)`, and `rainbond_manage_component_connection_envs(operation=summary)` for the requested components. Before any write, call `rainbond_analyze_env_conflicts`; if it reports a conflict, stop and show only non-sensitive key names. Do not overwrite automatically and do not run `list` or `describe` to discover known Tools.
+
 1. Resolve context
 - read user explicit target environment if provided
 - read `.rainbond/local.json`
@@ -220,12 +215,12 @@ Follow this order.
 3. Query Rainbond runtime state
 - query app detail
 - query component list
-- identify components from MCP data first
+- identify components from locked-transport data first
 - use local files only as hints for naming and roles
 
 4. Gather env candidates
 For each relevant component:
-- inspect current envs and connection envs from Rainbond MCP
+- inspect current envs and connection envs through the locked Rainbond transport
 - compare with project baseline in `rainbond.app.json`
 - identify values that represent meaningful non-sensitive overrides
 - classify provider connection envs and dependency-injected connection values as runtime connection metadata before delta evaluation
@@ -258,8 +253,8 @@ For each relevant component:
 ## Drift Reporting
 
 If Rainbond runtime differs from local files:
-- trust MCP
-- update the env file based on MCP-derived, filtered values
+- trust the locked Rainbond transport
+- update the env file based on platform-derived, filtered values
 - explicitly report the drift in output
 
 Examples:
@@ -308,7 +303,7 @@ EnvironmentSyncResult:
     team_name: string
     region_name: string
     app_name: string
-    app_id: string | null
+    app_id: positive integer | null # normalize a decimal session string at every Rainbond Tool boundary; reject non-numeric IDs
   env_delta:
     component_env_overrides: map
   skip_reasons:
@@ -465,7 +460,7 @@ Split into:
 - keeping platform-generated connection metadata
 - copying baseline values into the env file
 - guessing app identity when the project is not linked
-- using local files as runtime truth when MCP says otherwise
+- using local files as runtime truth when the locked Rainbond transport says otherwise
 
 ## Quick Reference
 
@@ -473,7 +468,7 @@ Priority summary:
 1. explicit input
 2. `.rainbond/local.json`
 3. `rainbond.app.json`
-4. runtime truth from MCP only
+4. runtime truth from the locked Rainbond transport only
 
 Keep:
 - durable, non-sensitive, app-meaningful deltas relative to baseline

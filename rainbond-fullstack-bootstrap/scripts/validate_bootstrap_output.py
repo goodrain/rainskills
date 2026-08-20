@@ -384,8 +384,8 @@ def validate_cross_field_rules(payload: dict[str, Any]) -> list[str]:
             "blocking_bucket='cluster capacity blocked'"
         )
 
-    if blocking_bucket == "mcp backend issue" and next_handoff != "none":
-        errors.append("blocking_bucket='mcp backend issue' requires next_handoff='none'")
+    if blocking_bucket == "platform backend issue" and next_handoff != "none":
+        errors.append("blocking_bucket='platform backend issue' requires next_handoff='none'")
 
     if blocking_bucket == "external artifact unreachable":
         if overall != "code_or_build_handoff_needed":

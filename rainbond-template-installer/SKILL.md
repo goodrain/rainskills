@@ -1,22 +1,13 @@
 ---
 name: rainbond-template-installer
-description: Use when installing a local or cloud Rainbond app template into an existing or newly created target app through the current Rainbond MCP template-install workflow.
+description: Use when installing a local or cloud Rainbond app template into an existing or newly created target app through the current Rainbond template-install workflow.
 ---
 
 # Rainbond Template Installer
 
-## MCP 认证失败恢复（JWT 过期 / 401 / 403）
+## Rainbond 传输
 
-当任何 `rainbond_*` MCP 工具返回 401 / 403 / `unauthorized` / `token expired` 类认证错误时，
-禁止重装 skills，也禁止手工改 `~/.rainbond/mcp.env`。先用下面任一命令刷新 JWT：
-
-```bash
-bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh) refresh
-# 或：bash ~/.rainbond/skills/install.sh refresh
-```
-
-刷新成功后按安装器输出执行客户端恢复动作：Codex / Claude Code 重启，Pi Agent 执行
-`/reload`；OpenClaw 当前 CLI 使用安装器触发 MCP 热加载，独立 Gateway / Agent 进程需重新加载配置或重启。在恢复完成前不要自动重试同一个 MCP 工具调用。
+如果上游已初始化本次工作流的 RainSkills CLI，直接复用，不重新探测。否则在第一次 Rainbond 调用前读取 [../rainbond-app-assistant/references/transport-resolution.md](../rainbond-app-assistant/references/transport-resolution.md) 并初始化一次。CLI 锁定后，认证、网络、超时和业务错误均不得触发替代调用通道。
 
 ## Overview
 
@@ -36,13 +27,13 @@ This skill is the correct execution path when a component or app is sourced from
 
 ## Canonical Model Reference
 
-Use `docs/product-object-model.md` as the repository-level source of truth for:
+Use [product object model](../rainbond-app-assistant/references/product-object-model.md) as the repository-level source of truth for:
 
 - `ComponentSource.kind = template`
 - `template_install` as a handoff path rather than bootstrap execution
 - the boundary between template-install intent, deployment planning, and downstream runtime/delivery stages
 
-This skill should describe how template-install intent is executed through MCP. It should not redefine the canonical object boundaries independently.
+This skill should describe how template-install intent is executed through the locked Rainbond transport. It should not redefine the canonical object boundaries independently.
 
 ## When to Use
 
@@ -59,7 +50,7 @@ Do not use when:
 - the template source or target app context is completely unknown and cannot be resolved
 - the user wants only template discovery without installation
 
-## Preferred MCP Tools
+## Preferred Rainbond Tools
 
 Prefer this tool chain:
 - `rainbond_query_cloud_markets`
@@ -86,7 +77,7 @@ Resolve values in this order:
 Required installation context:
 - `team_name`
 - `region_name`
-- target `app_id` or enough information to create a target app
+- target `app_id` or enough information to create a target app. At every Rainbond Tool boundary, normalize a decimal session string to a positive integer; reject non-numeric IDs.
 - template source:
   - `local`
   - `cloud`
@@ -267,7 +258,7 @@ TemplateInstallResult:
     target_app:
       team_name: string
       region_name: string
-      app_id: string
+      app_id: positive integer
       app_reused: boolean
   install_status: pending | success | failed
   services_summary: string[]
@@ -287,7 +278,7 @@ TemplateInstallResult:
     target_app:
       team_name: rainbond-demo
       region_name: singapore
-      app_id: app-88
+      app_id: 88
       app_reused: true
   install_status: success
   services_summary:
@@ -307,7 +298,7 @@ Installation source is `cloud`, `market_name` is `official-market`.
 `app_model_id` model-123, `app_model_version` 1.0.3, version selection reason `latest_stable`.
 
 ### Target App
-`team_name` rainbond-demo, `region_name` singapore, `app_id` app-88, target app was reused.
+`team_name` rainbond-demo, `region_name` singapore, `app_id` 88, target app was reused.
 
 ### Install Result
 Install succeeded. Installed services: `postgres`, `api`, `web`.
@@ -327,7 +318,7 @@ TemplateInstallResult:
     target_app:
       team_name: rainbond-demo
       region_name: singapore
-      app_id: app-88
+      app_id: 88
       app_reused: true
   install_status: success
   services_summary:
@@ -405,5 +396,5 @@ Local flow:
 3. create app if needed
 4. install
 
-Current install MCP:
+Current install capability:
 - `rainbond_install_app_model`

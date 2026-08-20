@@ -16,7 +16,9 @@ SKILL_FILES = {
     "rainbond-fullstack-bootstrap": ROOT / "rainbond-fullstack-bootstrap" / "SKILL.md",
     "rainbond-fullstack-troubleshooter": ROOT / "rainbond-fullstack-troubleshooter" / "SKILL.md",
     "rainbond-delivery-verifier": ROOT / "rainbond-delivery-verifier" / "SKILL.md",
+    "rainbond-platform-query": ROOT / "rainbond-platform-query" / "SKILL.md",
 }
+BUSINESS_SKILL_FILES = sorted(ROOT.glob("rainbond-*/SKILL.md"))
 
 
 def classify_prompt(prompt: str) -> str | None:
@@ -30,10 +32,28 @@ def classify_prompt(prompt: str) -> str | None:
             "rainbond-fullstack-troubleshooter",
         ],
         "rainbond-delivery-verifier": ["$rainbond-delivery-verifier", "rainbond-delivery-verifier"],
+        "rainbond-platform-query": ["$rainbond-platform-query", "rainbond-platform-query"],
     }
     for skill, needles in explicit_names.items():
         if any(needle in text for needle in needles):
             return skill
+
+    platform_query_needles = [
+        "当前企业",
+        "当前登录的用户",
+        "有哪些团队",
+        "有哪些集群",
+        "团队里的应用",
+        "应用有哪些组件",
+        "current enterprise",
+        "current user",
+        "list teams",
+        "list regions",
+        "list apps",
+        "list components",
+    ]
+    if any(needle in text for needle in platform_query_needles):
+        return "rainbond-platform-query"
 
     bootstrap_needles = [
         "只帮我创建应用和组件",
@@ -93,6 +113,7 @@ def main() -> int:
     payload = yaml.safe_load(args.fixtures.read_text(encoding="utf-8"))
     cases = payload.get("cases", [])
     required_markers = payload.get("required_markers", {})
+    forbidden_operational_markers = payload.get("forbidden_operational_markers", [])
 
     failures = 0
     for skill_name, markers in required_markers.items():
@@ -114,11 +135,22 @@ def main() -> int:
             continue
         print(f"PASS {case['id']}")
 
+    for skill_path in BUSINESS_SKILL_FILES:
+        text = skill_path.read_text(encoding="utf-8")
+        for marker in forbidden_operational_markers:
+            if marker in text:
+                print(f"FAIL operational MCP-only marker {skill_path.parent.name}")
+                print(f"  - forbidden marker: {marker}")
+                failures += 1
+
     if failures:
         print(f"\n{failures} routing eval(s) failed.")
         return 1
 
-    print(f"\nAll {len(cases)} routing fixture(s) and {sum(len(v) for v in required_markers.values())} marker check(s) passed.")
+    print(
+        f"\nAll {len(cases)} skill routing fixture(s) and "
+        f"{sum(len(v) for v in required_markers.values())} routing marker check(s) passed."
+    )
     return 0
 
 

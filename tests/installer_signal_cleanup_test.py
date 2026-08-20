@@ -4,6 +4,7 @@ import os
 import pty
 import re
 import select
+import shutil
 import signal
 import socket
 import stat
@@ -17,6 +18,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 AUTH_READY_PATTERN = re.compile(rb"127\.0\.0\.1:(\d+)/cli-callback")
 MANUAL_PASTE_PATTERN = re.compile("请粘贴回调 URL 或 JWT".encode())
+NODE_EXECUTABLE = shutil.which("node")
+if NODE_EXECUTABLE is None:
+    raise RuntimeError("Node.js 18+ is required for installer signal tests")
+NODE_BIN_DIR = str(Path(NODE_EXECUTABLE).resolve().parent)
 
 
 def write_executable(path: Path, content: str) -> None:
@@ -161,7 +166,7 @@ exit 0
             {
                 "HOME": str(home),
                 "TMPDIR": str(temp_dir),
-                "PATH": f"{bin_dir}:/usr/bin:/bin",
+                "PATH": f"{bin_dir}:{NODE_BIN_DIR}:/usr/bin:/bin",
                 "SHELL": "/bin/bash",
                 "RAINBOND_LOGIN_TIMEOUT": "60",
             }
@@ -274,7 +279,7 @@ exit 0
             {
                 "HOME": str(home),
                 "TMPDIR": str(temp_dir),
-                "PATH": f"{bin_dir}:/usr/bin:/bin",
+                "PATH": f"{bin_dir}:{NODE_BIN_DIR}:/usr/bin:/bin",
                 "SHELL": "/bin/bash",
                 "REAL_CURL": real_curl,
                 "RAINBOND_LOGIN_TIMEOUT": "60",

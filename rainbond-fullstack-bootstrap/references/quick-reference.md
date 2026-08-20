@@ -8,7 +8,7 @@ Use this file for low-frequency reminders. Do not treat it as the source of trut
 - trying to fully troubleshoot runtime issues inside bootstrap
 - forgetting inner port before adding a dependency
 - duplicating provider connection values on every consumer instead of using provider connection envs plus explicit dependencies
-- claiming MCP cannot create explicit component dependencies even though `rainbond_manage_component_dependency` is available
+- claiming Rainbond Tool cannot create explicit component dependencies even though `rainbond_manage_component_dependency` is available
 - treating Kubernetes/Rainbond DNS reachability, Nginx upstream config, or hard-coded service hostnames as a substitute for Rainbond console-visible dependency edges
 - adding speculative compatibility envs during creation
 - declaring success just because the app and components were created
@@ -23,10 +23,10 @@ Use this file for low-frequency reminders. Do not treat it as the source of trut
 - skipping the Build Mode Selection priority chain (manifest → heuristic → ask) and either blindly defaulting to CNB or blindly setting `prefer_dockerfile_when_detected = true` based on file presence alone
 - treating the Dockerfile-intent-signal examples as a closed checklist instead of applying the underlying principle ("would the language buildpack produce equivalent runtime behavior?")
 - omitting the per-component build-mode decision from output (both the prose "Build mode for `<name>`: …" line AND the structured `deployment_plan.workflow.build_strategy_decisions` entry), leaving the user no way to verify or override the chosen mode
-- promising `dockerfile_path` support when the current MCP surface only exposes `prefer_dockerfile_when_detected`
+- promising `dockerfile_path` support when the current Rainbond Tool surface only exposes `prefer_dockerfile_when_detected`
 - jumping straight to runtime logs for a source build failure without checking component events and build logs first
 - treating external artifact download failures as application source-code failures without naming the unreachable artifact
-- staging local packages in `/tmp` when the MCP upload tool can only read the current workspace
+- staging local packages in `/tmp` when the local upload helper can only read the current workspace
 - starting local Docker/OrbStack or pushing temporary images as an implicit fallback
 
 ## Source Resolution Summary
@@ -35,7 +35,7 @@ Use this file for low-frequency reminders. Do not treat it as the source of trut
 - App identity: explicit input > `.rainbond/local.json` > baseline `project`
 - Component envs: explicit input > secret file > env-file overrides > baseline component envs
 - Component topology: explicit input > baseline manifest
-- Runtime component reuse hints: `.rainbond/local.json.runtime_components`, but trust MCP if they disagree
+- Runtime component reuse hints: `.rainbond/local.json.runtime_components`, but trust current platform runtime facts if they disagree
 - Source mapping:
   - v1 top-level `image` -> image execution
   - v2 `source.kind = image` -> image execution
@@ -45,11 +45,11 @@ Use this file for low-frequency reminders. Do not treat it as the source of trut
 
 ## Local Package Reminder
 
-- `source.local_path` is read only by `upload_local_package.py`; never send it to MCP
+- `source.local_path` is read only by `upload_local_package.py`; never send it to a Rainbond Tool
 - `source.local_path: "."` means package the current project directory
 - `source.archive_name` is optional and only matters when `local_path` is a directory
 - stage generated local packages under `.rainbond/staging/<component>/` inside the current workspace; never use `/tmp`
-- required order: local `prepare` -> MCP initialize (`event_id` + `upload_request`) -> local HTTP `upload` with the exact request contract -> immediate local `cleanup` -> non-empty MCP status -> create by `event_id`
+- required order: local `prepare` -> Rainbond Tool initialize (`event_id` + `upload_request`) -> local HTTP `upload` with the exact request contract -> immediate local `cleanup` -> non-empty Rainbond Tool status -> create by `event_id`
 - init failure: local cleanup and stop
 - upload failure: local cleanup -> remote upload-event deletion -> stop
 - empty status: remote upload-event deletion -> stop

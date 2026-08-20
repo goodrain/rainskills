@@ -21,10 +21,10 @@ AppAssistantResult:
       team_name: demo-team
       region_name: cn
       app_name: frontend-console
-      app_id: app-208
+      app_id: 208
     linked: true
     selected_environment: preview
-    deployment_location_url: https://run.rainbond.com/#/team/demo-team/region/cn/apps/app-208/overview
+    deployment_location_url: https://run.rainbond.com/#/team/demo-team/region/cn/apps/208/overview
   environment:
     name: preview
     source: local_preference

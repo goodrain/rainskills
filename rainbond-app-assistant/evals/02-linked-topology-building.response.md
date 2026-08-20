@@ -21,10 +21,10 @@ AppAssistantResult:
       team_name: demo-team
       region_name: cn
       app_name: inventory-app
-      app_id: app-202
+      app_id: 202
     linked: true
     selected_environment: preview
-    deployment_location_url: https://run.rainbond.com/#/team/demo-team/region/cn/apps/app-202/overview
+    deployment_location_url: https://run.rainbond.com/#/team/demo-team/region/cn/apps/202/overview
   environment:
     name: preview
     source: local_preference
@@ -46,7 +46,7 @@ AppAssistantResult:
   actions_performed:
     - skill: inspection-only
       status: completed
-      details: Resolved the linked source app state from current MCP truth without changing the source-backed path.
+      details: Resolved the linked source app state from current platform truth without changing the source-backed path.
     - skill: rainbond-fullstack-troubleshooter
       status: pending
       details: Selected because topology exists but source-backed components are still converging.

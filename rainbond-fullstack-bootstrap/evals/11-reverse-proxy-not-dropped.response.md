@@ -18,7 +18,7 @@ BootstrapResult:
       team_name: demo-team
       region_name: rainbond
       app_name: reverse-proxy-demo
-      app_id: app-compose-011
+      app_id: 11
     environment:
       name: preview
       source: default

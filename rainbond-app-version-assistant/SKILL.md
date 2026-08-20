@@ -5,18 +5,9 @@ description: Use when working in the Rainbond app version center flow under `/te
 
 # Rainbond App Version Assistant
 
-## MCP 认证失败恢复（JWT 过期 / 401 / 403）
+## Rainbond 传输
 
-当任何 `rainbond_*` MCP 工具返回 401 / 403 / `unauthorized` / `token expired` 类认证错误时，
-禁止重装 skills，也禁止手工改 `~/.rainbond/mcp.env`。先用下面任一命令刷新 JWT：
-
-```bash
-bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh) refresh
-# 或：bash ~/.rainbond/skills/install.sh refresh
-```
-
-刷新成功后按安装器输出执行客户端恢复动作：Codex / Claude Code 重启，Pi Agent 执行
-`/reload`；OpenClaw 当前 CLI 使用安装器触发 MCP 热加载，独立 Gateway / Agent 进程需重新加载配置或重启。在恢复完成前不要自动重试同一个 MCP 工具调用。
+如果上游已初始化本次工作流的 RainSkills CLI，直接复用，不重新探测。否则在第一次 Rainbond 调用前读取 [../rainbond-app-assistant/references/transport-resolution.md](../rainbond-app-assistant/references/transport-resolution.md) 并初始化一次。CLI 锁定后，认证、网络、超时和业务错误均不得触发替代调用通道。
 
 ## Overview
 
@@ -34,7 +25,7 @@ This skill is **not** the market-app upgrade flow under `/upgrade`.
 
 ## Canonical Model Reference
 
-Use `docs/product-object-model.md` as the repository-level source of truth for:
+Use [product object model](../rainbond-app-assistant/references/product-object-model.md) as the repository-level source of truth for:
 
 - `Release`, `Snapshot`, and `Rollback` object boundaries
 - the distinction between delivery acceptance and version-center operations
@@ -71,7 +62,7 @@ Important:
 
 So this skill should model the `/version` center, not the old standalone publish page.
 
-## Preferred MCP Tools
+## Preferred Rainbond Tools
 
 ### Version Center
 - `rainbond_get_app_version_overview`
@@ -111,7 +102,7 @@ Resolve in this order:
 Required context:
 - `team_name`
 - `region_name`
-- `app_id`
+- `app_id` (at every Rainbond Tool boundary, normalize a decimal session string to a positive integer; reject non-numeric IDs)
 
 Common optional context:
 - `version_id`
@@ -311,7 +302,7 @@ VersionCenterSession:
   context:
     team_name: string
     region_name: string
-    app_id: string
+    app_id: positive integer
   state_snapshot:
     baseline_version: string | null
     unsaved_runtime_changes: boolean
@@ -331,7 +322,7 @@ VersionCenterSession:
   context:
     team_name: rainbond-demo
     region_name: singapore
-    app_id: app-4fd2
+    app_id: 42
   state_snapshot:
     baseline_version: v12
     unsaved_runtime_changes: false
@@ -346,7 +337,7 @@ VersionCenterSession:
   action_plan:
     - rainbond_get_app_version_overview
     - rainbond_create_app_share_record
-    - rainbond_submit_app_share
+    - rainbond_submit_app_share_info
   next_step: submit_publish_draft
 ```
 
@@ -360,7 +351,7 @@ App `rainbond-demo`, flow type `publish`.
 Current baseline version is `v12`, unsaved runtime changes do not exist, and there is one unfinished publish record: `share-102`.
 
 ### Action Plan
-Next MCP tools: `rainbond_get_app_version_overview`, `rainbond_create_app_share_record`, `rainbond_submit_app_share`. The flow is draft-based.
+Next Rainbond tools: `rainbond_get_app_version_overview`, `rainbond_create_app_share_record`, `rainbond_submit_app_share_info`. The flow is draft-based.
 
 ### Result
 Prepared the publish session, reused snapshot `version-12`, and confirmed the draft share record `share-102` remains the active publish target.
@@ -375,7 +366,7 @@ VersionCenterSession:
   context:
     team_name: rainbond-demo
     region_name: singapore
-    app_id: app-4fd2
+    app_id: 42
   state_snapshot:
     baseline_version: v12
     unsaved_runtime_changes: false
@@ -390,7 +381,7 @@ VersionCenterSession:
   action_plan:
     - rainbond_get_app_version_overview
     - rainbond_create_app_share_record
-    - rainbond_submit_app_share
+    - rainbond_submit_app_share_info
   next_step: submit_publish_draft
 ```
 ````
@@ -409,7 +400,7 @@ Always respond using exactly these sections:
 - whether there is an unfinished publish or rollback record
 
 ### Action Plan
-- exact MCP tools to call next
+- exact Rainbond tools to call next
 - whether the flow is direct or draft-based
 
 ### Result

@@ -48,9 +48,10 @@ $defs:
       - frontend access-path issue
       - source build still running
       - source build failed
-      - mcp backend issue
+      - platform backend issue
       - external artifact unreachable
       - cluster capacity blocked
+      - config_file_configmap_missing
   evidence_source:
     type: string
     enum:
@@ -82,6 +83,7 @@ $defs:
           - api_startup_issue
           - frontend_access_path_issue
           - cluster_capacity_blocked
+          - platform_backend_issue
           - code_or_build_handoff_needed
           - runtime_healthy_ready_for_delivery_verifier
       - type: "null"

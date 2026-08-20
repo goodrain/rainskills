@@ -18,7 +18,7 @@ BootstrapResult:
       team_name: demo-team
       region_name: rainbond
       app_name: mysql-provider-demo
-      app_id: app-demo-007
+      app_id: 7
     environment:
       name: preview
       source: default

@@ -18,7 +18,7 @@ BootstrapResult:
       team_name: demo-team
       region_name: us-west
       app_name: template-demo
-      app_id: app-demo-004
+      app_id: 4
     environment:
       name: preview
       source: default
