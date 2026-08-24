@@ -18,7 +18,7 @@ BootstrapResult:
       team_name: demo-team
       region_name: us-west
       app_name: deferred-demo
-      app_id: app-demo-002
+      app_id: 2
     environment:
       name: preview
       source: explicit

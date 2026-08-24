@@ -36,7 +36,7 @@ class PackageUploadWorkflowContractTest(unittest.TestCase):
             )
             previous_position = position
 
-        self.assertIn("Never pass `source.local_path` to an MCP tool", guidance)
+        self.assertIn("Never pass `source.local_path` to a Rainbond Tool", guidance)
         self.assertIn("`upload_request.url` -> `--upload-url`", guidance)
         self.assertNotIn("`upload_request.upload_url`", guidance)
 

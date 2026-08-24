@@ -18,6 +18,7 @@ const skillNames = [
   "rainbond-fullstack-bootstrap",
   "rainbond-fullstack-troubleshooter",
   "rainbond-platform-installer",
+  "rainbond-platform-query",
   "rainbond-project-init",
   "rainbond-template-installer",
 ];
@@ -26,7 +27,11 @@ function packPackage(destination) {
   const result = spawnSync(
     npmCommand,
     ["pack", "--json", "--pack-destination", destination],
-    { cwd: repoRoot, encoding: "utf8" }
+    {
+      cwd: repoRoot,
+      encoding: "utf8",
+      env: { ...process.env, npm_config_cache: path.join(destination, "npm-cache") },
+    }
   );
   assert.equal(result.status, 0, result.stderr || result.stdout);
   const [packed] = JSON.parse(result.stdout);
@@ -54,10 +59,7 @@ test("package metadata defines a public, runtime-dependency-free npx command", (
   assert.deepEqual(manifest.os, ["darwin", "linux", "win32"]);
   assert.equal(manifest.dependencies, undefined);
   assert.equal(manifest.devDependencies.esbuild, "0.25.8");
-  assert.equal(manifest.devDependencies["@modelcontextprotocol/sdk"], "1.30.0");
-  assert.deepEqual(manifest.pi, {
-    skills: ["./marketplace/rainskills/skills"],
-  });
+  assert.deepEqual(manifest.pi, { skills: ["./marketplace/rainskills/skills"] });
   assert.equal(manifest.scripts.postinstall, undefined);
   assert.equal(
     manifest.scripts["test:package-upload"],
@@ -65,7 +67,15 @@ test("package metadata defines a public, runtime-dependency-free npx command", (
   );
   assert.equal(
     manifest.scripts.test,
-    "npm run test:launcher && npm run test:marketplace && npm run test:pi && npm run test:platform && npm run test:windows && npm run test:package-upload && npm run test:package && npm run test:installer && npm run test:signal && npm run test:npx-pty"
+    "npm run test:launcher && npm run test:api-bridge && npm run test:mcp-priority && npm run test:routing && npm run test:skill-profile && npm run test:skill-manifest && npm run test:marketplace && npm run test:platform && npm run test:windows && npm run test:package-upload && npm run test:package && npm run test:installer && npm run test:signal && npm run test:npx-pty"
+  );
+  assert.equal(
+    manifest.scripts["test:mcp-priority"],
+    "node --test tests/mcp-priority-cleanup.test.js tests/transport-resolution.test.js tests/skill-console-contract.test.js"
+  );
+  assert.equal(
+    manifest.scripts["test:routing"],
+    "python3 tests/run_skill_routing_evals.py"
   );
   assert.equal(
     manifest.scripts["test:platform"],
@@ -86,8 +96,10 @@ test("packed artifact contains the installer and all skills but no development f
   assert(filePaths.has("SKILL.md"));
   assert(filePaths.has("agents/openai.yaml"));
   assert(filePaths.has("bin/rainskills.js"));
+  assert(filePaths.has("bin/rainskills-tools.js"));
+  assert(filePaths.has("scripts/build-skill-manifest.mjs"));
   assert(filePaths.has("install.sh"));
-  assert(filePaths.has("pi/rainskills-mcp.ts"));
+  assert(!filePaths.has("pi/rainskills-mcp.ts"));
   assert(filePaths.has("rainbond-platform-installer/scripts/platform-installer.js"));
   assert(filePaths.has("rainbond-platform-installer/agents/openai.yaml"));
   assert(filePaths.has("rainbond-platform-installer/references/installation-policy.json"));
@@ -97,7 +109,6 @@ test("packed artifact contains the installer and all skills but no development f
     "windows-onboarding.js",
     "windows-auth.js",
     "windows-browser.ps1",
-    "windows-client-config.js",
     "windows-platform.js",
     "windows-platform.ps1",
     "wsl-bootstrap.sh",

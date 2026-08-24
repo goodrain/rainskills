@@ -254,7 +254,7 @@ async function authorizeWithDeviceFlow({
       interval += 5;
       continue;
     }
-    if (payload.error === "access_denied") throw new Error("你已拒绝 Rainbond MCP 授权");
+    if (payload.error === "access_denied") throw new Error("你已拒绝 Rainbond 授权");
     if (payload.error === "expired_token") throw new Error("Rainbond 设备授权码已过期");
     throw new Error(`Rainbond Device Flow 轮询失败（HTTP ${response.status}）`);
   }

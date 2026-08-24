@@ -18,7 +18,7 @@ BootstrapResult:
       team_name: demo-team
       region_name: us-west
       app_name: ambiguity-demo
-      app_id: app-demo-005
+      app_id: 5
     environment:
       name: preview
       source: explicit

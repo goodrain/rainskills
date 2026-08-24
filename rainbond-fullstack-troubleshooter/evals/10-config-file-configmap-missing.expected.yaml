@@ -1,0 +1,21 @@
+case: config-file-configmap-missing
+assert:
+  equal:
+    TroubleshootResult.runtime_state.label: runtime_unhealthy
+    TroubleshootResult.blocker_bucket: config_file_configmap_missing
+    TroubleshootResult.verification_summary.stop_reason: api_startup_issue
+    TroubleshootResult.next_handoff: none
+  contains:
+    TroubleshootResult.runtime_state.component_status:
+      api: abnormal
+    TroubleshootResult.verification_summary.evidence_chain:
+      - component_events
+      - pod_detail
+    TroubleshootResult.verification_summary.stop_boundary:
+      stopped: true
+      delivery_verifier_allowed: false
+      fallback_used: false
+  prose_contains:
+    - config_file_configmap_missing
+    - new_file_content
+    - platform-side sync blocker

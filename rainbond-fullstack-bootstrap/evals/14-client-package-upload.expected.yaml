@@ -26,4 +26,4 @@ assert:
   prose_not_contains:
     - rainbond_upload_package_file
     - rainbond_create_component_from_local_package
-    - passed source.local_path to MCP
+    - passed source.local_path to a Rainbond Tool

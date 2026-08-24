@@ -14,7 +14,7 @@ When these signals appear, choose ONE delivery path from the decision tree below
 ### Q1: Is the project source code already in a remote git repository reachable by the Rainbond cluster?
 
 - YES → use **Recipe A: Init-Job Component** (default, recommended)
-- NO  → ask the user to push the repository to a reachable git host first. Do NOT attempt MCP local-package upload as a substitute for missing remote git. Local-package upload is allowed only when the user explicitly opts in after being told it is slow and lossy.
+- NO  → ask the user to push the repository to a reachable git host first. Do NOT attempt local-package upload as a substitute for missing remote git. Local-package upload is allowed only when the user explicitly opts in after being told it is slow and lossy.
 
 ### Q2: Does the user already have a pre-baked database image with init data embedded?
 
@@ -70,14 +70,14 @@ These shortcuts have repeatedly failed in past runs and MUST NOT be attempted:
 - public file-sharing services (file.io, transfer.sh, pastebin, anonymous S3 buckets) as a transport for SQL files
 - manual `kubectl exec` / `docker exec` into the database pod to run import commands
 - one-shot import containers WITHOUT a declared `depends_on` to the database component (race condition: the importer can start before the database is ready)
-- MCP local-package upload as the default path; only allow it when the user has been informed it is slow and has explicitly opted in
+- local-package upload as the default path; only allow it when the user has been informed it is slow and has explicitly opted in
 - creating the init component as `image` with a hand-typed connection string instead of a dependency-injected provider connection env
 - pushing a temporary database image to a registry just to embed the SQL files (this is a delivery-mode switch and requires explicit user confirmation)
 
 ## Stop Conditions
 
 Stop and report to the user when:
-- the project ships SQL init assets but the application source is only on a local disk (no reachable remote git) and the user has not opted into MCP local-package upload
+- the project ships SQL init assets but the application source is only on a local disk (no reachable remote git) and the user has not opted into local-package upload
 - the SQL files are too large to fit in the chosen transport (single file > 100 MB) — request a different transport strategy explicitly
 - the database engine is unsupported by the available client images (no matching `mysql` / `postgres` / `mongo` client image accessible to the cluster)
 - Recipe A succeeds at creation but the init component fails repeatedly because the SQL files are not idempotent — the user must decide whether to make them idempotent or run a one-shot manual import

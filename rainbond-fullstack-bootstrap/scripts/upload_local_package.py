@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Prepare, upload, and clean local packages for Rainbond MCP workflows."""
+"""Prepare, upload, and clean local packages for Rainbond Tool workflows."""
 
 import argparse
 import json

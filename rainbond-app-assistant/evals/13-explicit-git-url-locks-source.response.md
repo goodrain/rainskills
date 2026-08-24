@@ -21,10 +21,10 @@ AppAssistantResult:
       team_name: demo-team
       region_name: cn
       app_name: catalog-app
-      app_id: app-302
+      app_id: 302
     linked: true
     selected_environment: preview
-    deployment_location_url: https://run.rainbond.com/#/team/demo-team/region/cn/apps/app-302/overview
+    deployment_location_url: https://run.rainbond.com/#/team/demo-team/region/cn/apps/302/overview
   environment:
     name: preview
     source: local_preference

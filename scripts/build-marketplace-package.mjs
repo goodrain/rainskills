@@ -65,7 +65,7 @@ const codexPlugin = {
     displayName: "Rainskills",
     shortDescription: "Install and connect the complete Rainbond skill suite",
     longDescription:
-      "Install every independent Rainskills capability, choose Rainbond Cloud or a private platform, authorize access, configure MCP, and verify the connection.",
+      "Install every independent Rainskills capability, choose Rainbond Cloud or a private platform, authorize the local CLI, and verify the connection.",
     developerName: "Goodrain",
     category: "Engineering",
     capabilities: ["Interactive", "Write"],

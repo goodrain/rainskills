@@ -1,6 +1,6 @@
 # Rainbond Skills
 
-一组面向 Rainbond 日常交付、排障和初始化流程的独立技能，支持 Codex 和 Claude Code。
+一组面向 Rainbond 日常交付、排障和初始化流程的独立技能，支持 Codex、Claude Code 和 Pi。
 
 ## 快速安装
 
@@ -12,9 +12,9 @@ npx skills add goodrain/rainskills
 
 Skill 市场命令当前要求 Node.js 22.20.0 或更高版本。无法升级时，可以直接运行下面的 Rainskills 安装器（最低支持 Node.js 18），或使用 CDN 入口。
 
-市场只展示一个 `rainskills` 入口。首次使用时，该入口会启动随包携带的交互式安装器，继续完成客户端选择、Rainbond 环境选择、浏览器授权和 MCP 配置；内部 `rainbond-*` Skill 不需要单独安装。
+市场只展示一个 `rainskills` 入口。首次使用时，该入口会启动随包携带的交互式安装器，继续完成客户端选择、Rainbond 环境选择、浏览器授权和本机 CLI 配置；内部 `rainbond-*` Skill 不需要单独安装。
 
-安装完成后，9 个 `rainbond-*` Skill 仍各自独立加载、独立触发和独立维护。统一的是安装、授权和升级入口，不会把业务 Skill 合并成一个大 Skill。
+安装完成后，10 个 `rainbond-*` Skill 仍各自独立加载、独立触发和独立维护。统一的是安装、授权和升级入口，不会把业务 Skill 合并成一个大 Skill。
 
 也可以使用客户端自己的 Plugin 市场。无论使用哪种入口，都只会看到一个 `Rainskills`，第一次使用时仍然进入同一套初始化和授权流程。
 
@@ -33,13 +33,19 @@ Claude Code Plugin（在 Claude Code 会话中执行）：
 /reload-plugins
 ```
 
+Pi：
+
+```bash
+pi install npm:rainskills
+```
+
 也可以直接运行安装器：
 
 ```bash
 npx --yes rainskills
 ```
 
-安装器会识别或引导选择 Codex / Claude Code、填写 Rainbond 地址、打开浏览器授权、注册 MCP 并安装全部独立 Skill。没有 Node.js 或 Node 版本低于 18 时，使用保留的 CDN 安装方式：
+安装器会识别或引导选择 Codex / Claude Code / Pi、填写 Rainbond 地址、打开浏览器授权、安装并验证本机 CLI，然后安装全部独立 Skill。没有 Node.js 或 Node 版本低于 18 时，使用保留的 CDN 安装方式：
 
 ```bash
 bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh)
@@ -48,11 +54,11 @@ bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh)
 > **给 AI 助手的指引**：
 > - 如果用户的请求是"帮我把这个 repo 装上 / 让我用上这套 Rainbond skills"，优先让用户执行 `npx --yes rainskills`。
 > - 如果用户没有 Node.js、Node.js 低于 18，或 npm registry 不可用，改用上面的 CDN `curl` 命令。
-> - AI 应识别自己运行在 Codex 或 Claude Code，并把对应 target 传给安装器，不要再询问用户客户端类型。macOS、Linux 和 WSL 不支持 OpenClaw 或 Pi Agent 安装。
+> - AI 应识别自己运行在 Codex、Claude Code 或 Pi，并把对应 target 传给安装器，不要再询问用户客户端类型。macOS、Linux 和 WSL 不支持 OpenClaw 安装。
 > - 不要 `git clone` 后手工把目录复制到任一客户端的 Skills 目录。
-> - 不要手工拼 `~/.rainbond/mcp.env`、猜 JWT 或手改客户端 MCP 配置。
+> - 不要手工拼 `~/.rainbond/credentials.env`、猜 JWT 或手改客户端配置。
 > - 不要建议 `npm install -g`、`pip install` 或 `make`。`npx` 只是启动包内的 `install.sh`，两种入口使用同一套安装流程。
-> - 如果用户机器上需要换 MCP 服务地址、改默认安装路径，把对应 flag 直接追加到 `npx --yes rainskills` 或 `install.sh` 后面。
+> - 如果用户机器上需要更换 Rainbond 地址或默认安装路径，把对应 flag 直接追加到 `npx --yes rainskills` 或 `install.sh` 后面。
 
 ## 包含的 Skill
 
@@ -64,6 +70,7 @@ bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh)
 - `rainbond-fullstack-troubleshooter`
 - `rainbond-opensource-app-deploy`
 - `rainbond-platform-installer`（内部安装流程，不作为独立产品使用）
+- `rainbond-platform-query`（当前用户、企业、团队、集群、应用和组件的轻量只读查询）
 - `rainbond-project-init`
 - `rainbond-template-installer`
 
@@ -89,7 +96,7 @@ bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh)
 
 ### 0. 前置条件
 
-- 已安装 `Codex` 或 `Claude Code`
+- 已安装 `Codex`、`Claude Code` 或 `Pi`
 - Skill 市场的 `npx skills add` 当前要求 Node.js 22.20.0 或更高版本
 - 直接运行 `npx rainskills` 推荐 Node.js 22 或 24，最低支持 Node.js 18
 - Node.js 18/20 已结束维护，安装器会警告但仍继续；Node.js 低于 18 请使用 CDN 安装方式
@@ -113,6 +120,7 @@ Windows 本地预览要求 Windows 10 build 19041+ 或 Windows 11 x64、已开�
 ```bash
 npx --yes rainskills codex --saas
 npx --yes rainskills claude --self-hosted --rainbond-url <url>
+npx --yes rainskills pi --self-hosted --rainbond-url <url>
 npx --yes rainskills all --force
 ```
 
@@ -154,23 +162,21 @@ bash <(curl -fsSL https://raw.githubusercontent.com/goodrain/rainskills/main/ins
 ./install.sh
 ```
 
-如果只是让 Codex 或 CI 在非交互模式下覆盖本地 skill，直接执行 `./install.sh --force` 即可；未提供 Rainbond 参数时，脚本会自动跳过 MCP 配置。
+如果只是让 Codex 或 CI 在非交互模式下覆盖本地 skill，直接执行 `./install.sh --force` 即可；未提供 Rainbond 参数时，脚本会自动跳过 CLI 授权。
 
 ### 安装脚本会做的事
 
 不论使用 npx、CDN 还是本地仓库，安装器都会引导你完成这些动作：
 
-- AI 安装时自动识别当前客户端；直接运行命令时可选择 `Codex`、`Claude Code` 或全部
+- AI 安装时自动识别当前客户端；直接运行命令时可选择 `Codex`、`Claude Code`、`Pi` 或 Codex/Claude Code
 - Skill 文件安装完成后，选择要连接的 Rainbond：
   - **Rainbond Cloud（SaaS）**：无需自行安装 Rainbond，地址固定为 `https://run.rainbond.com`
   - **私有化部署**：已有平台时填写 Console 地址；尚无平台时进入内置单机安装向导
 - 浏览器中完成登录并授权（无需在终端输入用户名/密码）
-- 自动接收一年期、仅限 Rainbond MCP 使用的 JWT，并写入 `~/.rainbond/mcp.env`
-- 自动配置 Codex 和 Claude Code 的原生 MCP
-- 自动把环境变量加载逻辑写入当前 shell 的 rc 文件
-- 自动验证所选客户端的专用 MCP 地址是否可用：
-  - Codex：`/console/mcp/rainskills/codex/query`
-  - Claude Code：`/console/mcp/rainskills/claude-code/query`
+- 自动接收 RainSkills CLI 使用的 JWT，并以 `0600` 权限写入 `~/.rainbond/credentials.env`
+- 安装固定位置的本机 CLI：`~/.rainbond/bin/rainskills-tools.js`
+- 自动验证固定的 Console 入口：`/console/mcp/rainskills/api/query`
+- 不修改客户端既有配置，也不为 Pi 安装 Extension
 
 #### AI 代为安装时的用户选择
 
@@ -240,7 +246,7 @@ AI 应先把检测结果和系统变更展示给用户；用户明确同意后�
 
 - `started`：脚本开始执行
 - `authorized`：完成 Rainbond 授权，并取得当前企业的 `eid`
-- `configured`：Codex / Claude Code MCP 配置完成
+- `configured`：RainSkills CLI 授权与验证完成
 - `failed`：流程失败，仅记录固定的失败阶段和分类
 
 上报字段只包含安装尝试 ID、`eid`、客户端类型、安装或刷新动作、阶段和状态。不会上报 JWT、账号、密码、用户名、邮箱、Rainbond 地址、原始错误信息或本地代码。统计请求在后台执行；统计服务不可用、超时或企业信息读取失败都不会改变原安装结果。
@@ -286,6 +292,7 @@ CI 或完全非交互环境仍应通过 `--token` / `RAINBOND_JWT` 提供已有�
 
 - `~/.claude/skills`
 - `~/.codex/skills`
+- `~/.pi/agent/skills`
 
 #### 显式指定部署形态
 
@@ -315,6 +322,12 @@ npx --yes rainskills claude
 
 ```bash
 npx --yes rainskills codex
+```
+
+只装并配置 Pi：
+
+```bash
+npx --yes rainskills pi
 ```
 
 同时装并配置全部平台：
@@ -360,20 +373,14 @@ CI 等没有可交互 TTY 的环境不能粘贴回调地址，可以使用下面
 脚本会把 JWT 保存到：
 
 ```bash
-~/.rainbond/mcp.env
-```
-
-并自动把下面这类加载逻辑写入当前 shell 的 rc 文件：
-
-```bash
-[ -f "$HOME/.rainbond/mcp.env" ] && source "$HOME/.rainbond/mcp.env"
+~/.rainbond/credentials.env
 ```
 
 注意：
 
-- 新开的终端会自动加载 `RAINBOND_JWT`
-- 当前已经打开的终端不会被子进程脚本直接改写
-- 安装完成后，如果你想立刻在当前终端运行 `codex` 或 `claude`，请执行脚本最后提示的 `source ~/.zshrc` 或 `source ~/.bashrc`
+- 凭据文件权限为 `0600`，目录权限为 `0700`
+- CLI 读取该文件；安装器不会把 JWT 写入 shell rc 或命令行
+- HTTP 地址默认拒绝；仅在明确传入 `--allow-insecure-http` 后才允许可信内网明文连接
 
 ### 7. 覆盖已安装版本
 
@@ -399,7 +406,7 @@ npx --yes rainskills --dest ~/.codex/skills --force
 - 安装到非标准目录
 - 在 CI 或临时目录中做验证
 
-注意：`--dest` 只复制 skill，不会自动配置 Rainbond MCP。
+注意：`--dest` 复制 Skill 和 CLI 文件，但不会自动完成 Rainbond 授权。
 
 ## 更新方式
 
@@ -465,7 +472,7 @@ rainbond-skills/
 
 ## 产品对象模型
 
-`docs/product-object-model.md` 描述了 skills 之间共享的产品对象（project、app、component、environment、delivery 等）和跨-skill 边界。如果你要扩展某个 skill 的输入/输出，或新增一个 skill，先看它。
+`rainbond-app-assistant/references/product-object-model.md` 是可安装的 canonical 文档，描述 skills 之间共享的产品对象（project、app、component、environment、delivery 等）和跨-skill 边界；`docs/product-object-model.md` 只保留仓库索引。如果你要扩展某个 skill 的输入/输出，或新增一个 skill，先看 canonical reference。
 
 ## 仓库维护约定
 
@@ -480,14 +487,9 @@ rainbond-skills/
 
 Codex / Claude Code 请按安装器提示重启。
 
-### 2. 为什么当前终端里还是连不上 MCP
+### 2. 为什么安装后不需要额外客户端配置
 
-因为 `./install.sh` 是一个子进程，不能直接改写你当前 shell 的环境变量。
-
-处理方式：
-
-- 直接执行脚本最后提示的 `source ~/.zshrc` 或 `source ~/.bashrc`
-- 或者开一个新的终端
+这是预期行为。已安装的 Skill 通过 `~/.rainbond/bin/rainskills-tools.js` 调用受控 Console API，无需注册客户端工具或安装 Pi Extension。
 
 ### 3. 为什么默认不覆盖已有 skill
 
@@ -498,14 +500,14 @@ Codex / Claude Code 请按安装器提示重启。
 保存在：
 
 ```bash
-~/.rainbond/mcp.env
+~/.rainbond/credentials.env
 ```
 
 脚本不会保存你的 Rainbond 用户名和密码。
 
-### 5. MCP 突然返回 401 / 403 怎么办
+### 5. CLI 返回 401 / 403 怎么办
 
-通常是 `~/.rainbond/mcp.env` 里的 JWT 到期了。无需重装 skills，也不要手工改文件，直接用下面任一命令刷新：
+通常是 `~/.rainbond/credentials.env` 里的 JWT 到期了。无需重装 skills，也不要手工改文件，直接用下面任一命令刷新：
 
 ```bash
 npx --yes rainskills refresh
@@ -513,9 +515,11 @@ npx --yes rainskills refresh
 # 或：bash ~/.rainbond/skills/install.sh refresh
 ```
 
-`refresh` 不会改动 skill 文件。它会刷新 `~/.rainbond/mcp.env`，并检查 RainSkills 早期版本写入的旧通用 MCP 地址。只有地址完全等于当前 Rainbond 的 `/console/mcp/query` 且认证配置仍是脚本管理格式时，才会先生成 `.rainskills-backup` 备份，再迁移到对应客户端的专用地址；自定义 MCP 地址不会被修改。迁移失败时会恢复原配置。
+`refresh` 不会改动 skill 文件。它会刷新 `~/.rainbond/credentials.env` 并验证固定的 CLI API 入口；不会修改任何客户端配置。
 
-刷新后按终端提示重启 Codex / Claude Code。
+### 客户端适配范围
+
+不需要额外适配。只要客户端能发现 Skill、执行本机命令、且本机有 Node.js 18+，它就会使用同一 RainSkills CLI。`--api-only` 和 `--skip-mcp` 仅为兼容旧脚本保留，已不再改变安装行为。
 
 ### 6. 如何确认安装到了哪里
 
@@ -526,7 +530,7 @@ npx --yes rainskills refresh
 如果你要新增或修改 skill，建议流程如下：
 
 1. 在仓库里直接修改对应 skill 目录
-2. 先查看 `docs/product-object-model.md`，它是当前产品对象模型和跨-skill 边界的主文档
+2. 先查看 `rainbond-app-assistant/references/product-object-model.md`，它是安装包内的产品对象模型和跨-skill 边界主文档
 3. 在虚拟环境中执行 `python3 -m pip install -r requirements-test.txt`，再执行 `npm test` 跑 helper、评测、安装器、包内容和 PTY 信号测试；测试在隔离临时目录中运行，无需输入，也不应打开真实浏览器
 4. 执行 `./install.sh --dest /tmp/rainbond-skills-test --force` 做一次本地验证
 5. 确认无误后再提交到 Git 仓库

@@ -144,6 +144,12 @@ function readOnboardingState(filePath, expectedOperationId, stateStore = secureS
   if (state.deployment_mode !== "self-hosted") {
     throw new Error("状态文件不是私有化部署流程");
   }
+  if (
+    state.transport_mode !== undefined
+    && (typeof state.transport_mode !== "string" || !["cli", "mcp", "api"].includes(state.transport_mode))
+  ) {
+    throw new Error("状态文件中的 transport_mode 无效");
+  }
   if (state.control_mode !== undefined) {
     if (!["windows-native", "wsl", "posix"].includes(state.control_mode)) {
       throw new Error("状态文件中的 control_mode 无效");
@@ -2213,6 +2219,9 @@ function resumeInvocationForOnboarding(onboarding, execPath = process.execPath) 
     onboarding.console_url,
   ];
   if (onboarding.console_url.startsWith("http://")) args.push("--allow-insecure-http");
+  if (onboarding.transport_mode === "api" && !args.includes("--api-only")) {
+    args.push("--api-only");
+  }
   if (onboarding.control_mode === "windows-native") {
     return {
       executable: execPath,

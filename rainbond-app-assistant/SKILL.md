@@ -1,6 +1,6 @@
 ---
 name: rainbond-app-assistant
-description: "Use for any request to deploy, run, deliver, publish, or troubleshoot the current project — regardless of whether the user mentions \"Rainbond\" by name. Triggers on generic intents such as: 帮我把项目跑起来 / 部署这个项目 / 发布上线 / 看看为什么跑不起来 / 帮我交付 / 排查一下 / deploy this project / run this app / check what is blocking it. Prefer this skill when a Rainbond MCP connection is configured in the session. Handles the full lifecycle: project-init, bootstrap, troubleshooting, delivery verification, dev-to-test promotion, and code-layer handoff."
+description: "Use for any request to deploy, run, deliver, publish, or troubleshoot the current project — regardless of whether the user mentions \"Rainbond\" by name. Triggers on generic intents such as: 帮我把项目跑起来 / 部署这个项目 / 发布上线 / 看看为什么跑不起来 / 帮我交付 / 排查一下 / deploy this project / run this app / check what is blocking it. Uses the installed RainSkills CLI for platform actions. Handles the full lifecycle: project-init, bootstrap, troubleshooting, delivery verification, dev-to-test promotion, and code-layer handoff."
 ---
 
   # Rainbond App Assistant
@@ -55,56 +55,24 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
   - 规则说明、流程说明、人类可读结论：优先中文
   - `### Structured Output` 里的对象名、字段名、enum：保持英文 canonical 形式
 
-  ## Preflight Gate（最高优先级，先于硬规则执行）
+  ## Rainbond Transport Preflight（最高优先级）
 
-  在读取其它 skill 文件、扫描用户项目、或调用任何业务 MCP 工具之前，必须先验证当前会话能力。
+  在读取下层 Skill、扫描项目或执行 Rainbond 业务操作前，为本次工作流解析一次传输，并在工作流结束前保持不变。先读取 [references/transport-resolution.md](references/transport-resolution.md)，不要复制其中规则。
 
-  Step 0 — Probe MCP availability：
-  - 调用一个轻量探针，例如 `rainbond_query_enterprises`
-  - 成功：记录 enterprise / team / region 上下文，进入"硬规则"和主线流程
-  - 失败（auth / transport / timeout / not configured）：立即停止，不进入业务流程
-
-  Preflight 失败时禁止做的事：
-  - 读取其它 reference / SKILL 文件
-  - 扫描用户项目目录、读取 `rainbond.app.json` 或 `.rainbond/local.json`
-  - 在本地生成 `Dockerfile`、`docker-compose.yml`、`manifest`、部署脚本或临时部署文档
-  - 手工编写或猜测 `~/.rainbond/mcp.env`、JWT、API token
-  - 调用任何业务 MCP 工具
-
-  Preflight 失败时必须给用户的动作建议，需要先区分场景：
-
-  - 如果用户机器上已存在 `~/.rainbond/mcp.env` 或 `~/.rainbond/skills/install.sh`，
-    判定为「已装过，多半是 JWT 过期 / 401 / 403」，给出 refresh 指引：
-
-    ```bash
-    bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh) refresh
-    # 或：bash ~/.rainbond/skills/install.sh refresh
-    ```
-
-    成功后按安装器输出执行客户端恢复动作：Codex / Claude Code 重启，Pi Agent 执行
-    `/reload`；OpenClaw 当前 CLI 使用安装器触发 MCP 热加载，独立 Gateway / Agent 进程需重新加载配置或重启。恢复完成后再让用户重新触发同一指令，
-    本轮不要自动重试同一个 MCP 工具调用。
-
-  - 否则视为首次安装，给完整安装命令：
-
-    ```bash
-    bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh)
-    ```
-
-    安装脚本会配置 MCP server、保存 JWT，并验证当前客户端的 RainSkills 专用 MCP 地址可用。
-    配置完成后重新触发同一指令即可。
-
-  例外：用户在同一会话里已经成功用过任意 `rainbond_*` 工具，则视为 preflight 已通过，不必每轮重探。
+  1. 不检测当前会话的 `rainbond_*` Tool；运行一次 `node ~/.rainbond/bin/rainskills-tools.js status`。
+  2. CLI status 成功时选择 `cli`；失败时停止并按共享规则报告恢复动作。
+  3. 已选择 `cli` 后，认证、网络、超时和业务错误都不得切换传输。
+  6. 写操作超时或结果未知时禁止重放，先用同一传输查询平台事实。
 
   ## Installation Intent（高优先级）
 
   当用户的请求本身是"帮我把 rainskills / Rainbond MCP 装上"或等价表达（含 `github.com/goodrain/rainskills` URL）时，**禁止**走以下旁路：
 
   - 手工 `git clone` 后只复制部分 `rainbond-*` Skill
-  - 手工编写 `~/.rainbond/mcp.env`、JWT、登录回调
+  - 手工编写 `~/.rainbond/credentials.env`、JWT、登录回调
   - 手工修改任一客户端配置来注册 MCP server
 
-  必须给用户一行可直接复制的命令，由仓库内 `install.sh` 接管交互式登录、JWT 获取、MCP 注册和验证：
+  必须给用户一行可直接复制的命令，由仓库内 `install.sh` 接管交互式登录、JWT 获取、CLI 安装和验证：
 
   ```bash
   bash <(curl -fsSL https://raw.githubusercontent.com/goodrain/rainskills/main/install.sh)
@@ -113,7 +81,7 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
   如果用户当前会话所在仓库就是 `rainbond-skills` 本身，可建议 `./install.sh`。
   如果用户明确要求非默认仓库位置，告诉他用环境变量 `RAINBOND_SKILLS_HOME=<path>` 前置。
 
-  说明给用户：脚本会安装全部独立 Skill、引导浏览器登录、写 `~/.rainbond/mcp.env`、为 Codex / Claude Code / OpenClaw / Pi Agent 配置对应 MCP，并验证专用地址。不需要 AI 手工配置其中任何一步。
+  说明给用户：脚本会安装全部独立 Skill、引导浏览器登录、写 `~/.rainbond/credentials.env`、安装并验证本机 CLI。Codex / Claude Code / Pi 不需要 Rainbond MCP 或 Extension。不需要 AI 手工配置其中任何一步。
 
   ## 硬规则
 
@@ -175,12 +143,13 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
 16. 如果用户要求调整源码构建参数，优先走 `rainbond_manage_component_envs(operation=replace_build_envs, build_env_dict=...)`。
     不要把语言构建参数塞进 `build_info`。
 17. 如果源码检测同时命中 Dockerfile 和语言构建，按 `rainbond-fullstack-bootstrap` 的 Build Mode Selection 优先级链解决：manifest `source.build.strategy` 优先 → 启发式按 Dockerfile 分类 + 意图信号判断（"语言 buildpack 能否产生等价运行时行为"，原则驱动而非固定清单）→ 真正模糊时才问一次并建议用户写回 manifest。决策必须双轨可审计：prose 输出"Build mode for `<name>`: `<picked>` (`<source>` — `<reason>`; to override: `<hint>`)"逐组件展示，且 bootstrap 的结构化输出 `deployment_plan.workflow.build_strategy_decisions[<name>]` 同步记录（仅给有 dual detection 的组件填）。`dockerfile` 决策映射到 `rainbond_create_component_from_source` 的 `prefer_dockerfile_when_detected = true`。详见 `rainbond-fullstack-bootstrap/references/source-build-parameter-guide.md § Build Mode Selection`。
-18. 当前 MCP 不支持显式 `dockerfile_path` 时，不要在顶层编排里承诺该能力。
+    - **恢复例外按状态决定**：`checking` / `checked` / 未完成组件可以通过 `rainbond_get_component_check_result(prefer_dockerfile_when_detected=true)` 在原拓扑中取得 Dockerfile 证据，禁止删除。只有 `create_status=complete` 的 CNB 组件不存在通用原地切换能力时，才允许在已保存 topology and configuration snapshot、已向用户展示该完成状态并获得 explicit user confirmation 后删除并重建；任一证据缺失时只读停止。
+18. 当前 Rainbond Tool 不支持显式 `dockerfile_path` 时，不要在顶层编排里承诺该能力。
 19. 对 reverse-proxy full-stack 项目，不要只因为根路径 URL 存在就把它当作最终交付成功或 Fast Path 的可信 URL；同 host 的 backend 路径（通常是 `/api`）必须也一致可用，或明确停在 blocker。
 20. **组件依赖与连接变量管理**（合并自原 20-23 四条）：多组件拓扑里，provider/consumer 关系必须用显式依赖 + provider 侧连接变量管理，不要让 consumer 端硬编码或重复声明。
 
     **可执行工具（fact）**：
-    - 显式依赖：`rainbond_manage_component_dependency` — 不要回答"MCP 没有依赖接口"；调用失败时按 MCP/控制面真实错误报告，不要描述为工具不存在
+    - 显式依赖：`rainbond_manage_component_dependency` — 不要回答“Rainbond Tool 没有依赖接口”；调用失败时按 Rainbond Tool/控制面真实错误报告，不要描述为工具不存在
     - Provider 连接变量：`rainbond_manage_component_connection_envs(scope=outer)` — 这是 provider 暴露给 consumer 的接口面
     - Consumer 自身的本地 env：`rainbond_manage_component_envs` — 仅放该 consumer 真正本地的值
 
@@ -189,10 +158,11 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
     - 共享连接信息（数据库连接串、缓存地址、消息队列 broker 等任何"provider 拥有的连接 fact"）→ 配在 provider 的 connection envs 上，**不要**在每个 consumer 上重复写
     - 运行时报 `connection refused` / `ENOTFOUND <provider-name>` / 错 host / 错 port / 缺密码等连接类错误 → 先看 provider connection env / dependency alias / compatibility env，**不要**把 baseline 里的硬编码主机名当成事实
     - 多组件拓扑进入交付验收前 → 必须跑一遍依赖完整性 gate（列已接受边 → 查现有依赖 → 补齐缺失 → 再次验证依赖摘要）。手工创建镜像组件、Compose fallback 路径、组件能独立启动都**不能**跳过 gate
-    - **配置覆盖 gate（backend 组件，设完 env 后、宣布健康/可交付前必跑）**：从 `rainbond_get_component_summary` 枚举该组件挂载的 config-file 卷。若有卷挂到已知配置路径（`config.yml` / `application.yml` / `application.properties` / `.env` / `nginx.conf` / `*.conf`），运行态有效配置由该文件决定而非 env（mounted config-file > env > 镜像默认值）。这时必须警告"env 可能被挂载的配置文件覆盖"，并先确认该文件反映了预期值，再宣布交付健康。比较配置值用于该 gate 是允许的，但**禁止**回显原始文件内容或密钥明文，只报结构化不一致。文件内容无法用当前 MCP 能力读取时，显式标注覆盖风险并停下来让用户确认，不要默默改 env 就当成功
+    - **配置覆盖 gate（backend 组件，设完 env 后、宣布健康/可交付前必跑）**：从 `rainbond_get_component_summary` 枚举该组件挂载的 config-file 卷。若有卷挂到已知配置路径（`config.yml` / `application.yml` / `application.properties` / `.env` / `nginx.conf` / `*.conf`），运行态有效配置由该文件决定而非 env（mounted config-file > env > 镜像默认值）。这时必须警告“env 可能被挂载的配置文件覆盖”，并先确认该文件反映了预期值，再宣布交付健康。比较配置值用于该 gate 是允许的，但**禁止**回显原始文件内容或密钥明文，只报结构化不一致。文件内容无法用当前 Rainbond Tool 能力读取时，显式标注覆盖风险并停下来让用户确认，不要默默改 env 就当成功
 
     具体的 provider 命名约定、connection env 变量名（`DB_*` / `REDIS_*` / `KAFKA_*` 等是示例，按 provider 文档实际名字为准）、以及依赖 alias 细节，详见 bootstrap modules/30-creation-rules.md 的相关章节。
 24. 不要自动拉起本地 Docker Desktop/OrbStack、执行本地 Docker build/push、或推送临时镜像作为兜底；这属于 delivery-mode 策略切换，必须先得到用户明确确认。
+24a. 每个 Rainbond Tool 的 `app_id` 必须是正整数（positive integer）。会话/持久化上下文可以保存十进制字符串，但调用 Tool 前必须归一化；`app-123` 等非数字值必须拒绝，不能透传。
 25. 每次运行内部仍必须形成 `AppAssistantResult` 结果对象，但默认用户答复不一定暴露 YAML。
     当 `source_app_delivery` 的 runtime healthy、没有 blocker、控制台部署位置和公网访问地址都已确定，且 delivery 已 `delivered` 或只剩浏览器人工确认时，默认使用简洁中文交付报告，不追加 `### Structured Output`。
 26. 只有在自动化/评测/调试明确要求结构化结果、用户明确要求 YAML/JSON、结果仍在构建或异常、存在 blocker/handoff/身份歧义、或进入 dev-to-test promotion 时，才把 `AppAssistantResult` 渲染为最终 fenced `yaml`。仅因当前 agent 无法打开公网地址而需要用户确认，不是暴露 YAML 的理由。
@@ -200,8 +170,11 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
     代理事实属于执行记录，不是强制暴露 YAML 的理由。
 28. `rbd-*` 组件（rbd-gateway、rbd-api、rbd-worker、rbd-chaos、rbd-db、rbd-mq、rbd-monitor、rbd-node 等）是 Rainbond 平台自身的基础设施组件，不是用户应用组件。
     - 可以用 `rainbond_query_region_rbd_components` 查询并展示它们的状态
-    - 不能通过 MCP 对它们执行重启、部署、修改等写操作；当前 MCP 工具集不支持此类操作
+    - 当前 Rainbond Tool 能力不支持对它们执行重启、部署、修改等写操作，任何传输都不得尝试
     - 如果用户要求操作这些组件，明确告知：需要通过 Kubernetes 命令（如 `kubectl rollout restart deployment/<name> -n rbd-system`）或 Rainbond 集群管理控制台进行，超出本技能的操作范围，不要假装可以执行
+28a. 写操作失败或结果异常时，先调用 `rainbond_get_operation_failure_context`，按其 `classified_reason` 决定停下、只读核实或低风险修复；`unknown` 回退既有证据链，禁止盲目重放写操作。
+    `event_log_tail` 只作为敏感诊断证据使用，绝不能复制、引用或向用户展示其原文；输出只能使用 `classified_reason`、非敏感摘要和已脱敏字段。
+28b. 运行态或交付健康检查先调用 `rainbond_get_app_health_overview`；仅 `abnormal` 或 `unknown` 组件再读取 component summary、日志、事件或存储明细。
 29. **仅给 bare Git URL 时默认 root + 空 `subdirectories`**：当用户给的只是一个 Git URL（无本地 manifest、无明确子目录提示），默认 `subdirectories=""`（仓库根）进入 source 检测，让后端判断这个仓库结构。**不要**先问用户"根目录还是子目录"。
     - 单项目仓库（一个 buildable root）→ 后端检测通过，正常 build
     - 多组件 / 多 example 仓库 → 后端返回 `multiple services detected` 或等价歧义信号 → 按 Iron Law 10 停下问用户选哪个子目录
@@ -225,23 +198,26 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
     - **不允许**根据"模型对该仓库的先验知识"猜常见名字（Java-maven-demo、java_maven_demo、demo/java-maven 等）
     - 这与 Iron Law 29 入口"必须问用户"配套：29 管入口、30 管中途用户输入验证失败的二次询问。
     猜测换参数 + 删-再-create 循环是典型 anti-pattern，server 端可能直接 reject 重复 create 调用。
-31. **任何 Rainbond MCP 写工具调用之前**，必须先按下面的映射调用对应的 `select_skill_<id>` 工具，把该阶段的执行手册加载进会话上下文；没先调 `select_skill_<id>` 就直接动手等于**无授权操作**，是 Iron Law 违反。
-    触发动作（凡是这类，第一次调之前都必须先 `select_skill_<id>`）：
+31. **任何 Rainbond 写操作之前**，必须先按下面的映射加载对应下层 `SKILL.md`，把该阶段的执行手册载入上下文；未加载就禁止执行写操作，是 Iron Law 违反。
+    加载方式：按下表的已安装相对路径读取一次。每个阶段只加载一次，跨阶段时再加载新阶段。
+    触发动作（凡是这类，第一次调用之前都必须完成加载）：
     - 创建/更新/部署组件：`rainbond_create_component_from_source`、`rainbond_create_component_from_image`、`rainbond_create_component_from_package`、`rainbond_create_component`、`rainbond_build_component`、`rainbond_update_component_build_source`、`rainbond_change_component_image`
     - 包上传事务：`rainbond_init_package_upload`、`rainbond_delete_package_upload`；包内容必须由 bootstrap 的客户端 helper 上传，完成后再用上面的 event-based package create
     - 组件配置：`rainbond_manage_component_envs`、`rainbond_manage_component_ports`、`rainbond_manage_component_connection_envs`、`rainbond_manage_component_dependency`、`rainbond_manage_component_storage`、`rainbond_manage_component_probe`、`rainbond_manage_component_autoscaler`
     - 应用操作：`rainbond_operate_app`、`rainbond_horizontal_scale_component`、`rainbond_vertical_scale_component`、`rainbond_delete_component`
-    映射表：
-    - 当前 run 是**首次部署/创建组件/补齐拓扑**（含从源码/镜像创建，以及客户端 package upload + event-based package create） → 在第一个 MCP 写调用之前调 `select_skill_rainbond-fullstack-bootstrap`
-    - 当前 run 是**排查运行态/构建失败**（CrashLoopBackOff / ImagePullBackOff / 构建报错 / 端口/依赖不通） → 在第一个 MCP 写调用之前调 `select_skill_rainbond-fullstack-troubleshooter`
-    - 当前 run 是**交付验收**（验证 URL 可达、reverse-proxy 路径连通） → 调 `select_skill_rainbond-delivery-verifier`
-    - 当前 run 是**开发到测试 promotion**（创建快照 + 测试 app） → 调 `select_skill_rainbond-app-version-assistant`
-    - 当前 run 是**模板安装**（本地/云端 Rainbond 应用模板） → 调 `select_skill_rainbond-template-installer`
+    映射表（已安装相对路径）：
+    - 首次部署/创建组件/补齐拓扑 → `../rainbond-fullstack-bootstrap/SKILL.md`
+    - 排查运行态/构建失败 → `../rainbond-fullstack-troubleshooter/SKILL.md`
+    - 交付验收 → `../rainbond-delivery-verifier/SKILL.md`
+    - 开发到测试 promotion → `../rainbond-app-version-assistant/SKILL.md`
+    - 模板安装 → `../rainbond-template-installer/SKILL.md`
+    - 首次项目绑定 → `../rainbond-project-init/SKILL.md`
+    - 环境同步 → `../rainbond-env-sync/SKILL.md`
     规则细节：
-    - `select_skill_<id>` 本身不需用户审批、不消耗 MCP，但它的调用是**前置门控**，没调不允许走下去
-    - 一个 skill 在同一次 run 内只需调一次（重复调用工具会返回 "already active" ack）
-    - **判断依据**：用户消息中只要含"部署 / 跑起来 / 上线 / 创建组件 / 发布"等部署意图，且当前 app 还没有对应组件，就必然要先 `select_skill_rainbond-fullstack-bootstrap`，不论用户是不是显式说"先 deep dive"
-    - 如果一次 run 内场景跨阶段（先创建后排障），按需追加 `select_skill_<id>`，旧的不会被卸载
+    - 相对路径读取只加载文档，不执行平台操作
+    - 一个 skill 在同一次 run 内只需加载一次
+    - **判断依据**：用户消息中只要含"部署 / 跑起来 / 上线 / 创建组件 / 发布"等部署意图，且当前 app 还没有对应组件，就必然要先读取 `../rainbond-fullstack-bootstrap/SKILL.md`，不论用户是不是显式说"先 deep dive"
+    - 如果一次 run 内场景跨阶段（先创建后排障），按需读取新阶段的文档
     正确路径：用户说"试试 maven-demo" → 你直接调 `rainbond_update_component_build_source(service_id=已知的, subdirectories='maven-demo')` → `rainbond_check_component(service_id=已知的, is_again=true)` → 轮询 `rainbond_get_component_check_result` 直到拿到新一轮 `check_event_id`/`check_uuid` 的结果。
 32. **简短回复继承上一轮被中断的操作**：当上一轮你向用户提了问、或在 prose 里邀请用户回复（"回复继续 / check / OK / 完成 / 重试" 等），用户给了简短或单值回复（"继续"、"OK"、"试试 X"、"对的就是 Y"、"换 master"），你的**下一个动作必须基于 priorTurnMessages 的最新状态继续上一个被中断的操作**，**禁止**把它当成一次"全新的开始"。
     - 看 priorTurnMessages 里上一条 assistant 消息：以问号结尾 / 含"回复 X / 你看 / 是否 / 请确认 / 请选" → 视为对你提问的回答
@@ -250,7 +226,7 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
     - **禁止**：本轮重新走"加载 skill / 询问意图 / 查 app 详情 / 列能力清单"的初始化流程
     - **例外**：用户消息明显是新任务（"换个项目"、"算了别部署了"、"先停下"），按新任务处理
     - 信号词识别："继续 / check / OK / 完成了吗 / 现在怎样 / 进度 / 试 X" 这类短词 → 多半属于回答；超过一句完整描述新任务的才算 fresh intent
-33. **`rainbond_update_component_build_source` 只改 DB 不触发检测**，调完之后下一个 MCP 写调用**必须**是 `rainbond_check_component(service_id=..., is_again=true)`，不允许中间夹任何其他工具，也不允许跳过它直接读 check_result 或调 build。
+33. **`rainbond_update_component_build_source` 只改 DB 不触发检测**，调完之后在已锁定传输上的下一个写调用**必须**是 `rainbond_check_component(service_id=..., is_again=true)`，不允许中间夹任何其他工具，也不允许跳过它直接读 check_result 或调 build。
     背景（必读）：后端 `update_component_build_source` 视图仅把 `git_url`/`subdirectories`/`code_version`/凭证字段写进 DB（`service.save()` 结束），**没有调用 `app_check_service.check_service`**。因此：
     - 改完 build_source 后调 `rainbond_get_component_check_result` → 返回的依然是**上一轮**（最初 create 时）的 `check_uuid` 和 "源码目录不存在" 旧结果，给人"我的修改没生效"的假象，实际是检测根本没重跑
     - 改完 build_source 后调 `rainbond_build_component` → 组件还停留在 `service_source=source_code` + 上轮检测未通过的状态，build 任务会被卡在 `checking`，无法真正启动
@@ -270,7 +246,7 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
     - `update_component_build_source` → `build_component`（中间没 `check_component`，组件仍 `checking`，build 必失败）
     - 多次 `update_component_build_source` 之间不夹 `check_component`（等价于在改了 DB 但没触发检测的情况下又改一遍，每次轮询的还是同一个旧 `check_uuid`）
     与 Iron Law 30 配套：30 管"换参数重试"的预算（同 `service_cname` 最多 2 次 create / 同 service_id 同字段最多 N 次 update），33 管"改完后必须走完一个完整 check 闭环"。两者一起堵住"猜参数 → 改了又不重检测 → 又看到旧错误 → 再猜"的死循环。
-34. **service_id provenance：任何 MCP 写工具传入的 `service_id` 必须有明确出处**，不允许凭模型记忆或上下文里飘着的 UUID 猜。
+34. **service_id provenance：任何 Rainbond 写 Tool 传入的 `service_id` 必须有明确出处**，不允许凭模型记忆或上下文里飘着的 UUID 猜。
     合法的 `service_id` 来源（按优先级）：
     - 本会话内 `rainbond_query_components` 的返回结果（最新一次）
     - 本会话内 `rainbond_create_component_*` 工具的返回值
@@ -296,10 +272,10 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
 
     反例（来自真实回归 case `cs_1779149681822_3u`，2026-05-19）：模型从 `rainbond_get_component_summary` 响应的 `recent_events` 段看到形如 `{"ID": 17740, "event_id": "...", "opt_type": "build-service"}`，直接把 `17740` 当成 `event_id` 传给 `rainbond_get_component_build_logs`，工具返回 `items: []`（找不到该 UUID 的日志）。正确做法：从同一 `recent_events[i].event_id` 字段取出 UUID 字符串，或调 `rainbond_get_component_events` 重查。
 35. **会话内部叙述纪律 + 内部 preflight 工具不要主动调**。下列四类是"内部会话状态"，对用户**无信息量**，禁止外漏到 assistant 可见消息：
-    - **`select_skill_*` 工具调用本身**：这是 server 内部 hookup，把指定 skill 的执行手册拼到 system prompt 用的。调用前**不要**说"我先加载 bootstrap 手册"、"现在调用 select_skill_..."；调用后**不要**说"Bootstrap 手册已加载"、"skill ready" 这类回声。server 返回的 `loaded_skill` / `already active` ack 是给你看的内部信号，**直接进入下一个真实工具调用**，保持沉默。
+    - **下层 Skill 加载本身**：相对路径读取是内部准备动作。加载前后都不要叙述“先加载手册”或回声；完成后直接进入下一个真实调用。
     - **`rainbond_get_current_user`**：本工具被 server 端 AuthSubjectResolver 在每次 HTTP 请求的 preflight 里跑过了。当前 user_id / username / enterprise_id / team_name / region_name **已经在 system prompt 的 session-context 段提供**，需要时直接读那里，**不要发 tool call 重新拉**。例外：用户明确说"我换了团队/企业，重新认一下"这种 explicit 重认证需求才调。
     - **`rainbond_query_components` 同入参重复轮询**：服务端 30s 内的同 args 调用会走缓存；你**不要**在每个新 user turn 开头都"先查一下组件列表"，priorTurnMessages 里上一次的 query 结果在 contextSignature 不变时仍然有效。
-    - **规则推理过程 / MCP 工具内部限制 / 分类决策叙述**：你内部基于哪条 Iron Law / hard rule / 推断信号做的决策、具体 MCP 工具签名 / 字段限制、对组件 / 服务的分类判断（"ClickHouse 是公认的列式分析数据库"这类），都属于内部状态，对用户**无信息量**。
+    - **规则推理过程 / Rainbond Tool 内部限制 / 分类决策叙述**：你内部基于哪条 Iron Law / hard rule / 推断信号做的决策、具体 Tool 签名 / 字段限制、对组件 / 服务的分类判断（"ClickHouse 是公认的列式分析数据库"这类），都属于内部状态，对用户**无信息量**。
       
       **禁止**这类叙述（来自真实回归 case 的典型模式）：
       - "ClickHouse 是公认的列式分析数据库，属于基础设施软件，按 image 模式创建"
@@ -322,10 +298,10 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
       
       > rainagent 运行时通过 server-side "最终覆盖规则" 段也强制了同一条规则；本条主要服务 CLI / Codex 端使用者（他们没有 runtime tail 注入）。
     
-    **同一个 `<skill_id>` 在 session 内最多 select 一次（跨 user turn 也算）**，但**不同 skill 之间切换永远允许**（典型流程：bootstrap 部署 → troubleshooter 排障 → delivery-verifier 验收 → version-assistant promote，每切一个阶段调一次新的 select_skill_<id>）。判断方式：如果当前会话的 priorTurnMessages 里已经出现过该 `skill_id` 的 `loaded_skill` 或 `already active` tool_result，**不要再调** `select_skill_<that-same-id>`；但如果你要切到另一个 skill_id（如从 bootstrap 切到 troubleshooter），就**必须**调 `select_skill_<new-id>` 一次。
+    **同一个 `<skill_id>` 在 session 内最多加载一次（跨 user turn 也算）**，但不同阶段之间切换永远允许。读取映射表中的新阶段相对路径；priorTurnMessages 已记录文件读取时，不重复加载同一 skill。
     
-    反例（**禁止**）：上一轮已经 `select_skill_rainbond-fullstack-bootstrap` 过了，本轮 user 简短回复 "java/jar"，你又调一次 `select_skill_rainbond-fullstack-bootstrap` 并叙述"先加载 bootstrap"。正确做法：priorTurnMessages 已有 ack → 直接 `rainbond_update_component_build_source(...)` 继续。
-    正例：上一轮 `select_skill_rainbond-fullstack-bootstrap`，本轮用户说"组件起不来帮我排查下" → 现在阶段从部署切到排障 → 调一次 `select_skill_rainbond-fullstack-troubleshooter`（新 skill，允许）→ 沉默地进入诊断流程，不复述"troubleshooter 已加载"。
+    反例（**禁止**）：上一轮已加载 bootstrap，本轮 user 简短回复 "java/jar"，又重复 selector 或读取同一文件并叙述“先加载 bootstrap”。正确做法：直接 `rainbond_update_component_build_source(...)` 继续。
+    正例：上一轮已加载 bootstrap，本轮用户说“组件起不来帮我排查下” → 切换到排障阶段 → 读取 `../rainbond-fullstack-troubleshooter/SKILL.md` → 沉默进入诊断流程。
 36. **用户给出的字面值（URL / 镜像地址 / 分支名 / 凭证）必须 verbatim 传给工具，禁止 LLM 凭训练知识"补全"、"修正"、"猜测"**。
     适用字段：`git_url` / `image_address` / `code_version`（分支/tag/commit）/ `username` / `password` / `token` / `subdirectories` 等任何用户在消息里给出的字面值。
     **禁止行为**：
@@ -333,7 +309,7 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
     - 用户给的 URL 没 `.git` 后缀就自动加上
     - 用户给的 URL 是 `gitee.com/xxx/yyy`，你"知道这个仓库其实在 GitHub" 就改成 `github.com/...`
     - 用户给了主仓库 URL（`https://gitee.com/rainbond/sourcecode-examples`），你把它换成你以为的子项目独立仓库（`https://gitee.com/some-org/java-maven-demo.git`）—— 同一个仓库下的不同子项目应该用**同一个 URL + subdirectories 参数**区分，而不是换 URL
-    - 用户没说分支，你自己写 `code_version=main` 或 `master` 当默认值（应该让后端/MCP 默认值生效，传 `master` 的前提是用户说过 master 或者你是 carrying over 从已有组件 build_source 拿到的字面值）
+    - 用户没说分支，你自己写 `code_version=main` 或 `master` 当默认值（应该让平台默认值生效，传 `master` 的前提是用户说过 master 或者你是 carrying over 从已有组件 build_source 拿到的字面值）
     
     **正确做法**：
     - 用户消息里出现的 URL/分支/凭证，**逐字符 copy** 传给工具
@@ -419,28 +395,30 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
 
   ### 触发时机
 
-  在主线流程进入每个专项阶段的**第一个动作之前**，调用对应的 `select_skill_<id>` 工具一次（同一个 skill 在同一次 run 内只需调一次，后续都已生效）。具体映射：
+  在主线流程进入每个专项阶段的第一个动作之前，必须读取对应下层 `SKILL.md`；未读取时禁止执行该阶段写操作。每个阶段只读取一次，后续复用。
 
-  | 主线阶段 | 触发条件 | 必须先调的工具 |
-  |---------|---------|---------------|
-  | 步骤 3：topology 创建 | linked 但拓扑/组件不存在；或要从源码/镜像/包创建/补齐组件 | `select_skill_rainbond-fullstack-bootstrap` |
-  | 步骤 4：运行态排障 | 组件已存在但运行不健康；构建失败、CrashLoopBackOff、ImagePullBackOff 等 | `select_skill_rainbond-fullstack-troubleshooter` |
-  | 步骤 5：交付验收 | 运行态健康，剩下的问题是用户能否访问、URL 是否可达、文件是否落盘等 | `select_skill_rainbond-delivery-verifier` |
-  | 步骤 6：dev-to-test promotion | 已 `delivered`，用户要求创建快照 + 测试 app | `select_skill_rainbond-app-version-assistant` |
-  | 模板安装路径 | 用户要求安装本地/云端 Rainbond 应用模板到目标 app | `select_skill_rainbond-template-installer` |
+  | 主线阶段 | 已安装相对路径 |
+  |---------|---------------|
+  | topology 创建 | `../rainbond-fullstack-bootstrap/SKILL.md` |
+  | 运行态排障 | `../rainbond-fullstack-troubleshooter/SKILL.md` |
+  | 交付验收 | `../rainbond-delivery-verifier/SKILL.md` |
+  | dev-to-test promotion | `../rainbond-app-version-assistant/SKILL.md` |
+  | 模板安装 | `../rainbond-template-installer/SKILL.md` |
+  | 项目绑定 | `../rainbond-project-init/SKILL.md` |
+  | 环境同步 | `../rainbond-env-sync/SKILL.md` |
 
   ### 调用语义
 
-  - `select_skill_<id>` 是当前会话的载入指令，不消耗 MCP 工具，无副作用，无需用户审批
-  - 调用后该 skill 的完整执行手册立即进入系统提示，后续动作必须严格按该 skill 的判断顺序、术语、输出契约执行
-  - 多个专项 skill 可以叠加加载（例如 bootstrap → 发现需要排障 → 再 `select_skill_rainbond-fullstack-troubleshooter`），新加载的 skill 在主题冲突时优先级更高
-  - 不能用调用 `select_skill_<id>` 来"探索这个 skill 是什么意思"——只在确认要进入对应阶段时调用
+  - 相对路径读取是载入指令，无平台副作用，无需用户审批
+  - 加载后必须严格按该 skill 的判断顺序、术语和输出契约执行
+  - 多个专项 skill 可以按阶段叠加加载；新加载的阶段规则在主题冲突时优先级更高
+  - 不用文件读取探索能力；只在确认进入对应阶段时加载
 
   ### 边界
 
   - 顶层路由判断（"用户的意图是不是部署/排障/交付"）仍然由本 skill 负责，不要在专项 skill 加载之后回头改路由
   - 工具行为约束（如本 skill 硬规则第 30 条"源码失败后必须先 query 不能直接重 create"）即使在专项 skill 加载之后仍然有效，专项 skill 只是补充更细的操作规则
-  - `rainbond-project-init` 是 workspace 型 skill，只在 Claude/Codex CLI 等有本地项目目录的客户端有意义；在 Web 端 rainagent 中**不存在** `select_skill_rainbond-project-init`，主线遇到 unlinked 时直接停下来让用户在 UI 中绑定项目
+  - `rainbond-project-init` 是 workspace 型 skill，只在有本地项目目录的客户端有意义；无本地工作区时主线遇到 unlinked 应停下来让用户在 UI 中绑定项目
 
   ## 停止条件
 
@@ -450,13 +428,13 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
   - team / app 选择仍然有歧义
   - source ref 无效
   - 多组件源码检测需要显式策略选择
-  - MCP / 控制面后端异常
+  - Rainbond Tool / 控制面后端异常
   - `delivery-verifier` 结果只是 `delivered-but-needs-manual-validation`
   - 进入 `code_or_build_handoff_needed`
 
   ## Canonical Model Reference
 
-  Use `docs/product-object-model.md` as the repository-level source of truth for:
+  Use [product object model](references/product-object-model.md) as the repository-level source of truth for:
 
   - `Project` and `Environment` context boundaries
   - `RuntimeState` distinctions such as topology missing, topology building, and runtime unhealthy
@@ -464,6 +442,8 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
   - version-flow handoff boundaries into snapshot, release, and rollback operations
 
   This skill should orchestrate transitions across those shared objects and states. It should not redefine their canonical boundaries independently.
+
+  For on-demand structured-output details, read [output-contract.md](references/output-contract.md) only when rendering or validating a structured result.
 
   ## Contract Surface
 
@@ -481,855 +461,13 @@ description: "Use for any request to deploy, run, deliver, publish, or troublesh
   - `promotion_result` is only a gated summary of the version/promotion flow after explicit dev-to-test intent and source-app `delivered`
   - bootstrap / troubleshooter / delivery-verifier contract details remain owned by their own schema + validator + eval surfaces
 
-  ## When to Use
+  ## On-demand references
 
-  Use when:
-  - a current project should be brought up in Rainbond end-to-end, whether linked or not yet linked
-  - the user gives a generic current-project deployment, run, inspection, or continue-the-mainline request
-  - a linked project should be brought up in Rainbond end-to-end
-  - the user wants a single entrypoint instead of manually choosing bootstrap or troubleshooting
-  - the next action is unclear and depends on project state
-  - the user wants the assistant to decide whether to sync env, create topology, diagnose runtime issues, verify delivery, or promote a delivered source app into a testing app
-  - the user wants one top-level prompt to carry the project as far as the current strict gate allows
+  Keep the routing, hard rules, mainline, and stop conditions above loaded at all times. Load only the reference needed for the current stage:
 
-  Do not use when:
-  - the user explicitly asks to run only one specific lower-level skill
-  - the task is only to inspect a single known runtime issue and no orchestration is needed
-  - the project is unrelated to Rainbond deployment
-  - the task is a pure code refactor with no Rainbond interaction
+  Concise delivery report mode is the default for an eligible successful source delivery: do not expose the fenced YAML block unless the output-mode gates require structured output.
 
-  ## Managed Lower-Level Skills
-
-  This skill orchestrates:
-  - `rainbond-project-init`
-  - `rainbond-env-sync`
-  - `rainbond-fullstack-bootstrap`
-  - `rainbond-template-installer`
-  - `rainbond-fullstack-troubleshooter`
-  - `rainbond-delivery-verifier`
-  - `rainbond-app-version-assistant`
-
-  This skill may also recommend handoff to:
-  - a code/build agent
-  - a frontend fix flow
-  - a reverse-proxy/build configuration fix flow
-
-  ## Input Model
-
-  This skill should prefer local project files and explicit user input over repeated questioning.
-
-  Configuration layers:
-  1. user explicit input
-  2. `.rainbond/secrets.preview.json` or `.rainbond/secrets.prod.json`
-  3. `.rainbond/env.preview.json` or `.rainbond/env.prod.json`
-  4. `.rainbond/local.json`
-  5. `rainbond.app.json`
-
-  Use these roles:
-  - `rainbond.app.json`: project topology baseline
-  - `.rainbond/local.json`: project binding and runtime mapping context
-  - `.rainbond/secrets.*.json`: local-only secret source
-  - `.rainbond/env.*.json`: non-sensitive environment delta reference
-  - Rainbond MCP: runtime truth
-  - `template` source or explicit template-install intent: app-model installation path
-
-  ## Decision Rules
-
-  ### 1. Link check first
-  Before doing any deployment or repair work:
-  - check whether `.rainbond/local.json` exists
-  - check whether local binding identity is present
-  - if `.rainbond/local.json.metadata.status == linked`, treat the project as linked
-  - if local metadata is not `linked` but current-run MCP/runtime confirmation proves the same app identity exists and is accessible, continue as linked and record the local metadata drift explicitly instead of stopping
-  - stop and ask for project linking only when neither local binding nor current-run MCP evidence can confirm a linked project state
-
-  ### 2. Environment selection
-  Select environment in this order:
-  - user explicit input
-  - `.rainbond/local.json.preferences.default_environment`
-  - `preview`
-
-  ### 3. Sync is optional, not automatic by default
-  Do not always sync first.
-
-  Run `rainbond-env-sync` when:
-  - env file is missing
-  - env file is clearly stale
-  - the user explicitly asks to sync
-  - troubleshooting would benefit from fresher env intent
-
-  Do not block bootstrap or troubleshooting only because sync was not run.
-
-  ### 3.1 Secret source check
-  Before bootstrap or other execution that requires sensitive values:
-  - check whether required secrets are available from user explicit input or `.rainbond/secrets.<environment>.json`
-  - if required secret source is missing, stop and ask for local secret input rather than continuing blindly
-
-  ### 4. Decide whether bootstrap is needed
-  Bootstrap is needed when:
-  - the app does not exist
-  - the app exists but required components are missing
-  - runtime components were intentionally cleared
-  - project topology is not yet established in Rainbond
-
-  Do not run bootstrap when:
-  - the topology already exists and the problem is runtime-only
-
-  ### 4.1 Decide whether template installation is needed
-  Template installation is needed when:
-  - the user explicitly asks to install from a local template, cloud market, app market, or app model
-  - the current project or resolved design marks the next delivery step as `template`
-  - the workflow is “install a template into an app” rather than “create raw components”
-
-  Prefer `rainbond-template-installer` instead of `rainbond-fullstack-bootstrap` when:
-  - template metadata is already known or can be queried
-  - the target action is app-model installation
-
-  Do not run template installer when:
-  - the task is direct component creation from image or source
-  - template metadata is completely absent and no template-install intent was given
-
-  ### 5. Decide whether troubleshooting is needed
-  Troubleshooting is needed when:
-  - bootstrap stops with runtime blockers
-  - the app exists but is not fully healthy
-  - source-backed components are still building and need convergence inspection
-  - components are `abnormal`, `waiting`, or otherwise runtime-unhealthy
-  - the user asks to “修复” or “恢复服务”
-
-  Do **not** treat these as troubleshooting by default:
-  - a frontend-only or docs-style app whose container is already `running` but still lacks a preferred external access URL
-  - a source app that appears runtime-healthy and only needs final delivery judgment
-
-  In those cases, prefer `rainbond-delivery-verifier`.
-
-  ### 5.1 Build-failure-first routing
-  If the user explicitly asks why a source-backed component failed to build, or current evidence already points to build failure:
-  - route to `rainbond-fullstack-troubleshooter`
-  - inspect component events first
-  - derive the failing build/deploy `event_id`
-  - read build logs before runtime container logs
-  - only continue to runtime logs when build evidence no longer explains the failure
-  - if the user wants to tune source build parameters, prefer `replace_build_envs` over `build_info`
-
-  ### 6. Decide whether code/build handoff is needed
-  Recommend code/build handoff when:
-  - frontend uses invalid browser-side host like `localhost`
-  - build-time env mistakes are detected
-  - reverse-proxy or nginx config is missing or wrong
-  - root cause is clearly in source code, build output, or web serving config
-  - lower-level Rainbond repairs have already restored db/api but frontend access still fails
-
-  Hard stop rule:
-  - once the run reaches `code_or_build_handoff_needed`, stop the Rainbond mainline there
-  - do not automatically modify local source code
-  - do not automatically run local quality gates such as `go test`, `go build`, `go vet`, `npm test`, or similar
-  - do not automatically commit, push, or retry with a changed source tree
-  - only continue into code changes if the user explicitly switches the task from Rainbond orchestration to code repair
-
-  ### 7. Decide whether post-delivery promotion is needed
-  Post-delivery promotion is needed when:
-  - the user explicitly asks for the development-to-testing mainline
-  - the user asks to create a testing app from the current delivered app
-  - the user asks for snapshot creation plus a new testing app
-
-  Strict gate:
-  - only auto-continue into `rainbond-app-version-assistant` when `rainbond-delivery-verifier` has already returned `DeliveryState = delivered`
-  - if delivery result is only `delivered-but-needs-manual-validation`, stop and report that manual validation is still required before automatic promotion
-  - do not auto-enter version flow from `partially-delivered`, `blocked`, or any non-final runtime state
-
-  ### 8. Normalize single-entry mainline intent
-  Treat the user as asking for the full positive mainline when the request clearly means:
-  - deploy this project to Rainbond and get it ready for testing
-  - run the development-to-testing flow
-  - deploy, verify, snapshot, and create a testing app
-
-  In that case:
-  - start from the top-level orchestration entrypoint
-  - continue automatically across lower-level skills until the current strict gate says stop
-  - do not require the user to rephrase into bootstrap, troubleshooter, delivery-verifier, or version-center steps
-
-  ## High-Level Workflow
-
-  Follow this order.
-
-  1. Resolve context and intent
-  - read user explicit goal
-  - read `.rainbond/local.json`
-  - read `rainbond.app.json`
-  - read environment file for selected environment if present
-  - scope all local file reads to the current project directory only
-  - do not search the user's home directory or sibling repositories for alternate Rainbond bindings or manifests
-  - determine whether the user asked only for source-app deployment or explicitly asked for the dev-to-test mainline
-  - treat Docker registry mirrors and Git proxy URLs in the prompt as transport hints, not as permission to replace a source-backed project with an image-backed component
-  - if the current source-backed project uses a raw `https://github.com/...` URL and no explicit proxy URL was provided, ask once whether to keep the raw URL or switch to a GitHub proxy URL before bootstrap
-  - if the project is a monorepo, preserve repository-root build context intent when component builds depend on root-level lockfiles or project metadata
-  - determine:
-    - team_name
-    - region_name
-    - app_name
-    - app_id
-    - selected environment
-
-  2. Assess project state
-  Classify into one of these states:
-  - `unlinked`
-  - `linked-but-not-synced`
-  - `linked-and-template-install-needed`
-  - `linked-and-topology-missing`
-  - `linked-and-topology-building`
-  - `linked-and-cluster-capacity-blocked`
-  - `linked-and-topology-present-but-runtime-unhealthy`
-  - `linked-and-needs-delivery-verification`
-  - `linked-and-healthy`
-  - `linked-and-ready-for-promotion`
-  - `linked-and-needs-code-handoff`
-
-  Mapping note:
-  - these are orchestration states, not replacements for canonical `RuntimeState` or `DeliveryState`
-  - `linked-and-topology-missing` maps to `RuntimeState = topology_missing`
-  - `linked-and-topology-building` maps to `RuntimeState = topology_building`
-  - `linked-and-cluster-capacity-blocked` maps to `RuntimeState = capacity_blocked`
-  - `linked-and-source-build-failed` maps to `RuntimeState = source_build_failed`
-  - `linked-and-topology-present-but-runtime-unhealthy` maps to `RuntimeState = runtime_unhealthy`
-  - `linked-and-needs-code-handoff` maps to `RuntimeState = code_or_build_handoff_needed`
-  - `linked-and-needs-delivery-verification` is a handoff state that usually follows `RuntimeState = runtime_healthy` and precedes a final `DeliveryState`
-  - `linked-and-healthy` should only be used once delivery has effectively reached `DeliveryState = delivered`
-  - `linked-and-ready-for-promotion` should only be used when the user has asked for dev-to-test promotion and the source app has already reached `DeliveryState = delivered`
-  - classify `linked-and-cluster-capacity-blocked` only when current-run MCP/runtime evidence still shows active scheduling failure caused by cluster resource shortage
-  - if historical events mention `Unschedulable` but current node capacity and current component/app state no longer support an active capacity blocker, do not keep the project in `linked-and-cluster-capacity-blocked`; classify from the current dominant runtime state instead
-
-  3. Choose next action
-  - `unlinked` -> run `rainbond-project-init`
-  - `linked-but-not-synced` -> optionally run `rainbond-env-sync` if needed
-  - `linked-and-template-install-needed` -> run `rainbond-template-installer`
-  - `linked-and-topology-missing` -> run `rainbond-fullstack-bootstrap`
-  - `linked-and-topology-building` -> run `rainbond-fullstack-troubleshooter`
-  - `linked-and-cluster-capacity-blocked` -> stop and recommend platform capacity action
-  - `linked-and-topology-present-but-runtime-unhealthy` -> run `rainbond-fullstack-troubleshooter`
-  - `linked-and-needs-delivery-verification` -> run `rainbond-delivery-verifier`
-  - `linked-and-ready-for-promotion` -> run `rainbond-app-version-assistant`, then `rainbond-delivery-verifier` on the created testing app
-  - `linked-and-needs-code-handoff` -> stop and recommend code/build fix
-  - `linked-and-healthy` -> report healthy and stop
-
-  4. Sequence lower-level skills
-  If `rainbond-project-init` is run:
-  - review init result
-  - if init is incomplete, stop there
-  - if init completes and the user asked to continue, proceed into `rainbond-fullstack-bootstrap`
-  - if init completes during a top-level single-entry deploy or dev-to-test mainline run, proceed into `rainbond-fullstack-bootstrap` automatically
-  - do not stop the overall app-assistant run at the init boundary unless the user explicitly asked to stop after initialization
-
-  If `rainbond-template-installer` is run:
-  - review install result
-  - if template installation succeeds but the resulting app is unhealthy, continue into `rainbond-fullstack-troubleshooter`
-  - if installation cannot proceed because template metadata is incomplete, stop and report the missing fields
-  - do not fall back to `rainbond-fullstack-bootstrap` unless the user explicitly changes intent away from template install
-
-  If bootstrap is run:
-  - review bootstrap result
-  - if bootstrap reports deferred dependencies because source-backed targets have not converged, treat the project as `linked-and-topology-building`
-  - if bootstrap reports a source-build failure or source-create failure, keep the source execution path in reasoning; do not reinterpret the same component as image-backed unless the user explicitly changed the source definition
-  - if bootstrap reports `external artifact unreachable`, keep the original delivery mode, stop at code/build handoff, and ask for reachable artifact/registry access or an explicit user-approved mirror/strategy change
-  - if bootstrap reports an invalid source ref or missing branch, stop and report that the source definition itself needs confirmation; do not rewrite the branch automatically
-  - do not block source-backed bootstrap only because `check_uuid` or `event_id` is absent unless the backend explicitly reports those fields as required
-  - if bootstrap reports multi-component source detection, stop and ask for an explicit execution-path decision; do not automatically switch to local package or other workaround paths
-  - if bootstrap reports `mcp backend issue`, stop and report that the control plane must be repaired before bootstrap can continue
-  - if bootstrap says handoff to troubleshooter is needed, continue into troubleshooting in the same high-level flow unless
-  the user asked to stop after creation
-  - if bootstrap says the runtime is converged enough and the remaining question is delivery acceptance, continue into `rainbond-delivery-verifier`
-
-  If troubleshooting is run:
-  - if troubleshooting identifies a cluster capacity blocker, stop and report that platform capacity must be restored before continuing
-  - review troubleshooting result
-  - if troubleshooting identifies `external artifact unreachable`, stop and report the unreachable artifact or registry evidence; do not run local Docker or switch delivery mode automatically
-  - if troubleshooting identifies a code/build issue, stop and hand off
-  - if troubleshooting reaches `runtime_healthy`, or reaches the point where the remaining question is delivery acceptance rather than further repair, continue into `rainbond-delivery-verifier`
-
-  If `rainbond-delivery-verifier` is run:
-  - review delivery result
-  - if the project is a reverse-proxy full-stack app and the root URL works but the same-host API path still fails, do not report success; keep the result blocked or route back to troubleshooting
-  - if delivery outcome is `delivered` and the user did not ask for promotion, report success
-  - if delivery outcome is `delivered` and the user explicitly asked for the development-to-testing mainline, continue into `rainbond-app-version-assistant`
-  - if delivery outcome is `delivered-but-needs-manual-validation`, stop and report that explicitly
-  - if delivery is blocked by runtime or platform issues, route back to the correct blocker category rather than pretending success
-
-  If `rainbond-app-version-assistant` is run:
-  - inspect version center first
-  - create a snapshot from the delivered source app
-  - create a new testing app directly from that snapshot
-  - then run `rainbond-delivery-verifier` against the created testing app
-  - if testing app delivery reaches `delivered` or `delivered-but-needs-manual-validation`, report the testing app identity and validation handoff summary
-  - if testing app delivery is `blocked` or `partially-delivered`, stop and report that the testing app needs follow-up troubleshooting
-  - do not recurse by treating the testing app as a new source app inside the same run
-
-  5. Final report
-  Always end with:
-  - current project state
-  - what actions were performed
-  - the current canonical runtime or delivery outcome when one is available
-  - the next most appropriate action
-  - in `### Project State`, explicitly include the exact `orchestration_state` label in prose
-  - in `### Current Health`, explicitly include the exact `runtime_state.phase` label in prose
-
-  ## Autonomy Rules
-
-  This skill should reduce unnecessary user confirmations.
-
-  Safe-to-continue actions:
-  - reading local config files
-  - reading MCP runtime state
-  - running env sync
-  - running template installer when source, version, and target app context are already resolved
-  - running bootstrap
-  - continuing automatically from successful `rainbond-project-init` into `rainbond-fullstack-bootstrap` during a single-entry mainline run
-  - running troubleshooter
-  - running delivery verifier after create/install/repair stages
-  - running app-version-assistant after strict `delivered` has been verified and the user explicitly asked for development-to-testing promotion
-  - continuing automatically from bootstrap to troubleshooter when bootstrap explicitly recommends that handoff
-  - continuing automatically from template install to troubleshooter when installation succeeded but health is still abnormal
-  - continuing automatically from troubleshooter to delivery verifier when the remaining question is delivery completion
-  - continuing automatically from strict `delivered` into snapshot creation, testing-app creation, and testing-app delivery verification when the user explicitly asked for promotion
-  - completing classification and emitting the final structured report even when a downstream skill was intentionally skipped by user request
-
-  Not safe to continue automatically:
-  - editing source files after `code_or_build_handoff_needed`
-  - running local build or test commands as a substitute for the Rainbond mainline after `code_or_build_handoff_needed`
-  - committing or pushing code after `code_or_build_handoff_needed`
-  - re-triggering bootstrap with modified source code unless the user explicitly asked to switch into a code-repair task
-  - retrying the same stage a third time after the same error signature already occurred twice
-  - changing delivery mode or workaround strategy without explicit user confirmation
-
-  Continuation rule:
-  - once the next safe action is determined, continue automatically instead of asking whether to continue
-  - but stop immediately when the run hits its attempt budget, even if the higher-level goal is still unfinished
-  - do not end the reply with a redundant confirmation request unless one of the pause conditions below is actually active
-
-  Pause and ask the user only when:
-  - the project is not linked
-  - required identity is still ambiguous after reading local files
-  - multiple accessible teams or multiple safe app targets exist and explicit user selection is required
-  - the user’s request conflicts with current state
-  - the next action is destructive or outside the supported scope
-  - the cluster is capacity-blocked and a human must decide whether to scale capacity or reduce requests
-  - a required secret source is missing
-  - a code/build handoff is required and the user has not asked for code changes
-
-  ## Output Format
-
-  Result model and presentation modes:
-
-  - this skill must emit `AppAssistantResult`
-  - minimum target fields:
-    - `project`
-    - `environment`
-    - `request_intent`
-    - `execution_path`
-    - `orchestration_state`
-    - `runtime_state`
-    - `delivery_state`
-    - `actions_performed`
-    - `next_action`
-  - optional extension field:
-    - `promotion_result`
-  - `AppAssistantResult` is always the internal result model for routing, validation, and downstream automation
-  - the user-facing reply has two presentation modes:
-    - concise delivery report mode
-    - structured contract mode
-
-  ### Concise delivery report mode
-
-  Use this mode by default when all of the following are true:
-  - `request_intent = source_app_delivery`
-  - `runtime_state.phase = runtime_healthy`
-  - `delivery_state.status` is `delivered` or `delivered-but-needs-manual-validation`
-  - `delivery_state.verification_mode` is `verified`, `inferred`, or `manual_validation_needed` consistently with that status
-  - `next_action` is `stop` or `stop and validate URL manually`
-  - `promotion_result = null`
-  - there is no unresolved `runtime_state.blocker` or `delivery_state.blocker`
-  - `project.deployment_location_url` is non-null
-  - `delivery_state.preferred_access_url` is non-null
-  - the user did not explicitly request structured output, YAML, JSON, debug output, or machine-readable output
-  - no eval/automation consumer explicitly requires structured contract mode
-
-  In concise delivery report mode:
-  - do not append `### Structured Output`
-  - do not expose the fenced YAML block
-  - keep the report short and directly useful to the user
-  - state `部署成功`; when only browser confirmation remains, state `部署成功，待浏览器访问确认`
-  - include application name and selected environment
-  - include `部署位置` as a clickable `project.deployment_location_url`
-  - include `访问地址` as a clickable `delivery_state.preferred_access_url`
-  - include only the essential user-facing component status and HTTP verification evidence
-  - when browser confirmation remains, add at most one short validation note
-  - include proxy/mirror usage when it affected the deployment
-  - include warnings that matter after delivery, such as development-only database auth or missing production persistence
-  - do not expose orchestration enums, lower-level skill names, `Blocking Issue: none`, or the internal action ledger
-
-  Default concise section order:
-  - `### 部署结果`
-  - `### 运行状态`
-  - `### 处理记录` only when non-trivial fixes or proxy changes materially affect later operation
-  - `### 注意事项` when there are production-readiness caveats
-
-  Example concise delivery reply (the public URL is an example only; a real reply must use the exact gateway value from Iron Law 40):
-
-  ```markdown
-  ### 部署结果
-  部署成功，待浏览器访问确认。
-
-  应用：`demo-2048`
-  环境：`preview`
-
-  - 部署位置：[打开 Rainbond 应用](https://run.rainbond.com/#/team/aw9qu6gd/region/rainbond/apps/3283/overview)
-  - 访问地址：[打开 2048](http://example.invalid/2048)
-
-  ### 运行状态
-
-  - `web`：运行中
-  - HTTP 检查：200 OK
-
-  服务运行正常。当前环境无法访问公网域名，请打开访问地址确认页面交互。
-
-  ### 处理记录
-  - 使用镜像代理完成依赖拉取
-  ```
-
-  ### Structured contract mode
-
-  Use this mode when any of the following is true:
-  - the user asks for structured output, YAML, JSON, debug details, or machine-readable output
-  - an eval, wrapper, or automation flow explicitly needs deterministic structured schema validation
-  - any concise delivery report condition above is not met
-  - the app is building, unhealthy, blocked, identity-ambiguous, or requires handoff
-  - `promotion_result` is non-null or the user requested dev-to-test promotion
-  - there is any unresolved blocker or handoff
-  - another skill or wrapper will consume the result as input
-
-  Building, unhealthy, blocked, ambiguous, handoff, and incomplete promotion states should keep the detailed human-readable sections and evidence below. Do not make non-success output terse merely because successful output is concise.
-
-  In structured contract mode:
-  - the human-readable sections below are the narrative view over `AppAssistantResult`
-  - the reply must end with a final `### Structured Output` section
-  - the `### Structured Output` section must render `AppAssistantResult` in fenced `yaml`
-  - the literal section order must be:
-    - `### Project State`
-    - `### Actions Performed`
-    - `### Current Health`
-    - `### Blocking Issue`
-    - `### Next Step`
-    - `### Structured Output`
-  - each heading above must be rendered literally, including the leading `###`
-  - headings such as `Project State` without `###`, translated heading labels, or `Structured Output` without the exact heading marker are contract failures
-  - the fenced `yaml` block must appear immediately under `### Structured Output`
-  - omitting the final structured block, changing its object name, or placing later prose after it is a contract failure
-
-  Proposed schema:
-
-  ```yaml
-  AppAssistantResult:
-    project:
-      identity:
-        team_name: string
-        region_name: string
-        app_name: string
-        app_id: string | null
-      linked: boolean
-      selected_environment: preview | production
-      deployment_location_url: string | null
-    environment:
-      name: preview | production
-      source: explicit | local_preference | default
-      env_delta_present: boolean
-      secrets_provided: boolean
-    request_intent: source_app_delivery | dev_to_test_promotion
-    execution_path:
-      requested_kind: source | image | package | template | unknown
-      resolved_kind: source | image | package | template | unknown
-    orchestration_state: string
-    runtime_state:
-      phase: topology_missing | topology_building | runtime_unhealthy | runtime_healthy | capacity_blocked | code_or_build_handoff_needed | source_build_failed | null
-      db_status: building | waiting | running | abnormal | capacity-blocked | null
-      api_status: building | waiting | running | abnormal | capacity-blocked | null
-      frontend_status: building | waiting | running | abnormal | capacity-blocked | null
-      blocker: string | null
-    delivery_state:
-      status: delivered | delivered-but-needs-manual-validation | partially-delivered | blocked
-      preferred_access_url: string | null
-      verification_mode: verified | inferred | manual_validation_needed | null
-      blocker: string | null
-      verifier_next_action: stop | manual_url_validation | run_troubleshooter | fix_cluster_capacity_first | code_build_handoff | null
-    promotion_result:
-      status: blocked | snapshot_created | testing_app_created | testing_app_verified
-      snapshot:
-        version_id: string | null
-        version: string | null
-        alias: string | null
-      testing_app:
-        team_name: string | null
-        region_name: string | null
-        app_name: string | null
-        app_id: string | null
-      testing_delivery_state:
-        status: delivered | delivered-but-needs-manual-validation | partially-delivered | blocked
-        preferred_access_url: string | null
-        verification_mode: verified | inferred | manual_validation_needed | null
-        blocker: string | null
-        verifier_next_action: stop | manual_url_validation | run_troubleshooter | fix_cluster_capacity_first | code_build_handoff | null
-    actions_performed:
-      - skill: string
-        status: string
-        details: string
-    next_action: string
-  ```
-
-  Construction rules:
-
-  - `project.identity`
-    - comes from the resolved current-run identity after applying explicit input, local binding, and manifest context
-  - `project.linked`
-    - must reflect whether current-run context confirms a linked project state
-    - do not force `false` only because local metadata is stale when MCP confirms the same bound app in the current run
-  - `project.selected_environment`
-    - must match the resolved environment for the current run
-  - `project.deployment_location_url`
-    - must always be present and may be `null` when trusted Console base or resolved identity is unavailable
-    - when non-null, must be built from trusted Console base plus the URL-encoded team, region, and app ID overview route from Iron Law 41
-    - must never be copied from or inferred from `delivery_state.preferred_access_url`
-  - `environment`
-    - must describe the selected environment and whether env/secrets layers are present enough to matter to orchestration
-  - `request_intent`
-    - must normalize whether the run is only for the source app or explicitly asks for the dev-to-test promotion flow
-  - `execution_path`
-    - must preserve the requested and resolved delivery path
-    - if the run is source-backed, `resolved_kind` must stay `source` unless the user explicitly changed delivery mode
-  - `orchestration_state`
-    - remains the workflow label used by the assistant
-  - `runtime_state.phase`
-    - must use canonical runtime labels
-    - use `source_build_failed` when a source-backed build or source detection has failed and the run is handing off to the troubleshooter on the same source path; this is the canonical phase for the source-build-first routing of Iron Law 6 (source-backed failure routes to troubleshooter, never to package/image/template fallback)
-    - in `source_build_failed`, `delivery_state` must stay `null` and `next_action` must point to a troubleshooter recommendation (the `run troubleshooter on the same source path` vocabulary entry)
-  - `runtime_state.db_status`, `api_status`, `frontend_status`
-    - must be based on current runtime evidence when available
-    - must use the canonical vocabulary `building`, `waiting`, `running`, `abnormal`, or `capacity-blocked`
-    - map statuses by actual role presence rather than filling every lane mechanically
-    - for frontend-only or docs-style projects, keep `api_status = null` unless a real service/API component exists
-    - for service-only projects with no user-facing frontend component, keep `frontend_status = null` unless a real frontend/access component exists
-    - do not emit raw platform labels such as `closed` as component status; translate them to the closest canonical status from the same evidence
-    - if raw status is `closed`, `closed` is never allowed in the canonical field
-    - raw `closed` or `undeploy` plus active unschedulable CPU/memory evidence maps to `capacity-blocked`
-    - raw `closed` plus crash, probe, dependency, image-pull, or other runtime failure evidence maps to `abnormal`
-    - raw app-level labels must not override stronger current component-level evidence
-  - `runtime_state.blocker`
-    - must capture the dominant unresolved blocker when one exists
-    - prefer the blocker supported by current-run MCP/runtime truth over stale historical events when they disagree
-  - `delivery_state`
-    - may be `null` if delivery verifier has not run yet
-    - must remain `null` when this run stopped before entering `rainbond-delivery-verifier`
-    - must always describe the source app only, even when testing-app promotion later succeeds
-    - should relay the lower-level delivery-verifier result instead of inventing a separate top-level delivery taxonomy
-  - `promotion_result`
-    - must remain `null` unless the user explicitly asked for development-to-testing promotion
-    - must describe snapshot and testing-app outcomes without replacing the source-app meaning of the top-level `project`
-    - must only be populated automatically after strict `delivery_state.status = delivered`
-    - should advance monotonically through `snapshot_created` -> `testing_app_created` -> `testing_app_verified`, or stop at `blocked`
-  - `actions_performed`
-    - should list the lower-level skills actually invoked or explicitly skipped when relevant to the next step
-    - if no lower-level skill was run, still record the inspection/classification pass and any intentionally skipped downstream skills that matter to the recommendation
-  - `next_action`
-    - must be the normalized form of the prose next-step recommendation
-    - **must be selected from the canonical `next_action` vocabulary below.** Fixed phrases are used verbatim; template phrases keep the literal words and only fill the `<...>` slots. Do not invent free-form wording — the vocabulary exists to keep the orchestration contract phrase-stable across runs.
-
-  #### Canonical `next_action` vocabulary
-
-  Fixed phrases — emit exactly as written, no slots, no rewording:
-
-  | Phrase | When |
-  |--------|------|
-  | `stop` | terminal state with nothing further to recommend (already delivered, or a clean stop) |
-  | `run bootstrap` | topology is missing and the source app must be created/bootstrapped next |
-  | `run troubleshooter` | topology is building/unhealthy and the next bounded step is the troubleshooter |
-  | `run troubleshooter on the same source path` | a source-backed build/detection failed; route to the troubleshooter on the same source path, never to a package/image/template fallback (pairs with `runtime_state.phase = source_build_failed`) |
-  | `run delivery verifier` | runtime looks healthy and the next step is delivery verification |
-  | `fix cluster capacity first` | the dominant blocker is cluster capacity and it must be resolved before anything else |
-  | `handoff to code/build agent` | the run reached `code_or_build_handoff_needed`; hand off to the code/build agent |
-  | `stop and validate URL manually` | delivery ended `delivered-but-needs-manual-validation`; user must validate the URL manually |
-  | `stop and ask the user to choose the team/app identity` | identity is ambiguous; stop and ask the user to pick the team/app |
-  | `stop and ask the user to provide a descriptor or template` | a complex multi-service suite needs a descriptor/template before continuing |
-  | `build the linked source app on the user-provided GitHub URL` | an explicit Git URL locks the source path; build the linked source app on that URL |
-  | `configure ports and envs on the known service_alias from the create return` | the service alias is already known from the create return; configure ports/envs on it next |
-
-  Template phrases — keep the literal words, fill only the `<...>` slot(s):
-
-  | Template | Slot(s) | When |
-  |----------|---------|------|
-  | `stop after reporting testing app verification for <app>` | `<app>` = testing app name | dev-to-test promotion finished; stop after reporting the testing app verification |
-  | `delete the abandoned half-installed template app <app> before building the source path` | `<app>` = abandoned app name (omit the slot, leaving `... template app before ...`, if no concrete name applies) | a strategy switch left a half-installed template app that must be cleaned up before building the source path |
-
-  > **修改需同步**：这张词表是 `next_action` 的唯一权威来源。`scripts/validate_app_assistant_output.py` 里的 `CANONICAL_NEXT_ACTIONS` / `CANONICAL_NEXT_ACTION_TEMPLATES` 必须与本表保持一致；改一处必须改另一处。
-
-  Consistency rules:
-
-  - `orchestration_state` and `runtime_state.phase` may differ in wording but must not conflict semantically
-  - if current-run MCP evidence confirms the app exists and the dominant blocker is runtime/platform capacity, do not downgrade the project to unlinked solely because local metadata still says `pending_verification`
-  - do not classify the project as `capacity_blocked` based only on old `Unschedulable` events when current node capacity and current app/component state indicate another blocker is now dominant
-  - if app-level runtime labels say `closed` but current component evidence shows active capacity scheduling failure, canonical component status must still be `capacity-blocked`
-  - only use `abnormal` for raw `closed` when no stronger canonical state can be supported from current evidence
-  - if the app is still `part_running` due to a critical capacity blocker, `next_action` must not point to delivery verification
-  - if `runtime_state.phase = source_build_failed`, `delivery_state` must be `null` and `next_action` must point to a troubleshooter recommendation; never fall back to package/image/template
-  - if delivery verifier has not run, do not invent a non-null delivery outcome
-  - if the run stopped during `project-init`, `bootstrap`, or `troubleshooter`, `delivery_state` must be `null`
-  - if the source app is runtime-healthy enough that the remaining issue is outer access or final URL selection, prefer `linked-and-needs-delivery-verification` over `linked-and-topology-present-but-runtime-unhealthy`
-  - for reverse-proxy full-stack apps, do not treat a frontend root URL alone as a trustworthy final outcome if the same-host backend path is still unverified or failing
-  - if a component was resolved as source-backed earlier in the same run, do not silently rewrite the reasoning as image-backed after a source-create or source-build failure
-  - if a source ref was resolved earlier in the same run, do not silently rewrite it to another branch
-  - do not treat missing optional source-create passthrough fields such as `check_uuid` or `event_id` as a blocker unless the backend explicitly requires them
-  - if source detection reports multiple services/components, do not automatically pivot into local package, local build, manual upload, or template-install workaround flows without explicit user confirmation
-  - if a GitHub source URL is still raw `https://github.com/...`, the assistant may ask once whether to use `https://ghfast.top/https://github.com/...` or `https://gh.rainbond.cc/https://github.com/...`, but must not silently rewrite the Git URL without either explicit user input or a repo-local proxy URL already present
-  - transport hints for registry or Git mirrors must not be treated as a delivery-mode override unless the user explicitly asked to switch to image deployment
-  - external artifact download failures, image layer pull timeouts, Docker Hub timeouts, and GitHub Release asset download failures should be reported as `external artifact unreachable` when that is the dominant evidence
-  - if bootstrap reports `mcp backend issue`, do not classify the result as `linked-and-needs-code-handoff`; stop with the source app still incomplete and report the backend capability failure explicitly
-  - if `delivery_state.status = delivered-but-needs-manual-validation`, `promotion_result` must stay `null` and `next_action` must not auto-enter version flow
-  - if runtime logs show hard-coded dependency coordinates such as `db`, but current dependency wiring provides provider connection envs or alias-based connection envs, prefer provider connection contract repair, then compatibility-env troubleshooting, over accepting the hard-coded value as authoritative
-  - if `promotion_result` is non-null, `delivery_state.status` must already be `delivered`
-  - if `promotion_result.testing_delivery_state` is non-null, `promotion_result.testing_app.app_id` must also be non-null
-  - for frontend-only or docs-style projects, do not mirror the same frontend component status into `api_status`
-  - do not upgrade top-level `delivery_state` from `delivered-but-needs-manual-validation` to `delivered` only because the testing app later verified successfully
-  - if testing-app verification ends in `blocked` or `partially-delivered`, `next_action` should point to troubleshooting the testing app rather than re-running the whole mainline
-  - no secret values may appear in the structured object
-
-  Example object:
-
-  ```yaml
-  AppAssistantResult:
-    project:
-      identity:
-        team_name: rainbond-demo
-        region_name: singapore
-        app_name: storefront
-        app_id: app-4fd2
-      linked: true
-      selected_environment: preview
-      deployment_location_url: https://run.rainbond.com/#/team/rainbond-demo/region/singapore/apps/app-4fd2/overview
-    environment:
-      name: preview
-      source: local_preference
-      env_delta_present: true
-      secrets_provided: true
-    request_intent: source_app_delivery
-    execution_path:
-      requested_kind: source
-      resolved_kind: source
-    orchestration_state: linked-and-topology-present-but-runtime-unhealthy
-    runtime_state:
-      phase: runtime_unhealthy
-      db_status: running
-      api_status: running
-      frontend_status: abnormal
-      blocker: frontend waiting on nginx host config
-    delivery_state:
-      status: blocked
-      preferred_access_url: null
-      verification_mode: null
-      blocker: frontend access path still blocked
-      verifier_next_action: run_troubleshooter
-    promotion_result: null
-    actions_performed:
-      - skill: rainbond-fullstack-troubleshooter
-        status: completed
-        details: Detected frontend health check failing and suggested capacity warning.
-      - skill: rainbond-delivery-verifier
-        status: skipped
-        details: Deferred until runtime is healthy.
-    next_action: run troubleshooter
-  ```
-
-  Example final reply:
-
-  ````markdown
-  ### Project State
-  The project is `linked-and-topology-present-but-runtime-unhealthy` for the `preview` environment with team `alpha-org`, region `us-south`, app `storefront`, and app_id `app-9a2b`.
-
-  ### Actions Performed
-  `rainbond-fullstack-troubleshooter` completed and identified converged API/DB components while the frontend stayed abnormal, prompting a focus on nginx host configuration; `rainbond-delivery-verifier` was skipped because runtime health remains outstanding.
-
-  ### Current Health
-  db status running, api/service status running, frontend-access status abnormal, overall status runtime_unhealthy.
-
-  ### Blocking Issue
-  frontend waiting on corrected nginx host config.
-
-  ### Next Step
-  run troubleshooter.
-
-  ### Structured Output
-  ```yaml
-  AppAssistantResult:
-    project:
-      identity:
-        team_name: alpha-org
-        region_name: us-south
-        app_name: storefront
-        app_id: app-9a2b
-      linked: true
-      selected_environment: preview
-      deployment_location_url: https://run.rainbond.com/#/team/alpha-org/region/us-south/apps/app-9a2b/overview
-    environment:
-      name: preview
-      source: default
-      env_delta_present: false
-      secrets_provided: true
-    orchestration_state: linked-and-topology-present-but-runtime-unhealthy
-    runtime_state:
-      phase: runtime_unhealthy
-      db_status: running
-      api_status: running
-      frontend_status: abnormal
-      blocker: nginx host configuration missing
-    delivery_state:
-      status: blocked
-      preferred_access_url: null
-    promotion_result: null
-    actions_performed:
-      - skill: rainbond-fullstack-troubleshooter
-        status: completed
-        details: Diagnosed frontend health check failure while db/api remained healthy.
-      - skill: rainbond-delivery-verifier
-        status: skipped
-        details: Deferred until runtime is healthy.
-    next_action: run troubleshooter
-  ```
-  ````
-
-  In structured contract mode, always respond using exactly these sections:
-
-  ### Project State
-  - state the current classification
-  - explicitly include the exact `orchestration_state` label in prose, preferably in backticks
-  - include selected environment
-  - include resolved team, region, app, and app_id if available
-
-  ### Actions Performed
-  - list the lower-level skill(s) used
-  - summarize what each one did
-  - if no lower-level skill was executed, say that this run only performed context resolution and state classification
-  - if a downstream skill was intentionally not entered because the user asked not to continue yet, say that explicitly
-  - if development-to-testing promotion was entered, explicitly name the source delivery gate, snapshot creation, testing-app creation, and testing-app verification stages
-  - if source creation failed, say so explicitly instead of describing the resulting component as if it had always been image-backed
-  - if source creation failed because of a control-plane exception, say that this is a backend/MCP issue rather than code/build failure
-  - if the source ref or branch was invalid, say that explicitly instead of auto-rewriting it
-
-  ### Current Health
-  Explicitly report:
-  - **db status** using `building`, `waiting`, `running`, `abnormal`, or `capacity-blocked` when runtime evidence is available
-  - **api/service status** using `building`, `waiting`, `running`, `abnormal`, or `capacity-blocked` when runtime evidence is available
-  - **frontend-access status**
-  - **overall status** using the canonical runtime or delivery term when one is available
-  - explicitly include the exact `runtime_state.phase` label in prose, preferably in backticks
-  - if MCP/runtime reports a raw label such as `closed`, explain it in prose if useful, but normalize the status field itself to the canonical vocabulary
-
-  ### Blocking Issue
-  - state the main blocker if the app is not fully healthy
-  - when `runtime_state.blocker` or `delivery_state.blocker` is non-null, reuse that blocker sentence verbatim in plain text so prose and structured output stay aligned
-  - do not wrap part of the blocker sentence in backticks or paraphrase only part of it
-  - if none, say `none`
-  - if the source app is healthy but the testing app blocked during promotion, state the testing-app blocker here
-  - if the source app only lacks an external access URL, describe that as a delivery/access-path blocker rather than generic runtime failure
-
-  ### Next Step
-  - state the single most appropriate next action
-  - examples:
-    - `run env sync`
-    - `run bootstrap`
-    - `run troubleshooter`
-    - `manual URL validation before promotion`
-    - `create snapshot and testing app`
-    - `run troubleshooter on testing app`
-    - `stop, hand off testing app to human testers`
-    - `handoff to code/build agent`
-    - `stop, app is healthy`
-
-  ### Structured Output
-  - append a fenced `yaml` block as the final section
-  - render `AppAssistantResult`
-  - keep enum values and field names aligned with the schema above
-  - if `runtime_state` or `delivery_state` is unavailable, use `null` rather than guessing
-  - if post-delivery promotion was not entered, use `promotion_result: null`
-  - do not place any prose after this section
-  - the heading itself must be exactly `### Structured Output`
-  - the opening fence must be exactly ````yaml` immediately after the heading
-  - the closing fence must be the last non-whitespace line of the whole reply
-
-  ## Common Mistakes
-
-  - running bootstrap when the topology already exists
-  - running bootstrap for a template-install intent
-  - running troubleshooter before confirming the project is linked
-  - assuming env sync is mandatory for every run
-  - treating env files as runtime truth
-  - exposing a large YAML block for an eligible successful source delivery, including browser-confirmation-only delivery, when the user did not ask for structured/debug output
-  - reporting team/region/app identity as a substitute for the clickable Rainbond deployment location
-  - using the public service URL as the Rainbond deployment location, or constructing the public service URL from naming conventions
-  - stripping useful diagnostic evidence from building, blocked, unhealthy, ambiguous, handoff, or incomplete promotion states
-  - omitting the required `### Structured Output` section in structured contract mode
-  - replacing the required five human-readable sections with freeform narrative in structured contract mode
-  - treating a project as unlinked only because `.rainbond/local.json.metadata.status` is stale even though MCP confirms the same app in the current run
-  - omitting `Actions Performed` detail when the run only did inspection/classification and intentionally skipped downstream skills
-  - echoing raw platform labels such as `closed` instead of normalizing component status to the canonical vocabulary
-  - stopping after bootstrap even when bootstrap explicitly recommends troubleshooting
-  - skipping template version resolution before installation
-  - treating source build convergence as a finished healthy topology
-  - continuing application repair when scheduling is blocked by cluster capacity
-  - stopping at “running” without verifying delivery state or reporting access URL
-  - declaring the app healthy when only db/api are healthy but frontend access is still broken
-  - continuing platform-level repairs when the issue is clearly in code or reverse proxy configuration
-  - auto-entering version flow when delivery is only `delivered-but-needs-manual-validation`
-  - replacing the source-app meaning of `project` with the created testing app instead of recording testing identity under `promotion_result`
-  - recursively treating the created testing app as a brand-new source app in the same run
-  - silently degrading a source-backed component into an image-backed component after a source creation error
-  - silently rewriting the source branch or ref after a source creation error
-  - inventing `delivery_state.partially-delivered` before `rainbond-delivery-verifier` has actually run
-  - routing a control-plane or MCP backend failure into `code_build_handoff`
-  - copying a frontend-only component state into `api_status`
-  - stopping the top-level app-assistant run at successful init even though the user asked for deploy or dev-to-test continuation
-  - silently selecting one team when multiple accessible teams existed and the user had not chosen one
-  - searching outside the current project directory for `rainbond.app.json` or `.rainbond/local.json`
-  - continuing into local code edits, local tests, commit, push, or automatic retry after reaching `code_build_handoff_needed`
-  - automatically switching from source-backed bootstrap to local package because source detection found multiple services
-  - starting local Docker/OrbStack, building locally, or pushing temporary images after a source/package/image path fails without explicit user confirmation
-  - spending 20-30 minutes repeatedly trying the same path instead of stopping at the attempt budget
-  - routing a clear source build failure straight to runtime logs without checking component events and build logs first
-  - using `build_info` as the default container for source build parameters
-  - promising `dockerfile_path` or defaulting to Dockerfile mode without explicit user intent
-
-  ## Quick Reference
-
-  Decision summary:
-  - no link -> link first
-  - no link -> `rainbond-project-init`
-  - template install intent -> `rainbond-template-installer`
-  - no topology -> bootstrap
-  - source build still converging -> troubleshooter
-  - explicit build failure question -> troubleshooter with `events -> build logs -> runtime logs`
-  - external artifact unreachable -> stop and request reachable mirror/egress or explicit strategy change
-  - cluster capacity blocked -> stop and fix platform capacity first
-  - topology exists but unhealthy -> troubleshoot
-  - runtime appears converged -> delivery verifier
-  - strict delivered plus explicit dev-to-test intent -> create snapshot and testing app
-  - delivered-but-needs-manual-validation -> stop for manual URL validation before promotion; use concise success output for source-only delivery when all concise-mode conditions are met
-  - runtime fixed but browser path broken -> code/build handoff
-  - healthy -> stop
-
-  Trust model:
-  - local files provide context
-  - MCP provides runtime truth
-
-  Default orchestration:
-  1. resolve context
-  2. determine whether the run is source-only or dev-to-test mainline
-  3. classify state
-  4. choose lower-level skill
-  5. continue until the current strict gate says stop
-  6. if strict delivered and promotion was requested, snapshot and create testing app
-  7. verify the testing app once
-  8. report one next step
+  - [references/workflow-rules.md](references/workflow-rules.md) — input model, decision rules, detailed workflow, and autonomy boundaries.
+  - [references/output-contract.md](references/output-contract.md) — **Concise delivery report mode** and structured AppAssistantResult rendering.
+  - [references/operational-reference.md](references/operational-reference.md) — common mistakes and quick-reference routing.
+  - [references/product-object-model.md](references/product-object-model.md) — canonical cross-skill state and field definitions; load only when resolving a contract ambiguity.

@@ -5,18 +5,9 @@ description: Use only when the next step is already known to be final delivery v
 
 # Rainbond Delivery Verifier
 
-## MCP 认证失败恢复（JWT 过期 / 401 / 403）
+## Rainbond 传输
 
-当任何 `rainbond_*` MCP 工具返回 401 / 403 / `unauthorized` / `token expired` 类认证错误时，
-禁止重装 skills，也禁止手工改 `~/.rainbond/mcp.env`。先用下面任一命令刷新 JWT：
-
-```bash
-bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh) refresh
-# 或：bash ~/.rainbond/skills/install.sh refresh
-```
-
-刷新成功后按安装器输出执行客户端恢复动作：Codex / Claude Code 重启，Pi Agent 执行
-`/reload`；OpenClaw 当前 CLI 使用安装器触发 MCP 热加载，独立 Gateway / Agent 进程需重新加载配置或重启。在恢复完成前不要自动重试同一个 MCP 工具调用。
+如果上游已初始化本次工作流的 RainSkills CLI，直接复用，不重新探测。否则在第一次 Rainbond 调用前读取 [../rainbond-app-assistant/references/transport-resolution.md](../rainbond-app-assistant/references/transport-resolution.md) 并初始化一次。CLI 锁定后，认证、网络、超时和业务错误均不得触发替代调用通道。
 
 ## Overview
 
@@ -33,7 +24,7 @@ The goal is to:
 
 ## Canonical Model Reference
 
-Use `docs/product-object-model.md` as the repository-level source of truth for:
+Use [product object model](../rainbond-app-assistant/references/product-object-model.md) as the repository-level source of truth for:
 
 - `RuntimeState` versus `DeliveryState`
 - shared component convergence labels and blocker buckets
@@ -152,6 +143,10 @@ exists.
 ## Workflow
 
 Follow this order.
+
+### Fixed Tool fast path
+
+Call `rainbond_get_app_detail`, then `rainbond_get_app_health_overview` before per-component inspection. Use `rainbond_query_components` and component/storage summaries only for abnormal or unknown components. Do not run `list` or `describe` to discover these known Tool names.
 
 1. Resolve app context
 - determine `team_name`, `region_name`, `app_name`, and `app_id`
@@ -289,7 +284,7 @@ The overall delivery outcome is `delivered-but-needs-manual-validation` for app 
 Preferred user-facing URL: `https://example-team-cn.rainbond.me/my-app`
 
 ### Verification Result
-Verified MCP runtime convergence and resolved the best access URL. User-facing access was inferred rather than directly checked from the current environment, so manual validation is still needed.
+Verified platform runtime convergence through the locked Rainbond transport and resolved the best access URL. User-facing access was inferred rather than directly checked from the current environment, so manual validation is still needed.
 
 ### Next Step
 manual URL validation
@@ -366,6 +361,6 @@ Delivery checks:
 5. final delivery report
 
 Final truth rules:
-- MCP gives runtime truth
+- the locked Rainbond transport gives runtime truth
 - access URL must be explicitly reported
 - if external validation is not possible, use the final outcome `delivered-but-needs-manual-validation`

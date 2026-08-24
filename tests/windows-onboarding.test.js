@@ -41,6 +41,13 @@ function writeSkill(root, name, body = "initial\n") {
   return directory;
 }
 
+function writeBridge(root, body = "#!/usr/bin/env node\n") {
+  const bridge = path.join(root, "bin", "rainskills-tools.js");
+  fs.mkdirSync(path.dirname(bridge), { recursive: true });
+  fs.writeFileSync(bridge, body);
+  return bridge;
+}
+
 function authorizationParams(url) {
   const parsed = new URL(url);
   const queryIndex = parsed.hash.indexOf("?");
@@ -166,8 +173,87 @@ test("Windows argument parsing rejects unknown input before installation", () =>
     path.join(home, ".claude", "skills"),
     path.join(home, ".codex", "skills"),
   ]);
+  assert.equal(parseWindowsInstallerArgs(["pi"]).target, "pi");
+  assert.deepEqual(destinationsForTarget("pi", home), [
+    path.join(home, ".pi", "agent", "skills"),
+  ]);
   assert.throws(() => parseWindowsInstallerArgs(["--unknown"]), /未知参数/);
   assert.throws(() => parseWindowsInstallerArgs(["--dest"]), /--dest/);
+  assert.equal(parseWindowsInstallerArgs(["codex", "--api-only"]).apiOnly, true);
+  assert.equal(parseWindowsInstallerArgs(["codex", "--api-only", "--skip-mcp"]).apiOnly, true);
+});
+
+test("Windows bridge installation is atomic, protected, updatable, and reparse-safe", () => {
+  const { installBridge } = require(windowsOnboardingPath);
+  const home = temporaryHome();
+  const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-package-bridge-"));
+  const source = writeBridge(packageRoot, "v1\n");
+  writeSkill(packageRoot, "rainbond-test");
+  fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({
+    name: "rainskills",
+    version: "0.1.0-test",
+  }));
+  const stateStore = createPortableSecureStateStore(home);
+
+  const destination = installBridge({ home, packageRoot, stateStore });
+  assert.equal(fs.readFileSync(destination, "utf8"), "v1\n");
+  assert.equal(fs.lstatSync(destination).mode & 0o777, 0o600);
+  const manifestPath = path.join(home, ".rainbond", "bin", "rainskills-skill-manifest.json");
+  assert.equal(fs.lstatSync(manifestPath).mode & 0o777, 0o600);
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  assert.equal(manifest.schema, "rainskills.skill-manifest.v1");
+  assert.deepEqual(manifest.skills.map((entry) => entry.id), ["rainbond-test"]);
+  fs.writeFileSync(source, "v2\n");
+  assert.equal(installBridge({ home, packageRoot, stateStore }), destination);
+  assert.equal(fs.readFileSync(destination, "utf8"), "v2\n");
+  assert.equal(
+    fs.readdirSync(path.dirname(destination)).some((name) => name.startsWith(".rainskills-tools.js.")),
+    false
+  );
+
+  fs.writeFileSync(source, "v3\n");
+  const failingStore = {
+    ...stateStore,
+    protectRegularFile(target) {
+      if (target === destination) throw new Error("simulated ACL failure");
+      return stateStore.protectRegularFile(target);
+    },
+  };
+  assert.throws(
+    () => installBridge({ home, packageRoot, stateStore: failingStore }),
+    /simulated ACL failure/
+  );
+  assert.equal(fs.readFileSync(destination, "utf8"), "v2\n");
+  assert.equal(
+    fs.readdirSync(path.dirname(destination)).some((name) => name.startsWith(".rainskills-tools.js.")),
+    false
+  );
+
+  fs.rmSync(path.dirname(destination), { recursive: true });
+  fs.symlinkSync(path.join(home, ".codex"), path.dirname(destination), "dir");
+  assert.throws(
+    () => installBridge({ home, packageRoot, stateStore }),
+    /symbolic|符号链接|reparse/i
+  );
+});
+
+test("Codex installation writes a protected rule for CLI-enforced reads only", () => {
+  const { installCodexReadRule } = require(windowsOnboardingPath);
+  const home = temporaryHome();
+  const stateStore = createPortableSecureStateStore(home);
+  const bridge = path.join(home, ".rainbond", "bin", "rainskills-tools.js");
+  fs.mkdirSync(path.dirname(bridge), { recursive: true });
+  fs.writeFileSync(bridge, "#!/usr/bin/env node\n");
+
+  const destination = installCodexReadRule({ home, bridge, stateStore });
+  const rule = fs.readFileSync(destination, "utf8");
+  assert.equal(destination, path.join(home, ".codex", "rules", "rainskills.rules"));
+  assert.equal(fs.lstatSync(destination).mode & 0o777, 0o600);
+  assert.match(rule, /prefix_rule\(/);
+  assert.match(rule, /decision = "allow"/);
+  assert.match(rule, /\["status", "list", "describe", "read"\]/);
+  assert.match(rule, new RegExp(JSON.stringify(bridge).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.doesNotMatch(rule, /"call"|network_access/);
 });
 
 test("Windows skill copying installs, skips, updates, and force-overwrites atomically", () => {
@@ -232,10 +318,12 @@ test("native Windows checkpoint is protected and accepted by platform resume", (
     operationId,
     now: () => "2026-08-03T00:00:00.000Z",
     stateStore,
+    transportMode: "api",
   });
 
   assert.equal(checkpoint.state.control_mode, "windows-native");
   assert.equal(checkpoint.state.control_distro, null);
+  assert.equal(checkpoint.state.transport_mode, "api");
   assert.equal(checkpoint.state.platform_state_path, path.join(
     home,
     ".rainbond",
@@ -262,6 +350,7 @@ test("native main saves private onboarding and shows the fixed continuation comm
   const destination = path.join(home, ".codex", "skills");
   const output = [];
   writeSkill(packageRoot, "rainbond-test");
+  writeBridge(packageRoot);
   fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ version: "0.1.0-test" }));
   const baseStateStore = createPortableSecureStateStore(home);
   let lockAcquisitions = 0;
@@ -291,6 +380,9 @@ test("native main saves private onboarding and shows the fixed continuation comm
   assert.equal(lockAcquisitions, 1);
   assert.equal(result.counts.installed, 1);
   assert.equal(fs.existsSync(path.join(destination, "rainbond-test", "SKILL.md")), true);
+  assert.equal(fs.existsSync(path.join(home, ".rainbond", "bin", "rainskills-tools.js")), true);
+  assert.equal(fs.existsSync(path.join(home, ".codex", "rules", "rainskills.rules")), true);
+  assert(output.some((line) => line.includes("Codex 只读网络规则")));
   const continuationCommand = `npx rainskills@0.1.0-test platform install --onboarding-id ${result.nextAction.onboarding_id}`;
   assert(output.includes("Rainbond 平台安装将在独立步骤中继续，前面的选择已经保存。"));
   assert(output.includes("支持 Windows 本地安装，也可以安装到 Linux 服务器。"));
@@ -310,6 +402,24 @@ test("native main saves private onboarding and shows the fixed continuation comm
     )),
     false
   );
+});
+
+test("deprecated API-only checkpoint is normalized to the CLI transport", async () => {
+  const { main } = require(windowsOnboardingPath);
+  const home = temporaryHome();
+  const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-api-checkpoint-"));
+  writeSkill(packageRoot, "rainbond-test");
+  writeBridge(packageRoot);
+  fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ version: "0.1.0-test" }));
+  const result = await main(["codex", "--api-only", "--self-hosted"], {
+    control: { mode: "windows-native", hostPlatform: "win32", controlPlatform: "win32" },
+    home,
+    packageRoot,
+    stateStore: createPortableSecureStateStore(home),
+    logger() {},
+  });
+  assert.equal(result.status, "awaiting-platform");
+  assert.equal(result.checkpoint.state.transport_mode, "cli");
 });
 
 test("Windows authorization accepts GET and POST loopback callbacks with exact state", async (t) => {
@@ -577,140 +687,125 @@ test("Windows browser opener uses a fixed PowerShell file and treats URL as data
   assert.doesNotMatch(helperSource, /Start-Process -FilePath \$uri\.AbsoluteUri/);
 });
 
-test("Windows MCP validation and client configuration keep JWT out of argv", async () => {
-  const {
-    configureSelectedClients,
-    persistWindowsEnvironment,
-    validateMcp,
-  } = require(path.join(
-    repoRoot,
-    "rainbond-platform-installer",
-    "scripts",
-    "windows-client-config.js"
-  ));
-  const token = "header.payload.signature";
-  let request = null;
-  const validation = await validateMcp({
-    url: "https://rainbond.example.com/console/mcp/rainskills/codex/query",
-    token,
+test("native CLI authorization validates the dedicated endpoint and writes protected credentials", async () => {
+  const { authorizeAndConfigure, validateApi } = require(windowsOnboardingPath);
+  let request;
+  const validated = await validateApi({
+    url: "https://rainbond.example.com/console/mcp/rainskills/api/query",
+    token: "header.payload.signature",
     async fetchImpl(url, options) {
       request = { url, options };
       return new Response(JSON.stringify({
         jsonrpc: "2.0",
         id: 1,
+        result: { tools: [] },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+  assert.deepEqual(validated, { token: "header.payload.signature" });
+  assert.equal(request.url, "https://rainbond.example.com/console/mcp/rainskills/api/query");
+  assert.equal(request.options.headers.Authorization, "GRJWT header.payload.signature");
+  assert.equal(request.options.headers["mcp-protocol-version"], "2025-03-26");
+  assert.deepEqual(JSON.parse(request.options.body), {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "tools/list",
+    params: {},
+  });
+  await assert.rejects(
+    validateApi({
+      url: request.url,
+      token: "header.payload.signature",
+      fetchImpl: async () => new Response(JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
         result: { serverInfo: { name: "rainbond-console-mcp" } },
-      }), {
-        status: 200,
-        headers: { "x-renewed-token": "renewed.payload.signature" },
-      });
+      }), { status: 200 }),
+    }),
+    /无法识别/
+  );
+  let timeoutSignal;
+  await assert.rejects(
+    validateApi({
+      url: request.url,
+      token: "header.payload.signature",
+      timeoutMs: 10,
+      fetchImpl: async (_url, options) => {
+        timeoutSignal = options.signal;
+        return new Promise(() => {});
+      },
+    }),
+    /超时/
+  );
+  assert.equal(timeoutSignal.aborted, true);
+
+  let slowReaderCancelled = false;
+  await assert.rejects(
+    validateApi({
+      url: request.url,
+      token: "header.payload.signature",
+      timeoutMs: 10,
+      fetchImpl: async () => ({
+        ok: true,
+        body: {
+          getReader() {
+            return {
+              read() { return new Promise(() => {}); },
+              async cancel() { slowReaderCancelled = true; },
+            };
+          },
+        },
+      }),
+    }),
+    /超时/
+  );
+  assert.equal(slowReaderCancelled, true);
+
+  const oversizedChunk = new Uint8Array(6 * 1024 * 1024);
+  await assert.rejects(
+    validateApi({
+      url: request.url,
+      token: "header.payload.signature",
+      maxResponseBytes: 10 * 1024 * 1024,
+      fetchImpl: async () => new Response(new Blob([oversizedChunk, oversizedChunk])),
+    }),
+    /过大/
+  );
+
+  let successSignal;
+  await validateApi({
+    url: request.url,
+    token: "header.payload.signature",
+    timeoutMs: 10,
+    async fetchImpl(_url, options) {
+      successSignal = options.signal;
+      return new Response(JSON.stringify({ result: { tools: [] } }));
     },
   });
-  assert.equal(request.options.headers.Authorization, `GRJWT ${token}`);
-  assert.equal(JSON.parse(request.options.body).method, "initialize");
-  assert.equal(validation.token, "renewed.payload.signature");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(successSignal.aborted, false, "success must clear its wall-clock timer");
 
   const calls = [];
-  function spawnImpl(command, args, options) {
-    calls.push({ command, args, options });
-    return { status: 0, stdout: "", stderr: "" };
-  }
-  persistWindowsEnvironment({
-    token,
-    baseUrl: "https://rainbond.example.com",
-    spawnImpl,
-    helperPath: "C:\\Program Files\\Rainskills\\windows-client-config.ps1",
-  });
-  configureSelectedClients({
-    target: "all",
-    baseUrl: "https://rainbond.example.com",
-    token,
-    spawnImpl,
-  });
-
-  assert.equal(calls.some((call) => call.args.some((argument) => argument.includes(token))), false);
-  assert.ok(calls.some((call) => call.command === "codex" && call.args.includes(
-    "https://rainbond.example.com/console/mcp/rainskills/codex/query"
-  )));
-  assert.ok(calls.some((call) => call.command === "claude" && call.args.includes(
-    "https://rainbond.example.com/console/mcp/rainskills/claude-code/query"
-  )));
-  assert.deepEqual(
-    calls.filter((call) => call.command === "codex").map((call) => call.args.slice(0, 3)),
-    [["mcp", "remove", "rainbond"], ["mcp", "add", "rainbond"]]
-  );
-  assert.deepEqual(
-    calls.filter((call) => call.command === "claude").map((call) => call.args.slice(0, 5)),
-    [
-      ["mcp", "remove", "--scope", "user", "rainbond"],
-      ["mcp", "add", "--scope", "user", "--transport"],
-    ]
-  );
-  assert.equal(calls[0].options.env.RAINSKILLS_RAINBOND_JWT, token);
-
   const home = temporaryHome();
-  const configPath = path.join(home, ".codex", "config.toml");
-  fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  fs.writeFileSync(configPath, [
-    'model = "gpt-5"',
-    "",
-    "[mcp_servers.rainbond]",
-    'url = "http://old.example.com/query"',
-    'bearer_token_env_var = "OLD_TOKEN"',
-    "",
-    "[projects.'C:\\\\work']",
-    'trust_level = "trusted"',
-    "",
-  ].join("\n"));
-
-  configureSelectedClients({
-    target: "codex",
-    baseUrl: "https://rainbond.example.com",
-    token,
-    home,
-    spawnImpl() {
-      return { status: null, error: Object.assign(new Error("missing"), { code: "ENOENT" }) };
-    },
-  });
-
-  const config = fs.readFileSync(configPath, "utf8");
-  assert.match(config, /model = "gpt-5"/);
-  assert.match(config, /\[projects\.'C:\\\\work'\]/);
-  assert.match(config, /\[mcp_servers\.rainbond\]/);
-  assert.match(config, /url = "https:\/\/rainbond\.example\.com\/console\/mcp\/rainskills\/codex\/query"/);
-  assert.match(config, /bearer_token_env_var = "RAINBOND_JWT"/);
-  assert.doesNotMatch(config, /old\.example\.com|OLD_TOKEN|header\.payload\.signature/);
-  assert.equal((config.match(/\[mcp_servers\.rainbond\]/g) || []).length, 1);
-  assert.equal(fs.existsSync(`${configPath}.rainskills-backup`), true);
-});
-
-test("native authorization orchestration falls back from Device Flow and configures clients", async () => {
-  const { authorizeAndConfigure } = require(windowsOnboardingPath);
-  const calls = [];
+  const stateStore = createPortableSecureStateStore(home);
   const result = await authorizeAndConfigure({
-    target: "codex",
+    target: "all",
+    home,
+    stateStore,
     baseUrl: "https://rainbond.example.com",
-    authorizeWithDeviceFlowImpl: async () => {
-      const error = new Error("unsupported");
-      error.code = "DEVICE_FLOW_UNSUPPORTED";
-      throw error;
-    },
-    authorizeWithLoopbackImpl: async () => "header.payload.signature",
-    validateMcpImpl: async ({ url, token }) => {
+    authorizeWithDeviceFlowImpl: async () => "header.payload.signature",
+    validateApiImpl: async ({ url, token }) => {
       calls.push({ kind: "validate", url, token });
       return { token: "renewed.payload.signature" };
-    },
-    persistWindowsEnvironmentImpl(options) {
-      calls.push({ kind: "persist", ...options });
-    },
-    configureSelectedClientsImpl(options) {
-      calls.push({ kind: "configure", ...options });
     },
     openBrowser() {},
   });
 
-  assert.deepEqual(result, { status: "configured" });
-  assert.equal(calls[0].url, "https://rainbond.example.com/console/mcp/rainskills/codex/query");
-  assert.equal(calls.at(-1).token, "renewed.payload.signature");
+  assert.deepEqual(result, { status: "cli-configured" });
+  assert.equal(calls[0].url, "https://rainbond.example.com/console/mcp/rainskills/api/query");
+  const credentialsPath = path.join(home, ".rainbond", "credentials.env");
+  assert.equal(fs.lstatSync(credentialsPath).mode & 0o777, 0o600);
+  assert.match(fs.readFileSync(credentialsPath, "utf8"), /renewed\.payload\.signature/);
 });
 
 test("native main completes an explicit SaaS configuration", async () => {
@@ -718,6 +813,7 @@ test("native main completes an explicit SaaS configuration", async () => {
   const home = temporaryHome();
   const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-package-saas-"));
   writeSkill(packageRoot, "rainbond-test");
+  writeBridge(packageRoot);
   fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ version: "0.1.0-test" }));
   const calls = [];
   const output = [];
@@ -725,7 +821,7 @@ test("native main completes an explicit SaaS configuration", async () => {
   const result = await main(["codex", "--saas"], {
     authorizeAndConfigure(options) {
       calls.push(options);
-      return { status: "configured" };
+      return { status: "cli-configured" };
     },
     control: {
       mode: "windows-native",
@@ -740,9 +836,10 @@ test("native main completes an explicit SaaS configuration", async () => {
     },
   });
 
-  assert.equal(result.status, "configured");
+  assert.equal(result.status, "cli-configured");
   assert.equal(calls[0].baseUrl, "https://run.rainbond.com");
   assert.equal(calls[0].target, "codex");
+  assert.equal(fs.existsSync(path.join(home, ".rainbond", "bin", "rainskills-tools.js")), true);
   assert.match(output.join("\n"), /重新启动 Codex/);
 });
 
@@ -800,19 +897,86 @@ test("native deployment selection preserves Cloud, private URL, and no-platform 
   });
 });
 
-test("native Windows onboarding accepts local HTTP Console URLs without an opt-in flag", async () => {
-  const { isLocalHttpUrl, main } = require(windowsOnboardingPath);
-  assert.equal(isLocalHttpUrl("http://127.0.0.1:7070"), true);
-  assert.equal(isLocalHttpUrl("http://172.31.255.2:7070"), true);
-  assert.equal(isLocalHttpUrl("http://rainbond.example.com:7070"), false);
-  assert.equal(isLocalHttpUrl("https://127.0.0.1:7070"), false);
+test("deprecated API-only flag remains a no-op for every target", async () => {
+  const { main } = require(windowsOnboardingPath);
+  for (const argv of [
+    ["codex", "--api-only", "--saas"],
+    ["claude", "--api-only", "--saas"],
+    ["pi", "--api-only", "--saas"],
+    ["all", "--api-only", "--saas"],
+    ["--dest", "CUSTOM", "--api-only", "--saas"],
+  ]) {
+    const home = temporaryHome();
+    const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-package-api-only-"));
+    writeSkill(packageRoot, "rainbond-test");
+    writeBridge(packageRoot);
+    fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ version: "0.1.0-test" }));
+    const customDestination = path.join(home, "custom-skills");
+    const actualArgv = argv.map((argument) => argument === "CUSTOM" ? customDestination : argument);
+    const calls = [];
+    const result = await main(actualArgv, {
+      home,
+      packageRoot,
+      stateStore: createPortableSecureStateStore(home),
+      authorizeAndConfigure(options) {
+        calls.push(options);
+        return { status: "cli-configured" };
+      },
+      logger() {},
+    });
+    assert.equal(result.status, actualArgv.includes("--dest") ? "skills-installed" : "cli-configured");
+    if (!actualArgv.includes("--dest")) {
+      assert.equal(calls[0].apiOnly, undefined, "deprecated flag must not alter authorization");
+    }
+    assert.equal(fs.existsSync(path.join(home, ".rainbond", "bin", "rainskills-tools.js")), true);
+    if (actualArgv.includes("--dest")) {
+      assert.equal(fs.existsSync(path.join(customDestination, "rainbond-test", "SKILL.md")), true);
+    }
+  }
+});
+
+test("CLI installation fails clearly before writes on an unsupported Node runtime", async () => {
+  const { main } = require(windowsOnboardingPath);
+  const home = temporaryHome();
+  const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-package-old-node-"));
+  writeSkill(packageRoot, "rainbond-test");
+  writeBridge(packageRoot);
+  fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ version: "0.1.0-test" }));
+  await assert.rejects(
+    main(["codex", "--api-only", "--saas"], {
+      home,
+      packageRoot,
+      nodeVersion: "16.20.0",
+      logger() {},
+    }),
+    /Node\.js 18/
+  );
+  assert.equal(fs.existsSync(path.join(home, ".codex", "skills")), false);
+  assert.equal(fs.existsSync(path.join(home, ".rainbond", "bin")), false);
+
+  for (const nodeVersion of ["", "not-a-version", "18oops", "17.99.0"]) {
+    await assert.rejects(
+      main(["codex", "--api-only", "--saas"], {
+        home: temporaryHome(),
+        packageRoot,
+        nodeVersion,
+        logger() {},
+      }),
+      /Node\.js 18/
+    );
+  }
+});
+
+test("native Windows onboarding requires an opt-in for every HTTP Console URL", async () => {
+  const { main } = require(windowsOnboardingPath);
   const home = temporaryHome();
   const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-package-local-http-"));
   writeSkill(packageRoot, "rainbond-test");
+  writeBridge(packageRoot);
   fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ version: "0.1.0-test" }));
   const calls = [];
 
-  const result = await main(["codex", "--rainbond-url", "http://127.0.0.1:7070"], {
+  await assert.rejects(main(["codex", "--rainbond-url", "http://127.0.0.1:7070"], {
     home,
     packageRoot,
     authorizeAndConfigure(options) {
@@ -820,9 +984,18 @@ test("native Windows onboarding accepts local HTTP Console URLs without an opt-i
       return { status: "configured" };
     },
     logger() {},
-  });
+  }), /默认禁用明文 HTTP/);
 
-  assert.equal(result.status, "configured");
+  const result = await main(["codex", "--rainbond-url", "http://127.0.0.1:7070", "--allow-insecure-http"], {
+    home,
+    packageRoot,
+    authorizeAndConfigure(options) {
+      calls.push(options);
+      return { status: "cli-configured" };
+    },
+    logger() {},
+  });
+  assert.equal(result.status, "cli-configured");
   assert.equal(calls[0].baseUrl, "http://127.0.0.1:7070");
 });
 
@@ -831,6 +1004,7 @@ test("native Windows onboarding still protects public HTTP Console URLs", async 
   const home = temporaryHome();
   const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-package-public-http-"));
   writeSkill(packageRoot, "rainbond-test");
+  writeBridge(packageRoot);
   fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ version: "0.1.0-test" }));
 
   await assert.rejects(
