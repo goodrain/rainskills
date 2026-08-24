@@ -11,7 +11,7 @@
 - 推荐资源：4 核 CPU、8 GB 内存、50 GB 可用磁盘；预检最低门槛为 2 核 CPU、4 GB 内存、30 GB 可用磁盘。低于推荐值时会提示风险但继续安装，最终以 Rainbond 实际部署验证为准。
 - 安装前端口 `80`、`443`、`7070` 必须空闲。
 
-远程单机只接受 `user@host` 或 `~/.ssh/config` 主机别名；ROI 主机集群逐节点使用配置中的 root 地址和端口。两种方式都先用 `BatchMode=yes` 检查现有免密连接。检查失败时固定暂停，用户只在自己电脑的系统终端执行版本锁定的 `ssh prepare` 命令，由 OpenSSH 读取指纹确认和一次密码；该命令只准备公钥连接，不安装 Rainbond。恢复后所有 `ssh` / `scp` 均为免密非交互调用。Rainskills 不接收或保存 SSH 密码、私钥，也不支持离线安装或自动清理冲突环境。
+远程单机只接受 `user@host` 或 `~/.ssh/config` 主机别名；ROI 主机集群逐节点使用配置中的 root 地址和端口。两种方式都先用 `BatchMode=yes` 检查现有免密连接。远程单机检查失败时固定输出一条版本锁定的 `ssh prepare`；主机集群先检查全部节点，再一次列出所有未就绪节点并输出一条版本锁定的 `ssh prepare-cluster --cluster-config`。用户只在自己电脑的系统终端执行，OpenSSH 读取每台服务器的指纹确认和一次密码；命令只准备公钥连接，不安装 Rainbond。全部完成后只统一回复一次“已完成”。恢复后所有 `ssh` / `scp` 均为免密非交互调用。Rainskills 不接收或保存 SSH 密码、私钥，也不支持离线安装或自动清理冲突环境。
 
 远程单机安装使用 `ssh -G` 解析的实际主机作为新平台 EIP，不再优先使用 `hostname -I` 的首个内网地址。完成后从控制端依次验证显式 Console 主机、SSH 实际主机、SSH 字面主机、Rainbond 上报 EIP 和远端主网卡地址，保存第一个可访问的 `http://<host>:7070`。手动补充只接受 IP 或 DNS 域名。
 
@@ -22,7 +22,7 @@
 - 内置 NFS 必须恰好选择一个 nfs-server；外部 NFS、已有 StorageClass 或外部存储不能配置 nfs-server。
 - 基础向导只生成内置 NFS、内置数据库和内置镜像仓库的最小配置，不询问或保存密码。高级配置通过 `--cluster-config` 导入。
 - 导入时只解析配置用于校验和摘要，受保护副本保留原始字节，不重新序列化未知 ROI 字段。拒绝符号链接、非普通文件、非当前用户文件，以及权限宽于 `0600` 的敏感配置。
-- 对所有节点并发执行只读 SSH 预检，但按 cluster.yaml 中的顺序展示结果。阻断非 root、非 Linux/amd64/arm64、资源不足、端口冲突、安装源不可达以及已有 RKE2/Rainbond，不自动清理或覆盖。
+- Rainskills 只检查并准备全部节点的 SSH 免密连接，不在 ROI 前自行检查 CPU、内存、磁盘容量、端口、安装源、网络或已有 RKE2/Rainbond，也不根据这些项目阻断安装。SSH 就绪并确认安装后，只对 bootstrap 节点执行固定的 `uname -m`，用于选择 `roi-amd64` 或 `roi-arm64`；实际安装条件由 ROI 判断。
 - 非交互执行必须显式提供 `--yes`。确认前不下载 ROI，也不传输配置或启动远端命令。
 - ROI 只允许 `https://get.rainbond.com/roi/roi-amd64` 和 `roi-arm64`，最多三次 `get.rainbond.com/roi/` 同源跳转，下载上限 128 MiB。校验 ELF 类型和架构，并运行固定的 `roi version`。
 - 安装器会主动探测策略中的官方 checksum 地址；发布 checksum 时必须匹配。官方明确未发布 checksum 时记录该事实，并锁定本次下载的最终 URL、版本和 SHA-256。

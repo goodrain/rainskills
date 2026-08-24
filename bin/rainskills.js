@@ -1011,12 +1011,12 @@ function resolveInvocation(args, {
       args: [platformInstallerPath, "install", ...args.slice(2)],
     };
   }
-  if (args[0] === "ssh" && args[1] === "prepare") {
+  if (args[0] === "ssh" && ["prepare", "prepare-cluster"].includes(args[1])) {
     return {
       executable: execPath,
       args: [
         path.resolve(__dirname, "..", "rainbond-platform-installer", "scripts", "ssh-key-setup.js"),
-        "prepare",
+        args[1],
         ...args.slice(2),
       ],
     };
@@ -1046,9 +1046,11 @@ async function runAutoUpdatePhase(args, {
   platform = process.platform,
   packageRoot = path.resolve(__dirname, ".."),
   checkForUpdate,
+  acquireArtifact,
   synchronizeSkills,
   updateState,
   delegate,
+  activeOperationDetector,
 } = {}) {
   const autoUpdate = require(
     "../rainbond-platform-installer/scripts/auto-update.js"
@@ -1067,6 +1069,11 @@ async function runAutoUpdatePhase(args, {
       ) {
         throw new Error("自动升级委托版本不匹配");
       }
+      const detectActive = activeOperationDetector
+        || (() => autoUpdate.hasActiveOperation({ home, platform }));
+      if (detectActive()) {
+        throw new Error("存在正在执行的 Rainskills 操作");
+      }
       (synchronizeSkills || autoUpdate.synchronizeInstalledSkills)({
         packageRoot,
         home,
@@ -1081,6 +1088,7 @@ async function runAutoUpdatePhase(args, {
     }
   }
   let lease = null;
+  let artifact = null;
   try {
     if (autoUpdate.isStableVersion(currentVersion) && autoUpdate.isSafeAutoUpdateEntry(args)) {
       lease = getState().acquireLease?.() || null;
@@ -1095,15 +1103,27 @@ async function runAutoUpdatePhase(args, {
       env,
       home,
       platform,
+      ...(activeOperationDetector ? { activeOperationDetector } : {}),
       ...(state ? { updateState: state } : {}),
     });
     if (decision.action !== "delegate") {
       return { handled: false, reason: decision.reason };
     }
-    const invocation = autoUpdate.buildStableUpdateInvocation(decision.version, args, { platform });
+    artifact = await (acquireArtifact || autoUpdate.acquireStableUpdateArtifact)(decision, {
+      home,
+      platform,
+    });
+    const detectActive = activeOperationDetector
+      || (() => autoUpdate.hasActiveOperation({ home, platform }));
+    if (detectActive()) return { handled: false, reason: "active-operation" };
+    const invocation = autoUpdate.buildStableUpdateInvocation(decision, args, {
+      platform,
+      artifactPath: artifact.path,
+    });
     const environment = autoUpdate.buildStableUpdateEnvironment(env, {
       fromVersion: currentVersion,
       targetVersion: decision.version,
+      registry: decision.registry,
     });
     let result;
     try {
@@ -1126,6 +1146,7 @@ async function runAutoUpdatePhase(args, {
       signal: result.signal || null,
     };
   } finally {
+    try { artifact?.cleanup(); } catch { /* protected cleanup is best effort */ }
     lease?.release();
   }
 }

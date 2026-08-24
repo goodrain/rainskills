@@ -379,6 +379,7 @@ function closeSshSession(session, runner = runCommand) {
 async function establishSshSession(target, {
   runner = runCommand,
   write = (value) => process.stdout.write(value),
+  deferAuthenticationMessage = false,
 } = {}) {
   const normalized = normalizeRemoteTarget(target.host, target.port);
   const probe = runner("ssh", [...sshArgs(normalized), "true"], { timeout: 30000 });
@@ -400,6 +401,7 @@ async function establishSshSession(target, {
   if (!/(Permission denied|Host key verification failed|authentication failed|no supported authentication methods)/i.test(detail)) {
     throw new Error(`无法通过 SSH 连接 ${normalized.host}：${detail}`);
   }
+  if (deferAuthenticationMessage) return null;
   write("\n[RAINSKILLS_USER_INPUT_REQUIRED:ssh_authentication]\n");
   writeUserMessage(
     write,

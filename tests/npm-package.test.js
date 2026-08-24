@@ -133,6 +133,8 @@ test("packed artifact contains the installer and all skills but no development f
     "runtime-operations.js",
     "local-runtime-commands.js",
     "local-runtime.js",
+    "auto-update-worker.js",
+    "installed-version.js",
     "ssh-key-setup.js",
     "mcp-router.js",
     "mcp-server.js",
@@ -141,6 +143,11 @@ test("packed artifact contains the installer and all skills but no development f
   ]) {
     assert(filePaths.has(`rainbond-platform-installer/scripts/${runtimeFile}`), `${runtimeFile} is missing`);
   }
+  assert.equal(
+    require("../rainbond-platform-installer/scripts/installed-version.js").version,
+    require("../package.json").version,
+    "the installed local updater version must match package.json"
+  );
   assert(filePaths.has("README.md"));
   assert(filePaths.has("LICENSE"));
   for (const skillName of skillNames) {

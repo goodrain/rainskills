@@ -20,6 +20,23 @@ const windowsOnboardingPath = path.join(
   "scripts",
   "windows-onboarding.js"
 );
+const AUTO_UPDATE_REGISTRY = "https://registry.npmjs.org/";
+
+function autoUpdateDescriptor(version = "1.2.4", registry = AUTO_UPDATE_REGISTRY) {
+  const tarball = registry === "https://registry.npmmirror.com/"
+    ? `https://cdn.npmmirror.com/packages/rainskills/${version}/rainskills-${version}.tgz`
+    : `${registry}rainskills/-/rainskills-${version}.tgz`;
+  return {
+    version,
+    registry,
+    tarball,
+    integrity: `sha512-${Buffer.alloc(64, 1).toString("base64")}`,
+  };
+}
+
+function fakeUpdateArtifact() {
+  return { path: "/tmp/rainskills-1.2.4.tgz", cleanup() {} };
+}
 
 function boundedUserMessage(output, messageId) {
   const begin = `[RAINSKILLS_USER_MESSAGE_BEGIN:${messageId}]\n`;
@@ -432,7 +449,12 @@ test("launcher delegates a safe runtime status to one exact newer stable package
       acquireLease: () => ({ release() {} }),
       recordFailure() {},
     },
-    checkForUpdate: async () => ({ action: "delegate", version: "1.2.4" }),
+    checkForUpdate: async () => ({
+      action: "delegate",
+      ...autoUpdateDescriptor("1.2.4", "https://registry.npmmirror.com/"),
+    }),
+    acquireArtifact: async () => fakeUpdateArtifact(),
+    activeOperationDetector: () => false,
     delegate: async (invocation, environment) => {
       calls.push({ invocation, environment });
       return { code: 0, signal: null };
@@ -442,11 +464,16 @@ test("launcher delegates a safe runtime status to one exact newer stable package
   assert.equal(result.handled, true);
   assert.equal(result.code, 0);
   assert.deepEqual(calls[0].invocation, {
-    executable: "npx",
-    args: ["--yes", "--ignore-scripts", "rainskills@1.2.4", "runtime", "status", "--json"],
+    executable: "npm",
+    args: [
+      "exec", "--yes", "--ignore-scripts", "--registry=https://registry.npmmirror.com/",
+      "--package=/tmp/rainskills-1.2.4.tgz", "--", "rainskills",
+      "runtime", "status", "--json",
+    ],
   });
   assert.equal(calls[0].environment.RAINSKILLS_AUTO_UPDATE_HOP, "1");
-  assert.equal(calls[0].environment.RAINBOND_JWT, "header.payload.signature");
+  assert.equal(calls[0].environment.npm_config_registry, "https://registry.npmmirror.com/");
+  assert.equal(calls[0].environment.RAINBOND_JWT, undefined);
 });
 
 test("launcher holds one protected update lease through exact-version delegation", async () => {
@@ -465,8 +492,10 @@ test("launcher holds one protected update lease through exact-version delegation
     },
     checkForUpdate: async () => {
       events.push("check");
-      return { action: "delegate", version: "1.2.4" };
+      return { action: "delegate", ...autoUpdateDescriptor() };
     },
+    acquireArtifact: async () => fakeUpdateArtifact(),
+    activeOperationDetector: () => false,
     delegate: async () => {
       events.push("delegate");
       return { code: 0, signal: null };
@@ -475,6 +504,27 @@ test("launcher holds one protected update lease through exact-version delegation
 
   assert.equal(result.handled, true);
   assert.deepEqual(events, ["acquire", "check", "delegate", "release"]);
+});
+
+test("launcher rechecks active work after artifact download and cleans without delegation", async () => {
+  const { runAutoUpdatePhase } = require(launcherPath);
+  let delegates = 0;
+  let cleanups = 0;
+  const result = await runAutoUpdatePhase(["runtime", "status", "--json"], {
+    currentVersion: "1.2.3",
+    env: {},
+    updateState: { acquireLease: () => ({ release() {} }), recordFailure() {} },
+    checkForUpdate: async () => ({ action: "delegate", ...autoUpdateDescriptor() }),
+    acquireArtifact: async () => ({
+      path: "/tmp/rainskills-1.2.4.tgz",
+      cleanup: () => { cleanups += 1; },
+    }),
+    activeOperationDetector: () => true,
+    delegate: async () => { delegates += 1; return { code: 0, signal: null }; },
+  });
+  assert.deepEqual(result, { handled: false, reason: "active-operation" });
+  assert.equal(delegates, 0);
+  assert.equal(cleanups, 1);
 });
 
 test("the delegated stable package refreshes skills before continuing the original action", async () => {
@@ -488,6 +538,7 @@ test("the delegated stable package refreshes skills before continuing the origin
       RAINSKILLS_AUTO_UPDATE_TARGET: "1.2.4",
     },
     packageRoot: repoRoot,
+    activeOperationDetector: () => false,
     synchronizeSkills: (options) => calls.push(["sync", options.packageRoot]),
     updateState: {
       recordApplied: (version) => calls.push(["applied", version]),
@@ -513,6 +564,7 @@ test("a failed delegated skill refresh falls back to the old package without use
     synchronizeSkills: () => {
       throw new Error("unsafe destination");
     },
+    activeOperationDetector: () => false,
     updateState: { recordFailure: () => {} },
   });
   assert.deepEqual(child, {
@@ -525,7 +577,9 @@ test("a failed delegated skill refresh falls back to the old package without use
   const parent = await runAutoUpdatePhase(["runtime", "status", "--json"], {
     currentVersion: "1.2.3",
     env: {},
-    checkForUpdate: async () => ({ action: "delegate", version: "1.2.4" }),
+    checkForUpdate: async () => ({ action: "delegate", ...autoUpdateDescriptor() }),
+    acquireArtifact: async () => fakeUpdateArtifact(),
+    activeOperationDetector: () => false,
     delegate: async () => ({ code: AUTO_UPDATE_FALLBACK_EXIT_CODE, signal: null }),
     updateState: { recordFailure: () => { failures += 1; } },
   });

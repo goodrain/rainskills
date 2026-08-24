@@ -28,6 +28,7 @@ function cluster(overrides = {}) {
         address: "10.0.0.1",
         internalAddress: "10.0.0.1",
         user: "root",
+        password: "fixture-password",
         port: 22,
         bootstrap: true,
       },
@@ -56,6 +57,7 @@ function host(name, address, extra = {}) {
     address,
     internalAddress: address,
     user: "root",
+    password: "fixture-password",
     port: 22,
     ...extra,
   };
@@ -69,6 +71,16 @@ function tempOperation(prefix = "rainskills-host-") {
 
 function sha256(bytes) {
   return crypto.createHash("sha256").update(bytes).digest("hex");
+}
+
+function userMessageBody(output, messageId) {
+  const begin = `[RAINSKILLS_USER_MESSAGE_BEGIN:${messageId}]\n`;
+  const end = `\n[RAINSKILLS_USER_MESSAGE_END:${messageId}]`;
+  const start = output.indexOf(begin);
+  assert.notEqual(start, -1, `missing user message ${messageId}`);
+  const finish = output.indexOf(end, start + begin.length);
+  assert.notEqual(finish, -1, `unterminated user message ${messageId}`);
+  return output.slice(start + begin.length, finish);
 }
 
 function elfBinary(arch = "amd64", payload = "roi-safe") {
@@ -107,6 +119,15 @@ test("topology accepts one, two, and N hosts without a three-node minimum", () =
     },
   });
   assert.equal(validateClusterTopology(many).hosts.length, 5);
+});
+
+test("topology requires a non-empty ROI password for every host without reflecting it", () => {
+  const { validateClusterTopology } = moduleUnderTest();
+  for (const password of [undefined, "", "   ", 123]) {
+    const value = cluster();
+    value.hosts[0].password = password;
+    assert.throws(() => validateClusterTopology(value), /password.*未填写|password.*必填/i);
+  }
 });
 
 test("topology rejects zero/even etcd and invalid bootstrap, roles, names, or addresses", () => {
@@ -171,7 +192,7 @@ test("topology enforces nfs-server only for built-in NFS", () => {
   }), /nfs-server.*必须为空|must be empty/i);
 });
 
-test("one-shot cluster template is complete, secret-free, and marks example addresses for editing", () => {
+test("one-shot cluster template includes blank protected password fields and requires them before ROI", () => {
   const {
     createHostClusterTemplate,
     diagnoseClusterConfig,
@@ -179,17 +200,77 @@ test("one-shot cluster template is complete, secret-free, and marks example addr
   } = moduleUnderTest();
   const bytes = createHostClusterTemplate();
   const text = bytes.toString("utf8");
-  assert.doesNotMatch(text, /password|private.?key|token|secret|credential/i);
   const value = parseClusterDocument(bytes).value;
   assert.equal(value.hosts.length, 3);
+  assert.deepEqual(value.hosts.map((item) => item.password), ["", "", ""]);
+  assert.equal(text.split("对应服务器的 root 密码，只在本地文件中填写").length - 1, 1);
   assert.deepEqual(value.roleGroups.etcd, ["node1", "node2", "node3"]);
   const diagnostic = diagnoseClusterConfig(bytes, { source: "generated-template" });
   assert.equal(diagnostic.value.hosts.length, 3);
   assert.deepEqual(diagnostic.issues, [
+    "节点 node1 的 password 未填写",
     "请把 hosts.node1.address 和 internalAddress 改为真实服务器地址",
+    "节点 node2 的 password 未填写",
     "请把 hosts.node2.address 和 internalAddress 改为真实服务器地址",
+    "节点 node3 的 password 未填写",
     "请把 hosts.node3.address 和 internalAddress 改为真实服务器地址",
   ]);
+
+  value.hosts.forEach((item, index) => {
+    item.address = `10.0.0.${index + 1}`;
+    item.internalAddress = item.address;
+    item.password = `fixture-password-${index + 1}`;
+  });
+  assert.deepEqual(
+    diagnoseClusterConfig(Buffer.from(YAML.stringify(value)), { source: "generated-template" }).issues,
+    [],
+  );
+});
+
+test("one-shot cluster template explains each field once without changing the existing structure", () => {
+  const { createHostClusterTemplate, parseClusterDocument } = moduleUnderTest();
+  const bytes = createHostClusterTemplate();
+  const text = bytes.toString("utf8");
+  const value = parseClusterDocument(bytes).value;
+
+  for (const guidance of [
+    "以下 IP 均为示例地址，必须替换成真实服务器地址",
+    "节点名称，集群内必须唯一",
+    "SSH 地址，请改成服务器 IP 或域名",
+    "节点内网通信地址；没有独立内网时与 address 相同",
+    "SSH 用户，当前使用 root",
+    "对应服务器的 root 密码，只在本地文件中填写",
+    "SSH 端口",
+    "引导节点，只能配置一个且必须属于 master",
+    "etcd 节点数必须是正奇数",
+    "内置 NFS 只能指定一个节点",
+    "没有外部镜像仓库时保持 false",
+    "没有外部数据库时保持 false",
+  ]) {
+    assert.equal(text.split(guidance).length - 1, 1, `guidance must appear once: ${guidance}`);
+  }
+
+  assert.deepEqual(value, {
+    hosts: [
+      { name: "node1", address: "192.0.2.101", internalAddress: "192.0.2.101", user: "root", password: "", port: 22, bootstrap: true },
+      { name: "node2", address: "192.0.2.102", internalAddress: "192.0.2.102", user: "root", password: "", port: 22 },
+      { name: "node3", address: "192.0.2.103", internalAddress: "192.0.2.103", user: "root", password: "", port: 22 },
+    ],
+    roleGroups: {
+      etcd: ["node1", "node2", "node3"],
+      master: ["node1", "node2", "node3"],
+      worker: ["node1", "node2", "node3"],
+      "rbd-gateway": ["node1", "node2"],
+      "rbd-chaos": ["node1", "node2", "node3"],
+      "nfs-server": ["node1"],
+    },
+    storage: {
+      nfs: { enabled: true, sharePath: "/nfs-data/k8s", storageClass: { enabled: true } },
+      existingStorageClass: { enabled: false },
+    },
+    registry: { external: { enabled: false } },
+    database: { mysql: { enabled: false }, custom: { enabled: false } },
+  });
 });
 
 test("one-shot diagnostics return all detectable topology problems in stable order", () => {
@@ -249,6 +330,7 @@ test("host cluster first entry creates one protected template and waits without 
     options: { yes: false },
   }, {
     stateStore,
+    platform: "darwin",
     interactive: false,
     write: (value) => output.push(value),
     sessionFactory: async () => { sessions += 1; throw new Error("must not prepare SSH"); },
@@ -265,8 +347,31 @@ test("host cluster first entry creates one protected template and waits without 
   assert.equal(state.stage, "configuration");
   assert.equal(state.status, "waiting_user");
   assert.equal(state.config_source, "generated-template");
-  assert.match(output.join(""), /集群配置文件已生成/);
-  assert.match(output.join(""), /编辑完成后回复“已完成”/);
+  const message = userMessageBody(output.join(""), "platform.host-cluster-config");
+  assert.match(message, /集群配置文件已生成/);
+  assert.match(message, new RegExp(`\\[点击打开 cluster\\.yaml\\]\\(<${configPath}>\\)`));
+  assert.match(message, new RegExp(`open '${configPath}'`));
+  assert.match(message, /编辑完成后回复“已完成”/);
+  assert.match(message, /填写每台服务器的 password/);
+  assert.doesNotMatch(message, /不要在文件中填写密码/);
+});
+
+test("host cluster config prompt provides native open commands on macOS Linux and Windows", () => {
+  const { renderHostClusterConfigPrompt } = moduleUnderTest();
+  const posixPath = "/Users/example user/.rainbond/platform-installer/op/host-cluster/cluster.yaml";
+  const windowsPath = "C:\\Users\\example user\\.rainbond\\platform-installer\\op\\host-cluster\\cluster.yaml";
+
+  assert.match(
+    renderHostClusterConfigPrompt({ configPath: posixPath, platform: "darwin" }),
+    /open '\/Users\/example user\/\.rainbond\/platform-installer\/op\/host-cluster\/cluster\.yaml'/,
+  );
+  assert.match(
+    renderHostClusterConfigPrompt({ configPath: posixPath, platform: "linux" }),
+    /xdg-open '\/Users\/example user\/\.rainbond\/platform-installer\/op\/host-cluster\/cluster\.yaml'/,
+  );
+  const windowsMessage = renderHostClusterConfigPrompt({ configPath: windowsPath, platform: "win32" });
+  assert.match(windowsMessage, /explorer\.exe "C:\\Users\\example user\\\.rainbond/);
+  assert.match(windowsMessage, /\[点击打开 cluster\.yaml\]\(<C:\/Users\/example%20user\//);
 });
 
 test("protected template creation is no-clobber and preserves competing files or symlinks", () => {
@@ -285,7 +390,7 @@ test("protected template creation is no-clobber and preserves competing files or
   assert.equal(fs.readFileSync(victim, "utf8"), "victim\n");
 });
 
-test("valid edited one-shot config prints a topology summary and continues directly to SSH preflight", async () => {
+test("valid edited one-shot config prepares SSH and proceeds without the Rainskills host preflight", async () => {
   const { installHostCluster } = moduleUnderTest();
   const root = tempOperation("rainskills-host-template-resume-");
   const home = path.join(root, "home");
@@ -305,22 +410,28 @@ test("valid edited one-shot config prints a topology summary and continues direc
   fs.writeFileSync(configPath, YAML.stringify(cluster()), { mode: 0o600 });
   const output = [];
   let sessions = 0;
-  let preflights = 0;
+  let confirmations = 0;
   const result = await installHostCluster(context, {
     stateStore,
     interactive: false,
     write: (value) => output.push(value),
     sessionFactory: async () => { sessions += 1; return { controlPath: null, interactive: false }; },
     closeSession: () => {},
-    runPreflight: async () => { preflights += 1; return { interrupted: true, signal: "SIGINT", blockers: [], nodes: [] }; },
+    confirm: async ({ summary }) => {
+      confirmations += 1;
+      assert.equal(summary.blockers, undefined);
+      return { accepted: false, waiting: true };
+    },
   });
-  assert.equal(result.interrupted, true);
+  assert.equal(result.waiting, true);
   assert.equal(sessions, 1);
-  assert.equal(preflights, 1);
+  assert.equal(confirmations, 1);
   assert.match(output.join(""), /集群配置检查通过/);
   assert.match(output.join(""), /节点：1 个/);
   assert.match(output.join(""), /etcd：1 个/);
   assert.match(output.join(""), /bootstrap：node1/);
+  assert.match(output.join(""), /正在准备所有服务器的 SSH 连接/);
+  assert.doesNotMatch(output.join(""), /运行条件|预检/);
 });
 
 test("import preserves unknown fields byte-for-byte and blocks symlinks or unsafe sensitive permissions", () => {
@@ -499,7 +610,7 @@ test("cluster source reads are descriptor-bound and Windows replacement between 
   }), /ACL.*identity|身份|identity/i, "safe path ACL identity must not authorize different fd bytes");
 });
 
-test("wizard supports add/list/edit/delete, writes a minimal secret-free config, and cancel is atomic", async () => {
+test("wizard preserves host passwords only in the persisted config and cancel is atomic", async () => {
   const { runClusterWizard } = moduleUnderTest();
   const original = cluster();
   const answers = [
@@ -523,7 +634,9 @@ test("wizard supports add/list/edit/delete, writes a minimal secret-free config,
   assert.equal(parsed.storage.nfs.enabled, true);
   assert.equal(parsed.database.mysql.enabled, false);
   assert.equal(parsed.registry.external.enabled, false);
-  assert.doesNotMatch(writes[0].toString("utf8"), /password/i);
+  const persisted = YAML.parse(writes[0].toString("utf8"));
+  assert.equal(persisted.hosts[0].password, "fixture-password");
+  assert.doesNotMatch(output.join(""), /fixture-password/);
   assert.match(output.join(""), /node1|node2/);
   assert.equal(saved.cancelled, false);
 
@@ -538,118 +651,65 @@ test("wizard supports add/list/edit/delete, writes a minimal secret-free config,
   assert.deepEqual(original, cluster());
 });
 
-test("preflight uses fixed SSH argv concurrently and returns stable redacted summaries", async () => {
-  const { runHostPreflight } = moduleUnderTest();
-  const value = cluster({
-    hosts: [host("slow", "10.0.0.1", { bootstrap: true }), host("fast", "10.0.0.2")],
-    roleGroups: {
-      etcd: ["slow"], master: ["slow"], worker: ["slow", "fast"],
-      "rbd-gateway": ["slow"], "rbd-chaos": ["fast"], "nfs-server": ["slow"],
-    },
-  });
-  const calls = [];
-  let inFlight = 0;
-  let maxInFlight = 0;
-  const result = await runHostPreflight(value, {
-    sessions: new Map([
-      ["slow", { controlPath: "/protected/slow-control", interactive: false }],
-      ["fast", { controlPath: "/protected/fast-control", interactive: false }],
-    ]),
-    sshRunner: async (command, args) => {
-      calls.push({ command, args });
-      inFlight += 1;
-      maxInFlight = Math.max(maxInFlight, inFlight);
-      const target = args[args.indexOf("-p") + 2];
-      await new Promise((resolve) => setTimeout(resolve, target.includes("10.0.0.1") ? 20 : 1));
-      inFlight -= 1;
-      return {
-        code: 0,
-        stdout: JSON.stringify({
-          root: true, platform: "linux", arch: "amd64", cpu: 8, memoryBytes: 16 * 1024 ** 3,
-          optBytes: 80 * 1024 ** 3, rancherBytes: 80 * 1024 ** 3, occupiedPorts: [],
-          sourceReachable: true, imageReachable: true, softwareReachable: true,
-          bootstrapReachable: true, existingRke2: false, existingRainbond: false,
-          secret: "password=must-not-leak",
-        }),
-        stderr: "registryPassword=must-not-leak",
-      };
-    },
-  });
-  assert(maxInFlight > 1);
-  assert.deepEqual(result.nodes.map(({ name }) => name), ["slow", "fast"]);
-  assert.deepEqual(calls.map(({ command }) => command), ["ssh", "ssh"]);
-  for (const { args } of calls) {
-    assert(Array.isArray(args));
-    assert.deepEqual(args.slice(0, 2), ["-o", "BatchMode=yes"]);
-    assert.equal(args[args.indexOf("-p") + 1], "22");
-    assert(args.includes("rainskills-host-preflight-v1"));
-  }
-  assert(calls[0].args.includes("10.0.0.2"), "bootstrap preflight must check peer reachability");
-  assert(calls[0].args.includes("ControlPath=/protected/slow-control"));
-  assert(calls[1].args.includes("ControlPath=/protected/fast-control"));
-  assert.equal(result.ok, true);
-  assert.doesNotMatch(JSON.stringify(result), /must-not-leak|password|stdout|stderr/i);
-});
-
-test("host SSH sessions accept only prepared key access and pause consistently in every TTY mode", async () => {
+test("host SSH sessions collect all unavailable nodes and emit one labeled batch command", async () => {
   const { prepareHostSshSessions, validateClusterTopology } = moduleUnderTest();
-  const topology = validateClusterTopology(cluster());
-  const calls = [];
-  const result = await prepareHostSshSessions(topology, {
-    interactive: true,
-    sessionFactory: async (item, options) => {
-      calls.push({ item, options });
-      return {
-        target: { host: `root@${item.address}`, port: item.port },
-        controlPath: null,
-        interactive: false,
-        authentication: "key",
-      };
+  const config = cluster({
+    hosts: [
+      host("node1", "118.196.125.15", { bootstrap: true }),
+      host("node2", "118.196.125.168"),
+      host("node3", "118.196.125.169"),
+    ],
+    roleGroups: {
+      etcd: ["node1", "node2", "node3"], master: ["node1", "node2", "node3"], worker: ["node1", "node2", "node3"],
+      "rbd-gateway": ["node1", "node2"], "rbd-chaos": ["node1", "node2", "node3"], "nfs-server": ["node1"],
     },
   });
-  assert.equal(result.waiting, false);
-  assert.equal(calls.length, 1);
-  assert.equal(result.sessions.get("node1").authentication, "key");
-
+  const topology = validateClusterTopology(config);
+  const calls = [];
   for (const interactive of [true, false]) {
     const output = [];
-    let prompts = 0;
     const waiting = await prepareHostSshSessions(topology, {
       interactive,
       write: (value) => output.push(value),
-      sessionFactory: async () => { prompts += 1; return null; },
+      configPath: "/Users/example/.rainbond/platform-installer/operation/host-cluster/cluster.yaml",
+      packageVersion: "0.1.0-test",
+      platform: "darwin",
+      sessionFactory: async (item, options) => {
+        calls.push({ item, options });
+        return item.name === "node2"
+          ? { target: { host: `root@${item.address}`, port: item.port }, controlPath: null, authentication: "key" }
+          : null;
+      },
     });
     assert.equal(waiting.waiting, true);
-    assert.equal(prompts, 1);
-    assert.doesNotMatch(output.join(""), /等待认证|输入.*密码|交互终端继续/i);
+    assert.deepEqual(waiting.pending.map(({ name }) => name), ["node1", "node3"]);
+    const combined = output.join("");
+    assert.equal((combined.match(/RAINSKILLS_USER_MESSAGE_BEGIN:platform\.ssh-authentication/g) || []).length, 1);
+    const message = userMessageBody(combined, "platform.ssh-authentication");
+    assert.match(message, /1\. node1：root@118\.196\.125\.15:22/);
+    assert.match(message, /2\. node3：root@118\.196\.125\.169:22/);
+    assert.doesNotMatch(message, /node2/);
+    assert.match(message, /npx --yes rainskills@0\.1\.0-test ssh prepare-cluster --cluster-config/);
+    assert.match(message, /全部完成后.*回复“已完成”/s);
+    assert(calls.slice(-3).every(({ options }) => options.deferAuthenticationMessage === true));
   }
 });
 
-test("preflight classifies root, platform, architecture, resources, network, ports, and conflicts", async () => {
-  const { evaluateHostFacts } = moduleUnderTest();
-  const blockers = evaluateHostFacts({
-    root: false,
-    platform: "darwin",
-    arch: "s390x",
-    cpu: 1,
-    memoryBytes: 2 * 1024 ** 3,
-    optBytes: 1,
-    rancherBytes: 1,
-    occupiedPorts: [80, 443, 6060, 7070],
-    sourceReachable: false,
-    imageReachable: false,
-    softwareReachable: false,
-    bootstrapReachable: false,
-    existingRke2: true,
-    existingRainbond: true,
-  }, { bootstrap: true });
-  const codes = blockers.map(({ code }) => code);
-  for (const code of [
-    "root_required", "linux_required", "architecture_unsupported", "cpu_insufficient",
-    "memory_insufficient", "opt_disk_insufficient", "rancher_disk_insufficient",
-    "ports_occupied", "source_unreachable", "image_unreachable", "software_unreachable",
-    "bootstrap_network_unreachable", "existing_rke2", "existing_rainbond",
-  ]) assert(codes.includes(code), `${code} missing`);
+test("bootstrap architecture selection uses one fixed uname command instead of host preflight", async () => {
+  const { probeRemoteArchitecture } = moduleUnderTest();
+  const calls = [];
+  const arch = await probeRemoteArchitecture({ name: "node1", address: "10.0.0.1", port: 22 }, {
+    session: { controlPath: "/protected/control" },
+    sshRunner: async (command, args) => {
+      calls.push({ command, args });
+      return { code: 0, signal: null, stdout: "x86_64\n", stderr: "" };
+    },
+  });
+  assert.equal(arch, "amd64");
+  assert.deepEqual(calls, [{
+    command: "ssh",
+    args: ["-o", "BatchMode=yes", "-o", "ControlPath=/protected/control", "-p", "22", "root@10.0.0.1", "uname", "-m"],
+  }]);
 });
 
 test("ROI confirmation requires explicit acceptance before downloads or execution", async () => {
@@ -678,6 +738,7 @@ test("ROI confirmation requires explicit acceptance before downloads or executio
   assert.equal(nonTtyEffects, 0);
   assert.match(output.join(""), /RAINSKILLS_USER_CONFIRMATION_REQUIRED:roi_install/);
   assert.match(output.join(""), /拓扑|节点|系统变更|protected|cluster.yaml/i);
+  assert.doesNotMatch(output.join(""), /阻断项|风险提示|预检/);
 
   let acceptedEffects = 0;
   const accepted = await confirmRoiInstall({
@@ -721,7 +782,7 @@ test("host installer TTY confirmation has a real prompt and reject has zero arti
       }),
       sessionFactory: async (item) => ({ target: { host: `root@${item.address}`, port: item.port }, controlPath: null, interactive: false }),
       closeSession: () => {},
-      runPreflight: async () => ({ ok: true, blockers: [], nodes: [{ name: "node1", arch: "amd64", blockers: [] }] }),
+      probeArchitecture: async () => "amd64",
       acquireArtifact: async ({ operationDir, persistLock }) => {
         downloads += 1;
         const artifactPath = path.join(operationDir, "roi");
@@ -827,6 +888,25 @@ test("ROI version is probed on the Linux bootstrap with fixed argv and matching 
     command: "ssh",
     args: ["-o", "BatchMode=yes", "-o", "ControlPath=/protected/bootstrap-control", "-p", "22", "root@10.0.0.1", "/root/.rainbond/rainskills/op-1/roi.probe", "version"],
   }]);
+});
+
+test("ROI version probe accepts the official ROI v2 colon format", async () => {
+  const { probeRemoteRoiVersion } = moduleUnderTest();
+  const root = tempOperation();
+  const artifactPath = path.join(root, "roi");
+  const bytes = elfBinary("amd64");
+  fs.writeFileSync(artifactPath, bytes, { mode: 0o600 });
+
+  const version = await probeRemoteRoiVersion({
+    bootstrap: host("node1", "10.0.0.1", { bootstrap: true }),
+    artifactPath,
+    remoteDir: "/root/.rainbond/rainskills/op-1",
+    session: { controlPath: "/protected/bootstrap-control", interactive: false },
+    transfer: async (input) => ({ remoteSha256: input.sha256 }),
+    sshRunner: async () => ({ code: 0, stdout: "ROI Version: v2.0.0\n", stderr: "" }),
+  });
+
+  assert.equal(version, "ROI Version: v2.0.0");
 });
 
 test("ROI artifact rejects cross-origin redirect, byte overflow, bad format/version/checksum, and changed resume bytes", async () => {
@@ -1024,7 +1104,10 @@ test("ROI execution transfers fixed bytes, invokes attached roi up, redacts logs
   ]);
   assert.match(calls[0].input, /receipt_text launching/);
   assert.match(calls[0].input, /receipt_text completed/);
-  assert.match(calls[0].input, /"\$artifact" up -f "\$config"/);
+  assert.equal(
+    calls[0].input.includes("printf '%s\\n' y | \"$artifact\" up -f \"$config\""),
+    true,
+  );
   assert.deepEqual(states.at(-1).resumeArgv, resumeArgv);
   assert.doesNotMatch(JSON.stringify(states), /secret|database|registry|password/i);
   assert.doesNotMatch(fs.readFileSync(logPath, "utf8"), /secret|multiline-log-must-not-leak|stderr-log-must-not-leak|PREFIX-(?:LOG|PEM-LOG)|MULTI-KEY-LOG|AUTH-LOG|COOKIE-LOG|API-LOG|GRJWT-LOG|NAKED-PEM-LOG|JWT-LOG|FIRST-MULTI-LOG|SECOND-MULTI-LOG|COOKIE-MULTI-LOG|AUTH-MULTI-LOG/i);
@@ -1221,8 +1304,8 @@ test("SSH and attached ROI runners kill children at a fixed output ceiling witho
   }
 });
 
-test("read-only SSH children register for signals and preflight interruption stops before artifact or ROI", async () => {
-  const { defaultSshRunner, installHostCluster, probeRemoteRoiVersion, runHostPreflight } = moduleUnderTest();
+test("read-only SSH children register for signals and architecture interruption stops before artifact or ROI", async () => {
+  const { defaultSshRunner, installHostCluster, probeRemoteRoiVersion } = moduleUnderTest();
   const child = new EventEmitter();
   child.pid = 4343;
   child.stdout = new PassThrough();
@@ -1238,33 +1321,6 @@ test("read-only SSH children register for signals and preflight interruption sto
   assert.equal(ssh.signal, "SIGTERM");
   assert.equal(registrations[0], child);
   assert.equal(registrations.at(-1), null);
-
-  const concurrentChildren = [];
-  const concurrentRegistrations = new Set();
-  const concurrent = runHostPreflight(cluster({
-    hosts: [host("node1", "10.0.0.1", { bootstrap: true }), host("node2", "10.0.0.2")],
-    roleGroups: {
-      etcd: ["node1"], master: ["node1"], worker: ["node1", "node2"],
-      "rbd-gateway": ["node1"], "rbd-chaos": ["node2"], "nfs-server": ["node1"],
-    },
-  }), {
-    registerChild(value) {
-      if (value) concurrentRegistrations.add(value);
-      return () => concurrentRegistrations.delete(value);
-    },
-    sshSpawn: () => {
-      const value = new EventEmitter();
-      value.pid = 5000 + concurrentChildren.length;
-      value.stdout = new PassThrough(); value.stderr = new PassThrough(); value.stdin = new PassThrough();
-      concurrentChildren.push(value);
-      if (concurrentChildren.length === 2) queueMicrotask(() => concurrentChildren.forEach((item) => item.emit("close", null, "SIGINT")));
-      return value;
-    },
-  });
-  const concurrentResult = await concurrent;
-  assert.equal(concurrentResult.interrupted, true);
-  assert.equal(concurrentChildren.length, 2);
-  assert.equal(concurrentRegistrations.size, 0);
 
   const versionRoot = tempOperation("rainskills-version-interrupt-");
   const versionArtifact = path.join(versionRoot, "roi");
@@ -1285,7 +1341,7 @@ test("read-only SSH children register for signals and preflight interruption sto
   }), (error) => error.code === "RAINSKILLS_HOST_CLUSTER_INTERRUPTED" && error.signal === "SIGTERM");
   assert.equal(versionChildren.length, 1);
 
-  const root = tempOperation("rainskills-preflight-interrupt-");
+  const root = tempOperation("rainskills-architecture-interrupt-");
   const home = path.join(root, "home");
   fs.mkdirSync(home, { mode: 0o700 });
   const stateStore = require("./helpers/portable-secure-state.js").createPortableSecureStateStore(home);
@@ -1304,7 +1360,12 @@ test("read-only SSH children register for signals and preflight interruption sto
     interactive: false,
     sessionFactory: async () => ({ controlPath: null, interactive: false }),
     closeSession: () => {},
-    runPreflight: async () => ({ interrupted: true, signal: "SIGINT", blockers: [], nodes: [] }),
+    probeArchitecture: async () => {
+      const error = new Error("SSH architecture query interrupted");
+      error.code = "RAINSKILLS_HOST_CLUSTER_INTERRUPTED";
+      error.signal = "SIGINT";
+      throw error;
+    },
     acquireArtifact: async () => { downloads += 1; },
     execute: async () => { executions += 1; },
   });
@@ -1338,6 +1399,37 @@ test("remote transfer stages bytes and refuses a symlink final without overwriti
   assert(scp);
   assert.notEqual(scp.args.at(-1), "root@10.0.0.1:/root/.rainbond/rainskills/op/cluster.yaml");
   assert(calls.every(({ command, args }) => command !== "scp" || !args.at(-1).endsWith("/cluster.yaml")), "scp must never target the fixed final path");
+});
+
+test("remote transfer pipes fixed stage and publish scripts to bash stdin", async () => {
+  const { defaultTransfer } = moduleUnderTest();
+  const root = tempOperation("rainskills-remote-stdin-");
+  const localPath = path.join(root, "cluster.yaml");
+  const bytes = Buffer.from("protected cluster bytes");
+  const digest = sha256(bytes);
+  fs.writeFileSync(localPath, bytes, { mode: 0o600 });
+  const scriptCalls = [];
+
+  const result = await defaultTransfer({
+    host: "root@10.0.0.1",
+    port: 22,
+    localPath,
+    remotePath: "/root/.rainbond/rainskills/op/cluster.yaml",
+    sha256: digest,
+    mode: 0o600,
+    runner: (command, args, options) => {
+      if (command === "ssh" && args.includes("bash")) {
+        scriptCalls.push({ args: [...args], options });
+        assert.equal(options.stdio[0], "pipe", "bash -s must receive the fixed script through a pipe");
+        assert.equal(typeof options.input, "string");
+        return { status: 0, stdout: args.includes(digest) ? `${digest}\n` : "", stderr: "" };
+      }
+      return { status: 0, stdout: "", stderr: "" };
+    },
+  });
+
+  assert.equal(scriptCalls.length, 2);
+  assert.equal(result.remoteSha256, digest);
 });
 
 test("verification children register and stage-bound aborts prevent every later side effect", async () => {
@@ -1376,7 +1468,7 @@ test("verification children register and stage-bound aborts prevent every later 
     }, {
       stateStore, abortState, interactive: false,
       sessionFactory: async () => ({ controlPath: null, interactive: false }), closeSession: () => {},
-      runPreflight: async () => ({ ok: true, blockers: [], nodes: [{ name: "node1", arch: "amd64", blockers: [] }] }),
+      probeArchitecture: async () => "amd64",
       acquireArtifact: async ({ operationDir, persistLock }) => {
         const artifactPath = path.join(operationDir, "roi");
         const artifactBytes = elfBinary("amd64");
@@ -1412,7 +1504,7 @@ test("an interrupted ROI execution resumes by read-only reconciliation and never
   const onboarding = { operation_id: operationId, intent: structuredClone(originalIntent) };
   const paths = { root: path.join(home, ".rainbond", "platform-installer", operationId) };
   stateStore.ensurePrivateDirectory(paths.root);
-  let preflights = 0;
+  let architectureProbes = 0;
   let downloads = 0;
   let executions = 0;
   let reconciliations = 0;
@@ -1422,10 +1514,10 @@ test("an interrupted ROI execution resumes by read-only reconciliation and never
     interactive: false,
     sessionFactory: async () => ({ controlPath: null, interactive: false }),
     closeSession: () => {},
-    runPreflight: async () => {
-      preflights += 1;
-      if (preflights > 1) throw new Error("existing Rainbond markers must not re-enter preflight");
-      return { ok: true, blockers: [], nodes: [{ name: "node1", arch: "amd64", blockers: [] }] };
+    probeArchitecture: async () => {
+      architectureProbes += 1;
+      if (architectureProbes > 1) throw new Error("resume must not repeat architecture selection");
+      return "amd64";
     },
     acquireArtifact: async ({ operationDir, persistLock }) => {
       downloads += 1;
@@ -1465,7 +1557,7 @@ test("an interrupted ROI execution resumes by read-only reconciliation and never
 
   const second = await installHostCluster({ onboarding, state: { operation_id: operationId }, paths, options: { clusterConfig: source, yes: true } }, dependencies);
   assert.equal(second.verification.consoleUrl, "http://10.0.0.1:7070");
-  assert.equal(preflights, 1);
+  assert.equal(architectureProbes, 1);
   assert.equal(downloads, 1);
   assert.equal(executions, 1);
   assert.equal(reconciliations, 1);
@@ -1500,7 +1592,7 @@ test("executing resume only reuses locked bytes after reconciliation proves ROI 
     execution_approved: true,
   });
   let executions = 0;
-  let preflights = 0;
+  let architectureProbes = 0;
   let downloads = 0;
   const result = await installHostCluster({
     onboarding: { operation_id: operationId }, state: { operation_id: operationId }, paths,
@@ -1508,7 +1600,7 @@ test("executing resume only reuses locked bytes after reconciliation proves ROI 
   }, {
     stateStore, interactive: false,
     sessionFactory: async () => ({ controlPath: null, interactive: false }), closeSession: () => {},
-    runPreflight: async () => { preflights += 1; throw new Error("must not preflight"); },
+    probeArchitecture: async () => { architectureProbes += 1; throw new Error("must not re-select architecture"); },
     acquireArtifact: async () => { downloads += 1; throw new Error("must not download"); },
     reconcile: async () => ({ disposition: "not_started", ownershipVerified: true, bytesVerified: true }),
     execute: async () => { executions += 1; return { interrupted: false }; },
@@ -1516,7 +1608,7 @@ test("executing resume only reuses locked bytes after reconciliation proves ROI 
   });
   assert.equal(result.verification.consoleUrl, "http://10.0.0.1:7070");
   assert.equal(executions, 1);
-  assert.equal(preflights, 0);
+  assert.equal(architectureProbes, 0);
   assert.equal(downloads, 0);
 });
 
@@ -1548,7 +1640,7 @@ test("unknown host resume state reconciles read-only then blocks with the fixed 
     stateStore, interactive: false, write: (value) => output.push(value),
     sessionFactory: async () => ({ controlPath: null, interactive: false }), closeSession: () => {},
     reconcile: async () => { reconciliations += 1; return { disposition: "unknown" }; },
-    runPreflight: async () => { sideEffects += 1; }, acquireArtifact: async () => { sideEffects += 1; },
+    probeArchitecture: async () => { sideEffects += 1; }, acquireArtifact: async () => { sideEffects += 1; },
     execute: async () => { sideEffects += 1; }, verify: async () => { sideEffects += 1; },
   });
   assert.equal(result.waiting, true);
@@ -1586,7 +1678,7 @@ test("verifying and completed host stages only run verification and completion",
       stateStore, interactive: false,
       sessionFactory: async () => ({ controlPath: null, interactive: false }), closeSession: () => {},
       verify: async () => { verifications += 1; return { consoleUrl: "http://10.0.0.1:7070" }; },
-      runPreflight: async () => { other += 1; }, acquireArtifact: async () => { other += 1; },
+      probeArchitecture: async () => { other += 1; }, acquireArtifact: async () => { other += 1; },
       execute: async () => { other += 1; }, reconcile: async () => { other += 1; },
     });
     assert.equal(result.verification.consoleUrl, "http://10.0.0.1:7070");

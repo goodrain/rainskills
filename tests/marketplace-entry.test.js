@@ -231,6 +231,8 @@ test("README documents one-product installation and adapter-neutral stable auto-
   assert.match(readme, /\/plugin marketplace add goodrain\/rainskills/);
   assert.match(readme, /\/plugin install rainskills@goodrain/);
   assert.match(readme, /静默检查更新/);
+  assert.match(readme, /本地运行时立即返回.*后台任务静默检查更新/s);
+  assert.match(readme, /不会阻塞或改变当前操作/);
   assert.match(readme, /只跟随.*正式版/s);
   assert.match(readme, /RC.*不会.*自动升级/s);
   assert.match(readme, /升级只更新 Rainskills 自身，不触发 Rainbond/s);

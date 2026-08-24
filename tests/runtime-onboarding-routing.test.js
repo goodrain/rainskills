@@ -700,6 +700,12 @@ test("platform installer guidance reveals modes progressively", () => {
   assert.match(progressive, /本机.*不.*ROI.*Kubernetes/s);
   assert.match(progressive, /1、2 或 N|1\/2\/N/);
   assert.match(progressive, /etcd.*正奇数/i);
+  assert.match(progressive, /可点击.*cluster\.yaml.*当前系统.*打开命令/s);
+  assert.doesNotMatch(progressive, /只告诉用户文件位置/);
+  assert.match(progressive, /全部.*未就绪.*节点.*一次.*列出/s);
+  assert.match(progressive, /prepare-cluster.*--cluster-config/s);
+  assert.match(progressive, /只.*回复.*一次.*已完成/s);
+  assert.match(skill, /单台服务器.*ssh prepare.*主机集群.*ssh prepare-cluster/s);
   assert.match(skill, /--cluster-config/);
   assert.match(skill, /--kubeconfig/);
   assert.match(skill, /--kube-context/);
@@ -717,6 +723,16 @@ test("platform installer guidance reveals modes progressively", () => {
   assert.match(appAssistant, /runtime["',\s]+message["',\s]+--id["',\s]+new-application-environment/);
   assert.match(appAssistant, /runtime["',\s]+message["',\s]+--id["',\s]+private-deployment-location/);
   assert.match(appAssistant, /RAINSKILLS_USER_MESSAGE_BEGIN/);
+});
+
+test("README documents one batch SSH command for all unavailable cluster nodes", () => {
+  const readme = read("README.md");
+  const sshFlow = headingSection(readme, "### 服务器 SSH 固定流程", "## 多运行环境");
+  assert.match(sshFlow, /单台服务器.*ssh prepare.*主机集群.*ssh prepare-cluster/s);
+  assert.match(sshFlow, /全部.*待处理节点.*名称.*IP.*端口/s);
+  assert.match(sshFlow, /一条.*prepare-cluster.*--cluster-config/s);
+  assert.match(sshFlow, /统一回复.*已完成/s);
+  assert.doesNotMatch(sshFlow, /主机集群.*逐台.*回复“已完成”/s);
 });
 
 test("platform installer UI metadata follows the OpenAI Skill contract", () => {

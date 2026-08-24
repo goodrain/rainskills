@@ -5,16 +5,41 @@ const fs = require("node:fs");
 const https = require("node:https");
 const os = require("node:os");
 const path = require("node:path");
+const tls = require("node:tls");
 
 const { createSecureStateStore } = require("./secure-state.js");
 
 const OFFICIAL_LATEST_URL = "https://registry.npmjs.org/rainskills/latest";
 const OFFICIAL_REGISTRY = "https://registry.npmjs.org/";
+const MIRROR_REGISTRY = "https://registry.npmmirror.com/";
+const REGISTRY_SOURCES = Object.freeze({
+  official: Object.freeze({
+    name: "official",
+    registry: OFFICIAL_REGISTRY,
+    latestUrl: OFFICIAL_LATEST_URL,
+    tarballOrigin: OFFICIAL_REGISTRY,
+  }),
+  mirror: Object.freeze({
+    name: "mirror",
+    registry: MIRROR_REGISTRY,
+    latestUrl: `${MIRROR_REGISTRY}rainskills/latest`,
+    tarballOrigin: "https://cdn.npmmirror.com/",
+  }),
+});
 const UPDATE_STATE_SCHEMA = "rainskills.auto-update.v1";
 const UPDATE_STATE_VERSION = 1;
 const UPDATE_OPERATION_ID = "b53d72d4-5e88-4aae-9a9d-8305142d0262";
 const DEFAULT_CHECK_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_METADATA_BYTES = 64 * 1024;
+const MAX_TARBALL_BYTES = 16 * 1024 * 1024;
+const METADATA_TIMEOUT_MS = 3000;
+const TARBALL_TIMEOUT_MS = 15_000;
+const INTERNAL_TIMEOUT_CODE = "RAINSKILLS_REQUEST_TIMEOUT";
+const PROTOCOL_ERROR_CODE = "RAINSKILLS_PROTOCOL_ERROR";
+const METADATA_FALLBACK_ERROR_CODES = Object.freeze([
+  "ENOTFOUND", "EAI_AGAIN", "ECONNREFUSED", "ECONNRESET", "ETIMEDOUT",
+  "EHOSTUNREACH", "ENETUNREACH",
+]);
 const STABLE_VERSION_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const SAFE_ENTRY = Object.freeze(["runtime", "status", "--json"]);
 const DEFAULT_AGENT_ROOTS = Object.freeze([
@@ -22,6 +47,23 @@ const DEFAULT_AGENT_ROOTS = Object.freeze([
   [".claude", "skills"],
   [".agents", "skills"],
 ]);
+const AUTO_UPDATE_ENVIRONMENT_KEYS = Object.freeze([
+  "HOME", "USERPROFILE", "PATH", "Path", "SystemRoot", "ComSpec",
+  "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL",
+  "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
+]);
+
+function protocolError(message) {
+  const error = new Error(message);
+  error.code = PROTOCOL_ERROR_CODE;
+  return error;
+}
+
+function timeoutError(label) {
+  const error = new Error(`${label}请求超时`);
+  error.code = INTERNAL_TIMEOUT_CODE;
+  return error;
+}
 
 function isStableVersion(value) {
   return typeof value === "string" && STABLE_VERSION_PATTERN.test(value);
@@ -48,45 +90,104 @@ function isSafeAutoUpdateEntry(args) {
     && args.every((value, index) => value === SAFE_ENTRY[index]);
 }
 
-function validateOfficialLatestMetadata(metadata) {
+function tarballUrlFor(source, version) {
+  if (source === REGISTRY_SOURCES.mirror) {
+    return `${source.tarballOrigin}packages/rainskills/${version}/rainskills-${version}.tgz`;
+  }
+  return `${source.tarballOrigin}rainskills/-/rainskills-${version}.tgz`;
+}
+
+function metadataTarballUrlFor(source, version) {
+  return `${source.registry}rainskills/-/rainskills-${version}.tgz`;
+}
+
+function sourceForRegistry(registry) {
+  return Object.values(REGISTRY_SOURCES).find((source) => source.registry === registry) || null;
+}
+
+function validateRegistryLatestMetadata(metadata, source) {
+  if (!Object.values(REGISTRY_SOURCES).includes(source)) {
+    throw protocolError("npm registry 来源无效");
+  }
   if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
-    throw new Error("npm latest metadata 无效");
+    throw protocolError("npm latest metadata 无效");
   }
   if (metadata.name !== "rainskills" || !isStableVersion(metadata.version)) {
-    throw new Error("npm latest 不是 Rainskills 正式版");
+    throw protocolError("npm latest 不是 Rainskills 正式版");
   }
-  const expectedTarball = `${OFFICIAL_REGISTRY}rainskills/-/rainskills-${metadata.version}.tgz`;
+  const expectedMetadataTarball = metadataTarballUrlFor(source, metadata.version);
+  const downloadTarball = tarballUrlFor(source, metadata.version);
   if (
     !metadata.dist
     || typeof metadata.dist !== "object"
     || typeof metadata.dist.integrity !== "string"
     || !/^sha512-[A-Za-z0-9+/]{86}==$/.test(metadata.dist.integrity)
-    || metadata.dist.tarball !== expectedTarball
+    || metadata.dist.tarball !== expectedMetadataTarball
   ) {
-    throw new Error("npm latest 制品来源或完整性信息无效");
+    throw protocolError("npm latest 制品来源或完整性信息无效");
   }
-  return { version: metadata.version };
+  return {
+    version: metadata.version,
+    registry: source.registry,
+    tarball: downloadTarball,
+    integrity: metadata.dist.integrity,
+  };
 }
 
-function fetchOfficialLatest({
+function validateOfficialLatestMetadata(metadata) {
+  return validateRegistryLatestMetadata(metadata, REGISTRY_SOURCES.official);
+}
+
+function validateContentLength(headers, maxBytes, { allowZero, label }) {
+  const raw = headers && headers["content-length"];
+  if (raw === undefined) return;
+  if (typeof raw !== "string" || !/^(0|[1-9]\d*)$/.test(raw)) {
+    throw protocolError(`${label} Content-Length 无效`);
+  }
+  const value = Number(raw);
+  if ((!allowZero && value === 0) || !Number.isSafeInteger(value) || value > maxBytes) {
+    throw protocolError(`${label} Content-Length 超出限制`);
+  }
+}
+
+function fixedHttpsOptions(headers) {
+  return {
+    headers,
+    rejectUnauthorized: true,
+    checkServerIdentity: tls.checkServerIdentity,
+    ca: tls.rootCertificates,
+  };
+}
+
+function fetchRegistryMetadata(source, {
   request = https.get,
-  timeoutMs = 3000,
+  timeoutMs = METADATA_TIMEOUT_MS,
   maxBytes = MAX_METADATA_BYTES,
 } = {}) {
   return new Promise((resolve, reject) => {
     let settled = false;
+    let req;
+    const deadline = setTimeout(() => {
+      req?.destroy(timeoutError("npm latest "));
+    }, timeoutMs);
     const finish = (error, value) => {
       if (settled) return;
       settled = true;
+      clearTimeout(deadline);
       if (error) reject(error);
       else resolve(value);
     };
-    const req = request(OFFICIAL_LATEST_URL, {
-      headers: { accept: "application/json" },
-    }, (response) => {
+    req = request(source.latestUrl, fixedHttpsOptions({ accept: "application/json" }), (response) => {
       if (response.statusCode !== 200 || response.headers.location) {
         response.resume();
-        finish(new Error("npm latest 响应无效"));
+        finish(protocolError("npm latest 响应无效"));
+        return;
+      }
+      try {
+        validateContentLength(response.headers, maxBytes, { allowZero: true, label: "npm latest" });
+      } catch (error) {
+        response.resume();
+        finish(error);
         return;
       }
       let size = 0;
@@ -94,7 +195,7 @@ function fetchOfficialLatest({
       response.on("data", (chunk) => {
         size += chunk.length;
         if (size > maxBytes) {
-          req.destroy(new Error("npm latest 响应过大"));
+          req.destroy(protocolError("npm latest 响应过大"));
           return;
         }
         chunks.push(chunk);
@@ -103,15 +204,288 @@ function fetchOfficialLatest({
       response.once("end", () => {
         try {
           const metadata = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-          finish(null, validateOfficialLatestMetadata(metadata));
+          finish(null, validateRegistryLatestMetadata(metadata, source));
+        } catch (error) {
+          finish(error.code ? error : protocolError("npm latest JSON 无效"));
+        }
+      });
+    });
+    req.setTimeout(timeoutMs, () => req.destroy(timeoutError("npm latest ")));
+    req.once("error", (error) => finish(error));
+  });
+}
+
+function fetchOfficialLatest(options = {}) {
+  return fetchRegistryMetadata(REGISTRY_SOURCES.official, options);
+}
+
+function isMetadataFallbackError(error) {
+  return error?.code === INTERNAL_TIMEOUT_CODE
+    || METADATA_FALLBACK_ERROR_CODES.includes(error?.code);
+}
+
+async function fetchLatestWithFallback({
+  fetchMetadata = fetchRegistryMetadata,
+  ...requestOptions
+} = {}) {
+  try {
+    return await fetchMetadata(REGISTRY_SOURCES.official, requestOptions);
+  } catch (error) {
+    if (!isMetadataFallbackError(error)) throw error;
+    return fetchMetadata(REGISTRY_SOURCES.mirror, requestOptions);
+  }
+}
+
+function validateUpdateDescriptor(descriptor) {
+  const source = sourceForRegistry(descriptor?.registry);
+  if (
+    !source
+    || !isStableVersion(descriptor?.version)
+    || descriptor.tarball !== tarballUrlFor(source, descriptor.version)
+    || typeof descriptor.integrity !== "string"
+    || !/^sha512-[A-Za-z0-9+/]{86}==$/.test(descriptor.integrity)
+  ) {
+    throw protocolError("自动升级制品描述无效");
+  }
+  return { ...descriptor };
+}
+
+function expectedIntegrityBytes(integrity) {
+  const bytes = Buffer.from(integrity.slice("sha512-".length), "base64");
+  if (bytes.length !== 64) throw protocolError("自动升级 SHA-512 integrity 无效");
+  return bytes;
+}
+
+function writeAllSync(fd, chunk) {
+  let offset = 0;
+  while (offset < chunk.length) {
+    offset += fs.writeSync(fd, chunk, offset, chunk.length - offset);
+  }
+}
+
+function hashOpenFile(fd, maxBytes = MAX_TARBALL_BYTES) {
+  const hash = crypto.createHash("sha512");
+  const buffer = Buffer.allocUnsafe(64 * 1024);
+  let size = 0;
+  let offset = 0;
+  for (;;) {
+    const count = fs.readSync(fd, buffer, 0, buffer.length, offset);
+    if (count === 0) break;
+    size += count;
+    if (size > maxBytes) throw protocolError("自动升级本地制品过大");
+    hash.update(buffer.subarray(0, count));
+    offset += count;
+  }
+  if (size === 0) throw protocolError("自动升级本地制品为空");
+  return { size, digest: hash.digest() };
+}
+
+function downloadTarballToDescriptor(descriptor, fd, {
+  request = https.get,
+  timeoutMs = TARBALL_TIMEOUT_MS,
+  maxBytes = MAX_TARBALL_BYTES,
+} = {}) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let req;
+    let size = 0;
+    const hash = crypto.createHash("sha512");
+    const deadline = setTimeout(() => req?.destroy(timeoutError("npm tarball ")), timeoutMs);
+    const finish = (error, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      if (error) reject(error);
+      else resolve(value);
+    };
+    req = request(descriptor.tarball, fixedHttpsOptions({ accept: "application/octet-stream" }), (response) => {
+      if (response.statusCode !== 200 || response.headers.location) {
+        response.resume();
+        finish(protocolError("npm tarball 响应无效"));
+        return;
+      }
+      try {
+        validateContentLength(response.headers, maxBytes, { allowZero: false, label: "npm tarball" });
+      } catch (error) {
+        response.resume();
+        finish(error);
+        return;
+      }
+      response.on("data", (chunk) => {
+        if (settled) return;
+        size += chunk.length;
+        if (size > maxBytes) {
+          req.destroy(protocolError("npm tarball 响应过大"));
+          return;
+        }
+        try {
+          writeAllSync(fd, chunk);
+          hash.update(chunk);
+        } catch (error) {
+          req.destroy(error);
+        }
+      });
+      response.once("error", (error) => finish(error));
+      response.once("end", () => {
+        if (size === 0) {
+          finish(protocolError("npm tarball 为空"));
+          return;
+        }
+        try {
+          const actual = hash.digest();
+          const expected = expectedIntegrityBytes(descriptor.integrity);
+          if (!crypto.timingSafeEqual(actual, expected)) {
+            throw protocolError("npm tarball SHA-512 integrity 不匹配");
+          }
+          finish(null, { size, digest: actual.toString("hex") });
         } catch (error) {
           finish(error);
         }
       });
     });
-    req.setTimeout(timeoutMs, () => req.destroy(new Error("npm latest 请求超时")));
+    req.setTimeout(timeoutMs, () => req.destroy(timeoutError("npm tarball ")));
     req.once("error", (error) => finish(error));
   });
+}
+
+async function acquireStableUpdateArtifact(descriptor, {
+  home = os.homedir(),
+  platform = process.platform,
+  stateStore = createDefaultStateStore(platform, home),
+  request = https.get,
+  randomBytes = crypto.randomBytes,
+} = {}) {
+  const validated = validateUpdateDescriptor(descriptor);
+  const directory = stateStore.ensurePrivateDirectory(
+    path.join(home, ".rainbond", "rainskills", "update-artifacts")
+  );
+  const digestPrefix = expectedIntegrityBytes(validated.integrity).toString("hex").slice(0, 16);
+  const finalPath = path.join(directory, `rainskills-${validated.version}-${digestPrefix}.tgz`);
+  if (fs.existsSync(finalPath)) {
+    stateStore.assertProtectedRegularFile(finalPath);
+    const noFollow = fs.constants.O_NOFOLLOW || 0;
+    const existingFd = fs.openSync(finalPath, fs.constants.O_RDONLY | noFollow);
+    let identity;
+    try {
+      identity = fs.fstatSync(existingFd);
+      const pathIdentity = fs.lstatSync(finalPath);
+      if (
+        pathIdentity.isSymbolicLink()
+        || !pathIdentity.isFile()
+        || pathIdentity.dev !== identity.dev
+        || pathIdentity.ino !== identity.ino
+      ) throw protocolError("自动升级既有制品身份发生变化");
+      const actual = hashOpenFile(existingFd);
+      if (!crypto.timingSafeEqual(actual.digest, expectedIntegrityBytes(validated.integrity))) {
+        throw protocolError("自动升级既有制品 SHA-512 integrity 不匹配");
+      }
+    } finally {
+      fs.closeSync(existingFd);
+    }
+    let cleaned = false;
+    return {
+      path: finalPath,
+      cleanup() {
+        if (cleaned) return;
+        cleaned = true;
+        try {
+          const current = fs.lstatSync(finalPath);
+          if (
+            !current.isSymbolicLink()
+            && current.isFile()
+            && current.dev === identity.dev
+            && current.ino === identity.ino
+          ) fs.unlinkSync(finalPath);
+        } catch (error) {
+          if (error.code !== "ENOENT") throw error;
+        }
+      },
+    };
+  }
+  const candidatePath = path.join(
+    directory,
+    `.rainskills-${validated.version}.${process.pid}.${randomBytes(6).toString("hex")}.candidate`
+  );
+  const noFollow = fs.constants.O_NOFOLLOW || 0;
+  let fd;
+  let published = false;
+  let identity;
+  try {
+    fd = fs.openSync(
+      candidatePath,
+      fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | noFollow,
+      0o600
+    );
+    await downloadTarballToDescriptor(validated, fd, { request });
+    fs.fsyncSync(fd);
+    stateStore.protectRegularFile(candidatePath);
+    identity = fs.fstatSync(fd);
+    const candidateIdentity = fs.lstatSync(candidatePath);
+    if (
+      candidateIdentity.isSymbolicLink()
+      || !candidateIdentity.isFile()
+      || candidateIdentity.dev !== identity.dev
+      || candidateIdentity.ino !== identity.ino
+    ) {
+      throw protocolError("自动升级候选制品身份发生变化");
+    }
+    fs.linkSync(candidatePath, finalPath);
+    published = true;
+    stateStore.protectRegularFile(finalPath);
+    const finalIdentity = fs.lstatSync(finalPath);
+    if (
+      finalIdentity.isSymbolicLink()
+      || !finalIdentity.isFile()
+      || finalIdentity.dev !== identity.dev
+      || finalIdentity.ino !== identity.ino
+    ) {
+      throw protocolError("自动升级最终制品身份发生变化");
+    }
+    fs.unlinkSync(candidatePath);
+    if (platform !== "win32") {
+      const directoryFd = fs.openSync(directory, "r");
+      try { fs.fsyncSync(directoryFd); } finally { fs.closeSync(directoryFd); }
+    }
+    fs.closeSync(fd);
+    fd = undefined;
+    let cleaned = false;
+    return {
+      path: finalPath,
+      cleanup() {
+        if (cleaned) return;
+        cleaned = true;
+        try {
+          const current = fs.lstatSync(finalPath);
+          if (
+            !current.isSymbolicLink()
+            && current.isFile()
+            && current.dev === identity.dev
+            && current.ino === identity.ino
+          ) fs.unlinkSync(finalPath);
+        } catch (error) {
+          if (error.code !== "ENOENT") throw error;
+        }
+      },
+    };
+  } catch (error) {
+    if (fd !== undefined) fs.closeSync(fd);
+    for (const target of [candidatePath, ...(published ? [finalPath] : [])]) {
+      try { fs.unlinkSync(target); } catch (cleanupError) {
+        if (cleanupError.code !== "ENOENT") throw cleanupError;
+      }
+    }
+    throw error;
+  }
+}
+
+async function prepareStableUpdate({
+  fetchLatest = fetchLatestWithFallback,
+  acquireArtifact = acquireStableUpdateArtifact,
+  ...options
+} = {}) {
+  const descriptor = validateUpdateDescriptor(await fetchLatest(options));
+  const artifact = await acquireArtifact(descriptor, options);
+  return { descriptor, artifact };
 }
 
 function createDefaultStateStore(platform, home) {
@@ -247,7 +621,17 @@ function hasActiveOperation({
       path.join(home, ".rainbond", "rainskills-onboarding-v1.json"),
       stateStore
     );
-    return Boolean(onboarding && onboarding.stage !== "configured");
+    if (onboarding && onboarding.stage !== "configured") return true;
+    const operationsDirectory = path.join(home, ".rainbond", "rainskills", "operations");
+    if (!fs.existsSync(operationsDirectory)) return false;
+    const directoryInfo = fs.lstatSync(operationsDirectory);
+    if (directoryInfo.isSymbolicLink() || !directoryInfo.isDirectory()) return true;
+    for (const entry of fs.readdirSync(operationsDirectory, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith(".json")) return true;
+      const operation = stateStore.readProtectedJson(path.join(operationsDirectory, entry.name));
+      if (["awaiting-environment", "active"].includes(operation?.stage)) return true;
+    }
+    return false;
   } catch {
     return true;
   }
@@ -261,7 +645,7 @@ async function checkForStableUpdate({
   platform = process.platform,
   now = () => Date.now(),
   ttlMs = DEFAULT_CHECK_TTL_MS,
-  fetchLatest = fetchOfficialLatest,
+  fetchLatest = fetchLatestWithFallback,
   activeOperationDetector,
   updateState,
 } = {}) {
@@ -297,7 +681,9 @@ async function checkForStableUpdate({
     try { state.recordFailure?.(); } catch { /* best-effort only */ }
     return { action: "continue", reason: "check-failed" };
   }
-  if (!latest || !isStableVersion(latest.version)) {
+  try {
+    latest = validateUpdateDescriptor(latest);
+  } catch {
     try { state.recordCheck(null); } catch { /* best-effort only */ }
     return { action: "continue", reason: "invalid-latest" };
   }
@@ -305,28 +691,55 @@ async function checkForStableUpdate({
     try { state.recordCheck(latest.version); } catch { /* best-effort only */ }
     return { action: "continue", reason: "up-to-date" };
   }
-  return { action: "delegate", version: latest.version };
+  return { action: "delegate", ...latest };
 }
 
-function buildStableUpdateInvocation(version, args, { platform = process.platform } = {}) {
-  if (!isStableVersion(version)) throw new Error("自动升级只能委托到正式版");
+function buildStableUpdateInvocation(descriptor, args, {
+  platform = process.platform,
+  artifactPath,
+} = {}) {
+  const validated = validateUpdateDescriptor(descriptor);
   if (!isSafeAutoUpdateEntry(args)) throw new Error("自动升级入口无效");
+  const isAbsoluteArtifact = platform === "win32"
+    ? path.win32.isAbsolute(artifactPath || "")
+    : path.isAbsolute(artifactPath || "");
+  if (typeof artifactPath !== "string" || !isAbsoluteArtifact) {
+    throw new Error("自动升级本地制品路径无效");
+  }
   return {
-    executable: platform === "win32" ? "npx.cmd" : "npx",
-    args: ["--yes", "--ignore-scripts", `rainskills@${version}`, ...args],
+    executable: platform === "win32" ? "npm.cmd" : "npm",
+    args: [
+      "exec",
+      "--yes",
+      "--ignore-scripts",
+      `--registry=${validated.registry}`,
+      `--package=${artifactPath}`,
+      "--",
+      "rainskills",
+      ...args,
+    ],
   };
 }
 
-function buildStableUpdateEnvironment(source, { fromVersion, targetVersion }) {
+function sanitizeAutoUpdateEnvironment(source = process.env) {
+  const environment = {};
+  for (const key of AUTO_UPDATE_ENVIRONMENT_KEYS) {
+    if (typeof source[key] === "string") environment[key] = source[key];
+  }
+  return environment;
+}
+
+function buildStableUpdateEnvironment(source, { fromVersion, targetVersion, registry }) {
   if (!isStableVersion(fromVersion) || !isStableVersion(targetVersion)) {
     throw new Error("自动升级环境只能绑定正式版");
   }
+  if (!sourceForRegistry(registry)) throw new Error("自动升级 registry 无效");
   return {
-    ...source,
+    ...sanitizeAutoUpdateEnvironment(source),
     RAINSKILLS_AUTO_UPDATE_HOP: "1",
     RAINSKILLS_AUTO_UPDATE_FROM: fromVersion,
     RAINSKILLS_AUTO_UPDATE_TARGET: targetVersion,
-    npm_config_registry: OFFICIAL_REGISTRY,
+    npm_config_registry: registry,
     npm_config_ignore_scripts: "true",
   };
 }
@@ -477,19 +890,35 @@ function synchronizeInstalledSkills({
 }
 
 module.exports = {
+  AUTO_UPDATE_ENVIRONMENT_KEYS,
   DEFAULT_CHECK_TTL_MS,
+  INTERNAL_TIMEOUT_CODE,
+  MAX_METADATA_BYTES,
+  MAX_TARBALL_BYTES,
+  METADATA_FALLBACK_ERROR_CODES,
+  METADATA_TIMEOUT_MS,
   OFFICIAL_LATEST_URL,
+  OFFICIAL_REGISTRY,
+  REGISTRY_SOURCES,
+  TARBALL_TIMEOUT_MS,
+  acquireStableUpdateArtifact,
   buildStableUpdateEnvironment,
   buildStableUpdateInvocation,
   checkForStableUpdate,
   compareStableVersions,
   createAutoUpdateState,
+  fetchLatestWithFallback,
   fetchOfficialLatest,
+  fetchRegistryMetadata,
   hasActiveOperation,
   isSafeAutoUpdateEntry,
   isStableVersion,
+  prepareStableUpdate,
   recordSkillInstallDestinations,
   resolveInstallDestinations,
+  sanitizeAutoUpdateEnvironment,
   synchronizeInstalledSkills,
+  validateRegistryLatestMetadata,
+  validateUpdateDescriptor,
   validateOfficialLatestMetadata,
 };

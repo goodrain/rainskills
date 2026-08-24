@@ -72,7 +72,7 @@ Rainskills 安装完成，下一条消息即可直接使用。
 固定 launcher 来自当前 `package.json` 版本：
 
 ```json
-["npx", "--yes", "rainskills@0.1.0-rc.69"]
+["npx", "--yes", "rainskills@0.1.5"]
 ```
 
 所有调用都把 launcher 与参数合并成 argv 数组后直接执行；不得使用 `rainskills@latest`，不得把参数拼成 shell 字符串。
@@ -126,11 +126,13 @@ Rainskills 安装完成，下一条消息即可直接使用。
 部署到独立服务器或主机集群时，流程不再根据 Agent 是否提供可见终端而变化：
 
 1. Rainskills 先使用 `BatchMode=yes` 检查 SSH 免密连接。
-2. 已可连接时直接继续服务器预检；不可连接时固定停止，不在 Agent 任务终端里等待密码。
-3. 用户只在自己电脑的系统终端执行安装器显示的精确 `npx --yes rainskills@<当前版本> ssh prepare --ssh <user@host> --ssh-port <port>` 命令。指纹和一次服务器密码由系统 SSH 读取；该命令只准备公钥连接，不安装 Rainbond。
-4. 用户回到原任务回复“已完成”后，Agent 使用同一版本、同一 `onboarding-id` 和原安装参数继续。不得重新询问环境、安装模式、节点或应用来源。
-5. 后续预检、传输、安装和验收全部使用免密 SSH；系统终端不会继续安装或授权。
-6. Rainbond 验收通过后只进行一次浏览器授权，随后自动恢复最初的应用任务；不得回到 Agent 后再次授权。
+2. 已可连接时直接继续安装流程；不可连接时固定停止，不在 Agent 任务终端里等待密码。
+3. 单台服务器时，用户在系统终端执行一条版本锁定的 `ssh prepare --ssh <user@host> --ssh-port <port>` 命令。
+4. 主机集群时，Rainskills 先检查全部节点，一次列出所有待处理节点的名称、IP 和端口，再只给出一条版本锁定的 `ssh prepare-cluster --cluster-config <path>` 命令。该命令依次处理全部节点，已可免密连接的节点自动跳过；不得逐台显示命令或逐台等待用户回复。
+5. 指纹和一次服务器密码均由系统 SSH 读取；两种命令都只准备公钥连接，不安装 Rainbond。全部节点处理完后，用户统一回复一次“已完成”。
+6. Agent 使用同一版本、同一 `onboarding-id` 和原安装参数继续。不得重新询问环境、安装模式、节点或应用来源。
+7. 后续传输、安装和验收全部使用免密 SSH；系统终端不会继续安装或授权。
+8. Rainbond 验收通过后只进行一次浏览器授权，随后自动恢复最初的应用任务；不得回到 Agent 后再次授权。
 
 主机密钥发生变化时直接阻断并要求人工核对，不自动替换 `known_hosts`。聊天中永远不接收密码、私钥或 Token。
 
@@ -182,7 +184,7 @@ node <已安装的 Skills 根目录>/rainbond-platform-installer/scripts/local-r
 2. 部署到已有 Rainbond 只询问环境地址，不执行平台安装。
 3. 部署到本机直接进入单机版，不展示 ROI 或 Kubernetes；只有选择独立服务器后，再选择单台 Linux、三台及以上 Linux 或已有 Kubernetes。
 
-主机集群支持 1、2 或 N 台 Linux 服务器，不要求固定三台；etcd 节点数必须是正奇数。首次进入该分支时，Rainskills 会生成一份受保护的 `cluster.yaml` 示例文件。用户一次性修改服务器地址、SSH 端口和节点角色后回复“已完成”，Rainskills 会一次列出全部可确定的配置问题；校验通过后直接进入 SSH 预检，不再逐台询问。生成的文件中不得填写密码、私钥或 Token，SSH 密码仍只由系统 `ssh` 在终端中读取。已有 Kubernetes 分支使用指定 kubeconfig 和 context 安装，要求 Kubernetes 1.24 或更高版本。
+主机集群支持 1、2 或 N 台 Linux 服务器，不要求固定三台；etcd 节点数必须是正奇数。首次进入该分支时，Rainskills 会生成一份受保护的 `cluster.yaml` 示例文件。用户一次性修改服务器地址、SSH 端口和节点角色后回复“已完成”，Rainskills 会一次列出全部可确定的配置问题；校验通过后只准备全部节点的 SSH 免密连接，再展示拓扑和安装变更供用户确认，不再执行额外的 CPU、内存、磁盘、端口、网络或已有安装检查。生成的文件中不得填写密码、私钥或 Token，SSH 密码仍只由系统 `ssh` 在终端中读取。确认后仅查询 bootstrap 节点架构以选择对应的 ROI 文件，实际安装条件由 ROI 判断。已有 Kubernetes 分支使用指定 kubeconfig 和 context 安装，要求 Kubernetes 1.24 或更高版本。
 
 Windows 本地安装是预览能力，也可以改选 Linux 服务器。它要求 Windows 10 build 19041+ 或 Windows 11 x64、已开启虚拟化并允许 UAC；安装器使用受管 WSL2 环境。macOS 本地路径使用 OrbStack。用户不需要理解这些底层实现。
 
@@ -190,21 +192,21 @@ Windows 本地安装是预览能力，也可以改选 Linux 服务器。它要�
 
 ```bash
 # 本地单机
-npx --yes rainskills@0.1.0-rc.69 platform install --onboarding-id <id> \
+npx --yes rainskills@0.1.5 platform install --onboarding-id <id> \
   --location local --mode single-node
 
 # Linux 服务器单机
-npx --yes rainskills@0.1.0-rc.69 platform install --onboarding-id <id> \
+npx --yes rainskills@0.1.5 platform install --onboarding-id <id> \
   --location server --mode single-node --ssh <user@host>
 
 # 服务器主机集群（自动生成受保护示例文件）
-npx --yes rainskills@0.1.0-rc.69 platform install --onboarding-id <id> \
+npx --yes rainskills@0.1.5 platform install --onboarding-id <id> \
   --location server --mode host-cluster
 
 # 已有高级 ROI cluster.yaml 才追加：--cluster-config <path>
 
 # 已有 Kubernetes
-npx --yes rainskills@0.1.0-rc.69 platform install --onboarding-id <id> \
+npx --yes rainskills@0.1.5 platform install --onboarding-id <id> \
   --location server --mode existing-kubernetes \
   --kubeconfig <path> --kube-context <name> --chart-version <version>
 ```
@@ -224,13 +226,13 @@ npx --yes rainskills@0.1.0-rc.69 platform install --onboarding-id <id> \
 
 ## 更新
 
-Rainskills 会在用户下一次发起业务动作时静默检查更新，且只跟随 npm `latest` 指向的正式版。当前版本是 RC 或其他预发布版本时不会查询、不会自动升级；npm 上的新 RC 版本也不参与正式版自动升级。
+Rainskills 会在用户下一次发起业务动作时，由本地运行时立即返回环境查询结果，并另行启动后台任务静默检查更新。更新只跟随 npm `latest` 指向的正式版。当前版本是 RC 或其他预发布版本时不会查询、不会自动升级；npm 上的新 RC 版本也不参与正式版自动升级。
 
-发现更高的正式版后，当前 launcher 只委托到经过校验的精确版本，例如 `rainskills@1.2.3`，不会执行浮动的 `@latest` 业务代码。新版本先原子刷新已经安装的 Rainskills Skills，再继续原业务操作。版本检查失败、安装位置不安全或文件迁移失败时会保留旧版本继续，不要求用户处理。
+发现更高的正式版后，后台任务只委托到经过校验的精确版本，例如 `rainskills@1.2.3`，不会执行浮动的 `@latest` 业务代码。新版本原子刷新已经安装的 Rainskills Skills；当前业务继续使用启动时已经加载的版本，最迟从下一条新任务开始使用新版。npm 超时、版本检查失败、安装位置不安全或文件迁移失败时会保留旧版本，且不会阻塞或改变当前操作。
 
 升级只更新 Rainskills 自身，不触发 Rainbond 安装、运行环境选择、登录授权、MCP 配置或重新对接。原始业务操作会继续执行；只有该业务操作本身需要运行环境时，才按既有门禁检查当前连接。可用连接直接复用，401 只重新授权一次，403 立即停止，从未连接过运行环境时才进入环境选择。
 
-正在执行或等待恢复的部署、私有平台安装和授权流程继续使用启动时锁定的旧版本，自动升级不会插入这些流程。操作结束后的下一次普通业务请求才会再次检查正式版。
+正在执行的部署、私有平台安装和授权流程继续使用启动时锁定的旧版本，自动升级不会插入这些流程。操作完成后会再次静默调度更新检查；检查进程有固定超时且不向用户输出远程 npx 命令。
 
 如需手工恢复安装，可执行 `npx --yes rainskills@latest --force`；正常使用不需要主动运行更新命令。
 

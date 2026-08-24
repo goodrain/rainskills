@@ -7,6 +7,10 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 
+const { main } = require(
+  "../rainbond-platform-installer/scripts/local-runtime.js"
+);
+
 const { createEnvironmentRegistry } = require(
   "../rainbond-platform-installer/scripts/environment-registry.js"
 );
@@ -29,6 +33,7 @@ function runLocal(home, args) {
       USERPROFILE: home,
       PATH: "",
       npm_config_registry: "http://127.0.0.1:9",
+      RAINSKILLS_DISABLE_AUTO_UPDATE: "1",
     },
     timeout: 5000,
   });
@@ -43,6 +48,37 @@ test("local environment discovery returns an empty registry without npm or netwo
     default_environment_id: null,
     environments: [],
   });
+});
+
+test("local environment discovery schedules a silent background update after returning local data", async () => {
+  const events = [];
+  await main({
+    args: ["environment", "list", "--json"],
+    runCommand: () => {
+      events.push("local-result");
+      return true;
+    },
+    scheduleUpdate: () => {
+      events.push("background-update");
+    },
+  });
+
+  assert.deepEqual(events, ["local-result", "background-update"]);
+});
+
+test("active operation commands do not schedule an update in the middle of user work", async () => {
+  let updateCalls = 0;
+  await main({
+    args: [
+      "operation", "begin",
+      "--operation-id", "1d6754d6-6fb3-4bda-9a04-15c2d261d178",
+      "--intent-json", "{}",
+    ],
+    runCommand: () => true,
+    scheduleUpdate: () => { updateCalls += 1; },
+  });
+
+  assert.equal(updateCalls, 0);
 });
 
 test("local runtime renders onboarding copy without npm or network", () => {

@@ -5,6 +5,9 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { spawn, spawnSync } = require("node:child_process");
+const { createSecureStateStore } = require("./secure-state.js");
+const { createWindowsSecureStateStore } = require("./windows-platform.js");
+const { readSafeClusterSource, validateClusterTopology } = require("./host-cluster-installer.js");
 
 const REMOTE_AUTHORIZED_KEYS_SCRIPT = [
   "set -eu",
@@ -33,7 +36,15 @@ function normalizeSshTarget(value, port = 22) {
 
 function parseSshPrepareArgs(argv) {
   const result = { command: argv[0] || "", ssh: "", sshPort: 22 };
-  if (result.command !== "prepare") throw new Error("SSH 子命令必须是 prepare");
+  if (result.command === "prepare-cluster") {
+    if (argv.length !== 3 || argv[1] !== "--cluster-config") {
+      throw new Error("prepare-cluster 只接受 --cluster-config <path>");
+    }
+    const value = String(argv[2] || "").trim();
+    if (!value || /[\0\r\n]/.test(value)) throw new Error("--cluster-config 配置路径无效");
+    return { command: "prepare-cluster", clusterConfig: path.resolve(value) };
+  }
+  if (result.command !== "prepare") throw new Error("SSH 子命令必须是 prepare 或 prepare-cluster");
   for (let index = 1; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === "--ssh") {
@@ -114,12 +125,27 @@ function spawnInteractiveWithInput(command, args, { input, env = process.env } =
   });
 }
 
+function probeSshAccess(options, {
+  verifier = (command, args, runOptions) => spawnSync(command, args, { ...runOptions, encoding: "utf8" }),
+} = {}) {
+  const target = normalizeSshTarget(options.ssh, options.sshPort);
+  const result = verifier("ssh", [
+    "-o", "BatchMode=yes",
+    "-o", "ConnectTimeout=10",
+    "-p", String(target.port),
+    target.host,
+    "true",
+  ], { timeout: 30000 });
+  return !result.error && result.status === 0;
+}
+
 async function prepareSshAccess(options, {
   interactive = process.stdin.isTTY && process.stdout.isTTY,
   ensureIdentity = ensureDefaultIdentity,
   attachedRunner = spawnInteractiveWithInput,
   verifier = (command, args, runOptions) => spawnSync(command, args, { ...runOptions, encoding: "utf8" }),
   write = (value) => process.stdout.write(value),
+  completionMessage = true,
 } = {}) {
   const target = normalizeSshTarget(options.ssh, options.sshPort);
   if (!interactive) {
@@ -144,13 +170,57 @@ async function prepareSshAccess(options, {
 
   const verified = verifier("ssh", ["-o", "BatchMode=yes", ...baseArgs, "true"], { timeout: 30000 });
   if (verified.error || verified.status !== 0) throw new Error("SSH 免密连接验证失败，未对服务器执行 Rainbond 安装");
-  write("SSH 连接准备完成。请回到原来的 AI 任务并回复“已完成”。\n");
+  if (completionMessage) write("SSH 连接准备完成。请回到原来的 AI 任务并回复“已完成”。\n");
   return { ok: true, target };
+}
+
+function loadClusterTopology(configPath, {
+  platform = process.platform,
+  home = os.homedir(),
+} = {}) {
+  const sourceStateStore = platform === "win32"
+    ? createWindowsSecureStateStore({ home })
+    : createSecureStateStore({ platform, home });
+  const source = readSafeClusterSource(configPath, { platform, sourceStateStore });
+  return validateClusterTopology(source.value);
+}
+
+async function prepareClusterSshAccess(options, {
+  interactive = process.stdin.isTTY && process.stdout.isTTY,
+  loadTopology = loadClusterTopology,
+  probeAccess = probeSshAccess,
+  prepareAccess = prepareSshAccess,
+  write = (value) => process.stdout.write(value),
+  ...accessDependencies
+} = {}) {
+  if (!interactive) throw new Error("集群 SSH 准备必须在你电脑上的系统终端中运行");
+  const topology = loadTopology(options.clusterConfig);
+  const hosts = topology.hosts || [];
+  for (let index = 0; index < hosts.length; index += 1) {
+    const item = hosts[index];
+    const ssh = `${item.user || "root"}@${item.address}`;
+    write(`\n[${index + 1}/${hosts.length}] ${item.name}：${ssh}:${item.port}\n`);
+    if (probeAccess({ ssh, sshPort: item.port }, accessDependencies)) {
+      write(`${item.name} 已可免密连接，跳过。\n`);
+      continue;
+    }
+    try {
+      await prepareAccess(
+        { ssh, sshPort: item.port },
+        { ...accessDependencies, interactive: true, write, completionMessage: false }
+      );
+    } catch (error) {
+      throw new Error(`节点 ${item.name}（${ssh}:${item.port}）SSH 准备失败：${error.message}`);
+    }
+  }
+  write(`\n全部 ${hosts.length} 台服务器的 SSH 连接已准备完成。请回到原来的 AI 任务并回复“已完成”。\n`);
+  return { ok: true, hosts: hosts.map(({ name, address, port }) => ({ name, address, port })) };
 }
 
 async function main(argv) {
   const options = parseSshPrepareArgs(argv);
-  await prepareSshAccess(options);
+  if (options.command === "prepare-cluster") await prepareClusterSshAccess(options);
+  else await prepareSshAccess(options);
 }
 
 module.exports = {
@@ -158,7 +228,9 @@ module.exports = {
   ensureDefaultIdentity,
   normalizeSshTarget,
   parseSshPrepareArgs,
+  prepareClusterSshAccess,
   prepareSshAccess,
+  probeSshAccess,
   spawnInteractiveWithInput,
 };
 

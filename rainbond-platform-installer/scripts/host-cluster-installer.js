@@ -12,6 +12,7 @@ const YAML = require("yaml");
 
 const POLICY = require("../references/installation-policy.json");
 const { createSecureStateStore } = require("./secure-state.js");
+const { writeUserMessage } = require("./user-message.js");
 const { createWindowsSecureStateStore } = require("./windows-platform.js");
 
 const REQUIRED_ROLES = ["etcd", "master", "worker", "rbd-gateway", "rbd-chaos"];
@@ -20,61 +21,83 @@ const SENSITIVE_KEY = /(?:password|passwd|token|secret|private.?key|credential)/
 const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/;
 const SAFE_ADDRESS = /^(?:[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?|(?:[0-9a-fA-F]*:){2,}[0-9a-fA-F:.]+)$/;
 const SAFE_REMOTE_PATH = /^\/[A-Za-z0-9._/-]+$/;
-const MIN_CPU = 2;
-const MIN_MEMORY = 4 * 1024 ** 3;
-const MIN_DISK = 40 * 1024 ** 3;
-const REQUIRED_PORTS = [80, 443, 6060, 7070];
 const CRITICAL_WORKLOADS = ["rbd-api", "rbd-gateway", "rbd-app-ui"];
 const MAX_CHILD_OUTPUT_BYTES = 4 * 1024 * 1024;
 const CHILD_OUTPUT_LIMIT_ERROR = "子进程输出超过安全上限";
 const TEMPLATE_ADDRESSES = new Map([
-  ["node1.example.invalid", "node1"],
-  ["node2.example.invalid", "node2"],
-  ["node3.example.invalid", "node3"],
+  ["192.0.2.101", "node1"],
+  ["192.0.2.102", "node2"],
+  ["192.0.2.103", "node3"],
 ]);
-const HOST_PREFLIGHT_SCRIPT = String.raw`set -eu
-root=false
-[ "$(id -u)" = 0 ] && root=true
-platform="$(uname -s | tr '[:upper:]' '[:lower:]')"
-arch="$(uname -m)"
-cpu="$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || echo 0)"
-memory_kb="$(awk '/^MemTotal:/ {print $2; exit}' /proc/meminfo 2>/dev/null || echo 0)"
-opt_kb="$(df -Pk /opt/rainbond 2>/dev/null | awk 'END {print $4}')"
-[ -n "$opt_kb" ] || opt_kb="$(df -Pk /opt 2>/dev/null | awk 'END {print $4}')"
-rancher_kb="$(df -Pk /var/lib/rancher 2>/dev/null | awk 'END {print $4}')"
-[ -n "$rancher_kb" ] || rancher_kb="$(df -Pk /var/lib 2>/dev/null | awk 'END {print $4}')"
-ports=""
-for port in 80 443 6060 7070; do
-  if command -v ss >/dev/null 2>&1 && ss -lntH 2>/dev/null | awk '{print $4}' | grep -Eq "(^|:)$port$"; then
-    if [ -n "$ports" ]; then ports="$ports,$port"; else ports="$port"; fi
-  fi
-done
-source_reachable=false
-image_reachable=false
-software_reachable=false
-if command -v curl >/dev/null 2>&1; then
-  curl -fsSI --max-time 10 https://get.rainbond.com/ >/dev/null && source_reachable=true || true
-  curl -fsSI --max-time 10 https://registry.cn-hangzhou.aliyuncs.com/ >/dev/null && image_reachable=true || true
-  curl -fsSI --max-time 10 https://rpm.rancher.io/ >/dev/null && software_reachable=true || true
-fi
-existing_rke2=false
-existing_rainbond=false
-[ -e /etc/rancher/rke2/config.yaml ] || systemctl is-active --quiet rke2-server 2>/dev/null && existing_rke2=true || true
-[ -d /opt/rainbond ] && find /opt/rainbond -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null | grep -q . && existing_rainbond=true || true
-bootstrap_reachable=true
-[ "$#" -gt 0 ] && shift
-for peer in "$@"; do
-  if command -v ping >/dev/null 2>&1; then
-    ping -c 1 -W 2 "$peer" >/dev/null 2>&1 || bootstrap_reachable=false
-  elif command -v nc >/dev/null 2>&1; then
-    nc -z -w 2 "$peer" 22 >/dev/null 2>&1 || bootstrap_reachable=false
-  else
-    bootstrap_reachable=false
-  fi
-done
-printf 'ROOT=%s\nPLATFORM=%s\nARCH=%s\nCPU=%s\nMEMORY_BYTES=%s\nOPT_BYTES=%s\nRANCHER_BYTES=%s\nOCCUPIED_PORTS=%s\nSOURCE_REACHABLE=%s\nIMAGE_REACHABLE=%s\nSOFTWARE_REACHABLE=%s\nBOOTSTRAP_REACHABLE=%s\nEXISTING_RKE2=%s\nEXISTING_RAINBOND=%s\n' \
-  "$root" "$platform" "$arch" "$cpu" "$((memory_kb * 1024))" "$((opt_kb * 1024))" "$((rancher_kb * 1024))" "$ports" "$source_reachable" "$image_reachable" "$software_reachable" "$bootstrap_reachable" "$existing_rke2" "$existing_rainbond"
-`;
+
+function quotePosixArgument(value) {
+  return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
+
+function hostClusterConfigOpenCommand(configPath, platform = process.platform) {
+  const filePath = String(configPath);
+  if (!filePath || /[\0\r\n]/.test(filePath)) throw new Error("cluster.yaml 路径无效");
+  if (platform === "darwin") return `open ${quotePosixArgument(filePath)}`;
+  if (platform === "linux") return `xdg-open ${quotePosixArgument(filePath)}`;
+  if (platform === "win32") return `explorer.exe "${filePath.replace(/"/g, '""')}"`;
+  throw new Error("不支持的控制端平台");
+}
+
+function renderHostClusterConfigPrompt({ configPath, platform = process.platform, issues = [] }) {
+  const normalizedPath = String(configPath).replace(/\\/g, "/");
+  const linkTarget = encodeURI(normalizedPath).replace(/#/g, "%23");
+  const openCommand = hostClusterConfigOpenCommand(configPath, platform);
+  const heading = issues.length > 0
+    ? ["集群配置还需要调整：", ...issues.map((issue, index) => `${index + 1}. ${issue}`)]
+    : ["集群配置文件已生成。"];
+  return [
+    ...heading,
+    "",
+    `[点击打开 cluster.yaml](<${linkTarget}>)`,
+    "",
+    "如果链接无法打开，请在系统终端执行：",
+    "",
+    "```sh",
+    openCommand,
+    "```",
+    "",
+    issues.length > 0
+      ? "请修改同一个配置文件，完成后回复“已完成”。"
+      : "请一次性修改服务器地址、SSH 端口和节点角色，并填写每台服务器的 password。",
+    ...(issues.length > 0 ? [] : ["password 只在这个受保护的本地文件中填写；不要填写私钥或 Token。", "", "编辑完成后回复“已完成”，我会检查全部节点和集群拓扑。"]),
+  ].join("\n");
+}
+
+function clusterConfigCommandArgument(configPath, platform = process.platform) {
+  const value = String(configPath || "");
+  if (!value || /[\0\r\n]/.test(value)) throw new Error("cluster.yaml 路径无效");
+  if (platform === "win32") return `"${value.replace(/"/g, '""')}"`;
+  return quotePosixArgument(value);
+}
+
+function renderHostClusterSshAuthenticationPrompt({
+  nodes,
+  configPath,
+  packageVersion,
+  platform = process.platform,
+}) {
+  if (!Array.isArray(nodes) || nodes.length === 0) throw new Error("待准备 SSH 的集群节点不能为空");
+  const lines = [`以下 ${nodes.length} 台服务器需要准备 SSH 连接：`, ""];
+  for (let index = 0; index < nodes.length; index += 1) {
+    const item = nodes[index];
+    lines.push(`${index + 1}. ${item.name}：${item.user || "root"}@${item.address}:${item.port}`);
+  }
+  lines.push(
+    "",
+    "请打开你电脑上的系统终端，执行下面这一条命令：",
+    "",
+    `npx --yes rainskills@${packageVersion} ssh prepare-cluster --cluster-config ${clusterConfigCommandArgument(configPath, platform)}`,
+    "",
+    "命令会依次处理以上服务器；每台服务器的指纹确认和 SSH 密码只会由系统 ssh 读取，不会发送到聊天中。",
+    "全部完成后回到这里回复“已完成”，我会在当前任务中继续安装。",
+  );
+  return lines.join("\n");
+}
 const REMOTE_STAGE_SCRIPT = String.raw`set -eu
 directory="$1"
 temporary="$2"
@@ -140,7 +163,7 @@ mv -T -n -- "$launching" "$receipt" || true
 rm -f -- "$launching"
 verify_receipt launching || exit 82
 set +e
-"$artifact" up -f "$config"
+printf '%s\n' y | "$artifact" up -f "$config"
 roi_status="$?"
 set -e
 [ "$roi_status" = 0 ] || exit "$roi_status"
@@ -229,11 +252,11 @@ function parseClusterDocument(input) {
 }
 
 function createHostClusterTemplate() {
-  return Buffer.from(YAML.stringify({
+  const document = new YAML.Document({
     hosts: [
-      { name: "node1", address: "node1.example.invalid", internalAddress: "node1.example.invalid", user: "root", port: 22, bootstrap: true },
-      { name: "node2", address: "node2.example.invalid", internalAddress: "node2.example.invalid", user: "root", port: 22 },
-      { name: "node3", address: "node3.example.invalid", internalAddress: "node3.example.invalid", user: "root", port: 22 },
+      { name: "node1", address: "192.0.2.101", internalAddress: "192.0.2.101", user: "root", password: "", port: 22, bootstrap: true },
+      { name: "node2", address: "192.0.2.102", internalAddress: "192.0.2.102", user: "root", password: "", port: 22 },
+      { name: "node3", address: "192.0.2.103", internalAddress: "192.0.2.103", user: "root", password: "", port: 22 },
     ],
     roleGroups: {
       etcd: ["node1", "node2", "node3"],
@@ -249,7 +272,33 @@ function createHostClusterTemplate() {
     },
     registry: { external: { enabled: false } },
     database: { mysql: { enabled: false }, custom: { enabled: false } },
-  }, { lineWidth: 0 }), "utf8");
+  });
+  document.options.lineWidth = 0;
+
+  document.getIn(["hosts"], true).commentBefore = " 以下 IP 均为示例地址，必须替换成真实服务器地址\n 一次性填写全部服务器；下面相同字段的填写方式一致，不再重复备注";
+  document.getIn(["hosts", 0, "name"], true).comment = " 节点名称，集群内必须唯一";
+  document.getIn(["hosts", 0, "address"], true).comment = " SSH 地址，请改成服务器 IP 或域名";
+  document.getIn(["hosts", 0, "internalAddress"], true).comment = " 节点内网通信地址；没有独立内网时与 address 相同";
+  document.getIn(["hosts", 0, "user"], true).comment = " SSH 用户，当前使用 root";
+  document.getIn(["hosts", 0, "password"], true).comment = " 必填：对应服务器的 root 密码，只在本地文件中填写";
+  document.getIn(["hosts", 0, "port"], true).comment = " SSH 端口";
+  document.getIn(["hosts", 0, "bootstrap"], true).comment = " 引导节点，只能配置一个且必须属于 master";
+
+  document.getIn(["roleGroups", "etcd"], true).commentBefore = " etcd 节点数必须是正奇数";
+  document.getIn(["roleGroups", "master"], true).commentBefore = " 集群控制面节点";
+  document.getIn(["roleGroups", "worker"], true).commentBefore = " 运行应用工作负载的节点";
+  document.getIn(["roleGroups", "rbd-gateway"], true).commentBefore = " 提供应用访问入口的节点";
+  document.getIn(["roleGroups", "rbd-chaos"], true).commentBefore = " 执行应用构建任务的节点";
+  document.getIn(["roleGroups", "nfs-server"], true).commentBefore = " 内置 NFS 只能指定一个节点";
+
+  document.getIn(["storage", "nfs", "enabled"], true).comment = " 使用内置 NFS 时保持 true";
+  document.getIn(["storage", "nfs", "sharePath"], true).comment = " NFS 数据目录";
+  document.getIn(["storage", "existingStorageClass", "enabled"], true).comment = " 使用已有 StorageClass 时改为 true，并关闭内置 NFS";
+  document.getIn(["registry", "external", "enabled"], true).comment = " 没有外部镜像仓库时保持 false";
+  document.getIn(["database", "mysql", "enabled"], true).comment = " 没有外部数据库时保持 false";
+  document.getIn(["database", "custom", "enabled"], true).comment = " 使用自定义数据库时再开启";
+
+  return Buffer.from(String(document), "utf8");
 }
 
 function diagnoseClusterConfig(input, { source = "generated-template" } = {}) {
@@ -259,8 +308,8 @@ function diagnoseClusterConfig(input, { source = "generated-template" } = {}) {
   } catch {
     return { value: null, issues: ["cluster.yaml 解析失败，请检查 YAML 语法"] };
   }
-  if (source === "generated-template" && hasSensitiveFields(value)) {
-    return { value: null, issues: ["集群配置文件不能包含密码、私钥、Token 或其他敏感字段"] };
+  if (source === "generated-template" && hasDisallowedGeneratedSensitiveFields(value)) {
+    return { value: null, issues: ["集群配置文件不能包含私钥、Token 或其他未允许的敏感字段"] };
   }
 
   const issues = [];
@@ -291,6 +340,7 @@ function diagnoseClusterConfig(input, { source = "generated-template" } = {}) {
       addresses.add(candidate);
     }
     if (String(raw.user || "root") !== "root") add(`节点 ${name || index} 只支持 root SSH 用户`);
+    if (typeof raw.password !== "string" || raw.password.trim() === "") add(`节点 ${name || index} 的 password 未填写`);
     if (!Number.isInteger(port) || port < 1 || port > 65535) add(`节点 ${name || index} 的 SSH 端口无效`);
     if (raw.bootstrap !== undefined && typeof raw.bootstrap !== "boolean") add(`节点 ${name || index} 的 bootstrap 必须是布尔值`);
     if (TEMPLATE_ADDRESSES.get(address) === name || TEMPLATE_ADDRESSES.get(internalAddress) === name) {
@@ -341,6 +391,21 @@ function hasSensitiveFields(value) {
   return Object.entries(value).some(([key, child]) => SENSITIVE_KEY.test(key) || hasSensitiveFields(child));
 }
 
+function hasDisallowedGeneratedSensitiveFields(value, pathSegments = []) {
+  if (!value || typeof value !== "object") return false;
+  if (Array.isArray(value)) {
+    return value.some((child, index) => hasDisallowedGeneratedSensitiveFields(child, [...pathSegments, index]));
+  }
+  return Object.entries(value).some(([key, child]) => {
+    const allowedHostPassword = key === "password"
+      && pathSegments.length === 2
+      && pathSegments[0] === "hosts"
+      && Number.isInteger(pathSegments[1]);
+    return (SENSITIVE_KEY.test(key) && !allowedHostPassword)
+      || hasDisallowedGeneratedSensitiveFields(child, [...pathSegments, key]);
+  });
+}
+
 function normalizeHost(raw, index) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     throw new Error(`hosts[${index}] 必须是对象`);
@@ -358,6 +423,7 @@ function normalizeHost(raw, index) {
     throw new Error(`节点 internalAddress 无效：${name}`);
   }
   if (user !== "root") throw new Error(`ROI 主机安装只支持 root SSH 用户：${name}`);
+  if (typeof raw.password !== "string" || raw.password.trim() === "") throw new Error(`节点 password 未填写：${name}`);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(`节点 SSH 端口无效：${name}`);
   if (raw.bootstrap !== undefined && typeof raw.bootstrap !== "boolean") {
     throw new Error(`节点 bootstrap 必须是布尔值：${name}`);
@@ -460,6 +526,7 @@ function minimalClusterObject(config) {
       address: item.address,
       internalAddress: item.internalAddress,
       user: "root",
+      password: item.password,
       port: item.port,
       ...(item.bootstrap ? { bootstrap: true } : {}),
     })),
@@ -476,18 +543,7 @@ function minimalClusterObject(config) {
 function serializeMinimalClusterConfig(config) {
   const value = minimalClusterObject(config);
   const serialized = YAML.stringify(value, { lineWidth: 0 });
-  if (SENSITIVE_KEY.test(serialized)) {
-    const sensitiveKeys = [];
-    const visit = (child) => {
-      if (!child || typeof child !== "object") return;
-      for (const [key, nested] of Object.entries(child)) {
-        if (SENSITIVE_KEY.test(key)) sensitiveKeys.push(key);
-        visit(nested);
-      }
-    };
-    visit(value);
-    if (sensitiveKeys.length > 0) throw new Error("基础向导不能生成 password、token 或 secret 字段");
-  }
+  if (hasDisallowedGeneratedSensitiveFields(value)) throw new Error("基础向导不能生成私钥、Token 或其他未允许的敏感字段");
   return Buffer.from(serialized, "utf8");
 }
 
@@ -701,54 +757,6 @@ function parseBoolean(value) {
   return value === true || String(value).toLowerCase() === "true";
 }
 
-function parsePreflightOutput(output) {
-  const text = String(output || "").trim();
-  if (!text) throw new Error("远程预检没有返回结果");
-  if (text.startsWith("{")) return JSON.parse(text);
-  const values = {};
-  for (const line of text.split("\n")) {
-    const separator = line.indexOf("=");
-    if (separator > 0) values[line.slice(0, separator)] = line.slice(separator + 1);
-  }
-  return {
-    root: parseBoolean(values.ROOT),
-    platform: values.PLATFORM,
-    arch: values.ARCH,
-    cpu: Number(values.CPU),
-    memoryBytes: Number(values.MEMORY_BYTES),
-    optBytes: Number(values.OPT_BYTES),
-    rancherBytes: Number(values.RANCHER_BYTES),
-    occupiedPorts: String(values.OCCUPIED_PORTS || "").split(",").filter(Boolean).map(Number),
-    sourceReachable: parseBoolean(values.SOURCE_REACHABLE),
-    imageReachable: parseBoolean(values.IMAGE_REACHABLE),
-    softwareReachable: parseBoolean(values.SOFTWARE_REACHABLE),
-    bootstrapReachable: parseBoolean(values.BOOTSTRAP_REACHABLE),
-    existingRke2: parseBoolean(values.EXISTING_RKE2),
-    existingRainbond: parseBoolean(values.EXISTING_RAINBOND),
-  };
-}
-
-function evaluateHostFacts(facts, { bootstrap = false } = {}) {
-  const blockers = [];
-  const add = (condition, code, message) => { if (condition) blockers.push({ code, message }); };
-  add(facts.root !== true, "root_required", "ROI 集群安装要求通过 root SSH 连接");
-  add(String(facts.platform).toLowerCase() !== "linux", "linux_required", "节点必须运行 Linux");
-  add(!["amd64", "x64", "x86_64", "arm64", "aarch64"].includes(String(facts.arch).toLowerCase()), "architecture_unsupported", "节点架构只支持 amd64 或 arm64");
-  add(!Number.isFinite(Number(facts.cpu)) || Number(facts.cpu) < MIN_CPU, "cpu_insufficient", `节点至少需要 ${MIN_CPU} 核 CPU`);
-  add(!Number.isFinite(Number(facts.memoryBytes)) || Number(facts.memoryBytes) < MIN_MEMORY, "memory_insufficient", "节点至少需要 4 GB 内存");
-  add(!Number.isFinite(Number(facts.optBytes)) || Number(facts.optBytes) < MIN_DISK, "opt_disk_insufficient", "/opt/rainbond 至少需要 40 GB 可用空间");
-  add(!Number.isFinite(Number(facts.rancherBytes)) || Number(facts.rancherBytes) < MIN_DISK, "rancher_disk_insufficient", "/var/lib/rancher 至少需要 40 GB 可用空间");
-  const occupied = Array.isArray(facts.occupiedPorts) ? facts.occupiedPorts.filter((port) => REQUIRED_PORTS.includes(Number(port))) : [];
-  add(occupied.length > 0, "ports_occupied", `端口已被占用：${occupied.join(", ")}`);
-  add(facts.sourceReachable !== true, "source_unreachable", "Rainbond 安装源不可访问");
-  add(facts.imageReachable !== true, "image_unreachable", "Rainbond 镜像源不可访问");
-  add(facts.softwareReachable !== true, "software_unreachable", "RKE2/软件源不可访问");
-  add(bootstrap && facts.bootstrapReachable !== true, "bootstrap_network_unreachable", "bootstrap 无法访问其他节点");
-  add(facts.existingRke2 === true, "existing_rke2", "节点已存在 RKE2，安装器不会自动删除或覆盖");
-  add(facts.existingRainbond === true, "existing_rainbond", "节点已存在 Rainbond 数据，安装器不会自动删除或覆盖");
-  return blockers;
-}
-
 function boundedOutputLimit(requested) {
   const value = Number(requested);
   if (!Number.isSafeInteger(value) || value <= 0) return MAX_CHILD_OUTPUT_BYTES;
@@ -859,70 +867,64 @@ async function prepareHostSshSessions(topology, {
   sessionFactory,
   interactive = process.stdin.isTTY && process.stdout.isTTY,
   write = (value) => process.stdout.write(value),
+  configPath,
+  packageVersion = require("../../package.json").version,
+  platform = process.platform,
 } = {}) {
   const sessions = new Map();
+  const pending = [];
   if (typeof sessionFactory !== "function") return { waiting: false, sessions };
   for (const item of topology.hosts) {
-    const session = await sessionFactory(item, { interactive, write });
+    const session = await sessionFactory(item, { interactive, write, deferAuthenticationMessage: true });
     if (!session) {
-      return { waiting: true, sessions };
+      pending.push(item);
+      continue;
     }
     sessions.set(item.name, session);
+  }
+  if (pending.length > 0) {
+    write("\n[RAINSKILLS_USER_INPUT_REQUIRED:ssh_authentication]\n");
+    writeUserMessage(write, "platform.ssh-authentication", renderHostClusterSshAuthenticationPrompt({
+      nodes: pending,
+      configPath,
+      packageVersion,
+      platform,
+    }));
+    return { waiting: true, sessions, pending };
   }
   return { waiting: false, sessions };
 }
 
-async function runHostPreflight(config, { sshRunner = defaultSshRunner, sessions = new Map(), registerChild, sshSpawn } = {}) {
-  const topology = validateClusterTopology(config);
-  const tasks = topology.hosts.map(async (item) => {
-    const peers = item.bootstrap
-      ? topology.hosts.filter(({ name }) => name !== item.name).map(({ internalAddress }) => internalAddress)
-      : [];
-    const args = [...sshOptionsForSession(sessions.get(item.name)), "-p", String(item.port), `root@${item.address}`, "bash", "-s", "--", "rainskills-host-preflight-v1", ...peers];
-    let execution;
-    try {
-      execution = await sshRunner("ssh", args, { input: HOST_PREFLIGHT_SCRIPT, registerChild, spawnFn: sshSpawn });
-    } catch {
-      return { name: item.name, address: item.address, arch: null, blockers: [{ code: "ssh_unreachable", message: "系统 SSH 无法连接该节点" }] };
-    }
-    if (execution.signal) {
-      return { name: item.name, address: item.address, arch: null, interrupted: true, signal: execution.signal, blockers: [] };
-    }
-    if (execution.code !== 0) {
-      return { name: item.name, address: item.address, arch: null, blockers: [{ code: "ssh_unreachable", message: "系统 SSH 无法连接该节点" }] };
-    }
-    let facts;
-    try { facts = parsePreflightOutput(execution.stdout); } catch {
-      return { name: item.name, address: item.address, arch: null, blockers: [{ code: "preflight_invalid", message: "节点返回了无效的预检结果" }] };
-    }
-    const blockers = evaluateHostFacts(facts, { bootstrap: item.bootstrap });
-    return {
-      name: item.name,
-      address: item.address,
-      arch: ["x86_64", "x64"].includes(String(facts.arch).toLowerCase()) ? "amd64" : String(facts.arch).toLowerCase() === "aarch64" ? "arm64" : String(facts.arch).toLowerCase(),
-      cpu: Number(facts.cpu),
-      memoryBytes: Number(facts.memoryBytes),
-      optBytes: Number(facts.optBytes),
-      rancherBytes: Number(facts.rancherBytes),
-      blockers,
-    };
-  });
-  const nodes = await Promise.all(tasks);
-  const interrupted = nodes.find((node) => node.interrupted);
-  return {
-    ok: !interrupted && nodes.every(({ blockers }) => blockers.length === 0),
-    nodes,
-    blockers: nodes.flatMap((node) => node.blockers.map((blocker) => ({ node: node.name, ...blocker }))),
-    ...(interrupted ? { interrupted: true, signal: interrupted.signal } : {}),
-  };
+async function probeRemoteArchitecture(bootstrap, {
+  session,
+  sshRunner = defaultSshRunner,
+  registerChild,
+  sshSpawn,
+} = {}) {
+  const args = [
+    ...sshOptionsForSession(session),
+    "-p", String(bootstrap.port),
+    `root@${bootstrap.address}`,
+    "uname", "-m",
+  ];
+  const execution = await sshRunner("ssh", args, { registerChild, spawnFn: sshSpawn });
+  if (execution.signal) {
+    const error = new Error("读取 bootstrap 节点架构时被中断");
+    error.code = "RAINSKILLS_HOST_CLUSTER_INTERRUPTED";
+    error.signal = execution.signal;
+    throw error;
+  }
+  if (execution.code !== 0) throw new Error("无法读取 bootstrap 节点的 CPU 架构");
+  const value = String(execution.stdout || "").trim().toLowerCase();
+  if (["x86_64", "x64", "amd64"].includes(value)) return "amd64";
+  if (["aarch64", "arm64"].includes(value)) return "arm64";
+  throw new Error("bootstrap 节点的 CPU 架构不受 ROI 支持");
 }
 
 function renderConfirmationSummary(summary) {
   const lines = ["\nROI 主机集群安装确认", "", `节点拓扑：${summary.hosts} 个节点`];
   for (const node of summary.nodes || []) lines.push(`- ${node.name}: ${node.roles.join(", ")}${node.bootstrap ? " (bootstrap)" : ""}`);
-  lines.push("", "阻断项：", ...(summary.blockers?.length ? summary.blockers.map((item) => `- ${item.message || item}`) : ["- 无"]));
-  lines.push("风险提示：", ...(summary.warnings?.length ? summary.warnings.map((item) => `- ${item.message || item}`) : ["- 无"]));
-  lines.push("将发生的系统变更：安装 RKE2、Containerd、Rainbond 及所选存储组件；写入 /opt/rainbond 和 /var/lib/rancher。", `受保护配置：${summary.configPath}`, "");
+  lines.push("", "将发生的系统变更：安装 RKE2、Containerd、Rainbond 及所选存储组件；写入 /opt/rainbond 和 /var/lib/rancher。", `受保护配置：${summary.configPath}`, "");
   return `${lines.join("\n")}\n`;
 }
 
@@ -936,7 +938,6 @@ async function confirmRoiInstall({
   onAccepted,
 }) {
   write(renderConfirmationSummary(summary));
-  if (summary.blockers?.length) throw new Error("主机集群预检存在阻断项，不能继续执行 ROI");
   if (!yes) {
     if (!interactive) {
       write("[RAINSKILLS_USER_CONFIRMATION_REQUIRED:roi_install]\n确认以上拓扑和系统变更后，请使用原命令并添加 --yes。\n");
@@ -1043,8 +1044,9 @@ function defaultVersionProbe(filePath) {
 
 function normalizeRoiVersionOutput(output) {
   const lines = String(output || "").replace(/\r/g, "").split("\n").map((line) => line.trim()).filter(Boolean);
-  const version = lines.find((line) => /^roi\s+version\b/i.test(line));
-  if (!version || version.length > 120 || /[\u0000-\u001f\u007f-\u009f]/u.test(version) || !/^roi\s+version\s+[A-Za-z0-9][A-Za-z0-9._+/-]{0,99}$/i.test(version)) {
+  const versionPattern = /^roi\s+version(?:\s+[A-Za-z0-9][A-Za-z0-9._+/-]{0,99}|:\s+[A-Za-z0-9][A-Za-z0-9._+/-]{0,99})$/i;
+  const version = lines.find((line) => versionPattern.test(line));
+  if (!version || version.length > 120 || /[\u0000-\u001f\u007f-\u009f]/u.test(version)) {
     throw new Error("roi version 未返回安全、有效的 ROI 版本");
   }
   return version;
@@ -1490,12 +1492,13 @@ async function defaultTransfer({
   runner = spawnSync,
 }) {
   const runOptions = { encoding: "utf8", timeout: 30_000, stdio: ["inherit", "pipe", "pipe"] };
+  const scriptRunOptions = { ...runOptions, stdio: ["pipe", "pipe", "pipe"] };
   const sshOptions = sshOptionsForSession(session);
   const remoteDirectory = path.posix.dirname(remotePath);
   const remoteTemporary = path.posix.join(remoteDirectory, `.rainskills-upload-${crypto.randomBytes(16).toString("hex")}`);
   const mkdir = runner("ssh", [...sshOptions, "-p", String(port), host, "install", "-d", "-m", "700", "--", remoteDirectory], runOptions);
   if (mkdir.error || mkdir.status !== 0) throw new Error("无法准备 bootstrap 受保护操作目录");
-  const stage = runner("ssh", [...sshOptions, "-p", String(port), host, "bash", "-s", "--", remoteDirectory, remoteTemporary], { ...runOptions, input: REMOTE_STAGE_SCRIPT });
+  const stage = runner("ssh", [...sshOptions, "-p", String(port), host, "bash", "-s", "--", remoteDirectory, remoteTemporary], { ...scriptRunOptions, input: REMOTE_STAGE_SCRIPT });
   if (stage.error || stage.status !== 0) throw new Error("无法创建 bootstrap 安全上传暂存文件");
   const upload = runner("scp", [...sshOptions, "-P", String(port), localPath, `${host}:${remoteTemporary}`], { ...runOptions, timeout: 5 * 60_000 });
   if (upload.error || upload.status !== 0) throw new Error("无法把受保护安装文件传输到 bootstrap");
@@ -1503,7 +1506,7 @@ async function defaultTransfer({
   const publish = runner("ssh", [
     ...sshOptions, "-p", String(port), host, "bash", "-s", "--",
     remoteTemporary, remotePath, expectedDigest, remoteMode,
-  ], { ...runOptions, input: REMOTE_PUBLISH_SCRIPT });
+  ], { ...scriptRunOptions, input: REMOTE_PUBLISH_SCRIPT });
   if (publish.error || publish.status !== 0) {
     if (publish.status === 73 || /FINAL_NOT_REGULAR/.test(String(publish.stderr || ""))) {
       throw new Error("bootstrap 目标路径不是受信任的普通文件，拒绝覆盖 symlink 或非 regular 文件");
@@ -1854,7 +1857,11 @@ async function installHostCluster({ onboarding, state, paths, options }, depende
         status: "waiting_user",
         template_sha256: sha256(template),
       });
-      write(`\n[RAINSKILLS_USER_INPUT_REQUIRED:host_cluster_config]\n集群配置文件已生成：${configPath}\n\n请一次性修改文件中的服务器地址、SSH 端口和节点角色。\n不要在文件中填写密码、私钥或 Token。\n\n编辑完成后回复“已完成”，我会检查全部节点和集群拓扑。\n`);
+      write("\n[RAINSKILLS_USER_INPUT_REQUIRED:host_cluster_config]\n");
+      writeUserMessage(write, "platform.host-cluster-config", renderHostClusterConfigPrompt({
+        configPath,
+        platform: dependencies.platform || process.platform,
+      }));
       return { waiting: true, waitingStage: "waiting-host-cluster-config", configPath };
     }
     stateStore.assertProtectedRegularFile(configPath);
@@ -1865,7 +1872,12 @@ async function installHostCluster({ onboarding, state, paths, options }, depende
     const diagnostic = diagnoseClusterConfig(bytes, { source: "generated-template" });
     if (diagnostic.issues.length > 0) {
       persistDriverState({ stage: "configuration", status: "waiting_user" });
-      write(`\n[RAINSKILLS_USER_INPUT_REQUIRED:host_cluster_config]\n集群配置还需要调整：\n${diagnostic.issues.map((issue, index) => `${index + 1}. ${issue}`).join("\n")}\n\n请修改同一个配置文件，完成后回复“已完成”。\n`);
+      write("\n[RAINSKILLS_USER_INPUT_REQUIRED:host_cluster_config]\n");
+      writeUserMessage(write, "platform.host-cluster-config", renderHostClusterConfigPrompt({
+        configPath,
+        platform: dependencies.platform || process.platform,
+        issues: diagnostic.issues,
+      }));
       return { waiting: true, waitingStage: "waiting-host-cluster-config", configPath, issues: diagnostic.issues };
     }
     config = diagnostic.value;
@@ -1908,15 +1920,15 @@ async function installHostCluster({ onboarding, state, paths, options }, depende
   if (driverState.config_sha256 && driverState.config_sha256 !== configSha256) throw new Error("恢复时 cluster.yaml 字节发生变化，拒绝继续");
   if (!driverState.config_sha256) persistDriverState({ config_sha256: configSha256 });
   if (driverState.stage === "configuration") {
-    write(`\n[RAINSKILLS_STATUS:host_cluster_config_valid]\n集群配置检查通过：\n- 节点：${topology.hosts.length} 个\n- etcd：${topology.roleGroups.etcd.length} 个\n- bootstrap：${topology.bootstrap.name}\n- 存储模式：${topology.storageMode}\n\n正在检查所有服务器的 SSH 连接和运行条件。\n`);
+    write(`\n[RAINSKILLS_STATUS:host_cluster_config_valid]\n集群配置检查通过：\n- 节点：${topology.hosts.length} 个\n- etcd：${topology.roleGroups.etcd.length} 个\n- bootstrap：${topology.bootstrap.name}\n- 存储模式：${topology.storageMode}\n\n正在准备所有服务器的 SSH 连接。\n`);
   }
-  const prepared = await prepareHostSshSessions(topology, dependencies);
+  const prepared = await prepareHostSshSessions(topology, { ...dependencies, configPath });
   const closeSessions = () => {
     if (typeof dependencies.closeSession !== "function") return;
     for (const session of prepared.sessions.values()) dependencies.closeSession(session);
   };
   if (prepared.waiting) {
-    persistDriverState({ stage: "preflight", status: "waiting_user", config_sha256: configSha256 });
+    persistDriverState({ stage: "ssh", status: "waiting_user", config_sha256: configSha256 });
     closeSessions();
     return { waiting: true };
   }
@@ -1987,7 +1999,7 @@ async function installHostCluster({ onboarding, state, paths, options }, depende
 
     if (["verifying", "completed"].includes(driverState.stage)) return verifyAndComplete();
 
-    const normalStages = new Set(["configuration", "preflight", "confirmation", "artifact"]);
+    const normalStages = new Set(["configuration", "ssh", "preflight", "confirmation", "artifact"]);
     if (!normalStages.has(driverState.stage)) {
       let reconciliation;
       try {
@@ -2024,15 +2036,9 @@ async function installHostCluster({ onboarding, state, paths, options }, depende
       return executeLockedArtifact(artifact);
     }
 
-    const beforePreflight = interruptedAt("preflight");
-    if (beforePreflight) return beforePreflight;
-    persistDriverState({ stage: "preflight", status: "running", config_sha256: configSha256 });
-    const preflight = await (dependencies.runPreflight || runHostPreflight)(config, { ...dependencies, sessions: prepared.sessions });
-    if (preflight.interrupted) {
-      persistDriverState({ stage: "preflight", status: "interrupted", signal: preflight.signal || "SIGINT", resumeArgv });
-      return { waiting: true, interrupted: true, signal: preflight.signal || "SIGINT", resumeArgv };
-    }
-    const summary = { ...summarizeTopology(config), blockers: preflight.blockers, configPath };
+    const beforeConfirmation = interruptedAt("confirmation");
+    if (beforeConfirmation) return beforeConfirmation;
+    const summary = { ...summarizeTopology(config), configPath };
     const confirmation = await (dependencies.confirm || confirmRoiInstall)({
       summary,
       interactive: dependencies.interactive,
@@ -2042,18 +2048,24 @@ async function installHostCluster({ onboarding, state, paths, options }, depende
       write: dependencies.write,
       onAccepted: async () => {
         persistDriverState({ execution_approved: true, resumeArgv });
-        const bootstrapFacts = preflight.nodes.find(({ name }) => name === topology.bootstrap.name);
-        persistDriverState({ stage: "artifact", status: "running" });
         const artifactPath = path.join(hostRoot, "roi");
         let artifact;
         try {
+          let bootstrapArch = driverState.bootstrap_arch;
+          if (!bootstrapArch) {
+            bootstrapArch = await (dependencies.probeArchitecture || probeRemoteArchitecture)(topology.bootstrap, {
+              ...dependencies,
+              session: bootstrapSession,
+            });
+          }
+          persistDriverState({ stage: "artifact", status: "running", bootstrap_arch: bootstrapArch });
           artifact = reuseLockedRoiArtifact({
             state: driverState,
             configPath,
             artifactPath,
             stateStore,
           }) || await (dependencies.acquireArtifact || acquireRoiArtifact)({
-            arch: bootstrapFacts.arch,
+            arch: bootstrapArch,
             operationDir: hostRoot,
             stateStore,
             abortState: dependencies.abortState,
@@ -2096,7 +2108,6 @@ async function installHostCluster({ onboarding, state, paths, options }, depende
 module.exports = {
   ALL_ROLES,
   CRITICAL_WORKLOADS,
-  HOST_PREFLIGHT_SCRIPT,
   acquireRoiArtifact,
   atomicWriteProtectedBytes,
   confirmRoiInstall,
@@ -2104,7 +2115,6 @@ module.exports = {
   createProtectedBytesExclusive,
   defaultSshRunner,
   defaultTransfer,
-  evaluateHostFacts,
   executeRoiInstall,
   diagnoseClusterConfig,
   hasSensitiveFields,
@@ -2112,15 +2122,17 @@ module.exports = {
   inspectRemoteCluster,
   installHostCluster,
   parseClusterDocument,
+  probeRemoteArchitecture,
   probeRemoteRoiVersion,
   prepareHostSshSessions,
   probeConsole,
   readSafeClusterSource,
   reconcileHostExecution,
   redactInstallLog,
+  renderHostClusterConfigPrompt,
+  renderHostClusterSshAuthenticationPrompt,
   renderConfirmationSummary,
   runClusterWizard,
-  runHostPreflight,
   spawnRedactedAttached,
   reuseLockedRoiArtifact,
   serializeMinimalClusterConfig,
