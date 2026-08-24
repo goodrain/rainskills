@@ -42,7 +42,8 @@ test("repository exposes one complete Rainskills marketplace entry", () => {
   assert.match(skill, /every bundled `rainbond-\*` Skill as an independent Skill/i);
   assert.match(skill, /Do not ask the user to choose only one/i);
   assert.match(skill, /Codex=`codex` or Claude Code=`claude`/);
-  assert.match(skill, /does not support OpenClaw or Pi Agent/);
+  assert.match(skill, /does not support OpenClaw/);
+  assert.doesNotMatch(skill, /\bPi(?: Agent)?\b/);
   assert.match(skill, /attached interactive terminal/i);
   assert.match(skill, /RAINSKILLS_USER_INPUT_REQUIRED/);
   assert.match(skill, /rainskills\.next-action\.v1/);
@@ -185,16 +186,18 @@ test("release verifies marketplace output before building the repository tarball
   );
 });
 
-test("npm artifact includes the marketplace entry", () => {
+test("npm artifact includes the marketplace entry without a Pi adapter", () => {
   const manifest = readJson("package.json");
 
   assert(manifest.files.includes("SKILL.md"));
   assert(manifest.files.includes("agents/"));
   assert(manifest.files.includes("marketplace/"));
-  assert(manifest.files.includes("pi/"));
-  assert.deepEqual(manifest.pi, {
-    skills: ["./marketplace/rainskills/skills"],
-  });
+  assert(!manifest.files.includes("pi/"));
+  assert.equal(manifest.pi, undefined);
+  assert.equal(manifest.scripts["build:pi"], undefined);
+  assert.equal(manifest.scripts["check:pi"], undefined);
+  assert.equal(manifest.scripts["test:pi"], undefined);
+  assert.doesNotMatch(manifest.scripts.test, /test:pi/);
   assert.equal(
     manifest.scripts["test:marketplace"],
     "node --test tests/marketplace-entry.test.js"
@@ -237,8 +240,9 @@ test("README documents one-product installation and adapter-neutral stable auto-
   assert.match(readme, /RC.*不会.*自动升级/s);
   assert.match(readme, /升级只更新 Rainskills 自身，不触发 Rainbond/s);
   assert.match(readme, /支持 Codex 和 Claude Code/);
-  assert.match(readme, /不支持 OpenClaw 或 Pi Agent 安装/);
-  assert.doesNotMatch(readme, /npx --yes rainskills (openclaw|pi)/);
+  assert.match(readme, /不支持 OpenClaw 安装/);
+  assert.doesNotMatch(readme, /\bPi(?: Agent)?\b/);
+  assert.doesNotMatch(readme, /npx --yes rainskills openclaw/);
   assert.match(readme, /只会看到一个.*Rainskills/s);
   assert.match(readme, /安装完成后.*不会.*运行环境|安装完成后.*只.*Skills/s);
 });
@@ -255,4 +259,18 @@ test("generated marketplace guidance installs Skills without eager runtime setup
   const completion = skill.slice(skill.indexOf("## Completion Message"));
   assert.match(completion, /下一步可以直接说/);
   assert.doesNotMatch(completion, /reload|restart|重新加载|重启/i);
+});
+
+test("production entry points contain no Pi-specific adapter", () => {
+  for (const file of [
+    "package.json",
+    ".github/workflows/release.yml",
+    "SKILL.md",
+    "README.md",
+    "bin/rainskills.js",
+    "install.sh",
+    "rainbond-platform-installer/scripts/windows-client-config.js",
+  ]) {
+    assert.doesNotMatch(read(file), /\bpi\b|Pi Agent/i, file);
+  }
 });

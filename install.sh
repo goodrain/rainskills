@@ -810,8 +810,8 @@ parse_args() {
         TARGET="$1"
         shift
         ;;
-      openclaw|pi)
-        die "macOS/Linux 安装器不再支持 OpenClaw 和 Pi Agent，请使用 Codex 或 Claude Code。"
+      openclaw)
+        die "macOS/Linux 安装器不再支持 OpenClaw，请使用 Codex 或 Claude Code。"
         ;;
       --dest)
         [[ $# -ge 2 ]] || die "--dest 需要一个路径值"

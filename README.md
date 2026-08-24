@@ -41,7 +41,7 @@ Claude Code：
 /reload-plugins
 ```
 
-安装流程支持 Codex 和 Claude Code；macOS、Linux 和 WSL 不支持 OpenClaw 或 Pi Agent 安装。不要手工复制 Skill、拼接凭据或修改 MCP 配置。
+安装流程支持 Codex 和 Claude Code；macOS、Linux 和 WSL 不支持 OpenClaw 安装。不要手工复制 Skill、拼接凭据或修改 MCP 配置。
 
 ## 安装完成时用户会看到什么
 

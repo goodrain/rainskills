@@ -142,7 +142,7 @@ function removeExistingClient(spawnImpl, command, args, options) {
 }
 
 function localMcpCommand(client, packageVersion = require("../../package.json").version) {
-  if (!["codex", "claude", "pi", "generic"].includes(client)) {
+  if (!["codex", "claude", "generic"].includes(client)) {
     throw new Error("本地 MCP client 无效");
   }
   if (typeof packageVersion !== "string" || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(packageVersion)) {

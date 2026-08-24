@@ -244,7 +244,7 @@ test("environment commands use immutable ids and operation begin has no project 
 
 test("mcp serve starts one local operation router for every supported agent client", async () => {
   const { runBuiltin } = require(launcherPath);
-  for (const client of ["codex", "claude", "pi", "generic"]) {
+  for (const client of ["codex", "claude", "generic"]) {
     const calls = [];
     assert.equal(await runBuiltin(["mcp", "serve", "--client", client], {
       environmentRegistry: { read() {}, get() {} },
@@ -258,6 +258,11 @@ test("mcp serve starts one local operation router for every supported agent clie
     assert.equal(typeof calls[0].environmentCredentialStore.read, "function");
     assert.equal(typeof calls[0].operationStore.read, "function");
   }
+
+  await assert.rejects(
+    () => runBuiltin(["mcp", "serve", "--client", "pi"], {}),
+    /mcp serve 参数无效/
+  );
   await assert.rejects(
     () => runBuiltin(["mcp", "serve", "--client", "unknown"], {
       mcpServerRunner: async () => {},

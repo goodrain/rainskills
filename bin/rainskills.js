@@ -338,7 +338,7 @@ function parseMcpServeArgs(args) {
     || args[0] !== "mcp"
     || args[1] !== "serve"
     || args[2] !== "--client"
-    || !["codex", "claude", "pi", "generic"].includes(args[3])
+    || !["codex", "claude", "generic"].includes(args[3])
   ) {
     throw new Error("mcp serve 参数无效");
   }

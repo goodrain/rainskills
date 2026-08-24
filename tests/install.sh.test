@@ -753,24 +753,22 @@ test_noninteractive_http_requires_explicit_opt_in() {
   grep -F -- "--allow-insecure-http" /tmp/rainbond-install-test.out >/dev/null || fail "expected insecure http guidance"
 }
 
-test_posix_clients_openclaw_and_pi_are_rejected() {
-  local target tmpdir output_file rc
-  for target in openclaw pi; do
-    tmpdir="$(mktemp -d)"
-    output_file="/tmp/rainbond-install-${target}-removed.out"
-    mkdir -p "$tmpdir/home" "$tmpdir/logs"
-    make_fake_commands "$tmpdir/bin"
+test_posix_client_openclaw_is_rejected() {
+  local tmpdir output_file rc
+  tmpdir="$(mktemp -d)"
+  output_file="/tmp/rainbond-install-openclaw-removed.out"
+  mkdir -p "$tmpdir/home" "$tmpdir/logs"
+  make_fake_commands "$tmpdir/bin"
 
-    set +e
-    run_installer "$tmpdir" "$target" --skip-mcp --force >"$output_file" 2>&1
-    rc=$?
-    set -e
+  set +e
+  run_installer "$tmpdir" openclaw --skip-mcp --force >"$output_file" 2>&1
+  rc=$?
+  set -e
 
-    [[ $rc -ne 0 ]] || fail "expected POSIX installer to reject $target"
-    grep -F -- "macOS/Linux 安装器不再支持 OpenClaw 和 Pi Agent" "$output_file" >/dev/null \
-      || fail "expected removed $target guidance"
-    rm -rf "$tmpdir"
-  done
+  [[ $rc -ne 0 ]] || fail "expected POSIX installer to reject openclaw"
+  grep -F -- "macOS/Linux 安装器不再支持 OpenClaw" "$output_file" >/dev/null \
+    || fail "expected removed openclaw guidance"
+  rm -rf "$tmpdir"
 }
 
 test_default_install_is_skills_only() {
@@ -1612,7 +1610,7 @@ test_internal_connect_action_accepts_inspected_loopback_and_private_http_only() 
 }
 
 test_noninteractive_http_requires_explicit_opt_in
-test_posix_clients_openclaw_and_pi_are_rejected
+test_posix_client_openclaw_is_rejected
 test_default_install_is_skills_only
 test_skills_only_completion_contract_for_every_posix_target
 test_posix_all_target_installs_both_skill_sets_and_preserves_force_counts

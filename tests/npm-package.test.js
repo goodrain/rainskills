@@ -73,11 +73,12 @@ test("package metadata defines a public npx command with pinned runtime dependen
     "@modelcontextprotocol/sdk": "1.30.0",
     yaml: "2.9.0",
   });
-  assert.equal(manifest.devDependencies.esbuild, "0.25.8");
-  assert.equal(manifest.devDependencies["@modelcontextprotocol/sdk"], undefined);
-  assert.deepEqual(manifest.pi, {
-    skills: ["./marketplace/rainskills/skills"],
-  });
+  assert.equal(manifest.devDependencies, undefined);
+  assert.equal(manifest.pi, undefined);
+  assert(!manifest.files.includes("pi/"));
+  assert.equal(manifest.scripts["build:pi"], undefined);
+  assert.equal(manifest.scripts["check:pi"], undefined);
+  assert.equal(manifest.scripts["test:pi"], undefined);
   assert.equal(manifest.scripts.postinstall, undefined);
   assert.equal(
     manifest.scripts["test:package-upload"],
@@ -85,7 +86,7 @@ test("package metadata defines a public npx command with pinned runtime dependen
   );
   assert.equal(
     manifest.scripts.test,
-    "npm run test:auto-update && npm run test:launcher && npm run test:api-bridge && npm run test:skill-profile && npm run test:marketplace && npm run test:runtime-routing && npm run test:pi && npm run test:telemetry && npm run test:platform && npm run test:windows && npm run test:package-upload && npm run test:package && npm run test:installer && npm run test:signal && npm run test:npx-pty"
+    "npm run test:auto-update && npm run test:launcher && npm run test:api-bridge && npm run test:skill-profile && npm run test:marketplace && npm run test:runtime-routing && npm run test:telemetry && npm run test:platform && npm run test:windows && npm run test:package-upload && npm run test:package && npm run test:installer && npm run test:signal && npm run test:npx-pty"
   );
   assert.equal(manifest.scripts["test:auto-update"], "node --test tests/auto-update.test.js");
   assert.equal(
@@ -109,7 +110,7 @@ test("packed artifact contains the installer and all skills but no development f
   assert(filePaths.has("bin/rainskills.js"));
   assert(filePaths.has("bin/rainskills-tools.js"));
   assert(filePaths.has("install.sh"));
-  assert(filePaths.has("pi/rainskills-mcp.ts"));
+  assert(![...filePaths].some((filePath) => filePath.startsWith("pi/")));
   assert(filePaths.has("rainbond-platform-installer/scripts/platform-installer.js"));
   assert(filePaths.has("rainbond-platform-installer/scripts/auto-update.js"));
   assert(filePaths.has("rainbond-platform-installer/scripts/host-cluster-installer.js"));
