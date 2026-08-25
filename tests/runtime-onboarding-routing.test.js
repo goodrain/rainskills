@@ -731,7 +731,10 @@ test("platform installer guidance reveals modes progressively", () => {
   assert.match(progressive, /本机.*不.*ROI.*Kubernetes/s);
   assert.match(progressive, /1、2 或 N|1\/2\/N/);
   assert.match(progressive, /etcd.*正奇数/i);
-  assert.match(progressive, /可点击.*cluster\.yaml.*当前系统.*打开命令/s);
+  assert.match(progressive, /可点击.*servers\.txt.*当前系统.*打开命令/s);
+  assert.match(progressive, /public_ip.*private_ip.*ssh_port.*password/s);
+  assert.match(progressive, /自动生成.*cluster\.yaml/s);
+  assert.match(progressive, /普通用户不编辑.*cluster\.yaml/s);
   assert.doesNotMatch(progressive, /只告诉用户文件位置/);
   assert.match(progressive, /全部.*未就绪.*节点.*一次.*列出/s);
   assert.match(progressive, /prepare-cluster.*--cluster-config/s);

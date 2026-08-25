@@ -65,7 +65,7 @@ Do not use it to deploy an application to an existing Rainbond. Route those requ
 
 主机集群普通入口接受 `3-100` 台 Linux 主机。第一次进入 configuration 阶段时，必须只生成权限为 `0600`（Windows 为仅当前用户可读写）的受保护 `servers.txt` 并停止等待，不得先生成 `cluster.yaml`、发起 SSH、下载或安装。该文件带中文标题、中文注释和三个节点区块；用户可复制完整区块扩展节点，只填写每台服务器的公网 IP、内网 IP、SSH 端口和 root 密码。逐节点 SSH 端口按实际值填写，不要求为 22。固定消息必须包含可点击的 `servers.txt` 链接、当前系统的打开命令、`public_ip`、`private_ip`、`ssh_port`、`password` 四字段说明，以及“编辑完成后回复‘已完成’”。普通用户不编辑 `cluster.yaml`、YAML 或节点角色。
 
-用户继续同一 onboarding 时，读取同一份受保护 `servers.txt`（UTF-8，最大 1 MiB）并一次性列出全部可确定的区块、字段、地址、端口、重复节点和 3-100 节点数量问题。存在问题时保持原文件供修改，不创建 YAML 或产生其他副作用。校验通过后，自动生成受保护的 `cluster.yaml` 并自动分配拓扑：前三台承担 etcd/master，全部节点承担 worker/rbd-chaos，前两台承担 rbd-gateway，第一台承担 bootstrap/nfs-server。在第一次 SSH 动作之前展示不含密码的完整逐节点角色拓扑、bootstrap 和存储摘要，再检查并准备全部节点的 SSH 免密连接。
+用户继续同一 onboarding 时，读取同一份受保护 `servers.txt`（UTF-8，最大 1 MiB）并一次性列出全部可确定的区块、字段、地址、端口、重复节点和 3-100 节点数量问题。存在问题时保持原文件供修改，不创建 YAML 或产生其他副作用。校验通过后，自动生成受保护的 `cluster.yaml` 并自动分配拓扑：前三台承担 etcd/master，全部节点承担 worker/rbd-chaos，前两台承担 rbd-gateway，第一台承担 bootstrap/nfs-server。普通入口固定使用 3 个 etcd 节点；高级导入的 etcd 节点数仍必须是正奇数。在第一次 SSH 动作之前展示不含密码的完整逐节点角色拓扑、bootstrap 和存储摘要，再检查并准备全部节点的 SSH 免密连接。
 
 密码只保存在受保护的本地 `servers.txt`、自动生成的 `cluster.yaml` 和 ROI 安装/恢复所需的受保护远端配置中；密码不会写入聊天、日志、状态或错误信息，摘要也不得包含密码。恢复时锁定 `servers.txt` 与自动生成 `cluster.yaml` 的摘要；只采用与当前输入逐字节匹配的 crash residue，来源不明、符号链接、不匹配或锁定后漂移的文件均停止。
 
