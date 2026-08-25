@@ -96,6 +96,47 @@ test("platform query fixes Console-required arguments for CLI and embedded execu
   assert.match(query, /rainbond_query_regions.*enterprise_id/s);
 });
 
+test("local runtime commands request protected-state access in sandboxed hosts", () => {
+  const localRuntimeSkills = [
+    "SKILL.md",
+    ...fs.readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name.startsWith("rainbond-"))
+      .map((entry) => `${entry.name}/SKILL.md`)
+      .filter((relativePath) => fs.existsSync(path.join(root, relativePath)))
+      .filter((relativePath) => read(relativePath).includes("local-runtime.js")),
+  ];
+  const expectedRule = /受限沙箱.*用户级受保护目录访问/is;
+
+  for (const relativePath of localRuntimeSkills) {
+    assert.match(read(relativePath), expectedRule, relativePath);
+  }
+
+  const embedded = embeddedMarkdown();
+  assert.match(embedded, expectedRule);
+});
+
+test("runtime prerequisites are session-cached and never rediscover fixed launchers", () => {
+  const localRuntimeSkills = [
+    "SKILL.md",
+    ...fs.readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name.startsWith("rainbond-"))
+      .map((entry) => `${entry.name}/SKILL.md`)
+      .filter((relativePath) => fs.existsSync(path.join(root, relativePath)))
+      .filter((relativePath) => read(relativePath).includes("local-runtime.js")),
+  ];
+
+  for (const relativePath of localRuntimeSkills) {
+    const content = read(relativePath);
+    assert.match(content, /同一会话内只检查一次 Node\.js/, relativePath);
+    assert.match(content, /禁止读取、搜索或探测 `?rainskills\.js`?/, relativePath);
+    assert.match(content, /npm root -g/, relativePath);
+  }
+
+  const embedded = embeddedMarkdown();
+  assert.match(embedded, /同一会话内只检查一次 Node\.js/);
+  assert.match(embedded, /禁止读取、搜索或探测 `?rainskills\.js`?/);
+});
+
 test("failure context stays secret-safe and canonical blocker vocabularies agree", () => {
   const appAssistant = read("rainbond-app-assistant/SKILL.md");
   const troubleshooter = read("rainbond-fullstack-troubleshooter/SKILL.md");

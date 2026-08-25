@@ -18,6 +18,8 @@ If the adjacent installer is missing, check the local Node.js version before cho
 
 Skills-only 安装不需要 Node.js；CDN fallback 只负责安装 Skill 文件，不代表运行环境连接、应用部署或平台安装已经可执行。用户首次提出需要运行环境的动作时，对应业务 Skill 才检查 Node.js；固定 Rainskills launcher 需要 Node.js 18 或更高版本。缺失或版本过低时保留原始 intent 并停止，等待用户或 agent 明确同意安装或升级 Node.js，安装完成消息不得提前提示 Node.js。
 
+执行优化：同一会话内只检查一次 Node.js（首次使用本地 CLI 前）；仅在 Node.js 或 Rainskills 安装、升级，或 PATH 变更后失效。固定 launcher 和 argv 已在本 Skill 中，禁止读取、搜索或探测 `rainskills.js`，也禁止执行 `npm root -g`。每个新的业务操作仍需要刷新一次环境列表；带已有 `operation_id` 或 `onboarding-id` 的续接复用已绑定的环境 ID，不重复枚举环境。
+
 ## Completion Message
 
 The installer emits this text inside `RAINSKILLS_USER_MESSAGE_BEGIN:install.completed` and the matching END marker, followed by `RAINSKILLS_AGENT_SUMMARY_REQUIRED:include-next-actions`. Relay only the body exactly and print nothing else; do not expose the markers, summarize, reformat, add a source link, or add verification details. If the host still summarizes instead of relaying, its installation summary must retain at least one example from “下一步可以直接说”.
@@ -37,6 +39,8 @@ Rainskills 安装完成，下一条消息即可直接使用。
 ```
 
 ## Manage Runtime Environments
+
+受限沙箱（包括 Codex）执行本地状态命令时，必须申请用户级受保护目录访问权限；在 Codex 中使用 `require_escalated`。不得修改 `~/.rainbond` 权限、复制受保护状态到工作区，或因沙箱权限错误建议重装。
 
 环境是全局列表，不是项目绑定。本地状态命令必须定位已安装的同级 `rainbond-platform-installer/scripts/local-runtime.js`，解析为绝对路径后通过 `node` 以 argv 数组执行；不得为了查询本地环境访问 npm。只有连接或安装环境时才使用与当前技能包一致的固定 launcher `node <home>/.rainbond/lib/rainskills/bin/rainskills.js`（运行包版本 `rainskills@0.1.10`）。
 
