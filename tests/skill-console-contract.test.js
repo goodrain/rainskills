@@ -137,6 +137,24 @@ test("runtime prerequisites are session-cached and never rediscover fixed launch
   assert.match(embedded, /禁止读取、搜索或探测 `?rainskills\.js`?/);
 });
 
+test("browser and device authorization always use an attached interactive terminal", () => {
+  const localRuntimeSkills = [
+    "SKILL.md",
+    ...fs.readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name.startsWith("rainbond-"))
+      .map((entry) => `${entry.name}/SKILL.md`)
+      .filter((relativePath) => fs.existsSync(path.join(root, relativePath)))
+      .filter((relativePath) => read(relativePath).includes("runtime connect")),
+  ];
+  const expectedRule = /附加交互终端（TTY）[\s\S]*tty:\s*true/;
+
+  for (const relativePath of localRuntimeSkills) {
+    assert.match(read(relativePath), expectedRule, relativePath);
+  }
+
+  assert.match(embeddedMarkdown(), expectedRule);
+});
+
 test("failure context stays secret-safe and canonical blocker vocabularies agree", () => {
   const appAssistant = read("rainbond-app-assistant/SKILL.md");
   const troubleshooter = read("rainbond-fullstack-troubleshooter/SKILL.md");
