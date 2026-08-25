@@ -38,7 +38,7 @@ Rainskills 安装完成，下一条消息即可直接使用。
 
 ## Manage Runtime Environments
 
-环境是全局列表，不是项目绑定。本地状态命令必须定位已安装的同级 `rainbond-platform-installer/scripts/local-runtime.js`，解析为绝对路径后通过 `node` 以 argv 数组执行；不得为了查询本地环境访问 npm。只有连接或安装环境时才使用与当前技能包一致的固定 launcher `node <home>/.rainbond/lib/rainskills/bin/rainskills.js`（运行包版本 `rainskills@0.1.9`）。
+环境是全局列表，不是项目绑定。本地状态命令必须定位已安装的同级 `rainbond-platform-installer/scripts/local-runtime.js`，解析为绝对路径后通过 `node` 以 argv 数组执行；不得为了查询本地环境访问 npm。只有连接或安装环境时才使用与当前技能包一致的固定 launcher `node <home>/.rainbond/lib/rainskills/bin/rainskills.js`（运行包版本 `rainskills@0.1.10`）。
 
 - 列表：用本地 launcher 执行 `environment list --json`，只展示名称、类型、状态、是否默认和最近验证时间。
 - 重命名：用本地 launcher 执行 `environment rename --environment-id <uuid> --name <name>`。

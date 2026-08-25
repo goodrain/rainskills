@@ -585,6 +585,57 @@ test("call preserves only the explicit unauthenticated package upload mode", asy
   });
 });
 
+test("package-upload resolves the Console origin from the protected operation", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-package-upload-home-"));
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-package-upload-workspace-"));
+  const archive = path.join(workspace, "web release.zip");
+  const fakeBin = path.join(workspace, "bin");
+  const curlLog = path.join(workspace, "curl-argv.json");
+  fs.writeFileSync(archive, "package-bytes");
+  fs.mkdirSync(fakeBin);
+  const curl = path.join(fakeBin, "curl");
+  fs.writeFileSync(
+    curl,
+    [
+      `#!${process.execPath}`,
+      `require("node:fs").writeFileSync(${JSON.stringify(curlLog)}, JSON.stringify(process.argv.slice(2)));`,
+      "",
+    ].join("\n"),
+    { mode: 0o755 }
+  );
+  prepareProtectedRuntime(home, {
+    RAINBOND_URL: "https://console.example/base",
+    RAINBOND_JWT: "jwt.payload.signature",
+  });
+
+  const result = await runBridge(
+    ["package-upload", "--archive", archive, "--input", "-"],
+    {
+      home,
+      env: {
+        PATH: `${fakeBin}${path.delimiter}${process.env.PATH || ""}`,
+        RAINBOND_URL: "",
+        RAINBOND_JWT: "",
+      },
+      input: JSON.stringify({
+        url: "/console/upload/events/e1",
+        url_scope: "console_origin",
+        method: "POST",
+        content_type: "multipart/form-data",
+        file_field: "packageTarFile",
+        authorization: "none",
+        timeout: 30,
+      }),
+    }
+  );
+
+  assert.equal(result.code, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), { uploaded: true });
+  const curlArgv = JSON.parse(fs.readFileSync(curlLog, "utf8"));
+  assert.equal(curlArgv.at(-1), "https://console.example/console/upload/events/e1");
+  assert.equal(curlArgv.some((value) => /jwt|authorization/i.test(value)), false);
+});
+
 test("call rejects local JSON file paths and never opens a network connection", async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-bridge-input-"));
   const inputPath = path.join(tempDir, "input.json");

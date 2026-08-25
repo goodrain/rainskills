@@ -6,6 +6,7 @@ const https = require("node:https");
 const os = require("node:os");
 const path = require("node:path");
 const { createHash, randomUUID } = require("node:crypto");
+const { spawnSync } = require("node:child_process");
 
 const REQUEST_TIMEOUT_MS = 180_000;
 const INPUT_MAX_BYTES = 1024 * 1024;
@@ -40,6 +41,10 @@ const CALL_OPTION_DEFINITIONS = Object.freeze({
   "--skill-id": Object.freeze({ property: "skillId", pattern: SKILL_ID_PATTERN }),
   "--root-skill-id": Object.freeze({ property: "rootSkillId", pattern: SKILL_ID_PATTERN }),
 });
+const PACKAGE_UPLOAD_FIELDS = Object.freeze([
+  "url", "url_scope", "method", "content_type", "file_field", "authorization",
+]);
+const PACKAGE_UPLOAD_MAX_TIMEOUT_SECONDS = 3600;
 
 const EXIT = Object.freeze({
   USAGE: 2,
@@ -127,6 +132,23 @@ function requireRuntimeModule(filename) {
     }
   }
   throw new BridgeError("installed Rainskills CLI runtime is incomplete", EXIT.CONFIG);
+}
+
+function requireRuntimeFile(...segments) {
+  const candidates = [
+    path.resolve(__dirname, "..", ...segments),
+    path.resolve(__dirname, "..", "lib", "rainskills", ...segments),
+    path.resolve(__dirname, "..", "lib", ...segments),
+  ];
+  for (const candidate of candidates) {
+    try {
+      const info = fs.lstatSync(candidate);
+      if (info.isFile() && !info.isSymbolicLink()) return candidate;
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+  }
+  throw new BridgeError("installed Rainskills package upload helper is incomplete", EXIT.CONFIG);
 }
 
 function loadOperationConfig({ homeDir, operationId, includeRuntime }) {
@@ -249,6 +271,17 @@ function parseCommand(args) {
   if (command === "describe" && remaining.length === 2 && remaining[1]) {
     return { command, toolName: remaining[1], operationId };
   }
+  if (
+    command === "package-upload"
+    && remaining.length === 5
+    && remaining[1] === "--archive"
+    && remaining[2]
+    && !remaining[2].startsWith("--")
+    && remaining[3] === "--input"
+    && remaining[4] === "-"
+  ) {
+    return { command, archive: remaining[2], input: remaining[4], operationId };
+  }
   if (command === "read" && remaining.length === 4 && remaining[1] && remaining[2] === "--input" && remaining[3] === "-") {
     return { command, toolName: remaining[1], input: remaining[3], operationId };
   }
@@ -310,6 +343,80 @@ function readArguments(input) {
     throw new BridgeError("input JSON must be an object", EXIT.USAGE);
   }
   return parsed;
+}
+
+function validatePackageUploadRequest(value) {
+  const allowed = new Set([...PACKAGE_UPLOAD_FIELDS, "timeout"]);
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new BridgeError("package upload request must be an object", EXIT.USAGE);
+  }
+  for (const key of Object.keys(value)) {
+    if (!allowed.has(key)) throw new BridgeError("package upload request has unknown fields", EXIT.USAGE);
+  }
+  if (PACKAGE_UPLOAD_FIELDS.some((key) => typeof value[key] !== "string" || !value[key])) {
+    throw new BridgeError("package upload request is incomplete", EXIT.USAGE);
+  }
+  const timeout = value.timeout === undefined ? 1800 : value.timeout;
+  if (
+    !Number.isInteger(timeout)
+    || timeout < 1
+    || timeout > PACKAGE_UPLOAD_MAX_TIMEOUT_SECONDS
+  ) {
+    throw new BridgeError("package upload timeout is invalid", EXIT.USAGE);
+  }
+  return { ...value, timeout };
+}
+
+function packageUploadEnvironment(baseUrl, source = process.env) {
+  const environment = { RAINBOND_URL: baseUrl };
+  for (const key of [
+    "PATH", "SystemRoot", "WINDIR", "ComSpec", "PATHEXT",
+    "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL",
+    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+    "http_proxy", "https_proxy", "no_proxy",
+    "SSL_CERT_FILE", "SSL_CERT_DIR", "CURL_CA_BUNDLE",
+  ]) {
+    if (typeof source[key] === "string" && source[key]) environment[key] = source[key];
+  }
+  return environment;
+}
+
+function executePackageUpload(command, config, { spawnSyncFn = spawnSync } = {}) {
+  const request = validatePackageUploadRequest(command.argumentsValue);
+  const helper = requireRuntimeFile(
+    "rainbond-fullstack-bootstrap", "scripts", "upload_local_package.py"
+  );
+  const result = spawnSyncFn("python3", [
+    helper,
+    "upload",
+    "--archive", command.archive,
+    "--upload-url", request.url,
+    "--url-scope", request.url_scope,
+    "--method", request.method,
+    "--content-type", request.content_type,
+    "--file-field", request.file_field,
+    "--authorization", request.authorization,
+    "--timeout", String(request.timeout),
+  ], {
+    encoding: "utf8",
+    env: packageUploadEnvironment(config.baseUrl),
+    maxBuffer: 256 * 1024,
+    shell: false,
+    timeout: (request.timeout + 2) * 1000,
+  });
+  if (result.error || result.status !== 0) {
+    throw new BridgeError("package upload failed", EXIT.TOOL);
+  }
+  let payload;
+  try {
+    payload = JSON.parse(result.stdout);
+  } catch {
+    throw new BridgeError("package upload helper returned invalid JSON", EXIT.TRANSPORT);
+  }
+  if (!payload || payload.uploaded !== true || Object.keys(payload).length !== 1) {
+    throw new BridgeError("package upload helper returned an invalid result", EXIT.TRANSPORT);
+  }
+  return payload;
 }
 
 function assertPrivateDirectory(directory) {
@@ -825,6 +932,9 @@ async function listTools(config) {
 }
 
 async function execute(command, config) {
+  if (command.command === "package-upload") {
+    return executePackageUpload(command, config);
+  }
   if (command.command === "status") {
     const tools = await listTools(config);
     const cached = loadCachedCatalog(config);
@@ -937,7 +1047,7 @@ async function main(args = process.argv.slice(2)) {
   let argumentRedactions = [];
   try {
     command = parseCommand(args);
-    if (command.command === "read" || command.command === "call") {
+    if (["read", "call", "package-upload"].includes(command.command)) {
       const argumentsValue = readArguments(command.input);
       command.argumentsValue = argumentsValue;
       argumentRedactions = collectArgumentRedactions(argumentsValue);
@@ -970,9 +1080,12 @@ module.exports = {
   CATALOG_TTL_MS,
   CLI_VERSION,
   loadConfig,
+  executePackageUpload,
+  packageUploadEnvironment,
   parseEnvFile,
   parseCommand,
   rpcRequest,
+  validatePackageUploadRequest,
 };
 
 if (require.main === module) {
