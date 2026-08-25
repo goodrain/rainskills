@@ -240,19 +240,15 @@ Follow this transaction in the exact order below:
    - capture the helper's `archive_path`, `file_name`, `generated`, and `staging_root` result fields
    - a supported package file is reused directly; a directory is converted to a zip archive by the helper
 2. Call `rainbond_init_package_upload` with Rainbond context only. It must return a non-empty `event_id` and an `upload_request`. Do not continue when either is absent or malformed.
-3. Run `upload_local_package.py upload` locally with `archive_path` plus the exact returned `upload_request` contract:
-   - `upload_request.url` -> `--upload-url`
-   - `upload_request.url_scope` -> `--url-scope`
-   - `upload_request.method` -> `--method`
-   - `upload_request.content_type` -> `--content-type`
-   - `upload_request.file_field` -> `--file-field`
-   - `upload_request.authorization` -> `--authorization`
-   - do not invent a URL, authorization mode, form field, HTTP method, or content type; the helper validates the same-Console-origin upload contract before invoking HTTP
+3. Run the protected local CLI command `package-upload --archive <archive_path> --input - --operation-id <uuid>` using the fixed CLI launcher defined by the active Skill, passing the complete `upload_request` object through stdin as JSON:
+   - the CLI resolves the Console origin from the environment already bound to the protected operation; never ask the user for `RAINBOND_URL` and never take it from the current shell
+   - do not add `RAINBOND_URL`, JWT, upload credentials, or a Console address to argv or stdin
+   - do not invent or rewrite the URL, authorization mode, form field, HTTP method, content type, or timeout; the CLI validates the same-Console-origin upload contract before invoking the local helper
 4. Run `upload_local_package.py cleanup` immediately after the HTTP attempt returns, whether upload succeeded, failed, or timed out. Pass the captured `archive_path`, `staging_root`, and `generated` flag. This cleanup must finish or be reported before any upload-status or component-create call.
 5. If and only if the HTTP upload succeeded, call `rainbond_get_package_upload_status(event_id=...)`. The returned uploaded-file status must be non-empty and must identify at least one uploaded file.
 6. If and only if status is non-empty, call `rainbond_create_component_from_package(event_id=...)`. Package creation is event-based; no local filesystem path belongs in this call.
 
-The helper command is `python3 rainbond-fullstack-bootstrap/scripts/upload_local_package.py <prepare|upload|cleanup> ...`. Preserve its JSON result fields exactly between phases; do not reconstruct paths or upload parameters from memory.
+The helper command is used directly only for `prepare` and `cleanup`: `python3 rainbond-fullstack-bootstrap/scripts/upload_local_package.py <prepare|cleanup> ...`. The HTTP upload must use the protected local CLI `package-upload` command. Preserve JSON result fields exactly between phases; do not reconstruct paths or upload parameters from memory.
 
 ### Cleanup and Stop Rules
 

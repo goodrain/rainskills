@@ -19,7 +19,7 @@ class PackageUploadWorkflowContractTest(unittest.TestCase):
         ordered_tokens = (
             "upload_local_package.py prepare",
             "rainbond_init_package_upload",
-            "upload_local_package.py upload",
+            "protected local CLI command `package-upload",
             "upload_local_package.py cleanup",
             "rainbond_get_package_upload_status",
             "rainbond_create_component_from_package",
@@ -37,8 +37,10 @@ class PackageUploadWorkflowContractTest(unittest.TestCase):
             previous_position = position
 
         self.assertIn("Never pass `source.local_path` to a Rainbond Tool", guidance)
-        self.assertIn("`upload_request.url` -> `--upload-url`", guidance)
+        self.assertIn("complete `upload_request` object through stdin", guidance)
+        self.assertNotIn("`upload_request.url` -> `--upload-url`", guidance)
         self.assertNotIn("`upload_request.upload_url`", guidance)
+        self.assertNotIn("Run `upload_local_package.py upload`", guidance)
 
     def test_app_assistant_does_not_offer_server_local_package_tools(self) -> None:
         guidance = APP_ASSISTANT_SKILL.read_text(encoding="utf-8")
