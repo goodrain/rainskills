@@ -35,6 +35,11 @@ const RISK_POLICY = Object.freeze({
   ],
   destructiveFragments: ["delete", "remove", "purge", "destroy"],
 });
+const CALL_OPTION_DEFINITIONS = Object.freeze({
+  "--confirm": Object.freeze({ property: "confirmation", pattern: OPERATION_ID_PATTERN }),
+  "--skill-id": Object.freeze({ property: "skillId", pattern: SKILL_ID_PATTERN }),
+  "--root-skill-id": Object.freeze({ property: "rootSkillId", pattern: SKILL_ID_PATTERN }),
+});
 
 const EXIT = Object.freeze({
   USAGE: 2,
@@ -249,22 +254,25 @@ function parseCommand(args) {
   }
   if (command === "call" && remaining.length >= 4 && remaining[1] && remaining[2] === "--input" && remaining[3] === "-") {
     const parsed = { command, toolName: remaining[1], input: remaining[3], operationId };
-    const allowed = new Set(["--confirm", "--skill-id", "--root-skill-id"]);
     for (let index = 4; index < remaining.length; index += 2) {
       const option = remaining[index];
       const value = remaining[index + 1];
-      if (!allowed.has(option) || !value || value.startsWith("--")) break;
-      if (option === "--confirm" && !parsed.confirmation && OPERATION_ID_PATTERN.test(value)) {
-        parsed.confirmation = value;
-      } else if (option === "--skill-id" && !parsed.skillId && SKILL_ID_PATTERN.test(value)) {
-        parsed.skillId = value;
-      } else if (option === "--root-skill-id" && !parsed.rootSkillId && SKILL_ID_PATTERN.test(value)) {
-        parsed.rootSkillId = value;
-      } else {
-        break;
+      const definition = CALL_OPTION_DEFINITIONS[option];
+      if (!definition) {
+        throw new BridgeError(`unsupported call option: ${String(option)}`, EXIT.USAGE);
       }
-      if (index + 2 === remaining.length) return parsed;
+      if (!value || value.startsWith("--")) {
+        throw new BridgeError(`call option ${option} requires a value`, EXIT.USAGE);
+      }
+      if (parsed[definition.property]) {
+        throw new BridgeError(`call option ${option} may be provided only once`, EXIT.USAGE);
+      }
+      if (!definition.pattern.test(value)) {
+        throw new BridgeError(`call option ${option} has an invalid value`, EXIT.USAGE);
+      }
+      parsed[definition.property] = value;
     }
+    return parsed;
   }
   throw new BridgeError("invalid command; use status, list, describe, read, or call", EXIT.USAGE);
 }

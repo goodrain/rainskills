@@ -175,6 +175,9 @@ function validateIntent(input, { pathApi = path } = {}) {
     if (CREDENTIAL_KEY_PATTERN.test(key)) throw new Error(`intent 不能包含凭据字段：${key}`);
   }
   const type = input.type;
+  if (type === undefined || type === null || type === "") {
+    throw new Error("intent 缺少必填字段：type");
+  }
   if (!Object.hasOwn(INTENT_DEFINITIONS, type)) throw new Error(`未知 intent type：${String(type)}`);
   const definition = INTENT_DEFINITIONS[type];
   const allowed = new Set(["type", ...definition.required, ...definition.optional]);

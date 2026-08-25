@@ -87,10 +87,14 @@ description: "Use whenever a user asks to deploy, run, deliver, publish, inspect
   只有“解决办法”确实存在并且可执行时才输出该项。默认用户回复不得出现 `Problem Judgment`、`Actions Taken`、`Verification Result`、`Follow-up Advice`、`Structured Output` 等诊断标题；不得展示内部状态码、枚举、对象字段、YAML、JSON、工具调用记录或英文状态表。只有用户明确要求结构化结果，或者自动化/评测明确要求结构化契约时，才允许输出后文的结构化格式。
   <!-- rainskills-user-result:end -->
 
-  <!-- rainskills-runtime-gate:start -->
-  ## 运行环境门禁（最高优先级）
+<!-- rainskills-runtime-gate:start -->
+## 运行环境门禁（最高优先级）
 
-  ### 多运行环境操作契约
+### CLI 调用格式（强制）
+
+所有可变 `call` 都必须使用完整 argv：`call <tool> --input - --operation-id <uuid> --skill-id rainbond-app-assistant`。CLI 返回确认 ID 后，只能在同一 argv 末尾加入 `--confirm <confirmation-id>`；不得省略 `--skill-id`、猜测参数，或根据泛化错误反复重试。
+
+### 多运行环境操作契约
 
   Node.js 前置检查通过后，每次用户业务请求都创建独立操作，不把项目绑定到任何环境、团队或应用。先执行本地 launcher + `["environment", "list", "--json"]`：用户明确说“运行环境/平台”时按环境名选择；明确说“团队”时表示默认环境中的团队；裸名称同时匹配环境和团队时必须让用户确认。未指定环境时使用全局默认环境；默认环境不可用时停止，禁止自动切换到其他环境。
 

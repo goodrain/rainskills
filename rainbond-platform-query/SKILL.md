@@ -8,9 +8,15 @@ description: Use for a user-requested, read-only Rainbond platform query about t
 <!-- rainskills-runtime-gate:start -->
 ## 运行环境门禁（最高优先级）
 
+### CLI 调用格式（强制）
+
+所有可变 `call` 都必须使用完整 argv：`call <tool> --input - --operation-id <uuid> --skill-id rainbond-platform-query`。CLI 返回确认 ID 后，只能在同一 argv 末尾加入 `--confirm <confirmation-id>`；不得省略 `--skill-id`、猜测参数，或根据泛化错误反复重试。
+
 ### 多运行环境操作契约
 
 Node.js 前置检查通过后，每次请求先执行本地 launcher + `["environment", "list", "--json"]`，按用户明确指定的运行环境选择不可变环境 ID；未指定时只用全局默认环境，默认环境不可用时停止且不回退。生成 UUID 后执行本地 launcher + `["operation", "begin", "--operation-id", "<uuid>", "--environment-id", "<id>", "--intent-json", "<intent-json>"]`，并在之后每个 Rainbond MCP 调用中加入 `rainskills_operation_id`。环境、团队和应用只属于本次操作，禁止保存项目级默认环境或绑定；同一项目可以在多个环境中查询。明确“团队”表示环境内团队；明确“运行环境/平台”表示环境；裸名称同时匹配环境和团队时必须询问。
+
+构造命令前必须先创建完整 intent，并把同一 JSON 原样用于 `operation begin` 和 `runtime connect`。例如查询当前企业时固定为 `{"type":"platform-query","resource":"current-enterprise"}`；不得只传 `resource`。本地 intent 校验失败表示命令尚未发起连接或授权，必须如实报告参数错误，不得表述为授权被拒绝。
 
 第一步检查 Node.js 是否存在且主版本不低于 18。Node.js 缺失或低于 18 时，只说明“Rainskills 执行组件需要 Node.js 18 或更高版本”并停止：不选择运行环境，不调用 MCP，不猜测替代命令。只有用户或 agent 明确同意后才安装或升级 Node.js，再从同一原始 intent 继续。
 
