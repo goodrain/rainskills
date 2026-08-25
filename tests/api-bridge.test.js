@@ -66,12 +66,18 @@ function prepareProtectedRuntime(home, env) {
   })}\n`, { mode: 0o600 });
 }
 
-function runBridge(args, { env = {}, input = "", allowInsecureHttp = true, home } = {}) {
+function runBridge(args, {
+  env = {},
+  input = "",
+  allowInsecureHttp = true,
+  home,
+  includeSkillBinding = true,
+} = {}) {
   return new Promise((resolve, reject) => {
     const actualHome = home || fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-bridge-home-"));
     prepareProtectedRuntime(actualHome, env);
     const commandArgs = [...args, "--operation-id", RUNTIME_OPERATION_ID];
-    if (args[0] === "call") {
+    if (args[0] === "call" && includeSkillBinding) {
       commandArgs.push("--skill-id", "rainbond-app-assistant", "--root-skill-id", "rainbond-app-assistant");
     }
     const child = spawn(process.execPath, [bridgePath, ...commandArgs], {
@@ -255,6 +261,88 @@ test("configuration safely parses mcp.env and lets environment values win", () =
   });
   assert.equal(REQUEST_TIMEOUT_MS, 180_000);
   assert.equal(fs.existsSync(marker), false);
+});
+
+test("call parsing keeps valid base syntax separate from mutable-call authorization", () => {
+  const { parseCommand } = require(bridgePath);
+
+  assert.deepEqual(
+    parseCommand([
+      "call", "rainbond_create_app", "--input", "-",
+      "--operation-id", RUNTIME_OPERATION_ID,
+    ]),
+    {
+      command: "call",
+      toolName: "rainbond_create_app",
+      input: "-",
+      operationId: RUNTIME_OPERATION_ID,
+    }
+  );
+
+  assert.deepEqual(
+    parseCommand([
+      "call", "rainbond_create_app", "--input", "-",
+      "--skill-id", "rainbond-app-assistant",
+      "--root-skill-id", "rainbond-app-assistant",
+      "--confirm", RUNTIME_OPERATION_ID,
+      "--operation-id", RUNTIME_OPERATION_ID,
+    ]),
+    {
+      command: "call",
+      toolName: "rainbond_create_app",
+      input: "-",
+      operationId: RUNTIME_OPERATION_ID,
+      skillId: "rainbond-app-assistant",
+      rootSkillId: "rainbond-app-assistant",
+      confirmation: RUNTIME_OPERATION_ID,
+    }
+  );
+
+  assert.throws(
+    () => parseCommand([
+      "call", "rainbond_create_app", "--input", "-", "--unknown", "value",
+      "--operation-id", RUNTIME_OPERATION_ID,
+    ]),
+    /unsupported call option: --unknown/
+  );
+
+  assert.throws(
+    () => parseCommand([
+      "call", "rainbond_create_app", "--input", "-", "--skill-id",
+      "--operation-id", RUNTIME_OPERATION_ID,
+    ]),
+    /call option --skill-id requires a value/
+  );
+
+  assert.throws(
+    () => parseCommand([
+      "call", "rainbond_create_app", "--input", "-",
+      "--skill-id", "rainbond-app-assistant",
+      "--skill-id", "rainbond-app-assistant",
+      "--operation-id", RUNTIME_OPERATION_ID,
+    ]),
+    /call option --skill-id may be provided only once/
+  );
+});
+
+test("mutable base calls report the missing Skill binding instead of invalid command", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-bridge-missing-skill-"));
+  const result = await runBridge(
+    ["call", "rainbond_create_app", "--input", "-"],
+    {
+      env: {
+        RAINBOND_URL: "http://127.0.0.1:65535",
+        RAINBOND_JWT: "bridge-jwt.payload.signature",
+      },
+      home,
+      input: JSON.stringify({ app_name: "demo" }),
+      includeSkillBinding: false,
+    }
+  );
+
+  assert.equal(result.code, 2);
+  assert.match(result.stderr, /mutable calls require --skill-id <active-skill-id>/);
+  assert.doesNotMatch(result.stderr, /invalid command/);
 });
 
 test("status, compact list, describe, and call use the dedicated JSON-RPC endpoint", async () => {

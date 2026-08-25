@@ -46,6 +46,20 @@ test("every bounded runtime intent maps to a fixed Skill and first resume step",
   }
 });
 
+test("runtime Skills publish their bound mutable-call argv", () => {
+  const fs = require("node:fs");
+  const { INTENT_DEFINITIONS } = require(modulePath);
+  const skillIds = new Set(Object.values(INTENT_DEFINITIONS)
+    .map((definition) => definition.skillId)
+    .filter((skillId) => fs.existsSync(path.resolve(__dirname, "..", skillId, "SKILL.md"))));
+
+  for (const skillId of skillIds) {
+    const skill = fs.readFileSync(path.resolve(__dirname, "..", skillId, "SKILL.md"), "utf8");
+    assert.match(skill, new RegExp(`--skill-id ${skillId}`));
+    assert.match(skill, /--confirm <confirmation-id>/);
+  }
+});
+
 test("new deploy and create intents can defer application source until the runtime is ready", () => {
   const { createIntentContinuation, validateIntent } = require(modulePath);
 
@@ -81,6 +95,10 @@ test("deferred application source fields remain bounded and internally consisten
 test("intent validation rejects unknown and credential-like fields", () => {
   const { validateIntent } = require(modulePath);
 
+  assert.throws(
+    () => validateIntent({ resource: "current-enterprise" }),
+    /intent.*缺少.*type/i
+  );
   assert.throws(
     () => validateIntent({ type: "query", operation: "summary", prompt: "deploy everything" }),
     /unknown|未知/i
