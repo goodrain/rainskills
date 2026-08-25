@@ -11,23 +11,26 @@
 - 推荐资源：4 核 CPU、8 GB 内存、50 GB 可用磁盘；预检最低门槛为 2 核 CPU、4 GB 内存、30 GB 可用磁盘。低于推荐值时会提示风险但继续安装，最终以 Rainbond 实际部署验证为准。
 - 安装前端口 `80`、`443`、`7070` 必须空闲。
 
-远程单机只接受 `user@host` 或 `~/.ssh/config` 主机别名；ROI 主机集群逐节点使用配置中的 root 地址和端口。两种方式都先用 `BatchMode=yes` 检查现有免密连接。远程单机检查失败时固定输出一条版本锁定的 `ssh prepare`；主机集群先检查全部节点，再一次列出所有未就绪节点并输出一条版本锁定的 `ssh prepare-cluster --cluster-config`。用户只在自己电脑的系统终端执行，OpenSSH 读取每台服务器的指纹确认和一次密码；命令只准备公钥连接，不安装 Rainbond。全部完成后只统一回复一次“已完成”。恢复后所有 `ssh` / `scp` 均为免密非交互调用。Rainskills 不接收或保存 SSH 密码、私钥，也不支持离线安装或自动清理冲突环境。
+远程单机只接受 `user@host` 或 `~/.ssh/config` 主机别名；ROI 主机集群逐节点使用配置中的 root 地址和端口。两种方式都先用 `BatchMode=yes` 检查现有免密连接。远程单机检查失败时固定输出一条版本锁定的 `ssh prepare`；主机集群先检查全部节点，再一次列出所有未就绪节点并输出一条版本锁定的 `ssh prepare-cluster --cluster-config`。用户只在自己电脑的系统终端执行，OpenSSH 读取每台服务器的指纹确认和一次密码；命令只准备公钥连接，不安装 Rainbond。全部完成后只统一回复一次“已完成”。恢复后所有 `ssh` / `scp` 均为免密非交互调用。Rainskills 不接收聊天中的 SSH 密码或私钥，也不支持离线安装或自动清理冲突环境。
 
 远程单机安装使用 `ssh -G` 解析的实际主机作为新平台 EIP，不再优先使用 `hostname -I` 的首个内网地址。完成后从控制端依次验证显式 Console 主机、SSH 实际主机、SSH 字面主机、Rainbond 上报 EIP 和远端主网卡地址，保存第一个可访问的 `http://<host>:7070`。手动补充只接受 IP 或 DNS 域名。
 
 ## ROI 主机集群策略
 
-- 支持 1 台、2 台或任意数量的 Linux 节点，不把“三台以上”作为安装阻断条件。少于三个控制面或 etcd 节点时明确提示不具备高可用。
-- etcd 必须至少一个且数量为奇数；恰好一个 bootstrap，并且 bootstrap 必须属于 master。master、worker、rbd-gateway、rbd-chaos 均至少包含一个合法节点。
-- 内置 NFS 必须恰好选择一个 nfs-server；外部 NFS、已有 StorageClass 或外部存储不能配置 nfs-server。
-- 基础向导只生成内置 NFS、内置数据库和内置镜像仓库的最小配置，不询问或保存密码。高级配置通过 `--cluster-config` 导入。
-- 导入时只解析配置用于校验和摘要，受保护副本保留原始字节，不重新序列化未知 ROI 字段。拒绝符号链接、非普通文件、非当前用户文件，以及权限宽于 `0600` 的敏感配置。
+- 普通入口支持 `3-100` 台 Linux 节点。首次进入时只创建受保护的 `servers.txt` 并停止等待，不生成 `cluster.yaml`、不发起 SSH，也不下载或执行 ROI。固定消息提供可点击链接、macOS/Linux/Windows 对应打开命令、四字段说明和“编辑完成后回复‘已完成’”；普通用户不编辑 `cluster.yaml`、YAML 或节点角色。
+- `servers.txt` 使用 UTF-8 文本，包含中文标题、中文注释和三个连续的 `[server-N]` 区块。每个区块只允许 `public_ip`（公网 IP）、`private_ip`（内网 IP）、`ssh_port`（逐节点 SSH 端口）和 `password`（root 密码）；超过三台时复制完整区块并连续编号。每台服务器可使用不同端口，SSH 端口范围为 1-65535，不要求为 22。文件最大 1 MiB，最多 100 个节点；一次汇总全部格式、字段、地址、端口、重复 endpoint 和节点数量问题。
+- `servers.txt` 必须是当前用户拥有的普通文件；POSIX 权限精确为 `0600`，Windows 使用仅当前用户可读写的 ACL。通过受保护 descriptor 读取并拒绝符号链接、替换、读取期间变化、非法 UTF-8、NUL/控制字符和超限内容。校验失败时保留同一文件供修改，不创建 YAML 或产生 SSH/下载副作用。
+- 校验成功后自动生成受保护的 `cluster.yaml`：节点依次命名为 node1...nodeN，node1 为 bootstrap；前三台自动承担 etcd/master，全部节点承担 worker/rbd-chaos，前两台承担 rbd-gateway，node1 承担 nfs-server。使用内置 NFS、内置数据库和内置镜像仓库的最小配置。用户不选择或修改节点角色。
+- SSH 前先展示不含凭据的完整逐节点角色拓扑摘要，包括节点数、每节点角色、bootstrap、存储模式和受保护配置路径。密码只保存在受保护的本地 `servers.txt`、自动生成的 `cluster.yaml` 和 ROI 安装/恢复所需的受保护远端配置中。允许内部 `parseHostServerInput` 返回的 host 对象携带 `password`，仅供生成受保护的 `cluster.yaml` 和后续 ROI 安装。对外用户消息、状态、遥测、日志、错误和对外返回值不得反射密码或原始输入，所有对外摘要都不含凭据；日志仍对 password、database、registry、token、secret 等字段脱敏。
+- 状态只保存 `servers.txt` 和自动生成 `cluster.yaml` 的受保护路径及 SHA-256。恢复时两者必须保持字节不变；若崩溃发生在 YAML 已创建但摘要尚未持久化，只采用与当前 `servers.txt` 自动生成结果逐字节相同的 crash residue。来源不明、符号链接、不匹配或锁定后漂移的 `cluster.yaml` 均停止，不覆盖或猜测来源。
+- 保留旧 `config_source=generated-template` 断点，继续原有 YAML 校验和恢复流程。显式 `--cluster-config <path>` 是高级导入入口，继续支持有效的 1、2 或 N 节点 ROI YAML；导入时只解析配置用于校验和摘要，受保护副本保留原始字节，不重新序列化未知 ROI 字段。拒绝符号链接、非普通文件、非当前用户文件，以及权限宽于 `0600` 的敏感配置。
+- 高级/旧 YAML 仍要求 etcd 至少一个且数量为奇数、恰好一个属于 master 的 bootstrap，并满足 master、worker、rbd-gateway、rbd-chaos 和存储角色约束；少于三个控制面或 etcd 节点时明确提示不具备高可用。普通 `servers.txt` 入口固定生成三控制面/etcd 拓扑。
 - Rainskills 只检查并准备全部节点的 SSH 免密连接，不在 ROI 前自行检查 CPU、内存、磁盘容量、端口、安装源、网络或已有 RKE2/Rainbond，也不根据这些项目阻断安装。SSH 就绪并确认安装后，只对 bootstrap 节点执行固定的 `uname -m`，用于选择 `roi-amd64` 或 `roi-arm64`；实际安装条件由 ROI 判断。
 - 非交互执行必须显式提供 `--yes`。确认前不下载 ROI，也不传输配置或启动远端命令。
 - ROI 只允许 `https://get.rainbond.com/roi/roi-amd64` 和 `roi-arm64`，最多三次 `get.rainbond.com/roi/` 同源跳转，下载上限 128 MiB。校验 ELF 类型和架构，并运行固定的 `roi version`。
 - 安装器会主动探测策略中的官方 checksum 地址；发布 checksum 时必须匹配。官方明确未发布 checksum 时记录该事实，并锁定本次下载的最终 URL、版本和 SHA-256。
 - 恢复时必须复用字节完全相同的受保护 cluster.yaml 和 ROI。bootstrap 上再次校验两份文件的 SHA-256，然后通过已准备的免密 SSH 执行固定的 `roi up -f <protected-cluster.yaml>`。
-- 状态、事件和遥测不保存原始 YAML、SSH/ROI 原始输出或凭据。日志对 password、database、registry、token、secret 等字段脱敏。
+- 状态、事件和遥测不保存原始 TXT/YAML、SSH/ROI 原始输出或凭据。
 - ROI 正常退出后仍需验证所有预期节点 Ready、rbd-api/rbd-gateway/rbd-app-ui 等关键组件就绪，以及 Console 从当前控制端可访问；全部通过后才能进入授权。
 
 ## 已有 Kubernetes 集群策略

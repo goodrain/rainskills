@@ -2680,7 +2680,7 @@ async function waitForHostClusterConfiguration({ write = (value) => process.stdo
   writeUserMessage(
     write,
     "platform.host-cluster-configuration",
-    "多节点主机集群模式已选择。Rainskills 将生成受保护的 cluster.yaml 示例文件，编辑完成后会一次检查全部节点和集群拓扑。",
+    "多节点主机集群模式已选择。Rainskills 将生成带中文说明的受保护 servers.txt；填写服务器信息后，会自动生成集群配置。",
   );
   return { waiting: true };
 }
@@ -2885,6 +2885,8 @@ async function runInstallOperation(options, {
         return;
       }
       if (result?.verification) {
+        state = stateUpdater(paths.state, state, { input_path: null });
+        activeOperation.state = state;
         await platformCompleter(onboarding, state, paths, result.verification, options.noResume, { abortState });
         return;
       }
@@ -2902,6 +2904,7 @@ async function runInstallOperation(options, {
     state = stateUpdater(paths.state, state, {
       stage: result?.waitingStage || "mode-configuration",
       status: "waiting_user",
+      input_path: result?.inputPath ?? null,
     });
     activeOperation.state = state;
     return;

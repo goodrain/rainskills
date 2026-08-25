@@ -4,10 +4,12 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const http = require("node:http");
 const https = require("node:https");
+const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 const readline = require("node:readline/promises");
 const { spawn, spawnSync } = require("node:child_process");
+const { TextDecoder } = require("node:util");
 const YAML = require("yaml");
 
 const POLICY = require("../references/installation-policy.json");
@@ -19,10 +21,14 @@ const REQUIRED_ROLES = ["etcd", "master", "worker", "rbd-gateway", "rbd-chaos"];
 const ALL_ROLES = [...REQUIRED_ROLES, "nfs-server"];
 const SENSITIVE_KEY = /(?:password|passwd|token|secret|private.?key|credential)/i;
 const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/;
-const SAFE_ADDRESS = /^(?:[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?|(?:[0-9a-fA-F]*:){2,}[0-9a-fA-F:.]+)$/;
 const SAFE_REMOTE_PATH = /^\/[A-Za-z0-9._/-]+$/;
 const CRITICAL_WORKLOADS = ["rbd-api", "rbd-gateway", "rbd-app-ui"];
 const MAX_CHILD_OUTPUT_BYTES = 4 * 1024 * 1024;
+const MAX_SERVER_INPUT_BYTES = 1024 * 1024;
+const MAX_SERVER_INPUT_HOSTS = 100;
+const MAX_SERVER_INPUT_ISSUES = 200;
+const SERVER_INPUT_FIELDS = ["public_ip", "private_ip", "ssh_port", "password"];
+const SERVER_INPUT_VALIDATION_ERROR = "servers.txt 解析结果无效";
 const CHILD_OUTPUT_LIMIT_ERROR = "子进程输出超过安全上限";
 const TEMPLATE_ADDRESSES = new Map([
   ["192.0.2.101", "node1"],
@@ -65,6 +71,63 @@ function renderHostClusterConfigPrompt({ configPath, platform = process.platform
       ? "请修改同一个配置文件，完成后回复“已完成”。"
       : "请一次性修改服务器地址、SSH 端口和节点角色，并填写每台服务器的 password。",
     ...(issues.length > 0 ? [] : ["password 只在这个受保护的本地文件中填写；不要填写私钥或 Token。", "", "编辑完成后回复“已完成”，我会检查全部节点和集群拓扑。"]),
+  ].join("\n");
+}
+
+function createHostServerInputTemplate() {
+  const heading = [
+    "# Rainbond 多节点服务器信息",
+    "# 密码只写入受保护的本地和远端安装文件，不会写入聊天、日志或状态；不要填写私钥或 Token。",
+    "# 超过三台服务器时，复制完整的 [server-N] 区块并按顺序编号。",
+  ];
+  const sections = Array.from({ length: 3 }, (_, index) => [
+    `[server-${index + 1}]`,
+    "# 公网 IP：控制端通过 SSH 访问该服务器的地址；没有独立公网 IP 时可与内网 IP 相同",
+    "public_ip=",
+    "# 内网 IP：集群节点之间通信使用的地址",
+    "private_ip=",
+    "# SSH 端口：按服务器实际端口填写，不要求为 22",
+    "ssh_port=22",
+    "# root 密码：保留所有特殊字符；不要添加引号",
+    "password=",
+  ].join("\n"));
+  return Buffer.from(`${heading.join("\n")}\n\n${sections.join("\n\n")}\n`, "utf8");
+}
+
+function hostServerInputOpenCommand(inputPath, platform = process.platform) {
+  const filePath = String(inputPath);
+  if (!filePath || /[\0\r\n]/.test(filePath)) throw new Error("servers.txt 路径无效");
+  if (platform === "darwin") return `open ${quotePosixArgument(filePath)}`;
+  if (platform === "linux") return `xdg-open ${quotePosixArgument(filePath)}`;
+  if (platform === "win32") return `explorer.exe "${filePath.replace(/"/g, '""')}"`;
+  throw new Error("不支持的控制端平台");
+}
+
+function renderHostServerInputPrompt({ inputPath, platform = process.platform, issues = [] }) {
+  const normalizedPath = String(inputPath).replace(/\\/g, "/");
+  const linkTarget = encodeURI(normalizedPath).replace(/#/g, "%23");
+  const heading = issues.length > 0
+    ? ["服务器信息还需要调整：", ...issues.map((issue, index) => `${index + 1}. ${issue}`)]
+    : ["服务器信息文件已生成。"];
+  return [
+    ...heading,
+    "",
+    `[点击打开 servers.txt](<${linkTarget}>)`,
+    "",
+    "如果链接无法打开，请在系统终端执行：",
+    "",
+    "```sh",
+    hostServerInputOpenCommand(inputPath, platform),
+    "```",
+    "",
+    "请为每台服务器填写 public_ip、private_ip、ssh_port 和 password。",
+    "- 公网 IP：控制端 SSH 地址；没有独立公网 IP 时可与内网 IP 相同。",
+    "- 内网 IP：节点通信地址。",
+    "- SSH 端口：填写每台服务器的实际端口，不强制为 22。",
+    "- root 密码：只写入受保护的本地和远端安装文件，不得发送到聊天。",
+    "密码只写入受保护的本地和远端安装文件，不会写入聊天、日志或状态；不要填写私钥或 Token。",
+    "",
+    "编辑完成后回复“已完成”，我会检查全部服务器信息。",
   ].join("\n");
 }
 
@@ -237,6 +300,178 @@ function deepClone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+function normalizeServerInputAddress(value) {
+  if (typeof value !== "string" || value.includes("%")) return null;
+  const ipVersion = net.isIP(value);
+  if (ipVersion === 4) return value;
+  if (ipVersion === 6) {
+    try {
+      return new URL(`http://[${value}]/`).hostname.slice(1, -1);
+    } catch {
+      return null;
+    }
+  }
+  if (value.length > 253) return null;
+  const labels = value.split(".");
+  if (labels.some((label) => (
+    label.length < 1
+    || label.length > 63
+    || !/^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/.test(label)
+  ))) return null;
+  return value.toLowerCase();
+}
+
+function parseHostServerInput(input) {
+  const bytes = Buffer.isBuffer(input) ? input : Buffer.from(String(input || ""), "utf8");
+  const issues = [];
+  const issueSet = new Set();
+  let diagnosticsTruncated = false;
+  const add = (message) => {
+    if (!message || issueSet.has(message)) return;
+    if (issues.length >= MAX_SERVER_INPUT_ISSUES) {
+      diagnosticsTruncated = true;
+      return;
+    }
+    issueSet.add(message);
+    issues.push(message);
+  };
+  const result = (hosts) => {
+    if (diagnosticsTruncated) issues.push("servers.txt 问题过多，诊断已截断");
+    return { hosts, issues };
+  };
+  if (bytes.length > MAX_SERVER_INPUT_BYTES) {
+    return { hosts: [], issues: ["servers.txt 大小不能超过 1 MiB"] };
+  }
+
+  let text;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return { hosts: [], issues: ["servers.txt 必须使用有效的 UTF-8 编码"] };
+  }
+  if (/[\u0000-\u0009\u000b\u000c\u000e-\u001f\u007f-\u009f]/.test(text)
+    || /(?:^|[^\r])\r(?!\n)/.test(text)) {
+    add("servers.txt 不能包含 NUL 或其他控制字符");
+    text = text
+      .replace(/[\u0000-\u0009\u000b\u000c\u000e-\u001f\u007f-\u009f]/g, "")
+      .replace(/\r(?!\n)/g, "");
+  }
+
+  const sections = [];
+  let current = null;
+  let ignoreRemainingInput = false;
+  const lines = text.split("\n");
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+    if (ignoreRemainingInput) continue;
+    const lineNumber = lineIndex + 1;
+    const line = lines[lineIndex].endsWith("\r") ? lines[lineIndex].slice(0, -1) : lines[lineIndex];
+    if (line.trim() === "" || line.trimStart().startsWith("#")) continue;
+
+    const sectionMatch = /^\[server-(\d+)\]$/.exec(line);
+    if (sectionMatch) {
+      if (sections.length >= MAX_SERVER_INPUT_HOSTS) {
+        add("servers.txt 最多允许 100 个节点区块");
+        current = null;
+        ignoreRemainingInput = true;
+        continue;
+      }
+      current = {
+        number: Number(sectionMatch[1]),
+        numberText: sectionMatch[1],
+        line: lineNumber,
+        fields: new Map(),
+      };
+      sections.push(current);
+      continue;
+    }
+    if (line.startsWith("[") && line.endsWith("]")) {
+      add(`第 ${lineNumber} 行是未知区块`);
+      current = null;
+      continue;
+    }
+
+    const separator = line.indexOf("=");
+    if (separator < 0) {
+      add(`第 ${lineNumber} 行字段格式无效`);
+      continue;
+    }
+    if (!current) {
+      add(`第 ${lineNumber} 行字段不属于任何 server 区块`);
+      continue;
+    }
+    const field = line.slice(0, separator);
+    if (!SERVER_INPUT_FIELDS.includes(field)) {
+      add(`第 ${lineNumber} 行包含未知字段`);
+      continue;
+    }
+    if (current.fields.has(field)) {
+      add(`第 ${lineNumber} 行的 ${field} 字段重复`);
+      continue;
+    }
+    const rawValue = line.slice(separator + 1);
+    current.fields.set(field, field === "password" ? rawValue : rawValue.trim());
+  }
+
+  if (sections.length < 3) add("servers.txt 至少需要 3 个节点区块");
+  const sectionNumbers = new Set();
+  for (let index = 0; index < sections.length; index += 1) {
+    const section = sections[index];
+    const label = `server-${section.number}`;
+    if (sectionNumbers.has(section.number)) add(`第 ${section.line} 行的 ${label} 区块重复`);
+    sectionNumbers.add(section.number);
+    if (section.numberText !== String(index + 1)) add(`第 ${section.line} 行的区块编号必须从 server-1 开始连续`);
+    for (const field of SERVER_INPUT_FIELDS) {
+      if (!section.fields.has(field)) {
+        add(`${label} 的 ${field} 字段缺失`);
+      } else if (field === "password" && section.fields.get(field).trim() === "") {
+        add(`${label} 的 password 未填写或只有空白`);
+      } else if (field !== "password" && section.fields.get(field) === "") {
+        add(`${label} 的 ${field} 字段未填写`);
+      }
+    }
+  }
+
+  const hosts = sections.map((section) => ({
+    publicIp: section.fields.get("public_ip") || "",
+    privateIp: section.fields.get("private_ip") || "",
+    sshPort: Number(section.fields.get("ssh_port")),
+    password: section.fields.get("password") || "",
+  }));
+  const sshEndpoints = new Set();
+  const privateAddresses = new Set();
+  for (let index = 0; index < sections.length; index += 1) {
+    const section = sections[index];
+    const host = hosts[index];
+    const label = `server-${section.number}`;
+    const publicIp = section.fields.get("public_ip");
+    const privateIp = section.fields.get("private_ip");
+    const portText = section.fields.get("ssh_port");
+    const publicNormalized = typeof publicIp === "string" && publicIp !== ""
+      ? normalizeServerInputAddress(publicIp)
+      : null;
+    const privateNormalized = typeof privateIp === "string" && privateIp !== ""
+      ? normalizeServerInputAddress(privateIp)
+      : null;
+    const publicValid = publicNormalized !== null;
+    const privateValid = privateNormalized !== null;
+    const portValid = typeof portText === "string" && /^\d+$/.test(portText)
+      && Number.isInteger(host.sshPort) && host.sshPort >= 1 && host.sshPort <= 65535;
+    if (typeof publicIp === "string" && publicIp !== "" && !publicValid) add(`${label} 的 public_ip 地址无效`);
+    if (typeof privateIp === "string" && privateIp !== "" && !privateValid) add(`${label} 的 private_ip 地址无效`);
+    if (typeof portText === "string" && portText !== "" && !portValid) add(`${label} 的 ssh_port 必须是 1 到 65535 的整数`);
+    if (publicValid && portValid) {
+      const endpoint = `${publicNormalized}\0${host.sshPort}`;
+      if (sshEndpoints.has(endpoint)) add(`${label} 的 SSH endpoint 与前面的区块重复`);
+      sshEndpoints.add(endpoint);
+    }
+    if (privateValid) {
+      if (privateAddresses.has(privateNormalized)) add(`${label} 的 private_ip 与前面的区块重复`);
+      privateAddresses.add(privateNormalized);
+    }
+  }
+  return result(hosts);
+}
+
 function parseClusterDocument(input) {
   const text = Buffer.isBuffer(input) ? input.toString("utf8") : String(input || "");
   if (text.includes("\0")) throw new Error("cluster.yaml 不能包含 NUL 字节");
@@ -301,6 +536,61 @@ function createHostClusterTemplate() {
   return Buffer.from(String(document), "utf8");
 }
 
+function createClusterConfigFromServerInput(hosts) {
+  if (!Array.isArray(hosts) || hosts.length < 3 || hosts.length > MAX_SERVER_INPUT_HOSTS) {
+    throw new Error(SERVER_INPUT_VALIDATION_ERROR);
+  }
+  const nodeNames = Array.from({ length: hosts.length }, (_, index) => `node${index + 1}`);
+  const generatedHosts = [];
+  for (let index = 0; index < hosts.length; index += 1) {
+    if (!Object.prototype.hasOwnProperty.call(hosts, index)) {
+      throw new Error(SERVER_INPUT_VALIDATION_ERROR);
+    }
+    const item = hosts[index];
+    if (!item || typeof item !== "object" || Array.isArray(item)
+      || typeof item.publicIp !== "string" || normalizeServerInputAddress(item.publicIp) === null
+      || typeof item.privateIp !== "string" || normalizeServerInputAddress(item.privateIp) === null
+      || !Number.isInteger(item.sshPort) || item.sshPort < 1 || item.sshPort > 65535
+      || typeof item.password !== "string" || item.password.trim() === "") {
+      throw new Error(SERVER_INPUT_VALIDATION_ERROR);
+    }
+    generatedHosts.push({
+      name: nodeNames[index],
+      address: item.publicIp,
+      internalAddress: item.privateIp,
+      user: "root",
+      password: item.password,
+      port: item.sshPort,
+      ...(index === 0 ? { bootstrap: true } : {}),
+    });
+  }
+  const config = {
+    hosts: generatedHosts,
+    roleGroups: {
+      etcd: nodeNames.slice(0, 3),
+      master: nodeNames.slice(0, 3),
+      worker: nodeNames,
+      "rbd-gateway": nodeNames.slice(0, 2),
+      "rbd-chaos": nodeNames,
+      "nfs-server": ["node1"],
+    },
+    storage: {
+      nfs: { enabled: true, sharePath: "/nfs-data/k8s", storageClass: { enabled: true } },
+      existingStorageClass: { enabled: false },
+    },
+    registry: { external: { enabled: false } },
+    database: { mysql: { enabled: false }, custom: { enabled: false } },
+  };
+  try {
+    validateClusterTopology(config);
+  } catch {
+    throw new Error(SERVER_INPUT_VALIDATION_ERROR);
+  }
+  const document = new YAML.Document(config);
+  document.options.lineWidth = 0;
+  return Buffer.from(String(document), "utf8");
+}
+
 function diagnoseClusterConfig(input, { source = "generated-template" } = {}) {
   let value;
   try {
@@ -317,7 +607,8 @@ function diagnoseClusterConfig(input, { source = "generated-template" } = {}) {
   const hosts = Array.isArray(value.hosts) ? value.hosts : [];
   if (!Array.isArray(value.hosts) || hosts.length === 0) add("hosts 至少需要配置一个节点");
   const names = new Set();
-  const addresses = new Set();
+  const sshEndpoints = new Set();
+  const internalAddresses = new Set();
   const normalized = [];
   for (let index = 0; index < hosts.length; index += 1) {
     const raw = hosts[index];
@@ -329,15 +620,21 @@ function diagnoseClusterConfig(input, { source = "generated-template" } = {}) {
     const address = String(raw.address || "");
     const internalAddress = String(raw.internalAddress || raw.address || "");
     const port = raw.port === undefined ? 22 : Number(raw.port);
+    const normalizedAddress = normalizeServerInputAddress(address);
+    const normalizedInternalAddress = normalizeServerInputAddress(internalAddress);
     if (!SAFE_NAME.test(name)) add(`hosts[${index}].name 无效`);
     if (names.has(name) && name) add(`节点名称重复：${name}`);
     if (name) names.add(name);
-    if (!SAFE_ADDRESS.test(address) || address.startsWith("-") || /\.\./.test(address)) add(`节点 ${name || index} 的 address 无效`);
-    if (!SAFE_ADDRESS.test(internalAddress) || internalAddress.startsWith("-") || /\.\./.test(internalAddress)) add(`节点 ${name || index} 的 internalAddress 无效`);
-    for (const candidate of new Set([address, internalAddress])) {
-      if (!candidate) continue;
-      if (addresses.has(candidate)) add(`节点地址重复：${candidate}`);
-      addresses.add(candidate);
+    if (normalizedAddress === null) add(`节点 ${name || index} 的 address 无效`);
+    if (normalizedInternalAddress === null) add(`节点 ${name || index} 的 internalAddress 无效`);
+    if (normalizedAddress !== null && Number.isInteger(port) && port >= 1 && port <= 65535) {
+      const endpoint = `${normalizedAddress}\0${port}`;
+      if (sshEndpoints.has(endpoint)) add(`节点地址（SSH endpoint）重复：${address}:${port}`);
+      sshEndpoints.add(endpoint);
+    }
+    if (normalizedInternalAddress !== null) {
+      if (internalAddresses.has(normalizedInternalAddress)) add(`节点 internalAddress 重复：${internalAddress}`);
+      internalAddresses.add(normalizedInternalAddress);
     }
     if (String(raw.user || "root") !== "root") add(`节点 ${name || index} 只支持 root SSH 用户`);
     if (typeof raw.password !== "string" || raw.password.trim() === "") add(`节点 ${name || index} 的 password 未填写`);
@@ -416,10 +713,10 @@ function normalizeHost(raw, index) {
   const user = String(raw.user || "root");
   const port = raw.port === undefined ? 22 : Number(raw.port);
   if (!SAFE_NAME.test(name)) throw new Error(`节点名称无效：${name || `(index ${index})`}`);
-  if (!SAFE_ADDRESS.test(address) || address.startsWith("-") || /\.\./.test(address)) {
+  if (normalizeServerInputAddress(address) === null) {
     throw new Error(`节点 address 无效：${name}`);
   }
-  if (!SAFE_ADDRESS.test(internalAddress) || internalAddress.startsWith("-") || /\.\./.test(internalAddress)) {
+  if (normalizeServerInputAddress(internalAddress) === null) {
     throw new Error(`节点 internalAddress 无效：${name}`);
   }
   if (user !== "root") throw new Error(`ROI 主机安装只支持 root SSH 用户：${name}`);
@@ -449,14 +746,20 @@ function validateClusterTopology(config) {
   if (!Array.isArray(config.hosts) || config.hosts.length === 0) throw new Error("集群至少需要一个节点");
   const hosts = config.hosts.map(normalizeHost);
   const names = new Set();
-  const addresses = new Set();
+  const sshEndpoints = new Set();
+  const internalAddresses = new Set();
   for (const item of hosts) {
     if (names.has(item.name)) throw new Error(`节点名称必须唯一：${item.name}`);
     names.add(item.name);
-    for (const address of new Set([item.address, item.internalAddress])) {
-      if (addresses.has(address)) throw new Error(`节点地址存在冲突：${address}`);
-      addresses.add(address);
+    const normalizedAddress = normalizeServerInputAddress(item.address);
+    const endpoint = `${normalizedAddress}\0${item.port}`;
+    if (sshEndpoints.has(endpoint)) throw new Error(`节点地址（SSH endpoint）存在冲突：${item.address}:${item.port}`);
+    sshEndpoints.add(endpoint);
+    const normalizedInternalAddress = normalizeServerInputAddress(item.internalAddress);
+    if (internalAddresses.has(normalizedInternalAddress)) {
+      throw new Error(`节点 internalAddress 存在冲突：${item.internalAddress}`);
     }
+    internalAddresses.add(normalizedInternalAddress);
   }
   const roleGroups = config.roleGroups;
   if (!roleGroups || typeof roleGroups !== "object" || Array.isArray(roleGroups)) {
@@ -611,6 +914,92 @@ function readSafeClusterSource(filePath, {
     }
   }
   return { bytes, value: parsed };
+}
+
+function readProtectedServerInput(filePath, {
+  platform = process.platform,
+  stateStore,
+  fsImpl = fs,
+  currentUid = typeof process.getuid === "function" ? process.getuid() : null,
+} = {}) {
+  if (!stateStore || typeof stateStore.assertProtectedRegularFile !== "function") {
+    throw new Error("servers.txt 必须通过受保护文件检查");
+  }
+  const readOnce = () => {
+    let opened;
+    try {
+      const noFollow = platform === "win32" ? 0 : (fsImpl.constants.O_NOFOLLOW || 0);
+      opened = fsImpl.openSync(filePath, fsImpl.constants.O_RDONLY | noFollow);
+    } catch (error) {
+      if (["ELOOP", "EMLINK"].includes(error.code)) throw new Error("拒绝读取符号链接 servers.txt");
+      throw error;
+    }
+    try {
+      const info = fsImpl.fstatSync(opened);
+      if (!info.isFile() || info.isSymbolicLink?.()) throw new Error("servers.txt 不是普通文件");
+      if (currentUid !== null && info.uid !== currentUid) throw new Error("servers.txt 不属于当前用户");
+      if (platform !== "win32" && (info.mode & 0o777) !== 0o600) {
+        throw new Error("servers.txt 权限必须精确为 0600");
+      }
+      if (info.size > MAX_SERVER_INPUT_BYTES) throw new Error("servers.txt 大小不能超过 1 MiB");
+      const bytes = Buffer.alloc(info.size);
+      let offset = 0;
+      while (offset < bytes.length) {
+        const count = fsImpl.readSync(opened, bytes, offset, bytes.length - offset, offset);
+        if (count === 0) throw new Error("servers.txt 在读取期间发生变化，拒绝继续");
+        offset += count;
+      }
+      const extra = Buffer.alloc(1);
+      if (fsImpl.readSync(opened, extra, 0, 1, offset) !== 0) {
+        throw new Error("servers.txt 在读取期间增长或超过 1 MiB，拒绝继续");
+      }
+      const afterInfo = fsImpl.fstatSync(opened);
+      if (sourceIdentity(info) !== sourceIdentity(afterInfo)) {
+        throw new Error("servers.txt 在 descriptor 读取期间发生变化，拒绝继续");
+      }
+      return { bytes, info: afterInfo };
+    } finally {
+      fsImpl.closeSync(opened);
+    }
+  };
+
+  const inspectWindowsAcl = () => {
+    const protectedAcl = stateStore.assertProtectedRegularFile(filePath);
+    const acl = typeof stateStore.assertSafeExternalRegularFile === "function"
+      ? stateStore.assertSafeExternalRegularFile(filePath)
+      : protectedAcl;
+    if (!acl || typeof acl.fileIdentity !== "string" || acl.fileIdentity === "") {
+      throw new Error("Windows servers.txt ACL 检查缺少 file identity");
+    }
+    return acl;
+  };
+  const beforeAcl = platform === "win32"
+    ? inspectWindowsAcl()
+    : (stateStore.assertProtectedRegularFile(filePath), null);
+  const first = readOnce();
+  if (platform === "win32") {
+    if (beforeAcl.fileIdentity !== contentIdentity(first.bytes)) {
+      throw new Error("Windows servers.txt ACL identity 与首次 fd 字节不匹配");
+    }
+    const afterAcl = inspectWindowsAcl();
+    const second = readOnce();
+    if (afterAcl.fileIdentity !== contentIdentity(second.bytes)) {
+      throw new Error("Windows servers.txt ACL identity 与再次 fd 字节不匹配");
+    }
+    if (beforeAcl.fileIdentity !== afterAcl.fileIdentity
+      || sourceIdentity(first.info) !== sourceIdentity(second.info)
+      || sha256(first.bytes) !== sha256(second.bytes)) {
+      throw new Error("servers.txt 在 ACL 检查和读取期间发生变化，拒绝继续");
+    }
+  } else {
+    stateStore.assertProtectedRegularFile(filePath);
+    const second = readOnce();
+    if (sourceIdentity(first.info) !== sourceIdentity(second.info)
+      || sha256(first.bytes) !== sha256(second.bytes)) {
+      throw new Error("servers.txt 在两次受保护读取期间字节发生变化，拒绝继续");
+    }
+  }
+  return first.bytes;
 }
 
 function atomicWriteProtectedBytes(destinationPath, bytes, { stateStore, mode = 0o600 } = {}) {
@@ -921,9 +1310,33 @@ async function probeRemoteArchitecture(bootstrap, {
   throw new Error("bootstrap 节点的 CPU 架构不受 ROI 支持");
 }
 
+function renderTopologyNodeLine(node) {
+  return `- ${node.name}: ${node.roles.join(", ")}${node.bootstrap ? " (bootstrap)" : ""}`;
+}
+
+function renderValidatedTopologyStatus(summary, configPath) {
+  const etcdNodes = (summary.nodes || []).filter(({ roles }) => roles.includes("etcd"));
+  const lines = [
+    "",
+    "[RAINSKILLS_STATUS:host_cluster_config_valid]",
+    "集群配置检查通过：",
+    `- 节点：${summary.hosts} 个`,
+    `- etcd：${etcdNodes.length} 个`,
+    `- bootstrap：${summary.bootstrap}`,
+    `- 存储模式：${summary.storageMode}`,
+    `受保护配置：${configPath}`,
+    "",
+    "自动角色分配：",
+    ...(summary.nodes || []).map(renderTopologyNodeLine),
+    "",
+    "正在准备所有服务器的 SSH 连接。",
+  ];
+  return `${lines.join("\n")}\n`;
+}
+
 function renderConfirmationSummary(summary) {
   const lines = ["\nROI 主机集群安装确认", "", `节点拓扑：${summary.hosts} 个节点`];
-  for (const node of summary.nodes || []) lines.push(`- ${node.name}: ${node.roles.join(", ")}${node.bootstrap ? " (bootstrap)" : ""}`);
+  for (const node of summary.nodes || []) lines.push(renderTopologyNodeLine(node));
   lines.push("", "将发生的系统变更：安装 RKE2、Containerd、Rainbond 及所选存储组件；写入 /opt/rainbond 和 /var/lib/rancher。", `受保护配置：${summary.configPath}`, "");
   return `${lines.join("\n")}\n`;
 }
@@ -1284,35 +1697,59 @@ function reuseLockedRoiArtifact({
   };
 }
 
-function createLineRedactor() {
+function normalizeSensitiveValues(sensitiveValues = []) {
+  if (!Array.isArray(sensitiveValues)) return [];
+  return [...new Set(sensitiveValues
+    .filter((value) => typeof value === "string" && value.length > 0))]
+    .sort((left, right) => right.length - left.length);
+}
+
+function selectSafeRedactionMarker(sensitiveValues) {
+  const candidates = ["[REDACTED]", "[FILTERED]", "[MASKED]", "***", ""];
+  return candidates.find((candidate) => (
+    sensitiveValues.every((sensitiveValue) => !candidate.includes(sensitiveValue))
+  )) ?? "";
+}
+
+function redactLiteralSensitiveValues(value, sensitiveValues, marker) {
+  let safe = String(value || "");
+  for (const sensitiveValue of sensitiveValues) {
+    safe = safe.split(sensitiveValue).join(marker);
+  }
+  return safe;
+}
+
+function createLineRedactor(sensitiveValues = []) {
+  const literalValues = normalizeSensitiveValues(sensitiveValues);
+  const marker = selectSafeRedactionMarker(literalValues);
   let sensitiveBlockIndent = null;
   let pemBlock = false;
   let structuredBlockIndent = null;
   return (value) => {
-    const line = String(value || "").replace(/\r$/, "");
+    const line = redactLiteralSensitiveValues(String(value || "").replace(/\r$/, ""), literalValues, marker);
     const indent = line.match(/^\s*/)?.[0].length || 0;
     if (pemBlock) {
       if (/-----END [A-Z0-9 ]+-----/.test(line)) pemBlock = false;
-      return `${line.slice(0, indent)}[REDACTED]`;
+      return `${line.slice(0, indent)}${marker}`;
     }
     const pemBegin = /-----BEGIN [A-Z0-9 ]+-----/.test(line);
     if (pemBegin) {
       if (!/-----END [A-Z0-9 ]+-----/.test(line)) pemBlock = true;
-      return `${line.slice(0, indent)}[REDACTED]`;
+      return `${line.slice(0, indent)}${marker}`;
     }
     if (structuredBlockIndent !== null) {
-      if (!line.trim() || indent > structuredBlockIndent) return `${line.slice(0, indent)}[REDACTED]`;
+      if (!line.trim() || indent > structuredBlockIndent) return `${line.slice(0, indent)}${marker}`;
       structuredBlockIndent = null;
-      if (/^[}\]],?$/.test(line.trim())) return `${line.slice(0, indent)}[REDACTED]`;
+      if (/^[}\]],?$/.test(line.trim())) return `${line.slice(0, indent)}${marker}`;
     }
     if (sensitiveBlockIndent !== null) {
-      if (!line.trim() || indent > sensitiveBlockIndent) return `${line.slice(0, indent)}[REDACTED]`;
+      if (!line.trim() || indent > sensitiveBlockIndent) return `${line.slice(0, indent)}${marker}`;
       sensitiveBlockIndent = null;
     }
     if (
       /\b(?:Bearer|Basic)\s+\S+/i.test(line)
       || /\b[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/.test(line)
-    ) return `${line.slice(0, indent)}[REDACTED]`;
+    ) return `${line.slice(0, indent)}${marker}`;
     const keyMatches = [...line.matchAll(/(?:password|passwd|token|secret|private.?key|credential|database|registry|authorization|proxy-authorization|set-cookie|cookie|api[-_ ]?key|apikey|grjwt|jwt)/ig)];
     if (keyMatches.length === 0) return line;
     const candidates = keyMatches.map((keyMatch) => {
@@ -1331,20 +1768,20 @@ function createLineRedactor() {
       !earliest || candidate.separator < earliest.separator ? candidate : earliest
     ), null);
     const separator = firstCandidate?.separator ?? -1;
-    if (separator < 0) return "[REDACTED]";
+    if (separator < 0) return marker;
     const remainder = blockCandidate?.remainder ?? firstCandidate.remainder;
     if (/-----BEGIN [A-Z0-9 ]+-----/.test(remainder) && !/-----END [A-Z0-9 ]+-----/.test(remainder)) pemBlock = true;
     else if (/^[\[{]/.test(remainder) || /[\[{]\s*$/.test(line)) structuredBlockIndent = indent;
     else if (!remainder || /^[|>][+-]?$/.test(remainder)) sensitiveBlockIndent = indent;
-    return `${line.slice(0, separator + 1)} [REDACTED]`;
+    return `${line.slice(0, separator + 1)} ${marker}`;
   };
 }
 
-function redactInstallLog(value, maxBytes = MAX_CHILD_OUTPUT_BYTES) {
+function redactInstallLog(value, maxBytes = MAX_CHILD_OUTPUT_BYTES, sensitiveValues = []) {
   const outputLimit = boundedOutputLimit(maxBytes);
   const input = String(value || "");
   if (Buffer.byteLength(input) > outputLimit) throw childOutputLimitError();
-  const redactLine = createLineRedactor();
+  const redactLine = createLineRedactor(sensitiveValues);
   const output = [];
   let pending = "";
   let outputBytes = 0;
@@ -1368,14 +1805,14 @@ function redactInstallLog(value, maxBytes = MAX_CHILD_OUTPUT_BYTES) {
   return output.join("");
 }
 
-function protectedInstallLogBytes(execution) {
+function protectedInstallLogBytes(execution, sensitiveValues = []) {
   const rawStdout = String(execution?.stdout || "");
   const rawStderr = String(execution?.stderr || "");
   if (Buffer.byteLength(rawStdout) + Buffer.byteLength(rawStderr) > MAX_CHILD_OUTPUT_BYTES) {
     throw childOutputLimitError();
   }
-  const stdout = execution?.redacted === true ? rawStdout : redactInstallLog(rawStdout);
-  const stderr = execution?.redacted === true ? rawStderr : redactInstallLog(rawStderr);
+  const stdout = redactInstallLog(rawStdout, MAX_CHILD_OUTPUT_BYTES, sensitiveValues);
+  const stderr = redactInstallLog(rawStderr, MAX_CHILD_OUTPUT_BYTES, sensitiveValues);
   const stdoutLength = Buffer.byteLength(stdout);
   const stderrLength = Buffer.byteLength(stderr);
   const separatorLength = stdoutLength > 0 && stderrLength > 0 ? 1 : 0;
@@ -1392,6 +1829,17 @@ function assertSafeRemotePath(value) {
   return normalized;
 }
 
+const ROI_COMPLETION_RECEIPT_LINE = "RECEIPT_PHASE=completed";
+
+function isExactRoiCompletionReceiptLine(value) {
+  const line = String(value || "");
+  return (line.endsWith("\r") ? line.slice(0, -1) : line) === ROI_COMPLETION_RECEIPT_LINE;
+}
+
+function hasExactRoiCompletionReceipt(value) {
+  return String(value || "").split("\n").some(isExactRoiCompletionReceiptLine);
+}
+
 function spawnRedactedAttached(command, args, {
   spawnFn = spawn,
   registerChild = () => {},
@@ -1399,6 +1847,7 @@ function spawnRedactedAttached(command, args, {
   stderrWriter = process.stderr,
   maxOutputBytes,
   input,
+  sensitiveValues = [],
 } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawnFn(command, args, { stdio: [input === undefined ? "inherit" : "pipe", "pipe", "pipe"] });
@@ -1406,11 +1855,15 @@ function spawnRedactedAttached(command, args, {
     let cleared = false;
     let receivedBytes = 0;
     let emittedBytes = 0;
+    let receiptCompleted = false;
     const outputLimit = boundedOutputLimit(maxOutputBytes);
     const collected = { stdout: [], stderr: [] };
     const pending = { stdout: "", stderr: "" };
     const buffers = { stdout: "", stderr: "" };
-    const redactors = { stdout: createLineRedactor(), stderr: createLineRedactor() };
+    const redactors = {
+      stdout: createLineRedactor(sensitiveValues),
+      stderr: createLineRedactor(sensitiveValues),
+    };
     const unregister = registerChild(child, false);
     const clear = () => {
       if (cleared) return;
@@ -1451,14 +1904,18 @@ function spawnRedactedAttached(command, args, {
       buffers[name] += String(chunk);
       let newline;
       while ((newline = buffers[name].indexOf("\n")) >= 0) {
-        const safe = `${redactors[name](buffers[name].slice(0, newline))}\n`;
+        const rawLine = buffers[name].slice(0, newline);
+        if (name === "stdout" && isExactRoiCompletionReceiptLine(rawLine)) receiptCompleted = true;
+        const safe = `${redactors[name](rawLine)}\n`;
         buffers[name] = buffers[name].slice(newline + 1);
         if (!emitSafe(name, writer, safe)) return;
       }
     };
     const flush = (name, writer) => {
       if (!buffers[name]) return;
-      const safe = redactors[name](buffers[name]);
+      const rawLine = buffers[name];
+      if (name === "stdout" && isExactRoiCompletionReceiptLine(rawLine)) receiptCompleted = true;
+      const safe = redactors[name](rawLine);
       buffers[name] = "";
       emitSafe(name, writer, safe);
     };
@@ -1481,7 +1938,14 @@ function spawnRedactedAttached(command, args, {
       for (const name of ["stdout", "stderr"]) {
         if (pending[name]) collected[name].push(pending[name]);
       }
-      resolve({ code, signal, stdout: collected.stdout.join(""), stderr: collected.stderr.join(""), redacted: true });
+      resolve({
+        code,
+        signal,
+        stdout: collected.stdout.join(""),
+        stderr: collected.stderr.join(""),
+        redacted: true,
+        receiptCompleted,
+      });
     });
     if (input !== undefined) child.stdin.end(input);
   });
@@ -1576,6 +2040,7 @@ async function executeRoiInstall({
   sshSpawn,
   write = (value) => process.stderr.write(value),
   abortState,
+  sensitiveValues = [],
 }) {
   assertOperationNotAborted(abortState);
   const item = normalizeHost(bootstrap, 0);
@@ -1610,8 +2075,11 @@ async function executeRoiInstall({
     registerChild,
     spawnFn: sshSpawn,
     input: REMOTE_ROI_LAUNCH_SCRIPT,
+    sensitiveValues,
   });
-  atomicWriteProtectedBytes(logPath, protectedInstallLogBytes(execution), { stateStore });
+  const receiptCompleted = execution.receiptCompleted === true
+    || (execution.receiptCompleted === undefined && hasExactRoiCompletionReceipt(execution.stdout));
+  atomicWriteProtectedBytes(logPath, protectedInstallLogBytes(execution, sensitiveValues), { stateStore });
   if (execution.signal || execution.code === 130) {
     persistState({ stage: "executing", status: "interrupted", configSha256: configDigest, artifactSha256: artifactDigest, resumeArgv });
     write(`\n安装已中断，状态已保留。继续时执行：\n  ${resumeArgv.join(" ")}\n`);
@@ -1621,7 +2089,7 @@ async function executeRoiInstall({
     persistState({ stage: "executing", status: "failed", configSha256: configDigest, artifactSha256: artifactDigest, resumeArgv });
     throw new Error(`ROI 主机集群安装失败，退出码 ${execution.code}`);
   }
-  if (!/^RECEIPT_PHASE=completed$/m.test(String(execution.stdout || ""))) {
+  if (!receiptCompleted) {
     persistState({ stage: "executing", status: "failed", configSha256: configDigest, artifactSha256: artifactDigest, resumeArgv });
     throw new Error("ROI 已返回成功，但远端 completed receipt 验证结果缺失");
   }
@@ -1810,6 +2278,7 @@ async function installHostCluster({ onboarding, state, paths, options }, depende
   const hostRoot = path.join(paths.root, "host-cluster");
   stateStore.ensurePrivateDirectory(hostRoot);
   const configPath = path.join(hostRoot, "cluster.yaml");
+  const serverInputPath = path.join(hostRoot, "servers.txt");
   const driverStatePath = path.join(hostRoot, "state.json");
   const logPath = path.join(hostRoot, "roi.log");
   const loadedDriverState = loadDriverState(driverStatePath, stateStore);
@@ -1827,13 +2296,20 @@ async function installHostCluster({ onboarding, state, paths, options }, depende
     if (fs.existsSync(configPath)) {
       throw new Error("发现来源不明的受保护 cluster.yaml，已停止；请将其作为外部文件重新导入，或移走后重新生成模板");
     }
+    if (fs.existsSync(serverInputPath)) {
+      throw new Error("发现来源不明的受保护 servers.txt，已停止；请移走后重新开始");
+    }
     persistDriverState({
-      config_source: options.clusterConfig ? "imported-file" : "generated-template",
+      config_source: options.clusterConfig ? "imported-file" : "generated-server-input",
       ...(options.clusterConfig ? { import_source_path: path.resolve(options.clusterConfig) } : {}),
+      ...(!options.clusterConfig ? { server_input_path: serverInputPath } : {}),
     });
   } else if (!driverState.config_source) {
     if (driverState.stage !== "configuration" && driverState.config_sha256) {
-      persistDriverState({ config_source: "imported-file" });
+      persistDriverState({
+        config_source: "imported-file",
+        import_source_sha256: driverState.config_sha256,
+      });
     } else {
       throw new Error("主机集群配置来源状态不完整，拒绝读取 cluster.yaml");
     }
@@ -1842,13 +2318,103 @@ async function installHostCluster({ onboarding, state, paths, options }, depende
   if (driverState.config_source === "generated-template" && options.clusterConfig) {
     throw new Error("当前流程已绑定自动生成的 cluster.yaml，不能切换为外部导入配置");
   }
+  if (driverState.config_source === "generated-server-input" && options.clusterConfig) {
+    throw new Error("当前流程已绑定自动生成的 servers.txt，不能切换为外部导入配置");
+  }
   if (driverState.config_source === "imported-file" && options.clusterConfig
     && path.resolve(options.clusterConfig) !== driverState.import_source_path) {
     throw new Error("当前流程已绑定另一份外部 cluster.yaml，不能切换配置来源");
   }
 
   let config;
-  if (driverState.config_source === "generated-template") {
+  if (driverState.config_source === "generated-server-input") {
+    if (driverState.server_input_path !== serverInputPath) {
+      throw new Error("主机集群 servers.txt 路径状态不匹配，拒绝继续");
+    }
+    if (!fs.existsSync(serverInputPath)) {
+      if (fs.existsSync(configPath)) {
+        throw new Error("servers.txt 缺失且发现无法验证来源的 cluster.yaml，拒绝继续");
+      }
+      const template = createHostServerInputTemplate();
+      createProtectedBytesExclusive(serverInputPath, template, { stateStore });
+      persistDriverState({
+        stage: "configuration",
+        status: "waiting_user",
+        server_input_template_sha256: sha256(template),
+      });
+      write("\n[RAINSKILLS_USER_INPUT_REQUIRED:host_cluster_server_input]\n");
+      writeUserMessage(write, "platform.host-cluster-server-input", renderHostServerInputPrompt({
+        inputPath: serverInputPath,
+        platform: dependencies.platform || process.platform,
+      }));
+      return { waiting: true, waitingStage: "waiting-host-cluster-server-input", inputPath: serverInputPath };
+    }
+
+    const inputBytes = readProtectedServerInput(serverInputPath, {
+      platform: dependencies.platform || process.platform,
+      stateStore,
+    });
+    const inputSha256 = sha256(inputBytes);
+    if (driverState.server_input_sha256 && driverState.server_input_sha256 !== inputSha256) {
+      throw new Error("恢复时 servers.txt 字节发生变化，拒绝继续");
+    }
+
+    if (driverState.server_input_sha256) {
+      if (!driverState.generated_config_sha256 || !driverState.config_sha256) {
+        throw new Error("自动生成的 cluster.yaml 摘要状态不完整，拒绝继续");
+      }
+      if (!fs.existsSync(configPath)) throw new Error("已锁定的 cluster.yaml 缺失，拒绝恢复");
+      const locked = readSafeClusterSource(configPath, {
+        platform: dependencies.platform || process.platform,
+        sourceStateStore: stateStore,
+      });
+      const lockedSha256 = sha256(locked.bytes);
+      if (lockedSha256 !== driverState.generated_config_sha256
+        || lockedSha256 !== driverState.config_sha256) {
+        throw new Error("恢复时 cluster.yaml 字节发生变化，拒绝继续");
+      }
+      config = locked.value;
+    } else {
+      const parsed = parseHostServerInput(inputBytes);
+      if (parsed.issues.length > 0) {
+        if (fs.existsSync(configPath)) {
+          throw new Error("servers.txt 无效且发现无法验证的 cluster.yaml，拒绝继续");
+        }
+        persistDriverState({ stage: "configuration", status: "waiting_user" });
+        write("\n[RAINSKILLS_USER_INPUT_REQUIRED:host_cluster_server_input]\n");
+        writeUserMessage(write, "platform.host-cluster-server-input", renderHostServerInputPrompt({
+          inputPath: serverInputPath,
+          platform: dependencies.platform || process.platform,
+          issues: parsed.issues,
+        }));
+        return {
+          waiting: true,
+          waitingStage: "waiting-host-cluster-server-input",
+          inputPath: serverInputPath,
+          issues: parsed.issues,
+        };
+      }
+
+      const expectedConfigBytes = createClusterConfigFromServerInput(parsed.hosts);
+      if (!fs.existsSync(configPath)) {
+        createProtectedBytesExclusive(configPath, expectedConfigBytes, { stateStore });
+      }
+      const generated = readSafeClusterSource(configPath, {
+        platform: dependencies.platform || process.platform,
+        sourceStateStore: stateStore,
+      });
+      if (!generated.bytes.equals(expectedConfigBytes)) {
+        throw new Error("已有 cluster.yaml 与 servers.txt 自动生成结果不匹配，拒绝采用");
+      }
+      const generatedSha256 = sha256(generated.bytes);
+      persistDriverState({
+        server_input_sha256: inputSha256,
+        generated_config_sha256: generatedSha256,
+        config_sha256: generatedSha256,
+      });
+      config = generated.value;
+    }
+  } else if (driverState.config_source === "generated-template") {
     if (!fs.existsSync(configPath)) {
       const template = createHostClusterTemplate();
       createProtectedBytesExclusive(configPath, template, { stateStore });
@@ -1882,7 +2448,7 @@ async function installHostCluster({ onboarding, state, paths, options }, depende
     }
     config = diagnostic.value;
   } else if (driverState.config_source === "imported-file") {
-    if (!fs.existsSync(configPath)) {
+    const readImportSource = () => {
       const requestedSource = String(options.clusterConfig || driverState.import_source_path || "").trim();
       if (!requestedSource) throw new Error("外部 cluster.yaml 来源缺失，无法继续导入");
       const sourcePath = path.resolve(requestedSource);
@@ -1892,18 +2458,55 @@ async function installHostCluster({ onboarding, state, paths, options }, depende
         sourceStateStore: stateStore,
       });
       validateClusterTopology(source.value);
-      const sourceSha256 = sha256(source.bytes);
-      if (driverState.import_source_sha256 && driverState.import_source_sha256 !== sourceSha256) {
+      return { ...source, path: sourcePath, sha256: sha256(source.bytes) };
+    };
+
+    let protectedCopy;
+    if (!fs.existsSync(configPath)) {
+      const source = readImportSource();
+      if (driverState.import_source_sha256 && driverState.import_source_sha256 !== source.sha256) {
         throw new Error("外部 cluster.yaml 在导入恢复期间发生变化，拒绝继续");
       }
-      if (!driverState.import_source_sha256) persistDriverState({ import_source_path: sourcePath, import_source_sha256: sourceSha256 });
       createProtectedBytesExclusive(configPath, source.bytes, { stateStore });
+      protectedCopy = readSafeClusterSource(configPath, {
+        platform: dependencies.platform || process.platform,
+        sourceStateStore: stateStore,
+      });
+      if (!protectedCopy.bytes.equals(source.bytes)) {
+        throw new Error("受保护的导入 cluster.yaml 副本与外部 source 字节不匹配，拒绝继续");
+      }
+      persistDriverState({
+        import_source_path: source.path,
+        import_source_sha256: source.sha256,
+        config_sha256: source.sha256,
+      });
+    } else {
+      stateStore.assertProtectedRegularFile(configPath);
+      protectedCopy = readSafeClusterSource(configPath, {
+        platform: dependencies.platform || process.platform,
+        sourceStateStore: stateStore,
+      });
+      const protectedSha256 = sha256(protectedCopy.bytes);
+      if (driverState.import_source_sha256) {
+        if (driverState.import_source_sha256 !== protectedSha256) {
+          throw new Error("受保护的导入 cluster.yaml 副本与已锁定 source 摘要不匹配，拒绝继续");
+        }
+      } else {
+        if (!driverState.import_source_path) {
+          throw new Error("导入来源状态不完整，缺少受信任的外部 cluster.yaml 路径");
+        }
+        const source = readImportSource();
+        if (!protectedCopy.bytes.equals(source.bytes)) {
+          throw new Error("受保护的导入 cluster.yaml 副本与外部 source 字节不匹配，拒绝继续");
+        }
+        persistDriverState({
+          import_source_path: source.path,
+          import_source_sha256: source.sha256,
+          config_sha256: source.sha256,
+        });
+      }
     }
-    stateStore.assertProtectedRegularFile(configPath);
-    config = readSafeClusterSource(configPath, {
-      platform: dependencies.platform || process.platform,
-      sourceStateStore: stateStore,
-    }).value;
+    config = protectedCopy.value;
   } else {
     throw new Error("不支持的主机集群配置来源");
   }
@@ -1920,7 +2523,7 @@ async function installHostCluster({ onboarding, state, paths, options }, depende
   if (driverState.config_sha256 && driverState.config_sha256 !== configSha256) throw new Error("恢复时 cluster.yaml 字节发生变化，拒绝继续");
   if (!driverState.config_sha256) persistDriverState({ config_sha256: configSha256 });
   if (driverState.stage === "configuration") {
-    write(`\n[RAINSKILLS_STATUS:host_cluster_config_valid]\n集群配置检查通过：\n- 节点：${topology.hosts.length} 个\n- etcd：${topology.roleGroups.etcd.length} 个\n- bootstrap：${topology.bootstrap.name}\n- 存储模式：${topology.storageMode}\n\n正在准备所有服务器的 SSH 连接。\n`);
+    write(renderValidatedTopologyStatus(summarizeTopology(config), configPath));
   }
   const prepared = await prepareHostSshSessions(topology, { ...dependencies, configPath });
   const closeSessions = () => {
@@ -1983,6 +2586,7 @@ async function installHostCluster({ onboarding, state, paths, options }, depende
           resumeArgv,
           write: dependencies.write,
           abortState: dependencies.abortState,
+          sensitiveValues: topology.hosts.map(({ password }) => password),
         });
       } catch (error) {
         if (error.code !== "RAINSKILLS_HOST_CLUSTER_INTERRUPTED") throw error;
@@ -2111,7 +2715,9 @@ module.exports = {
   acquireRoiArtifact,
   atomicWriteProtectedBytes,
   confirmRoiInstall,
+  createClusterConfigFromServerInput,
   createHostClusterTemplate,
+  createHostServerInputTemplate,
   createProtectedBytesExclusive,
   defaultSshRunner,
   defaultTransfer,
@@ -2122,14 +2728,17 @@ module.exports = {
   inspectRemoteCluster,
   installHostCluster,
   parseClusterDocument,
+  parseHostServerInput,
   probeRemoteArchitecture,
   probeRemoteRoiVersion,
   prepareHostSshSessions,
   probeConsole,
+  readProtectedServerInput,
   readSafeClusterSource,
   reconcileHostExecution,
   redactInstallLog,
   renderHostClusterConfigPrompt,
+  renderHostServerInputPrompt,
   renderHostClusterSshAuthenticationPrompt,
   renderConfirmationSummary,
   runClusterWizard,

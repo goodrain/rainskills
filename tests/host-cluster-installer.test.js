@@ -158,6 +158,37 @@ test("topology rejects zero/even etcd and invalid bootstrap, roles, names, or ad
   }), /bootstrap.*master/i);
 });
 
+test("imported topology strictly rejects malformed IP and DNS addresses while preserving valid host forms", () => {
+  const { diagnoseClusterConfig, validateClusterTopology } = moduleUnderTest();
+  const malformed = [
+    { field: "address", value: "1:2:3" },
+    { field: "internalAddress", value: "a.-b.example" },
+    { field: "address", value: `${"a".repeat(64)}.example` },
+  ];
+  for (const { field, value } of malformed) {
+    const invalid = cluster();
+    invalid.hosts[0][field] = value;
+    assert.throws(() => validateClusterTopology(invalid), new RegExp(`${field}.*无效|无效.*${field}`));
+    const diagnostic = diagnoseClusterConfig(Buffer.from(YAML.stringify(invalid)), { source: "imported-file" });
+    assert.match(diagnostic.issues.join("\n"), new RegExp(`${field}.*无效|无效.*${field}`));
+  }
+
+  for (const [address, internalAddress] of [
+    ["192.0.2.10", "10.0.0.10"],
+    ["2001:db8::10", "fd00::10"],
+    ["Gateway.Example.com", "node-10.internal"],
+    ["ssh-alias", "node-10"],
+  ]) {
+    const valid = cluster();
+    Object.assign(valid.hosts[0], { address, internalAddress });
+    assert.doesNotThrow(() => validateClusterTopology(valid));
+    assert.deepEqual(
+      diagnoseClusterConfig(Buffer.from(YAML.stringify(valid)), { source: "imported-file" }).issues,
+      [],
+    );
+  }
+});
+
 test("topology enforces nfs-server only for built-in NFS", () => {
   const { validateClusterTopology } = moduleUnderTest();
   assert.equal(validateClusterTopology(cluster()).storageMode, "builtin-nfs");
@@ -273,6 +304,570 @@ test("one-shot cluster template explains each field once without changing the ex
   });
 });
 
+function serverInputSection(index, overrides = {}) {
+  const values = {
+    public_ip: `203.0.113.${index}`,
+    private_ip: `10.0.0.${index}`,
+    ssh_port: "22",
+    password: `fixture-password-${index}`,
+    ...overrides,
+  };
+  return [
+    `[server-${index}]`,
+    `public_ip=${values.public_ip}`,
+    `private_ip=${values.private_ip}`,
+    `ssh_port=${values.ssh_port}`,
+    `password=${values.password}`,
+  ].join("\n");
+}
+
+function serverInput(count, overrides = {}) {
+  return Array.from({ length: count }, (_, index) => (
+    serverInputSection(index + 1, overrides[index + 1])
+  )).join("\n\n");
+}
+
+function hostClusterWorkflowFixture(prefix = "rainskills-host-server-input-") {
+  const root = tempOperation(prefix);
+  const home = path.join(root, "home");
+  fs.mkdirSync(home, { mode: 0o700 });
+  const stateStore = require("./helpers/portable-secure-state.js").createPortableSecureStateStore(home);
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  const paths = { root: path.join(home, ".rainbond", "platform-installer", operationId) };
+  stateStore.ensurePrivateDirectory(paths.root);
+  const hostRoot = path.join(paths.root, "host-cluster");
+  return {
+    operationId,
+    paths,
+    hostRoot,
+    statePath: path.join(hostRoot, "state.json"),
+    configPath: path.join(hostRoot, "cluster.yaml"),
+    serverInputPath: path.join(hostRoot, "servers.txt"),
+    stateStore,
+    context: {
+      onboarding: { operation_id: operationId },
+      state: { operation_id: operationId },
+      paths,
+      options: { yes: true },
+    },
+  };
+}
+
+test("generated-server-input descriptor reader never requests more than the 1 MiB protected limit", () => {
+  const { readProtectedServerInput } = moduleUnderTest();
+  assert.equal(typeof readProtectedServerInput, "function");
+  const maximumBytes = 1024 * 1024;
+  const source = Buffer.alloc(maximumBytes, 0x20);
+  let closed = 0;
+  let largestRead = 0;
+  const bytes = readProtectedServerInput("/protected/servers.txt", {
+    platform: "linux",
+    currentUid: 501,
+    stateStore: { assertProtectedRegularFile: () => {} },
+    fsImpl: {
+      constants: { O_RDONLY: 0, O_NOFOLLOW: 0x100 },
+      openSync: () => 7,
+      fstatSync: () => ({
+        isFile: () => true,
+        isSymbolicLink: () => false,
+        uid: 501,
+        mode: 0o100600,
+        size: maximumBytes,
+      }),
+      readFileSync: () => assert.fail("descriptor reader must not use an unbounded read"),
+      readSync(fd, destination, offset, length, position) {
+        assert.equal(fd, 7);
+        largestRead = Math.max(largestRead, length);
+        if (position >= source.length) return 0;
+        const count = Math.min(length, source.length - position);
+        source.copy(destination, offset, position, position + count);
+        return count;
+      },
+      closeSync: () => { closed += 1; },
+    },
+  });
+  assert.equal(bytes.length, maximumBytes);
+  assert(largestRead <= maximumBytes);
+  assert.equal(closed, 2);
+});
+
+test("generated-server-input Windows reads bind both ACL identities to descriptor bytes and reject replacement", () => {
+  const { readProtectedServerInput } = moduleUnderTest();
+  const original = Buffer.from("original protected bytes");
+  const replacement = Buffer.from("replacement fd bytes");
+  const identity = (bytes) => `sha256:${sha256(bytes)}:${bytes.length}`;
+  const fsImpl = {
+    constants: { O_RDONLY: 0 },
+    openSync: () => 11,
+    fstatSync: () => ({
+      isFile: () => true,
+      isSymbolicLink: () => false,
+      uid: 501,
+      mode: 0o100600,
+      dev: 1,
+      ino: 2,
+      size: replacement.length,
+      mtimeMs: 3,
+      ctimeMs: 4,
+    }),
+    readSync(fd, destination, offset, length, position) {
+      assert.equal(fd, 11);
+      if (position >= replacement.length) return 0;
+      const count = Math.min(length, replacement.length - position);
+      replacement.copy(destination, offset, position, position + count);
+      return count;
+    },
+    closeSync: () => {},
+  };
+
+  assert.throws(() => readProtectedServerInput("C:\\protected\\servers.txt", {
+    platform: "win32",
+    currentUid: null,
+    fsImpl,
+    stateStore: {
+      assertProtectedRegularFile: () => {},
+      assertSafeExternalRegularFile: () => ({ fileIdentity: identity(original) }),
+    },
+  }), /ACL.*identity|ACL.*身份|身份.*ACL/i, "the ACL-authorized bytes must match both descriptor reads");
+
+  let inspections = 0;
+  assert.throws(() => readProtectedServerInput("C:\\protected\\servers.txt", {
+    platform: "win32",
+    currentUid: null,
+    fsImpl,
+    stateStore: {
+      assertProtectedRegularFile: () => {},
+      assertSafeExternalRegularFile: () => ({
+        fileIdentity: inspections++ === 0 ? identity(replacement) : identity(original),
+      }),
+    },
+  }), /ACL.*identity|ACL.*身份|身份.*ACL/i, "a replacement between ACL inspections must fail closed");
+  assert.equal(inspections, 2);
+});
+
+test("generated-server-input POSIX reads twice and rejects same-inode same-size content replacement", () => {
+  const { readProtectedServerInput } = moduleUnderTest();
+  const firstBytes = Buffer.from("first protected bytes!");
+  const secondBytes = Buffer.from("other protected bytes!");
+  assert.equal(firstBytes.length, secondBytes.length);
+  let opens = 0;
+  let stats = 0;
+  let assertions = 0;
+  const byFd = new Map();
+  assert.throws(() => readProtectedServerInput("/protected/servers.txt", {
+    platform: "linux",
+    currentUid: 501,
+    stateStore: { assertProtectedRegularFile: () => { assertions += 1; } },
+    fsImpl: {
+      constants: { O_RDONLY: 0, O_NOFOLLOW: 0x100 },
+      openSync() {
+        opens += 1;
+        const fd = 20 + opens;
+        byFd.set(fd, opens === 1 ? firstBytes : secondBytes);
+        return fd;
+      },
+      fstatSync: () => {
+        stats += 1;
+        return {
+          isFile: () => true,
+          isSymbolicLink: () => false,
+          uid: 501,
+          mode: 0o100600,
+          dev: 9,
+          ino: 10,
+          size: firstBytes.length,
+          mtimeMs: 11,
+          ctimeMs: 12,
+        };
+      },
+      readSync(fd, destination, offset, length, position) {
+        const source = byFd.get(fd);
+        if (position >= source.length) return 0;
+        const count = Math.min(length, source.length - position);
+        source.copy(destination, offset, position, position + count);
+        return count;
+      },
+      closeSync: () => {},
+    },
+  }), /读取期间.*变化|字节.*变化|digest|identity/i);
+  assert.equal(opens, 2);
+  assert.equal(stats, 4, "each bounded descriptor read must fstat before and after");
+  assert.equal(assertions, 2);
+});
+
+test("servers.txt template has Chinese guidance and three editable server input sections", () => {
+  const { createHostServerInputTemplate } = moduleUnderTest();
+  const bytes = createHostServerInputTemplate();
+  assert(Buffer.isBuffer(bytes));
+  const text = bytes.toString("utf8");
+
+  const expectedGuidance = [
+    "# Rainbond 多节点服务器信息",
+    "# 密码只写入受保护的本地和远端安装文件，不会写入聊天、日志或状态；不要填写私钥或 Token。",
+    "# 超过三台服务器时，复制完整的 [server-N] 区块并按顺序编号。",
+  ];
+  assert.deepEqual(text.split("\n").slice(0, 3), expectedGuidance);
+  assert.deepEqual([...text.matchAll(/^\[server-(\d+)\]$/gm)].map((match) => match[1]), ["1", "2", "3"]);
+  for (const field of ["public_ip", "private_ip", "ssh_port", "password"]) {
+    assert.equal(text.match(new RegExp(`^${field}=`, "gm"))?.length, 3, field);
+  }
+  for (const guidance of [
+    "# 公网 IP：控制端通过 SSH 访问该服务器的地址；没有独立公网 IP 时可与内网 IP 相同",
+    "# 内网 IP：集群节点之间通信使用的地址",
+    "# SSH 端口：按服务器实际端口填写，不要求为 22",
+    "# root 密码：保留所有特殊字符；不要添加引号",
+  ]) {
+    assert.equal(text.split(guidance).length - 1, 3, guidance);
+  }
+  assert.doesNotMatch(text, /cluster\.yaml|YAML|角色/);
+});
+
+test("servers.txt prompt links the file and provides native open commands without YAML or role editing", () => {
+  const { renderHostServerInputPrompt } = moduleUnderTest();
+  const posixPath = "/Users/example user/.rainbond/platform-installer/op/host-cluster/servers.txt";
+  const windowsPath = "C:\\Users\\example user\\.rainbond\\platform-installer\\op\\host-cluster\\servers.txt";
+
+  const macOS = renderHostServerInputPrompt({ inputPath: posixPath, platform: "darwin" });
+  assert.match(macOS, new RegExp(`\\[点击打开 servers\\.txt\\]\\(<${posixPath.replace(/\./g, "\\.").replace(/ /g, "%20")}>\\)`));
+  assert.match(macOS, /open '\/Users\/example user\/.*servers\.txt'/);
+  assert.match(macOS, /public_ip、private_ip、ssh_port 和 password/);
+  assert.match(macOS, /公网 IP：控制端 SSH 地址；没有独立公网 IP 时可与内网 IP 相同。/);
+  assert.match(macOS, /内网 IP：节点通信地址。/);
+  assert.match(macOS, /SSH 端口：填写每台服务器的实际端口，不强制为 22。/);
+  assert.match(macOS, /root 密码：只写入受保护的本地和远端安装文件，不得发送到聊天。/);
+  assert.match(macOS, /密码只写入受保护的本地和远端安装文件，不会写入聊天、日志或状态；不要填写私钥或 Token。/);
+  assert.doesNotMatch(macOS, /密码只保存在这个受保护的本地文件/);
+  assert.match(macOS, /回复“已完成”/);
+  assert.doesNotMatch(macOS, /cluster\.yaml|YAML|角色/);
+
+  assert.match(
+    renderHostServerInputPrompt({ inputPath: posixPath, platform: "linux" }),
+    /xdg-open '\/Users\/example user\/.*servers\.txt'/,
+  );
+  const windows = renderHostServerInputPrompt({ inputPath: windowsPath, platform: "win32" });
+  assert.match(windows, /explorer\.exe "C:\\Users\\example user\\.*servers\.txt"/);
+  assert.match(windows, /\[点击打开 servers\.txt\]\(<C:\/Users\/example%20user\//);
+});
+
+test("server input accepts UTF-8 BOM and CRLF and preserves password characters after the first equals", () => {
+  const { parseHostServerInput } = moduleUnderTest();
+  const sentinel = "  MUST-NOT-LEAK=part#tail  ";
+  const text = `\ufeff# 注释\r\n\r\n${serverInput(3, {
+    1: { password: sentinel, ssh_port: " 1 " },
+    2: { ssh_port: "65535" },
+    3: { public_ip: "2001:db8::3", private_ip: "node-3.internal" },
+  }).replace(/\n/g, "\r\n")}`;
+  const result = parseHostServerInput(Buffer.from(text, "utf8"));
+
+  assert.deepEqual(result.issues, []);
+  assert.equal(result.hosts.length, 3);
+  assert.equal(result.hosts[0].password, sentinel);
+  assert.equal(result.hosts[0].sshPort, 1);
+  assert.equal(result.hosts[1].sshPort, 65535);
+  assert.equal(result.hosts[2].publicIp, "2001:db8::3");
+  assert.equal(result.hosts[2].privateIp, "node-3.internal");
+});
+
+test("server input aggregates strict section and field errors without reflecting password values", () => {
+  const { parseHostServerInput } = moduleUnderTest();
+  const sentinel = "MUST-NOT-LEAK-SERVER-INPUT-SECRET";
+  const text = [
+    "[server-1]",
+    "public_ip=203.0.113.1",
+    "public_ip=203.0.113.9",
+    "private_ip=10.0.0.1",
+    "ssh_port=22",
+    `password=${sentinel}`,
+    "unknown=value",
+    "",
+    "[server-1]",
+    "public_ip=203.0.113.2",
+    "private_ip=10.0.0.2",
+    "ssh_port=22",
+    `password=${sentinel}`,
+    "",
+    "[server-3]",
+    "public_ip=203.0.113.3",
+    "ssh_port=22",
+    "password=   ",
+    "",
+    "[other]",
+    "public_ip=203.0.113.4",
+  ].join("\n");
+  const result = parseHostServerInput(text);
+  const report = result.issues.join("\n");
+
+  assert(result.issues.length >= 6, report);
+  assert.match(report, /重复.*server-1|server-1.*重复/);
+  assert.match(report, /区块.*连续|连续.*区块/);
+  assert.match(report, /public_ip.*重复|重复.*public_ip/);
+  assert.match(report, /未知字段/);
+  assert.match(report, /private_ip.*缺失|缺失.*private_ip/);
+  assert.match(report, /password.*空|password.*未填写/);
+  assert.match(report, /未知区块/);
+  assert.doesNotMatch(report, new RegExp(sentinel));
+});
+
+test("server input rejects NUL and other control characters without leaking the affected values", () => {
+  const { parseHostServerInput } = moduleUnderTest();
+  const sentinel = "MUST-NOT-LEAK-CONTROL-SECRET";
+  const result = parseHostServerInput(`${serverInput(3)}\n# ${sentinel}\u0000\npassword=${sentinel}\u0007`);
+  const report = result.issues.join("\n");
+  assert.match(report, /控制字符|NUL/);
+  assert.doesNotMatch(report, new RegExp(sentinel));
+});
+
+test("server input rejects Unicode C1 controls inside passwords without leaking their values", () => {
+  const { parseHostServerInput } = moduleUnderTest();
+  const sentinel = "MUST-NOT-LEAK-C1-SECRET";
+  const result = parseHostServerInput(serverInput(3, {
+    2: { password: `${sentinel}\u0085tail` },
+  }));
+  const report = result.issues.join("\n");
+  assert.match(report, /控制字符/);
+  assert.doesNotMatch(report, new RegExp(sentinel));
+});
+
+test("server input rejects section numbers with leading zeroes", () => {
+  const { parseHostServerInput } = moduleUnderTest();
+  const input = serverInput(3).replace("[server-1]", "[server-01]");
+  assert.match(parseHostServerInput(input).issues.join("\n"), /区块编号.*连续|连续.*区块编号/);
+});
+
+test("server input enforces node count and file size limits", () => {
+  const { parseHostServerInput } = moduleUnderTest();
+  assert.match(parseHostServerInput(serverInput(2)).issues.join("\n"), /至少.*3|3.*节点/);
+  assert.match(parseHostServerInput(serverInput(101)).issues.join("\n"), /最多.*100|100.*节点/);
+  assert.match(parseHostServerInput(Buffer.alloc(1024 * 1024 + 1, 0x20)).issues.join("\n"), /1 MiB|大小/);
+});
+
+test("server input bounds dense diagnostics and stops collecting after server-100", () => {
+  const { parseHostServerInput } = moduleUnderTest();
+  const denseErrors = Array.from({ length: 500 }, (_, index) => `unknown_${index}=value`).join("\n");
+  const denseResult = parseHostServerInput(`${serverInput(3)}\n${denseErrors}`);
+  assert(denseResult.issues.length <= 201, `unbounded diagnostics: ${denseResult.issues.length}`);
+  assert.match(denseResult.issues.at(-1), /诊断.*截断|问题.*过多/);
+
+  const nodeLimitResult = parseHostServerInput(`${serverInput(101)}\n${denseErrors}`);
+  assert.equal(nodeLimitResult.hosts.length, 100);
+  assert.match(nodeLimitResult.issues.join("\n"), /最多.*100|100.*节点/);
+  assert(nodeLimitResult.issues.length <= 201, `unbounded diagnostics: ${nodeLimitResult.issues.length}`);
+});
+
+test("server input size limit is byte-exact and malformed UTF-8 fails closed", () => {
+  const { parseHostServerInput } = moduleUnderTest();
+  const maximumBytes = 1024 * 1024;
+  const validPrefix = Buffer.from(`${serverInput(3)}\n#`, "utf8");
+  const exactLimit = Buffer.concat([validPrefix, Buffer.alloc(maximumBytes - validPrefix.length, 0x20)]);
+  assert.equal(exactLimit.length, maximumBytes);
+  assert.doesNotMatch(parseHostServerInput(exactLimit).issues.join("\n"), /1 MiB|大小/);
+
+  const multibyteOverflow = Buffer.from(`#${"界".repeat(Math.ceil(maximumBytes / 3))}`, "utf8");
+  assert(multibyteOverflow.length > maximumBytes);
+  assert.match(parseHostServerInput(multibyteOverflow).issues.join("\n"), /1 MiB|大小/);
+  assert.match(parseHostServerInput(Buffer.from([0xc3, 0x28])).issues.join("\n"), /UTF-8/);
+});
+
+test("server input validates address and port boundaries while allowing distinct ports on one public IP", () => {
+  const { parseHostServerInput } = moduleUnderTest();
+  const valid = parseHostServerInput(serverInput(3, {
+    1: { public_ip: "gateway.example.com", ssh_port: "1" },
+    2: { public_ip: "gateway.example.com", ssh_port: "65535" },
+    3: { public_ip: "2001:db8::3", private_ip: "fd00::3", ssh_port: "2222" },
+  }));
+  assert.deepEqual(valid.issues, []);
+
+  const invalid = parseHostServerInput(serverInput(3, {
+    1: { public_ip: "-bad.example", ssh_port: "0" },
+    2: { private_ip: "bad..internal", ssh_port: "65536" },
+    3: { ssh_port: "22.5" },
+  }));
+  const report = invalid.issues.join("\n");
+  assert.match(report, /server-1.*public_ip|public_ip.*server-1/);
+  assert.match(report, /server-2.*private_ip|private_ip.*server-2/);
+  assert.equal(invalid.issues.filter((issue) => /ssh_port/.test(issue)).length, 3);
+});
+
+test("server input rejects malformed IPv6 and DNS labels", () => {
+  const { parseHostServerInput } = moduleUnderTest();
+  const result = parseHostServerInput(serverInput(3, {
+    1: { public_ip: ":::" },
+    2: { private_ip: "1:2:3:4:5:6:7:8:9" },
+    3: { public_ip: "a.-b.example" },
+  }));
+  assert.equal(result.issues.filter((issue) => /地址无效/.test(issue)).length, 3, result.issues.join("\n"));
+});
+
+test("generated-server-input rejects IPv6 zone ids as fixed invalid-address diagnostics in TXT and imported YAML", () => {
+  const { diagnoseClusterConfig, parseHostServerInput, validateClusterTopology } = moduleUnderTest();
+  let parsed;
+  assert.doesNotThrow(() => {
+    parsed = parseHostServerInput(serverInput(3, { 1: { public_ip: "fe80::1%eth0" } }));
+  });
+  assert.match(parsed.issues.join("\n"), /server-1.*public_ip.*地址无效|public_ip.*地址无效/);
+
+  const imported = cluster();
+  imported.hosts[0].address = "fe80::1%eth0";
+  let diagnostic;
+  assert.doesNotThrow(() => {
+    diagnostic = diagnoseClusterConfig(Buffer.from(YAML.stringify(imported)), { source: "imported-file" });
+  });
+  assert.match(diagnostic.issues.join("\n"), /address.*无效/);
+  assert.throws(
+    () => validateClusterTopology(imported),
+    (error) => error instanceof Error && !(error instanceof TypeError) && /address.*无效/.test(error.message),
+  );
+});
+
+test("server input detects case-insensitive DNS and equivalent IPv6 address conflicts", () => {
+  const { parseHostServerInput } = moduleUnderTest();
+  const result = parseHostServerInput(serverInput(4, {
+    1: { public_ip: "Gateway.Example.com", private_ip: "2001:db8::1" },
+    2: { public_ip: "gateway.example.com", private_ip: "2001:0db8:0:0:0:0:0:1" },
+    3: { public_ip: "2001:db8::3", private_ip: "Node-3.Internal" },
+    4: { public_ip: "2001:0db8:0:0:0:0:0:3", private_ip: "node-3.internal" },
+  }));
+  assert.equal(result.issues.filter((issue) => /SSH endpoint/.test(issue)).length, 2, result.issues.join("\n"));
+  assert.equal(result.issues.filter((issue) => /private_ip.*重复/.test(issue)).length, 2, result.issues.join("\n"));
+});
+
+test("server input rejects duplicate SSH endpoints and private addresses without password leakage", () => {
+  const { parseHostServerInput } = moduleUnderTest();
+  const sentinel = "MUST-NOT-LEAK-DUPLICATE-SECRET";
+  const result = parseHostServerInput(serverInput(3, {
+    1: { public_ip: "gateway.example.com", private_ip: "10.0.0.1", password: sentinel },
+    2: { public_ip: "gateway.example.com", private_ip: "10.0.0.2", password: sentinel },
+    3: { public_ip: "different.example.com", private_ip: "10.0.0.2", password: sentinel },
+  }));
+  const report = result.issues.join("\n");
+  assert.match(report, /SSH.*重复|重复.*SSH/);
+  assert.match(report, /private_ip.*重复|重复.*private_ip/);
+  assert.doesNotMatch(report, new RegExp(sentinel));
+});
+
+function expectedGeneratedRoiConfig(hosts) {
+  const nodeNames = hosts.map((_, index) => `node${index + 1}`);
+  const controlPlaneNodes = nodeNames.slice(0, 3);
+  return {
+    hosts: hosts.map((item, index) => ({
+      name: nodeNames[index],
+      address: item.publicIp,
+      internalAddress: item.privateIp,
+      user: "root",
+      password: item.password,
+      port: item.sshPort,
+      ...(index === 0 ? { bootstrap: true } : {}),
+    })),
+    roleGroups: {
+      etcd: controlPlaneNodes,
+      master: controlPlaneNodes,
+      worker: nodeNames,
+      "rbd-gateway": nodeNames.slice(0, 2),
+      "rbd-chaos": nodeNames,
+      "nfs-server": ["node1"],
+    },
+    storage: {
+      nfs: { enabled: true, sharePath: "/nfs-data/k8s", storageClass: { enabled: true } },
+      existingStorageClass: { enabled: false },
+    },
+    registry: { external: { enabled: false } },
+    database: { mysql: { enabled: false }, custom: { enabled: false } },
+  };
+}
+
+test("generated ROI YAML maps three parsed servers deterministically and preserves password bytes", () => {
+  const { createClusterConfigFromServerInput, parseHostServerInput } = moduleUnderTest();
+  const password = "  edge=value#fragment and trailing spaces  ";
+  const parsed = parseHostServerInput(serverInput(3, {
+    1: { ssh_port: "2201", password },
+    2: { ssh_port: "2202" },
+    3: { ssh_port: "2203" },
+  }));
+  assert.deepEqual(parsed.issues, []);
+
+  const first = createClusterConfigFromServerInput(parsed.hosts);
+  const second = createClusterConfigFromServerInput(parsed.hosts);
+  assert(Buffer.isBuffer(first));
+  assert.deepEqual(first, second);
+
+  const generated = YAML.parse(first.toString("utf8"));
+  assert.deepEqual(generated, expectedGeneratedRoiConfig(parsed.hosts));
+  assert.equal(generated.hosts[0].password, password);
+});
+
+test("generated ROI YAML maps four parsed servers to three control-plane and all worker nodes", () => {
+  const { createClusterConfigFromServerInput, parseHostServerInput } = moduleUnderTest();
+  const parsed = parseHostServerInput(serverInput(4, {
+    1: { public_ip: "gateway.example.com", ssh_port: "2221" },
+    2: { public_ip: "gateway.example.com", ssh_port: "2222" },
+    3: { ssh_port: "2223" },
+    4: { ssh_port: "2224" },
+  }));
+  assert.deepEqual(parsed.issues, []);
+
+  const bytes = createClusterConfigFromServerInput(parsed.hosts);
+  assert(Buffer.isBuffer(bytes));
+  assert.deepEqual(YAML.parse(bytes.toString("utf8")), expectedGeneratedRoiConfig(parsed.hosts));
+});
+
+test("generated ROI YAML rejects sparse and malformed validated host arrays without secrets", () => {
+  const { createClusterConfigFromServerInput } = moduleUnderTest();
+  const sentinel = "MUST-NOT-LEAK-GENERATOR-SECRET";
+  const validHost = (index) => ({
+    publicIp: `203.0.113.${index}`,
+    privateIp: `10.0.0.${index}`,
+    sshPort: 2200 + index,
+    password: sentinel,
+  });
+  const sparse = new Array(3);
+  sparse[0] = validHost(1);
+  sparse[2] = validHost(3);
+  const invalidInputs = [
+    sparse,
+    [validHost(1), sentinel, validHost(3)],
+    [validHost(1), { ...validHost(2), publicIp: undefined }, validHost(3)],
+    [validHost(1), { ...validHost(2), sshPort: 65536 }, validHost(3)],
+    [validHost(1), validHost(2)],
+    Array.from({ length: 101 }, (_, index) => validHost(index + 1)),
+  ];
+
+  for (const hosts of invalidInputs) {
+    let error;
+    try {
+      createClusterConfigFromServerInput(hosts);
+    } catch (caught) {
+      error = caught;
+    }
+    assert(error, "invalid host input must be rejected");
+    assert.equal(error.message, "servers.txt 解析结果无效");
+    assert.doesNotMatch(error.message, new RegExp(sentinel));
+  }
+});
+
+test("topology treats address and port as the SSH endpoint and internalAddress as independently unique", () => {
+  const { validateClusterTopology } = moduleUnderTest();
+  const hosts = [
+    host("node1", "gateway.example.com", { internalAddress: "10.0.0.1", port: 2221, bootstrap: true }),
+    host("node2", "gateway.example.com", { internalAddress: "10.0.0.2", port: 2222 }),
+  ];
+  const value = cluster({
+    hosts,
+    roleGroups: {
+      etcd: ["node1"], master: ["node1"], worker: ["node1", "node2"],
+      "rbd-gateway": ["node1", "node2"], "rbd-chaos": ["node1", "node2"], "nfs-server": ["node1"],
+    },
+  });
+  assert.equal(validateClusterTopology(value).hosts.length, 2);
+
+  const duplicateEndpoint = structuredClone(value);
+  duplicateEndpoint.hosts[1].port = 2221;
+  assert.throws(() => validateClusterTopology(duplicateEndpoint), /SSH endpoint.*冲突|地址.*冲突/i);
+
+  const duplicateInternalAddress = structuredClone(value);
+  duplicateInternalAddress.hosts[1].internalAddress = "10.0.0.1";
+  assert.throws(() => validateClusterTopology(duplicateInternalAddress), /internalAddress.*冲突|地址.*冲突/i);
+});
+
 test("one-shot diagnostics return all detectable topology problems in stable order", () => {
   const { diagnoseClusterConfig } = moduleUnderTest();
   const invalid = cluster({
@@ -312,48 +907,371 @@ test("generated template diagnostics reject sensitive fields without echoing the
   assert.equal(imported.issues.some((issue) => /密码|私钥|Token|敏感/.test(issue)), false);
 });
 
-test("host cluster first entry creates one protected template and waits without SSH side effects", async () => {
+test("server input workflow first entry creates only protected servers.txt and waits without SSH side effects", async () => {
   const { installHostCluster } = moduleUnderTest();
-  const root = tempOperation("rainskills-host-template-");
-  const home = path.join(root, "home");
-  fs.mkdirSync(home, { mode: 0o700 });
-  const stateStore = require("./helpers/portable-secure-state.js").createPortableSecureStateStore(home);
-  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
-  const paths = { root: path.join(home, ".rainbond", "platform-installer", operationId) };
-  stateStore.ensurePrivateDirectory(paths.root);
+  const fixture = hostClusterWorkflowFixture();
   const output = [];
   let sessions = 0;
-  const result = await installHostCluster({
-    onboarding: { operation_id: operationId },
-    state: { operation_id: operationId },
-    paths,
-    options: { yes: false },
-  }, {
-    stateStore,
+  const result = await installHostCluster(fixture.context, {
+    stateStore: fixture.stateStore,
     platform: "darwin",
     interactive: false,
     write: (value) => output.push(value),
     sessionFactory: async () => { sessions += 1; throw new Error("must not prepare SSH"); },
   });
   assert.equal(result.waiting, true);
-  assert.equal(result.waitingStage, "waiting-host-cluster-config");
+  assert.equal(result.waitingStage, "waiting-host-cluster-server-input");
+  assert.equal(result.inputPath, fixture.serverInputPath);
   assert.equal(sessions, 0);
-  const hostRoot = path.join(paths.root, "host-cluster");
-  const configPath = path.join(hostRoot, "cluster.yaml");
-  const statePath = path.join(hostRoot, "state.json");
-  assert.equal(fs.existsSync(configPath), true);
-  if (process.platform !== "win32") assert.equal(fs.statSync(configPath).mode & 0o777, 0o600);
-  const state = stateStore.readProtectedJson(statePath);
+  assert.equal(fs.existsSync(fixture.serverInputPath), true);
+  assert.equal(fs.existsSync(fixture.configPath), false);
+  if (process.platform !== "win32") assert.equal(fs.statSync(fixture.serverInputPath).mode & 0o777, 0o600);
+  const state = fixture.stateStore.readProtectedJson(fixture.statePath);
   assert.equal(state.stage, "configuration");
   assert.equal(state.status, "waiting_user");
-  assert.equal(state.config_source, "generated-template");
-  const message = userMessageBody(output.join(""), "platform.host-cluster-config");
-  assert.match(message, /集群配置文件已生成/);
-  assert.match(message, new RegExp(`\\[点击打开 cluster\\.yaml\\]\\(<${configPath}>\\)`));
-  assert.match(message, new RegExp(`open '${configPath}'`));
+  assert.equal(state.config_source, "generated-server-input");
+  assert.equal(state.server_input_path, fixture.serverInputPath);
+  assert.match(output.join(""), /\[RAINSKILLS_USER_INPUT_REQUIRED:host_cluster_server_input\]/);
+  const message = userMessageBody(output.join(""), "platform.host-cluster-server-input");
+  assert.match(message, /服务器信息文件已生成/);
+  assert.match(message, new RegExp(`\\[点击打开 servers\\.txt\\]\\(<${fixture.serverInputPath}>\\)`));
+  assert.match(message, new RegExp(`open '${fixture.serverInputPath}'`));
   assert.match(message, /编辑完成后回复“已完成”/);
-  assert.match(message, /填写每台服务器的 password/);
-  assert.doesNotMatch(message, /不要在文件中填写密码/);
+  assert.match(message, /public_ip、private_ip、ssh_port 和 password/);
+  assert.doesNotMatch(message, /cluster\.yaml|YAML|角色/);
+});
+
+test("generated-server-input invalid resume reports all issues once and never creates YAML or starts SSH", async () => {
+  const { installHostCluster } = moduleUnderTest();
+  const fixture = hostClusterWorkflowFixture("rainskills-host-server-input-invalid-");
+  await installHostCluster(fixture.context, { stateStore: fixture.stateStore, interactive: false, write: () => {} });
+  fs.writeFileSync(fixture.serverInputPath, [
+    "[server-1]", "public_ip=bad..address", "private_ip=10.0.0.1", "ssh_port=0", "password=",
+    "", "[server-2]", "public_ip=203.0.113.2", "private_ip=10.0.0.1", "ssh_port=22", "password=second",
+  ].join("\n"), { mode: 0o600 });
+  const output = [];
+  let sessions = 0;
+  const result = await installHostCluster(fixture.context, {
+    stateStore: fixture.stateStore,
+    interactive: false,
+    write: (value) => output.push(value),
+    sessionFactory: async () => { sessions += 1; return null; },
+  });
+  assert.equal(result.waitingStage, "waiting-host-cluster-server-input");
+  assert.equal(result.inputPath, fixture.serverInputPath);
+  assert.equal(sessions, 0);
+  assert.equal(fs.existsSync(fixture.configPath), false);
+  assert(result.issues.length >= 5, result.issues.join("\n"));
+  assert.equal(new Set(result.issues).size, result.issues.length);
+  const message = userMessageBody(output.join(""), "platform.host-cluster-server-input");
+  for (const issue of result.issues) assert.equal(message.split(issue).length - 1, 1, issue);
+  assert.match(message, new RegExp(`\\[点击打开 servers\\.txt\\]\\(<${fixture.serverInputPath}>\\)`));
+  assert.doesNotMatch(message, /cluster\.yaml|YAML|角色/);
+});
+
+test("generated-server-input valid resume no-clobber generates protected YAML, locks both digests, and reaches SSH", async () => {
+  const { installHostCluster } = moduleUnderTest();
+  const fixture = hostClusterWorkflowFixture("rainskills-host-server-input-valid-");
+  const sentinel = "MUST-NOT-LEAK-SERVER-INPUT-PASSWORD";
+  await installHostCluster(fixture.context, { stateStore: fixture.stateStore, interactive: false, write: () => {} });
+  const inputBytes = Buffer.from(serverInput(3, { 1: { password: sentinel } }));
+  fs.writeFileSync(fixture.serverInputPath, inputBytes, { mode: 0o600 });
+  const output = [];
+  let sessions = 0;
+  let result;
+  try {
+    result = await installHostCluster(fixture.context, {
+      stateStore: fixture.stateStore,
+      interactive: false,
+      write: (value) => output.push(value),
+      sessionFactory: async () => { sessions += 1; return null; },
+    });
+  } catch (error) {
+    assert.doesNotMatch(String(error), new RegExp(sentinel));
+    throw error;
+  }
+  assert.equal(result.waiting, true);
+  assert.equal(sessions, 3);
+  assert.equal(fs.existsSync(fixture.configPath), true);
+  if (process.platform !== "win32") assert.equal(fs.statSync(fixture.configPath).mode & 0o777, 0o600);
+  const yamlBytes = fs.readFileSync(fixture.configPath);
+  const generated = YAML.parse(yamlBytes.toString("utf8"));
+  assert.equal(generated.hosts[0].password, sentinel);
+  assert.deepEqual(generated.roleGroups.etcd, ["node1", "node2", "node3"]);
+  const state = fixture.stateStore.readProtectedJson(fixture.statePath);
+  assert.equal(state.server_input_sha256, sha256(inputBytes));
+  assert.equal(state.generated_config_sha256, sha256(yamlBytes));
+  assert.equal(state.config_sha256, sha256(yamlBytes));
+  assert.equal(JSON.stringify(state).includes(sentinel), false);
+  assert.equal(output.join("").includes(sentinel), false);
+  assert.equal(JSON.stringify(result).includes(sentinel), false);
+});
+
+test("generated-server-input real helper emits every automatic node role before the first SSH session action", async () => {
+  const { installHostCluster } = moduleUnderTest();
+  const fixture = hostClusterWorkflowFixture("rainskills-host-server-input-topology-order-");
+  const sentinel = "MUST-NOT-LEAK-TOPOLOGY-PASSWORD";
+  await installHostCluster(fixture.context, {
+    stateStore: fixture.stateStore,
+    interactive: false,
+    write: () => {},
+  });
+  fs.writeFileSync(fixture.serverInputPath, serverInput(3, {
+    1: { password: sentinel },
+  }), { mode: 0o600 });
+
+  const output = [];
+  let sessions = 0;
+  await installHostCluster(fixture.context, {
+    stateStore: fixture.stateStore,
+    interactive: false,
+    write: (value) => output.push(value),
+    sessionFactory: async () => {
+      sessions += 1;
+      const beforeSsh = output.join("");
+      assert.match(beforeSsh, /RAINSKILLS_STATUS:host_cluster_config_valid/);
+      assert.match(beforeSsh, /自动角色分配：/);
+      assert.match(beforeSsh, /- node1: etcd, master, worker, rbd-gateway, rbd-chaos, nfs-server \(bootstrap\)/);
+      assert.match(beforeSsh, /- node2: etcd, master, worker, rbd-gateway, rbd-chaos/);
+      assert.match(beforeSsh, /- node3: etcd, master, worker, rbd-chaos/);
+      assert.match(beforeSsh, new RegExp(`受保护配置：${fixture.configPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+      assert.doesNotMatch(beforeSsh, new RegExp(sentinel));
+      return null;
+    },
+  });
+  assert.equal(sessions, 3);
+});
+
+test("generated-server-input adopts only matching crash-residue YAML and fails closed for mismatches or symlinks", async () => {
+  const { createClusterConfigFromServerInput, installHostCluster, parseHostServerInput } = moduleUnderTest();
+  for (const scenario of ["matching", "mismatch", "symlink"]) {
+    const fixture = hostClusterWorkflowFixture(`rainskills-host-server-input-residue-${scenario}-`);
+    await installHostCluster(fixture.context, { stateStore: fixture.stateStore, interactive: false, write: () => {} });
+    const inputBytes = Buffer.from(serverInput(3));
+    fs.writeFileSync(fixture.serverInputPath, inputBytes, { mode: 0o600 });
+    const expected = createClusterConfigFromServerInput(parseHostServerInput(inputBytes).hosts);
+    if (scenario === "matching") {
+      fs.writeFileSync(fixture.configPath, expected, { mode: 0o600 });
+    } else if (scenario === "mismatch") {
+      fs.writeFileSync(fixture.configPath, Buffer.from(YAML.stringify(cluster())), { mode: 0o600 });
+    } else {
+      const victim = path.join(fixture.hostRoot, "victim.yaml");
+      fs.writeFileSync(victim, expected, { mode: 0o600 });
+      fs.symlinkSync(victim, fixture.configPath);
+    }
+    let sessions = 0;
+    const run = () => installHostCluster(fixture.context, {
+      stateStore: fixture.stateStore,
+      interactive: false,
+      write: () => {},
+      sessionFactory: async () => { sessions += 1; return null; },
+    });
+    if (scenario === "matching") {
+      await run();
+      assert.equal(sessions, 3);
+      const state = fixture.stateStore.readProtectedJson(fixture.statePath);
+      assert.equal(state.generated_config_sha256, sha256(expected));
+    } else {
+      await assert.rejects(run, /cluster\.yaml.*(不匹配|来源|符号链接|拒绝)|(不匹配|来源|符号链接|拒绝).*cluster\.yaml/i);
+      assert.equal(sessions, 0);
+    }
+  }
+});
+
+test("generated-server-input fails closed for unknown YAML source and for TXT or YAML drift after lock", async () => {
+  const { installHostCluster } = moduleUnderTest();
+  const unknown = hostClusterWorkflowFixture("rainskills-host-server-input-unknown-");
+  unknown.stateStore.ensurePrivateDirectory(unknown.hostRoot);
+  fs.writeFileSync(unknown.configPath, YAML.stringify(cluster()), { mode: 0o600 });
+  await assert.rejects(
+    () => installHostCluster(unknown.context, { stateStore: unknown.stateStore, interactive: false, write: () => {} }),
+    /来源不明.*cluster\.yaml|cluster\.yaml.*来源不明/,
+  );
+
+  for (const drift of ["txt", "yaml"]) {
+    const fixture = hostClusterWorkflowFixture(`rainskills-host-server-input-${drift}-drift-`);
+    await installHostCluster(fixture.context, { stateStore: fixture.stateStore, interactive: false, write: () => {} });
+    fs.writeFileSync(fixture.serverInputPath, serverInput(3), { mode: 0o600 });
+    await installHostCluster(fixture.context, {
+      stateStore: fixture.stateStore, interactive: false, write: () => {}, sessionFactory: async () => null,
+    });
+    const target = drift === "txt" ? fixture.serverInputPath : fixture.configPath;
+    fs.appendFileSync(target, "\n# drift\n");
+    let sessions = 0;
+    await assert.rejects(
+      () => installHostCluster(fixture.context, {
+        stateStore: fixture.stateStore,
+        interactive: false,
+        write: () => {},
+        sessionFactory: async () => { sessions += 1; return null; },
+      }),
+      new RegExp(`${drift === "txt" ? "servers\\.txt" : "cluster\\.yaml"}.*(变化|漂移)|恢复.*${drift === "txt" ? "servers\\.txt" : "cluster\\.yaml"}`),
+    );
+    assert.equal(sessions, 0);
+  }
+});
+
+test("legacy generated-template waiting and locked states continue the original YAML workflow", async () => {
+  const { createHostClusterTemplate, installHostCluster } = moduleUnderTest();
+  for (const locked of [false, true]) {
+    const fixture = hostClusterWorkflowFixture(`rainskills-legacy-generated-template-${locked}-`);
+    fixture.stateStore.ensurePrivateDirectory(fixture.hostRoot);
+    const bytes = locked ? Buffer.from(YAML.stringify(cluster())) : createHostClusterTemplate();
+    fs.writeFileSync(fixture.configPath, bytes, { mode: 0o600 });
+    fixture.stateStore.atomicWriteJson(fixture.statePath, {
+      schema: "rainskills.host-cluster-state.v1",
+      version: 1,
+      operation_id: fixture.operationId,
+      stage: "configuration",
+      status: locked ? "running" : "waiting_user",
+      config_path: fixture.configPath,
+      config_source: "generated-template",
+      ...(locked ? { config_sha256: sha256(bytes) } : {}),
+    });
+    const output = [];
+    let sessions = 0;
+    const result = await installHostCluster(fixture.context, {
+      stateStore: fixture.stateStore,
+      interactive: false,
+      write: (value) => output.push(value),
+      sessionFactory: async () => { sessions += 1; return null; },
+    });
+    if (locked) {
+      assert.equal(sessions, 1);
+      assert.equal(result.waiting, true);
+    } else {
+      assert.equal(result.waitingStage, "waiting-host-cluster-config");
+      assert.equal(sessions, 0);
+      assert.match(output.join(""), /RAINSKILLS_USER_INPUT_REQUIRED:host_cluster_config/);
+      userMessageBody(output.join(""), "platform.host-cluster-config");
+    }
+  }
+});
+
+test("legacy generated-template compatibility migrates missing source and imported bytes retain 1, 2, and N host support", async () => {
+  const { installHostCluster } = moduleUnderTest();
+  for (const count of [1, 2, 5]) {
+    const fixture = hostClusterWorkflowFixture(`rainskills-host-import-compat-${count}-`);
+    fixture.stateStore.ensurePrivateDirectory(fixture.hostRoot);
+    const hosts = Array.from({ length: count }, (_, index) => host(
+      `node${index + 1}`,
+      `10.0.0.${index + 1}`,
+      index === 0 ? { bootstrap: true } : {},
+    ));
+    const names = hosts.map(({ name }) => name);
+    const bytes = Buffer.from(`${YAML.stringify(cluster({
+      hosts,
+      roleGroups: {
+        etcd: ["node1"], master: ["node1"], worker: names,
+        "rbd-gateway": ["node1"], "rbd-chaos": names, "nfs-server": ["node1"],
+      },
+    }))}# imported bytes must survive\n`);
+    fs.writeFileSync(fixture.configPath, bytes, { mode: 0o600 });
+    fixture.stateStore.atomicWriteJson(fixture.statePath, {
+      schema: "rainskills.host-cluster-state.v1",
+      version: 1,
+      operation_id: fixture.operationId,
+      stage: "ssh",
+      status: "waiting_user",
+      config_path: fixture.configPath,
+      config_sha256: sha256(bytes),
+    });
+    let sessions = 0;
+    await installHostCluster(fixture.context, {
+      stateStore: fixture.stateStore,
+      interactive: false,
+      write: () => {},
+      sessionFactory: async () => { sessions += 1; return null; },
+    });
+    assert.equal(sessions, count);
+    assert.deepEqual(fs.readFileSync(fixture.configPath), bytes);
+    assert.equal(fixture.stateStore.readProtectedJson(fixture.statePath).config_source, "imported-file");
+  }
+});
+
+test("imported-file crash residue rebinds the original source before adopting an unlocked protected copy", async () => {
+  const { installHostCluster } = moduleUnderTest();
+  const fixture = hostClusterWorkflowFixture("rainskills-host-import-crash-residue-");
+  fixture.stateStore.ensurePrivateDirectory(fixture.hostRoot);
+  const sourcePath = path.join(path.dirname(fixture.paths.root), "import-source.yaml");
+  const sourceBytes = Buffer.from(`${YAML.stringify(cluster())}# original source\n`);
+  const tampered = cluster();
+  tampered.hosts[0].address = "10.0.0.99";
+  const tamperedBytes = Buffer.from(`${YAML.stringify(tampered)}# changed protected copy\n`);
+  fs.writeFileSync(sourcePath, sourceBytes, { mode: 0o600 });
+  fs.writeFileSync(fixture.configPath, tamperedBytes, { mode: 0o600 });
+  fixture.stateStore.atomicWriteJson(fixture.statePath, {
+    schema: "rainskills.host-cluster-state.v1",
+    version: 1,
+    operation_id: fixture.operationId,
+    stage: "configuration",
+    status: "running",
+    config_path: fixture.configPath,
+    config_source: "imported-file",
+    import_source_path: sourcePath,
+  });
+  let sessions = 0;
+  await assert.rejects(
+    () => installHostCluster(fixture.context, {
+      stateStore: fixture.stateStore,
+      interactive: false,
+      write: () => {},
+      sessionFactory: async () => { sessions += 1; return null; },
+    }),
+    /外部.*source|导入.*副本|字节.*不匹配|cluster\.yaml.*不匹配/i,
+  );
+  assert.equal(sessions, 0);
+  const state = fixture.stateStore.readProtectedJson(fixture.statePath);
+  assert.equal(state.import_source_sha256, undefined);
+  assert.equal(state.config_sha256, undefined);
+
+  fs.writeFileSync(fixture.configPath, sourceBytes, { mode: 0o600 });
+  await installHostCluster(fixture.context, {
+    stateStore: fixture.stateStore,
+    interactive: false,
+    write: () => {},
+    sessionFactory: async () => { sessions += 1; return null; },
+  });
+  const adopted = fixture.stateStore.readProtectedJson(fixture.statePath);
+  assert.equal(adopted.import_source_sha256, sha256(sourceBytes));
+  assert.equal(adopted.config_sha256, sha256(sourceBytes));
+  assert.equal(sessions, 1);
+
+  fs.unlinkSync(sourcePath);
+  await installHostCluster(fixture.context, {
+    stateStore: fixture.stateStore,
+    interactive: false,
+    write: () => {},
+    sessionFactory: async () => null,
+  });
+});
+
+test("imported-file explicit state without any source binding fails closed before SSH", async () => {
+  const { installHostCluster } = moduleUnderTest();
+  const fixture = hostClusterWorkflowFixture("rainskills-host-import-source-state-missing-");
+  fixture.stateStore.ensurePrivateDirectory(fixture.hostRoot);
+  fs.writeFileSync(fixture.configPath, YAML.stringify(cluster()), { mode: 0o600 });
+  fixture.stateStore.atomicWriteJson(fixture.statePath, {
+    schema: "rainskills.host-cluster-state.v1",
+    version: 1,
+    operation_id: fixture.operationId,
+    stage: "configuration",
+    status: "running",
+    config_path: fixture.configPath,
+    config_source: "imported-file",
+  });
+  let sessions = 0;
+  await assert.rejects(
+    () => installHostCluster(fixture.context, {
+      stateStore: fixture.stateStore,
+      interactive: false,
+      write: () => {},
+      sessionFactory: async () => { sessions += 1; return null; },
+    }),
+    /导入来源状态不完整|source.*不完整|import.*source/i,
+  );
+  assert.equal(sessions, 0);
+  assert.equal(fixture.stateStore.readProtectedJson(fixture.statePath).config_sha256, undefined);
 });
 
 test("host cluster config prompt provides native open commands on macOS Linux and Windows", () => {
@@ -390,7 +1308,7 @@ test("protected template creation is no-clobber and preserves competing files or
   assert.equal(fs.readFileSync(victim, "utf8"), "victim\n");
 });
 
-test("valid edited one-shot config prepares SSH and proceeds without the Rainskills host preflight", async () => {
+test("legacy generated-template valid edited one-shot config prepares SSH without host preflight", async () => {
   const { installHostCluster } = moduleUnderTest();
   const root = tempOperation("rainskills-host-template-resume-");
   const home = path.join(root, "home");
@@ -405,9 +1323,19 @@ test("valid edited one-shot config prepares SSH and proceeds without the Rainski
     paths,
     options: { yes: true },
   };
-  await installHostCluster(context, { stateStore, interactive: false, write: () => {} });
-  const configPath = path.join(paths.root, "host-cluster", "cluster.yaml");
+  const hostRoot = path.join(paths.root, "host-cluster");
+  stateStore.ensurePrivateDirectory(hostRoot);
+  const configPath = path.join(hostRoot, "cluster.yaml");
   fs.writeFileSync(configPath, YAML.stringify(cluster()), { mode: 0o600 });
+  stateStore.atomicWriteJson(path.join(hostRoot, "state.json"), {
+    schema: "rainskills.host-cluster-state.v1",
+    version: 1,
+    operation_id: operationId,
+    stage: "configuration",
+    status: "waiting_user",
+    config_path: configPath,
+    config_source: "generated-template",
+  });
   const output = [];
   let sessions = 0;
   let confirmations = 0;
@@ -792,7 +1720,11 @@ test("host installer TTY confirmation has a real prompt and reject has zero arti
         persistLock(lock);
         return { path: artifactPath, ...lock };
       },
-      execute: async () => { executions += 1; return { interrupted: false }; },
+      execute: async ({ sensitiveValues }) => {
+        executions += 1;
+        assert.deepEqual(sensitiveValues, ["fixture-password"]);
+        return { interrupted: false };
+      },
       verify: async () => ({ verification: true, consoleUrl: "http://10.0.0.1:7070", location: "host-cluster (1 nodes)" }),
     });
     assert.equal(prompts, 1);
@@ -1169,6 +2101,268 @@ test("attached ROI runner registers the active child and streams only redacted p
   assert.match(`${stdout.join("")}\n${stderr.join("")}`, /\[REDACTED\]/);
   assert.doesNotMatch(`${stdout.join("")}\n${stderr.join("")}`, /must-not-leak|stderr-must|PEM-MUST|JSON-MUST|REGISTRY-JSON|PREFIX-(?:JSON|PEM)|MULTI-KEY-JSON/i);
   assert.match(stdout.join(""), /installing step 2/);
+});
+
+test("ROI literal sensitive values redact unkeyed cross-chunk output, returned bytes, and protected logs", async () => {
+  const { executeRoiInstall, redactInstallLog, spawnRedactedAttached } = moduleUnderTest();
+  const sensitiveValue = ["opaque", "value", "for", "roi", "xyz"].join("-");
+  const overlappingValue = sensitiveValue.slice(0, sensitiveValue.lastIndexOf("-"));
+  const direct = redactInstallLog(`connected using ${sensitiveValue}`, undefined, [overlappingValue, sensitiveValue]);
+  assert.equal(direct.includes(sensitiveValue), false, "direct log redaction exposed a literal sensitive value");
+  assert.match(direct, /^connected using \[REDACTED\]$/);
+
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.stdin = new PassThrough();
+  const streamed = [];
+  const running = spawnRedactedAttached("ssh", ["fixed"], {
+    spawnFn: () => child,
+    stdoutWriter: { write: (value) => streamed.push(String(value)) },
+    stderrWriter: { write: (value) => streamed.push(String(value)) },
+    sensitiveValues: [overlappingValue, sensitiveValue, sensitiveValue],
+  });
+  const splitAt = Math.floor(sensitiveValue.length / 2);
+  child.stdout.write(`connected using ${sensitiveValue.slice(0, splitAt)}`);
+  child.stdout.write(`${sensitiveValue.slice(splitAt)}\n`);
+  child.stdout.end();
+  child.stderr.end();
+  child.emit("close", 130, null);
+  const streamedResult = await running;
+  assert.equal(streamed.join("").includes(sensitiveValue), false, "stream writer exposed a literal sensitive value");
+  assert.equal(streamedResult.stdout.includes(sensitiveValue), false, "runner result exposed a literal sensitive value");
+  assert.match(`${streamed.join("")}\n${streamedResult.stdout}`, /\[REDACTED\]/);
+
+  const root = tempOperation("rainskills-roi-literal-redaction-");
+  const configPath = path.join(root, "cluster.yaml");
+  const artifactPath = path.join(root, "roi");
+  const logPath = path.join(root, "roi.log");
+  fs.writeFileSync(configPath, YAML.stringify(cluster()), { mode: 0o600 });
+  fs.writeFileSync(artifactPath, elfBinary("amd64"), { mode: 0o700 });
+  const output = [];
+  await executeRoiInstall({
+    bootstrap: host("node1", "10.0.0.1", { bootstrap: true }),
+    configPath,
+    artifactPath,
+    logPath,
+    remoteDir: "/root/.rainbond/rainskills/op-1",
+    resumeArgv: ["npx", `rainskills@${packageVersion}`, "platform", "install", "--onboarding-id", "1d6754d6-6fb3-4bda-9a04-15c2d261d178"],
+    sensitiveValues: [sensitiveValue],
+    transfer: async (input) => ({ remoteSha256: input.sha256 }),
+    attachedRunner: async () => ({
+      code: 130,
+      signal: "SIGINT",
+      redacted: false,
+      stdout: `connected using ${sensitiveValue}`,
+      stderr: "",
+    }),
+    write: (value) => output.push(value),
+  });
+  assert.equal(fs.readFileSync(logPath, "utf8").includes(sensitiveValue), false, "protected log exposed a literal sensitive value");
+  assert.match(fs.readFileSync(logPath, "utf8"), /\[REDACTED\]/);
+  assert.equal(output.join("").includes(sensitiveValue), false, "user output exposed a literal sensitive value");
+});
+
+test("ROI redaction marker never contains colliding sensitive values and preserves an unrelated receipt", async () => {
+  const { executeRoiInstall, redactInstallLog, spawnRedactedAttached } = moduleUnderTest();
+  const sensitiveValues = ["REDACTED", "[REDACTED]", "ACT"];
+  const containsSensitiveValue = (value) => sensitiveValues.some((item) => String(value).includes(item));
+  const literal = redactInstallLog(
+    "connected using [REDACTED] then REDACTED then ACT",
+    undefined,
+    sensitiveValues,
+  );
+  assert.equal(containsSensitiveValue(literal), false, "literal redaction marker collided with a sensitive value");
+  const keyword = redactInstallLog("password=ordinary-value", undefined, sensitiveValues);
+  assert.equal(containsSensitiveValue(keyword), false, "keyword redaction marker collided with a sensitive value");
+  assert.equal(redactInstallLog("RECEIPT_PHASE=completed", undefined, sensitiveValues), "RECEIPT_PHASE=completed");
+
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.stdin = new PassThrough();
+  const streamed = [];
+  const running = spawnRedactedAttached("ssh", ["fixed"], {
+    spawnFn: () => child,
+    stdoutWriter: { write: (value) => streamed.push(String(value)) },
+    stderrWriter: { write: (value) => streamed.push(String(value)) },
+    sensitiveValues,
+  });
+  child.stdout.write("connected using [RE");
+  child.stdout.write("DACTED]\nRECEIPT_PHASE=completed\n");
+  child.stdout.end();
+  child.stderr.end();
+  child.emit("close", 130, null);
+  const streamedResult = await running;
+  assert.equal(containsSensitiveValue(streamed.join("")), false, "stream marker collided with a sensitive value");
+  assert.equal(containsSensitiveValue(streamedResult.stdout), false, "returned marker collided with a sensitive value");
+  assert.match(streamedResult.stdout, /RECEIPT_PHASE=completed/);
+
+  const root = tempOperation("rainskills-roi-marker-collision-");
+  const configPath = path.join(root, "cluster.yaml");
+  const artifactPath = path.join(root, "roi");
+  const logPath = path.join(root, "roi.log");
+  fs.writeFileSync(configPath, YAML.stringify(cluster()), { mode: 0o600 });
+  fs.writeFileSync(artifactPath, elfBinary("amd64"), { mode: 0o700 });
+  await executeRoiInstall({
+    bootstrap: host("node1", "10.0.0.1", { bootstrap: true }),
+    configPath,
+    artifactPath,
+    logPath,
+    remoteDir: "/root/.rainbond/rainskills/op-1",
+    resumeArgv: ["npx", `rainskills@${packageVersion}`, "platform", "install", "--onboarding-id", "1d6754d6-6fb3-4bda-9a04-15c2d261d178"],
+    sensitiveValues,
+    transfer: async (input) => ({ remoteSha256: input.sha256 }),
+    attachedRunner: async () => ({
+      code: 130,
+      signal: "SIGINT",
+      redacted: false,
+      stdout: "connected using [REDACTED]\npassword=ordinary-value",
+      stderr: "",
+    }),
+    write: () => {},
+  });
+  assert.equal(containsSensitiveValue(fs.readFileSync(logPath, "utf8")), false, "protected log marker collided with a sensitive value");
+});
+
+test("ROI exact CRLF completion receipt survives literal password redaction on the real attached path", async () => {
+  const { executeRoiInstall, spawnRedactedAttached } = moduleUnderTest();
+  for (const sensitiveValue of ["completed", "RECEIPT"]) {
+    const root = tempOperation("rainskills-roi-receipt-redaction-");
+    const configPath = path.join(root, "cluster.yaml");
+    const artifactPath = path.join(root, "roi");
+    const logPath = path.join(root, "roi.log");
+    fs.writeFileSync(configPath, YAML.stringify(cluster()), { mode: 0o600 });
+    fs.writeFileSync(artifactPath, elfBinary("amd64"), { mode: 0o700 });
+    const visible = [];
+    let attachedResult;
+    const sshSpawn = () => {
+      const child = new EventEmitter();
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      child.stdin = new PassThrough();
+      child.kill = () => true;
+      queueMicrotask(() => {
+        child.stdout.end(`connected using ${sensitiveValue}\r\nRECEIPT_PHASE=completed\r\n`);
+        child.stderr.end();
+        child.emit("close", 0, null);
+      });
+      return child;
+    };
+    const result = await executeRoiInstall({
+      bootstrap: host("node1", "10.0.0.1", { bootstrap: true }),
+      configPath,
+      artifactPath,
+      logPath,
+      remoteDir: "/root/.rainbond/rainskills/op-1",
+      resumeArgv: ["npx", `rainskills@${packageVersion}`, "platform", "install", "--onboarding-id", "1d6754d6-6fb3-4bda-9a04-15c2d261d178"],
+      sensitiveValues: [sensitiveValue],
+      transfer: async (input) => ({ remoteSha256: input.sha256 }),
+      sshSpawn,
+      attachedRunner: async (command, args, options) => {
+        attachedResult = await spawnRedactedAttached(command, args, {
+          ...options,
+          stdoutWriter: { write: (value) => visible.push(String(value)) },
+          stderrWriter: { write: (value) => visible.push(String(value)) },
+        });
+        return attachedResult;
+      },
+      write: (value) => visible.push(String(value)),
+    });
+    assert.equal(result.interrupted, false);
+    assert.equal(attachedResult.receiptCompleted, true);
+    assert.equal(visible.join("").includes(sensitiveValue), false, "visible output exposed the literal password");
+    assert.equal(attachedResult.stdout.includes(sensitiveValue), false, "returned stdout exposed the literal password");
+    assert.equal(fs.readFileSync(logPath, "utf8").includes(sensitiveValue), false, "protected log exposed the literal password");
+  }
+});
+
+test("ROI custom attached runner detects an exact raw CRLF completion receipt before protecting its log", async () => {
+  const { executeRoiInstall } = moduleUnderTest();
+  const sensitiveValue = "completed";
+  const root = tempOperation("rainskills-roi-custom-receipt-");
+  const configPath = path.join(root, "cluster.yaml");
+  const artifactPath = path.join(root, "roi");
+  const logPath = path.join(root, "roi.log");
+  fs.writeFileSync(configPath, YAML.stringify(cluster()), { mode: 0o600 });
+  fs.writeFileSync(artifactPath, elfBinary("amd64"), { mode: 0o700 });
+  const result = await executeRoiInstall({
+    bootstrap: host("node1", "10.0.0.1", { bootstrap: true }),
+    configPath,
+    artifactPath,
+    logPath,
+    remoteDir: "/root/.rainbond/rainskills/op-1",
+    resumeArgv: ["npx", `rainskills@${packageVersion}`, "platform", "install", "--onboarding-id", "1d6754d6-6fb3-4bda-9a04-15c2d261d178"],
+    sensitiveValues: [sensitiveValue],
+    transfer: async (input) => ({ remoteSha256: input.sha256 }),
+    attachedRunner: async () => ({
+      code: 0,
+      signal: null,
+      stdout: `connected using ${sensitiveValue}\r\nRECEIPT_PHASE=completed\r\n`,
+      stderr: "",
+    }),
+    write: () => {},
+  });
+  assert.equal(result.interrupted, false);
+  assert.equal(fs.readFileSync(logPath, "utf8").includes(sensitiveValue), false, "protected custom-runner log exposed the literal password");
+});
+
+test("ROI real attached path rejects a successful process without the exact completion receipt", async () => {
+  const { executeRoiInstall, spawnRedactedAttached } = moduleUnderTest();
+  const sensitiveValue = "completed";
+  const root = tempOperation("rainskills-roi-receipt-missing-");
+  const configPath = path.join(root, "cluster.yaml");
+  const artifactPath = path.join(root, "roi");
+  const logPath = path.join(root, "roi.log");
+  fs.writeFileSync(configPath, YAML.stringify(cluster()), { mode: 0o600 });
+  fs.writeFileSync(artifactPath, elfBinary("amd64"), { mode: 0o700 });
+  const visible = [];
+  let attachedResult;
+  const sshSpawn = () => {
+    const child = new EventEmitter();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.stdin = new PassThrough();
+    child.kill = () => true;
+    queueMicrotask(() => {
+      child.stdout.end(
+        `connected using ${sensitiveValue}\r\n`
+        + " RECEIPT_PHASE=completed\r\n"
+        + "RECEIPT_PHASE=completed \r\n"
+        + "prefixRECEIPT_PHASE=completed\r\n",
+      );
+      child.stderr.end();
+      child.emit("close", 0, null);
+    });
+    return child;
+  };
+  await assert.rejects(
+    () => executeRoiInstall({
+      bootstrap: host("node1", "10.0.0.1", { bootstrap: true }),
+      configPath,
+      artifactPath,
+      logPath,
+      remoteDir: "/root/.rainbond/rainskills/op-1",
+      resumeArgv: ["npx", `rainskills@${packageVersion}`, "platform", "install", "--onboarding-id", "1d6754d6-6fb3-4bda-9a04-15c2d261d178"],
+      sensitiveValues: [sensitiveValue],
+      transfer: async (input) => ({ remoteSha256: input.sha256 }),
+      sshSpawn,
+      attachedRunner: async (command, args, options) => {
+        attachedResult = await spawnRedactedAttached(command, args, {
+          ...options,
+          stdoutWriter: { write: (value) => visible.push(String(value)) },
+          stderrWriter: { write: (value) => visible.push(String(value)) },
+        });
+        return attachedResult;
+      },
+      write: (value) => visible.push(String(value)),
+    }),
+    /completed receipt.*缺失|receipt.*缺失/i,
+  );
+  assert.equal(attachedResult.receiptCompleted, false);
+  assert.equal(visible.join("").includes(sensitiveValue), false, "visible output exposed the literal password");
+  assert.equal(attachedResult.stdout.includes(sensitiveValue), false, "returned stdout exposed the literal password");
+  assert.equal(fs.readFileSync(logPath, "utf8").includes(sensitiveValue), false, "protected log exposed the literal password");
 });
 
 test("attached ROI runner sends only the fixed launch script through piped stdin", async () => {

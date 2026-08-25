@@ -17,6 +17,7 @@ This is an internal Rainskills onboarding capability. Do not present it as a sep
 - 一次只处理当前消息块；用户选择后只执行 helper 给出的固定 argv，不自行设计问题或命令。
 - 平台安装和授权必须留在原 AI 任务中执行；不得让用户把完整的 `platform install` 命令复制到外部终端。
 - helper 无法免密连接 SSH 时，无论当前任务是否有 TTY，都必须原样展示 `platform.ssh-authentication` 固定消息并停止。不得在 AI 任务中等待或读取 SSH 密码。
+- 主机集群普通入口第一次输出 `platform.host-cluster-server-input` 时，只原样展示固定的 `servers.txt` 消息并停止。消息必须包含可点击链接、当前系统的打开命令、四个字段说明和“编辑完成后回复‘已完成’”；不要让用户编辑 YAML 或节点角色。
 - 单台服务器只执行消息中的精确 `ssh prepare` 命令；主机集群只执行一条 `ssh prepare-cluster --cluster-config <受保护文件>` 命令。两种命令都只生成/复用默认 ED25519 公钥并准备免密连接，不安装 Rainbond，也不修改 onboarding、运行环境或授权状态。
 - Agent 不得自行运行 `ssh-keyscan`、`ssh-copy-id` 或修改 `known_hosts`；只能让用户执行 helper 给出的版本锁定 `ssh prepare` 或 `ssh prepare-cluster` argv。
 - 用户回复“已完成”后，使用同一版本 launcher 和同一 `onboarding-id` 重新执行原来的 `platform install` argv；不要重新询问部署位置、安装模式、节点或应用来源。
@@ -35,7 +36,7 @@ Do not use it to deploy an application to an existing Rainbond. Route those requ
 3. 在任何平台安装命令之前，先执行 launcher + `["runtime", "message", "--id", "private-deployment-location"]`，并原样输出固定的三项部署位置消息。选择 1 后执行带 `["--location", "local", "--mode", "single-node"]` 的 `platform install`；选择 2 后执行带 `["--location", "server"]` 的 `platform install`，由 helper 继续显示固定的服务器类型消息；选择 3 后执行 launcher + `["runtime", "message", "--id", "private-console-origin"]` 并进入已有环境连接，不得执行 `platform install`。若是没有原始业务 intent 的直接平台安装请求，已有环境连接使用受限 `{"type":"environment-add"}` intent。
 4. Let the helper perform one read-only preflight against the already selected local or remote target, then show resources, blockers, and applicable host changes. Never invoke `platform install` without an explicit `--location`; the helper must not ask for the deployment location again.
 5. Obtain explicit confirmation before sending `y` to the waiting process or rerunning the exact command with `--yes`.
-6. 如果 helper 输出 `platform.ssh-authentication`，只原样展示该正文并等待用户回复“已完成”。单台服务器消息包含一条 `ssh prepare`；主机集群消息必须一次列出全部未就绪节点及一条 `ssh prepare-cluster`，不得按节点拆成多轮。随后在原任务中重跑同一安装 argv。否则保持操作附着并让 helper 下载、安装和验证，不得只凭官方脚本退出码推断成功。
+6. 如果 helper 输出 `platform.host-cluster-server-input`，只原样展示受保护 `servers.txt` 的固定正文并等待用户回复“已完成”，随后在原任务中重跑同一安装 argv。若输出 `platform.ssh-authentication`，同样只原样展示正文并等待；单台服务器消息包含一条 `ssh prepare`，主机集群消息必须一次列出全部未就绪节点及一条 `ssh prepare-cluster`，不得按节点拆成多轮。否则保持操作附着并让 helper 下载、安装和验证，不得只凭官方脚本退出码推断成功。
 7. Let the helper probe its ordered Console candidates from the control machine. If it emits `RAINSKILLS_USER_INPUT_REQUIRED:console_address`, ask for one public IP or DNS name and rerun the same fixed argv with `--console-host <host>` appended.
 8. On success, allow the helper to resume Rainskills authorization automatically. The user completes login and authorization in the browser.
 
@@ -62,11 +63,13 @@ Do not use it to deploy an application to an existing Rainbond. Route those requ
 3、已有 Kubernetes 集群
 ```
 
-主机集群驱动仍支持导入或恢复 1、2 或 N 台 Linux 主机的有效配置；etcd 节点数必须是正奇数。
+主机集群普通入口接受 `3-100` 台 Linux 主机。第一次进入 configuration 阶段时，必须只生成权限为 `0600`（Windows 为仅当前用户可读写）的受保护 `servers.txt` 并停止等待，不得先生成 `cluster.yaml`、发起 SSH、下载或安装。该文件带中文标题、中文注释和三个节点区块；用户可复制完整区块扩展节点，只填写每台服务器的公网 IP、内网 IP、SSH 端口和 root 密码。逐节点 SSH 端口按实际值填写，不要求为 22。固定消息必须包含可点击的 `servers.txt` 链接、当前系统的打开命令、`public_ip`、`private_ip`、`ssh_port`、`password` 四字段说明，以及“编辑完成后回复‘已完成’”。普通用户不编辑 `cluster.yaml`、YAML 或节点角色。
 
-主机集群第一次进入 configuration 阶段时，必须自动生成受保护的三节点 `cluster.yaml` 示例文件并停止等待。必须原样转发安装器固定消息，其中包含可点击的 `cluster.yaml` 文件链接和当前系统的打开命令，以及“一次性修改服务器地址、SSH 端口和节点角色、填写每台服务器的 password，完成后回复‘已完成’”；不得只给文件路径，也不得逐台询问节点字段。每个 `hosts` 节点必须包含空的 `password` 字段和一次填写备注；用户只在权限为 `0600`（Windows 为仅当前用户可读写）的本地文件中填写真实值。密码不得输出到聊天、日志、状态或错误信息。生成模板仍禁止 private key、Token 或其他 secret 字段。
+用户继续同一 onboarding 时，读取同一份受保护 `servers.txt`（UTF-8，最大 1 MiB）并一次性列出全部可确定的区块、字段、地址、端口、重复节点和 3-100 节点数量问题。存在问题时保持原文件供修改，不创建 YAML 或产生其他副作用。校验通过后，自动生成受保护的 `cluster.yaml` 并自动分配拓扑：前三台承担 etcd/master，全部节点承担 worker/rbd-chaos，前两台承担 rbd-gateway，第一台承担 bootstrap/nfs-server。在第一次 SSH 动作之前展示不含密码的完整逐节点角色拓扑、bootstrap 和存储摘要，再检查并准备全部节点的 SSH 免密连接。
 
-用户继续同一 onboarding 时，读取同一份受保护文件并一次性列出全部可确定的 YAML、节点、角色、bootstrap、etcd 和存储问题。存在问题时不得发起 SSH、下载或安装；配置通过后展示节点数、etcd 数量、bootstrap 和存储模式，直接检查并准备全部节点的 SSH 免密连接。已有 `--cluster-config` 高级导入仍保留原始字节和未知字段。
+密码只保存在受保护的本地 `servers.txt`、自动生成的 `cluster.yaml` 和 ROI 安装/恢复所需的受保护远端配置中；密码不会写入聊天、日志、状态或错误信息，摘要也不得包含密码。恢复时锁定 `servers.txt` 与自动生成 `cluster.yaml` 的摘要；只采用与当前输入逐字节匹配的 crash residue，来源不明、符号链接、不匹配或锁定后漂移的文件均停止。
+
+保留旧断点兼容：`config_source=generated-template` 继续原有 YAML 恢复流程。显式 `--cluster-config <path>` 是高级导入入口，仍可导入有效的 1、2 或 N 节点 ROI YAML，并保留原始字节和未知字段；这些兼容路径不得改变普通入口不要求用户编辑 YAML 或角色的规则。
 
 SSH 免密连接检查必须先检查全部节点。存在未就绪节点时，一次列出全部未就绪节点的序号、名称、IP 和端口，只输出一条版本锁定的 `ssh prepare-cluster --cluster-config <受保护文件>` 命令。该命令在系统终端依次准备所有节点，已经可以免密连接的节点自动跳过；完成后用户只统一回复一次“已完成”。不得发现一台就暂停，也不得逐台要求用户执行命令和回复。
 
@@ -78,7 +81,7 @@ SSH 免密连接检查必须先检查全部节点。存在未就绪节点时，�
 ## Fixed CLI Handoffs
 
 - 通用：`platform install --onboarding-id <id> --location <local|server> --mode <single-node|host-cluster|existing-kubernetes>`
-- 主机集群：可追加 `--cluster-config <path>`。
+- 主机集群：普通入口不传配置路径；高级导入可追加 `--cluster-config <path>`，旧 `generated-template` 仅用于恢复既有断点。
 - 已有 Kubernetes：使用 `--kubeconfig <path> --kube-context <name>`，可追加 `--values <path> --chart-version <version>`。
 - 非交互确认只接受在展示预检/变更后追加的 `--yes`；不能把缺少确认当作同意。
 

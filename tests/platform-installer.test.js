@@ -18,6 +18,12 @@ const platformInstallerPath = path.join(
   "scripts",
   "platform-installer.js"
 );
+const hostClusterInstallerPath = path.join(
+  repoRoot,
+  "rainbond-platform-installer",
+  "scripts",
+  "host-cluster-installer.js"
+);
 const secureStatePath = path.join(
   repoRoot,
   "rainbond-platform-installer",
@@ -132,7 +138,7 @@ test("platform branch handoffs and completion text are fixed by the helper", asy
   );
   assert.equal(
     userMessageBody(hostOutput.join(""), "platform.host-cluster-configuration"),
-    "多节点主机集群模式已选择。Rainskills 将生成受保护的 cluster.yaml 示例文件，编辑完成后会一次检查全部节点和集群拓扑。",
+    "多节点主机集群模式已选择。Rainskills 将生成带中文说明的受保护 servers.txt；填写服务器信息后，会自动生成集群配置。",
   );
 
   const kubernetesOutput = [];
@@ -2321,7 +2327,7 @@ test("host cluster dispatch persists routing, calls only ROI, and completes veri
   assert.equal(state.target_kind, "host-cluster");
 });
 
-test("host cluster configuration waiting stage is mirrored by the platform state", async () => {
+test("platform branch handoffs mirror the host server input waiting stage and path", async () => {
   const { runInstallOperation } = require(platformInstallerPath);
   const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-host-config-waiting-"));
   const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
@@ -2357,14 +2363,78 @@ test("host cluster configuration waiting stage is mirrored by the platform state
     stateUpdater: updateState,
     hostClusterInstaller: async () => ({
       waiting: true,
-      waitingStage: "waiting-host-cluster-config",
-      configPath: path.join(root, "host-cluster", "cluster.yaml"),
+      waitingStage: "waiting-host-cluster-server-input",
+      inputPath: path.join(root, "host-cluster", "servers.txt"),
     }),
     existingKubernetesInstaller: async () => assert.fail("must not dispatch Kubernetes"),
   });
   const state = stateStore.readProtectedJson(paths.state);
-  assert.equal(state.stage, "waiting-host-cluster-config");
+  assert.equal(state.stage, "waiting-host-cluster-server-input");
   assert.equal(state.status, "waiting_user");
+  assert.equal(state.input_path, path.join(root, "host-cluster", "servers.txt"));
+});
+
+test("platform branch handoffs clear stale host input paths on later waits and completion", async () => {
+  const { runInstallOperation } = require(platformInstallerPath);
+  const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-host-input-path-clear-"));
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  const root = path.join(tempHome, ".rainbond", "platform-installer", operationId);
+  fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+  const paths = {
+    root,
+    state: path.join(root, "state.json"),
+    events: path.join(root, "events.jsonl"),
+    log: path.join(root, "install.log"),
+    installer: path.join(root, "rainbond-install.sh"),
+  };
+  const stateStore = createPortableSecureStateStore(tempHome);
+  const writeState = (filePath, value) => stateStore.atomicWriteJson(filePath, value);
+  const updateState = (filePath, current, values) => {
+    const next = { ...current, ...values };
+    writeState(filePath, next);
+    return next;
+  };
+  const inputPath = path.join(root, "host-cluster", "servers.txt");
+  const results = [
+    { waiting: true, waitingStage: "waiting-host-cluster-server-input", inputPath },
+    { waiting: true },
+    { verification: { consoleUrl: "http://10.0.0.1:7070", location: "host-cluster (3 nodes)" } },
+  ];
+  let completed = 0;
+  const dependencies = {
+    onboardingPathResolver: () => path.join(tempHome, "onboarding.json"),
+    ensurePrivateDirectory: () => {},
+    onboardingReader: () => ({
+      operation_id: operationId,
+      stage: "awaiting-platform",
+      target: "codex",
+      deployment_mode: "self-hosted",
+      control_mode: "posix",
+      intent: { type: "deploy", project_root: "/workspace/app", source_kind: "local" },
+    }),
+    pathsResolver: () => paths,
+    stateWriter: writeState,
+    stateUpdater: updateState,
+    platformStateReader: (filePath) => stateStore.readProtectedJson(filePath),
+    hostClusterInstaller: async () => results.shift(),
+    existingKubernetesInstaller: async () => assert.fail("must not dispatch Kubernetes"),
+    platformCompleter: async (onboarding, state) => {
+      completed += 1;
+      assert.equal(onboarding.operation_id, operationId);
+      assert.equal(state.input_path, null);
+      assert.equal(stateStore.readProtectedJson(paths.state).input_path, null);
+    },
+  };
+  const options = { onboardingId: operationId, location: "server", mode: "host-cluster" };
+
+  await runInstallOperation(options, dependencies);
+  assert.equal(stateStore.readProtectedJson(paths.state).input_path, inputPath);
+  await runInstallOperation(options, dependencies);
+  assert.equal(stateStore.readProtectedJson(paths.state).input_path, null);
+
+  updateState(paths.state, stateStore.readProtectedJson(paths.state), { input_path: inputPath });
+  await runInstallOperation(options, dependencies);
+  assert.equal(completed, 1);
 });
 
 test("existing Kubernetes dispatch calls only Helm driver with shared abort and completes verified platform", async () => {
@@ -3142,6 +3212,97 @@ test("published guidance describes local and remote target selection", () => {
   assert.match(readme, /部署到本机.*部署到独立服务器.*部署到已有 Rainbond/s);
   assert.match(policy, /远程 Linux/);
   assert.doesNotMatch(policy, /不支持远程 SSH/);
+});
+
+function assertSimpleHostClusterGuidance(guidance) {
+  assert.match(guidance, /受保护的.*servers\.txt|servers\.txt.*受保护/);
+  assert.match(guidance, /中文标题[^。\n]*中文注释|中文标题.*中文注释/is);
+  assert.match(guidance, /公网\s*IP.*内网\s*IP.*SSH\s*端口.*root\s*密码/is);
+  assert.match(guidance, /3\s*[-–—至到]\s*100/);
+  assert.match(guidance, /SSH\s*端口.*不要求.*22|非\s*22.*SSH\s*端口/is);
+  assert.match(guidance, /最大\s*1\s*MiB|1\s*MiB[^。\n]*(?:上限|最大)/i);
+  assert.match(guidance, /(?:POSIX[^。\n]*)?0600[^。\n]*Windows[^。\n]*(?:ACL|仅当前用户可读写)/i);
+  assert.match(guidance, /前三台[^。\n]*etcd[^。\n]*master/i);
+  assert.match(guidance, /全部节点[^。\n]*worker[^。\n]*rbd-chaos/i);
+  assert.match(guidance, /前两台[^。\n]*rbd-gateway/i);
+  assert.match(guidance, /(?:第一台|node1)[^。\n]*bootstrap[^。\n]*(?:第一台|node1)?[^。\n]*nfs-server/i);
+  assert.match(guidance, /不含(?:密码|凭据)[^。\n]*(?:拓扑|节点)?[^。\n]*摘要/);
+  assert.match(guidance, /(?:SSH\s*前|SSH[^。\n]*之前)[^。\n]*完整[^。\n]*(?:逐节点|每节点)[^。\n]*(?:角色|拓扑)/i);
+  assert.match(guidance, /servers\.txt[^。\n]*cluster\.yaml[^。\n]*(?:SHA-256|摘要)/i);
+  assert.match(guidance, /crash residue/i);
+  assert.match(guidance, /密码只保存在受保护的本地[^。\n]*受保护(?:的)?远端/);
+  assert.match(
+    guidance,
+    /密码[^。\n]*不会写入[^。\n]*聊天[^。\n]*日志[^。\n]*状态[^。\n]*错误信息[^。\n]*摘要|对外用户消息[^。\n]*状态[^。\n]*遥测[^。\n]*日志[^。\n]*错误[^。\n]*对外返回值[^。\n]*不得反射[^。\n]*(?:密码|原始输入)/
+  );
+  assert.match(guidance, /generated-template/);
+  assert.match(guidance, /--cluster-config[^。\n]*原始字节[^。\n]*未知(?:\s*ROI)?\s*字段/);
+  assert.match(guidance, /(?:全部|所有)未就绪节点[^。\n]*(?:一条|只输出一条)[^。\n]*prepare-cluster/);
+  assert.doesNotMatch(guidance, /一次性修改服务器地址、SSH 端口和节点角色/);
+  assert.doesNotMatch(guidance, /用户(?:必须|需要|应当|只需).*修改.*cluster\.yaml/);
+  assert.doesNotMatch(guidance, /用户(?:必须|需要|应当|只需).*修改.*(?:节点)?角色/);
+  assert.doesNotMatch(guidance, /密码只(?:保存在|写入)[^、，；。\n]*servers\.txt(?:中|里)?[；。]/);
+}
+
+test("published host cluster guidance agrees with the real helper contract", () => {
+  const {
+    createClusterConfigFromServerInput,
+    createHostServerInputTemplate,
+    parseClusterDocument,
+    parseHostServerInput,
+    renderConfirmationSummary,
+    renderHostServerInputPrompt,
+    summarizeTopology,
+  } = require(hostClusterInstallerPath);
+  const skill = fs.readFileSync(
+    path.join(repoRoot, "rainbond-platform-installer", "SKILL.md"),
+    "utf8"
+  );
+  const policy = fs.readFileSync(
+    path.join(repoRoot, "rainbond-platform-installer", "references", "installation-policy.md"),
+    "utf8"
+  );
+
+  for (const guidance of [skill, policy]) assertSimpleHostClusterGuidance(guidance);
+  assert.match(skill, /platform\.host-cluster-server-input/);
+  assert.match(skill, /可点击[^。\n]*链接[^。\n]*打开命令[^。\n]*四个字段[^。\n]*已完成/);
+
+  const prompt = renderHostServerInputPrompt({ inputPath: "/protected/servers.txt", platform: "linux" });
+  for (const explanation of [
+    /公网 IP：控制端 SSH 地址/,
+    /内网 IP：节点通信地址/,
+    /SSH 端口：.*不强制为 22/,
+    /root 密码：只写入受保护的本地和远端安装文件/,
+  ]) assert.match(prompt, explanation);
+  assert.doesNotMatch(prompt, /cluster\.yaml|节点角色|密码只(?:保存在|写入).*servers\.txt[；。]/);
+
+  const sentinel = "MUST-NOT-LEAK-DOCUMENT-CONTRACT-PASSWORD";
+  let publicIp = 0;
+  let privateIp = 0;
+  const populated = createHostServerInputTemplate().toString("utf8")
+    .replace(/^public_ip=$/gm, () => `public_ip=203.0.113.${publicIp += 1}`)
+    .replace(/^private_ip=$/gm, () => `private_ip=10.0.0.${privateIp += 1}`)
+    .replace(/^password=$/gm, `password=${sentinel}`);
+  const parsed = parseHostServerInput(populated);
+  assert.deepEqual(parsed.issues, []);
+  assert(parsed.hosts.every(({ password }) => password === sentinel));
+  const config = parseClusterDocument(createClusterConfigFromServerInput(parsed.hosts)).value;
+  const topology = summarizeTopology(config);
+  const summary = renderConfirmationSummary({ ...topology, configPath: "/protected/cluster.yaml" });
+  assert.match(summary, /node1: etcd, master, worker, rbd-gateway, rbd-chaos, nfs-server \(bootstrap\)/);
+  assert.match(summary, /node2: etcd, master, worker, rbd-gateway, rbd-chaos/);
+  assert.match(summary, /node3: etcd, master, worker, rbd-chaos/);
+  assert.doesNotMatch(summary, new RegExp(sentinel));
+
+  const helperSource = readNormalizedSource(hostClusterInstallerPath);
+  const topologyOutput = helperSource.indexOf("write(renderValidatedTopologyStatus(summarizeTopology(config), configPath))");
+  const firstSshAction = helperSource.indexOf("await prepareHostSshSessions(topology", topologyOutput);
+  assert(topologyOutput >= 0);
+  assert(firstSshAction > topologyOutput);
+
+  assert.match(policy, /允许内部[^。\n]*parseHostServerInput[^。\n]*host[^。\n]*password[^。\n]*受保护[^。\n]*cluster\.yaml/i);
+  assert.match(policy, /对外用户消息[^。\n]*状态[^。\n]*遥测[^。\n]*日志[^。\n]*错误[^。\n]*对外返回值[^。\n]*不得反射[^。\n]*(?:密码|原始输入)/);
+  assert.doesNotMatch(policy, /诊断、返回值和摘要也不得反射密码/);
 });
 
 test("no download or installer execution appears before the confirmation gate", () => {
