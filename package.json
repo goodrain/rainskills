@@ -1,7 +1,7 @@
 {
   "name": "rainskills",
-  "version": "0.1.7",
-  "description": "Interactive Rainbond skill installer for Codex and Claude Code",
+  "version": "0.1.9",
+  "description": "Interactive Rainbond skill installer for Codex, Claude Code, and Pi Agent",
   "license": "Apache-2.0",
   "homepage": "https://github.com/goodrain/rainskills#readme",
   "bugs": {
@@ -33,10 +33,13 @@
     "rainbond-env-sync/",
     "rainbond-fullstack-bootstrap/",
     "rainbond-fullstack-troubleshooter/",
+    "rainbond-opensource-app-deploy/",
     "rainbond-platform-installer/",
     "rainbond-platform-query/",
     "rainbond-project-init/",
     "rainbond-template-installer/",
+    "scripts/build-skill-manifest.mjs",
+    "scripts/install-local-cli.mjs",
     "!**/__pycache__/",
     "!**/*.pyc"
   ],
@@ -51,9 +54,14 @@
   "scripts": {
     "build:marketplace": "node scripts/build-marketplace-package.mjs",
     "check:marketplace": "node scripts/build-marketplace-package.mjs --check",
-    "test": "npm run test:auto-update && npm run test:launcher && npm run test:api-bridge && npm run test:skill-profile && npm run test:marketplace && npm run test:runtime-routing && npm run test:telemetry && npm run test:platform && npm run test:windows && npm run test:package-upload && npm run test:package && npm run test:installer && npm run test:signal && npm run test:npx-pty",
+    "sync:runtime-version": "node scripts/sync-runtime-version.mjs",
+    "check:runtime-version": "node scripts/sync-runtime-version.mjs --check",
+    "version": "npm run sync:runtime-version && npm run build:marketplace",
+    "prepack": "node scripts/sync-runtime-version.mjs --check && node scripts/build-marketplace-package.mjs --check --quiet",
+    "test": "npm run test:runtime-version && npm run test:auto-update && npm run test:launcher && npm run test:api-bridge && npm run test:skill-profile && npm run test:marketplace && npm run test:runtime-routing && npm run test:telemetry && npm run test:platform && npm run test:windows && npm run test:package-upload && npm run test:package && npm run test:installer && npm run test:signal && npm run test:npx-pty",
+    "test:runtime-version": "node --test tests/runtime-version-sync.test.js",
     "test:auto-update": "node --test tests/auto-update.test.js",
-    "test:launcher": "node --test tests/console-origin.test.js tests/environment-credentials.test.js tests/environment-registry.test.js tests/local-runtime-cli.test.js tests/mcp-router.test.js tests/mcp-server.test.js tests/npx-launcher.test.js tests/runtime-credentials.test.js tests/runtime-intents.test.js tests/runtime-operations.test.js tests/runtime-state.test.js",
+    "test:launcher": "node --test tests/console-origin.test.js tests/environment-credentials.test.js tests/environment-registry.test.js tests/local-runtime-cli.test.js tests/local-cli-installer.test.js tests/npx-launcher.test.js tests/runtime-credentials.test.js tests/runtime-intents.test.js tests/runtime-operations.test.js tests/runtime-state.test.js tests/cli-only-transport.test.js tests/skill-manifest-builder.test.js",
     "test:api-bridge": "node --test tests/api-bridge.test.js",
     "test:skill-profile": "node --test tests/skill-profile-builder.test.js tests/markdown-link-integrity.test.js",
     "test:marketplace": "node --test tests/marketplace-entry.test.js",
@@ -68,7 +76,6 @@
     "test:npx-pty": "python3 tests/npx_pty_test.py"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.30.0",
     "yaml": "2.9.0"
   },
   "publishConfig": {

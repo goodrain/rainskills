@@ -24,7 +24,9 @@ const { createPortableSecureStateStore } = require("./helpers/portable-secure-st
 
 const repoRoot = path.resolve(__dirname, "..");
 const packageVersion = require("../package.json").version;
-const launcher = `["npx", "--yes", "rainskills@${packageVersion}"]`;
+const launcher = `["node", "<home>/.rainbond/lib/rainskills/bin/rainskills.js"]`;
+const packageMarker = `rainskills@${packageVersion}`;
+const runtimeLauncherLength = 2;
 const localLauncher = [
   "node",
   "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js",
@@ -71,6 +73,12 @@ const runtimeSkills = [
     action: "查询 Rainbond 平台信息",
     route: "existing",
     intentTypes: ["platform-query"],
+  },
+  {
+    file: "rainbond-opensource-app-deploy/SKILL.md",
+    action: "部署未收录到应用市场的开源应用",
+    route: "new",
+    intentTypes: ["opensource-deploy"],
   },
   {
     file: "rainbond-project-init/SKILL.md",
@@ -171,6 +179,7 @@ const intentSamples = {
     { type: "template-install", template_id: "template", install_scope: "new-app" },
     { type: "template-install", template_id: "template", install_scope: "existing-app", app_id: "app" },
   ],
+  "opensource-deploy": [{ type: "opensource-deploy", source_kind: "compose", source_url: "https://example.com/compose.yaml" }],
 };
 
 const bootstrapScopeCases = [
@@ -205,7 +214,7 @@ async function connectAndResume(fullArgv, intent, skillId) {
     liveProbe: async () => true,
   });
   const output = [];
-  await runBuiltin(fullArgv.slice(3), {
+  await runBuiltin(fullArgv.slice(runtimeLauncherLength), {
     runtimeStateManager: manager,
     originInspector: async (origin) => ({ origin }),
     connectionRunner: async () => ({ code: 0, signal: null, completesRuntimeState: false }),
@@ -240,9 +249,9 @@ test("bootstrap scope is explicit and existing targets cannot install a private 
 
     const installArgv = materializeConnectArgv(contract.connect_argv["install-private"], intent);
     if (expectedScope === "existing") {
-      assert.throws(() => parseRuntimeConnectArgs(installArgv.slice(3)), /existing|已有|现有/i);
+      assert.throws(() => parseRuntimeConnectArgs(installArgv.slice(runtimeLauncherLength)), /existing|已有|现有/i);
     } else {
-      assert.equal(parseRuntimeConnectArgs(installArgv.slice(3)).environmentChoice, "install-private");
+      assert.equal(parseRuntimeConnectArgs(installArgv.slice(runtimeLauncherLength)).environmentChoice, "install-private");
     }
   }
 
@@ -273,7 +282,7 @@ test("generic deployment uses the approved copy and defers source intake until p
   for (const type of ["deploy", "create"]) {
     const intent = { type };
     const argv = materializeConnectArgv(contract.connect_argv["install-private"], intent);
-    assert.deepEqual(parseRuntimeConnectArgs(argv.slice(3)).intent, intent);
+    assert.deepEqual(parseRuntimeConnectArgs(argv.slice(runtimeLauncherLength)).intent, intent);
   }
 });
 
@@ -311,12 +320,13 @@ for (const skill of runtimeSkills) {
     assert.match(gate, /第二次 401.*停止|401.*第二次.*停止/s);
     assert.match(gate, /403.*不.*重新授权|403.*禁止.*重.*授权/s);
     assert.match(gate, new RegExp(launcher.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.match(gate, new RegExp(packageMarker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
     assert.match(gate, /版本.*package\.json.*一致/s);
     assert.match(gate, /argv 数组/);
     assert.match(gate, /禁止.*rainskills@latest|禁止.*latest/s);
     assert.match(gate, /禁止.*shell 字符串|禁止.*执行 shell 字符串/s);
     assert.match(gate, /"runtime", "connect"/);
-    assert.match(gate, /codex.*claude.*all/s);
+    assert.match(gate, /codex.*claude.*pi.*all/s);
     assert.match(gate, /--intent-json/);
     assert.match(gate, /rainskills\.next-action\.v1.*校验.*argv/s);
     assert.match(gate, /\["intent", "resume", "--onboarding-id", "<同一 onboarding-id>"\]/);
@@ -349,7 +359,10 @@ for (const skill of runtimeSkills) {
     };
 
     assert.equal(contract.schema, "rainskills.skill-runtime-contract.v1");
-    assert.deepEqual(contract.launcher, ["npx", "--yes", `rainskills@${packageVersion}`]);
+    assert.deepEqual(contract.launcher, [
+      "node", "<home>/.rainbond/lib/rainskills/bin/rainskills.js",
+    ]);
+    assert.equal(contract.package_version, `rainskills@${packageVersion}`);
     assert.deepEqual(contract.local_launcher, localLauncher);
     assert.deepEqual(contract.local_argv, {
       "environment-list": [...localLauncher, "environment", "list", "--json"],
@@ -377,6 +390,9 @@ for (const skill of runtimeSkills) {
     assert.match(gate, /operation.*begin.*本地 launcher/s);
     assert.match(gate, /operation.*complete.*本地 launcher/s);
     assert.match(gate, /runtime.*message.*本地 launcher/s);
+    assert.match(gate, /\.rainbond\/bin\/rainskills-tools\.js/);
+    assert.match(gate, /不得.*直接调用.*Rainbond MCP|禁止.*直接调用.*Rainbond MCP/s);
+    assert.match(gate, /不得.*本地 Rainskills MCP|禁止.*本地 Rainskills MCP/s);
     assert.deepEqual(Object.keys(contract.routes).sort(), expectedScopes.sort());
     for (const scope of expectedScopes) {
       assert.deepEqual([...contract.routes[scope]].sort(), expectedEnvironments[scope]);
@@ -395,8 +411,8 @@ for (const skill of runtimeSkills) {
         assert(contract.routes[scope], `${type} must document ${scope} routing`);
         for (const environment of contract.routes[scope]) {
           const fullArgv = materializeConnectArgv(contract.connect_argv[environment], intent);
-          assert.deepEqual(fullArgv.slice(0, 3), contract.launcher);
-          const parsed = parseRuntimeConnectArgs(fullArgv.slice(3));
+          assert.deepEqual(fullArgv.slice(0, contract.launcher.length), contract.launcher);
+          const parsed = parseRuntimeConnectArgs(fullArgv.slice(contract.launcher.length));
           assert.deepEqual(parsed.intent, intent);
           assert.equal(
             parsed.environmentChoice,
@@ -544,6 +560,7 @@ test("protected runtime intents directly cover every business skill and survive 
     "platform-query": { type: "platform-query", resource: "teams", enterprise_id: "enterprise" },
     "project-init": { type: "project-init", project_root: "/workspace/app", source_kind: "local" },
     "template-install": { type: "template-install", template_id: "template", install_scope: "new-app" },
+    "opensource-deploy": { type: "opensource-deploy", source_kind: "compose", source_url: "https://example.com/compose.yaml" },
   };
   const expectedSkills = new Set(runtimeSkills.map(({ file }) => file.split("/", 1)[0]));
   const coveredSkills = new Set(
@@ -582,6 +599,20 @@ test("protected runtime intents directly cover every business skill and survive 
     assert.equal(continuation.skill_id, skillId);
     assert.deepEqual(continuation.intent, intent);
     assert.equal(continuation.resume_step, INTENT_DEFINITIONS[type].steps[0]);
+  }
+});
+
+test("business Skills forbid exploratory commands and blind retries after a CLI failure", () => {
+  for (const skill of runtimeSkills) {
+    const gate = markedSection(read(skill.file), "runtime-gate");
+    assert.match(
+      gate,
+      /只有 CLI 返回并通过校验的 `rainskills\.next-action\.v1` argv 才能执行续接/
+    );
+    assert.match(gate, /普通失败.*禁止自动重试/);
+    assert.match(gate, /不得执行 `--help`、`sleep`、`rg`、`grep`/);
+    assert.match(gate, /不得搜索 Rainskills 源码/);
+    assert.match(gate, /同一 `operation complete` 最多执行一次/);
   }
 });
 
@@ -671,11 +702,11 @@ test("README introduces runtime only after an application action and documents r
   assert.doesNotMatch(existingRuntimeChoice, /帮我(?:安装|准备)私有 Rainbond/);
   const privateInstall = headingSection(readme, "## 私有 Rainbond 安装", "## 更新");
   assert.doesNotMatch(privateInstall, /npx --yes rainskills platform install/);
-  const platformLaunchers = [
-    ...privateInstall.matchAll(/npx --yes rainskills@([^ ]+) platform install/g),
-  ];
+  const platformLaunchers = privateInstall.match(
+    /node ~\/\.rainbond\/lib\/rainskills\/bin\/rainskills\.js platform install/g
+  ) || [];
   assert.equal(platformLaunchers.length, 4);
-  assert(platformLaunchers.every((match) => match[1] === packageVersion));
+  assert.match(readme, new RegExp(`rainskills@${packageVersion.replaceAll(".", "\\.")}`));
 });
 
 test("platform installer guidance reveals modes progressively", () => {

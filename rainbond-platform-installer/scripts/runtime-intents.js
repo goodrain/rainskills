@@ -128,6 +128,13 @@ const INTENT_DEFINITIONS = deepFreeze({
     enums: { operation: ["auto", "build", "runtime", "access"] },
     steps: ["resolve-target", "diagnose", "repair", "verify"],
   },
+  "opensource-deploy": {
+    skillId: "rainbond-opensource-app-deploy",
+    required: ["source_kind"],
+    optional: ["project_root", "source_url"],
+    enums: { source_kind: ["compose", "helm", "images"] },
+    steps: ["topology", "model", "deploy", "verify"],
+  },
 });
 
 function assertBoundedString(value, field, maximum) {

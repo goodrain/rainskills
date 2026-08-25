@@ -28,6 +28,7 @@ const cases = [
   ["project-init", "rainbond-project-init", { project_root: "/workspace/app", source_kind: "local" }, "project-analysis"],
   ["bootstrap", "rainbond-fullstack-bootstrap", { project_root: "/workspace/app", app_id: "app-1" }, "resolve-target"],
   ["troubleshoot-phase", "rainbond-fullstack-troubleshooter", { operation: "build", app_id: "app-1" }, "resolve-target"],
+  ["opensource-deploy", "rainbond-opensource-app-deploy", { source_kind: "compose", source_url: "https://example.com/compose.yaml" }, "topology"],
 ];
 
 test("every bounded runtime intent maps to a fixed Skill and first resume step", () => {

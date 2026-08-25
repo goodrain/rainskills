@@ -98,15 +98,20 @@ description: "Use whenever a user asks to deploy, run, deliver, publish, inspect
 
   第一步检查 Node.js 是否存在且主版本不低于 18。Node.js 缺失或低于 18 时，只说明“Rainskills 执行组件需要 Node.js 18 或更高版本”并停止：不选择运行环境，不调用 MCP，不猜测替代命令。只有用户或 agent 明确同意后才安装或升级 Node.js，再从同一原始 intent 继续。
 
-  固定 launcher 是 `["npx", "--yes", "rainskills@0.1.7"]`；版本必须与本技能包 `package.json` 一致。把 launcher 与参数拼成 argv 数组直接执行，禁止使用 `rainskills@latest`，禁止拼接或执行 shell 字符串。
+  固定 launcher 是 `["node", "<home>/.rainbond/lib/rainskills/bin/rainskills.js"]`；运行包版本标记为 `rainskills@0.1.9`，且必须与本技能包 `package.json` 一致。把 launcher 与参数拼成 argv 数组直接执行，禁止使用 `rainskills@latest`，禁止拼接或执行 shell 字符串。
 
-  本地 launcher 必须从当前 Skill 所在目录的同级目录定位 `rainbond-platform-installer/scripts/local-runtime.js`，解析为绝对路径后使用 `["node", "<绝对路径>"]` 执行。`environment list`、`operation begin`、`operation complete` 和 `runtime message` 只能使用本地 launcher；本地 launcher 只读取已安装文件和本机受保护状态，不得访问 npm 或其它网络。只有用户选定连接或安装运行环境后，才使用上面的固定 npx launcher。
+  本地 launcher 必须从当前 Skill 所在目录的同级目录定位 `rainbond-platform-installer/scripts/local-runtime.js`，解析为绝对路径后使用 `["node", "<绝对路径>"]` 执行。`environment list`、`operation begin`、`operation complete` 和 `runtime message` 只能使用本地 launcher；本地 launcher 只读取已安装文件和本机受保护状态，不得访问 npm 或其它网络。只有用户选定连接或安装运行环境后，才使用上面的固定本地 launcher。
+
+  所有 Rainbond 查询和变更必须通过本地 `~/.rainbond/bin/rainskills-tools.js` 执行，并绑定本次 operation ID。禁止 Agent 直接调用 Rainbond MCP，也不得启动本地 Rainskills MCP 服务；只允许执行 CLI 返回的结构化结果与确认续接 argv。
+
+  只有 CLI 返回并通过校验的 `rainskills.next-action.v1` argv 才能执行续接。普通失败一律禁止自动重试：不得再次执行原命令，不得执行 `--help`、`sleep`、`rg`、`grep`，不得搜索 Rainskills 源码；同一 `operation complete` 最多执行一次。
 
   <!-- rainskills-runtime-contract:start -->
   ```json
   {
     "schema": "rainskills.skill-runtime-contract.v1",
-    "launcher": ["npx", "--yes", "rainskills@0.1.7"],
+    "package_version": "rainskills@0.1.9",
+    "launcher": ["node", "<home>/.rainbond/lib/rainskills/bin/rainskills.js"],
     "local_launcher": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js"],
     "local_argv": {
       "environment-list": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js", "environment", "list", "--json"],
@@ -126,15 +131,15 @@ description: "Use whenever a user asks to deploy, run, deliver, publish, inspect
       "existing": ["saas", "private-existing"]
     },
     "connect_argv": {
-      "saas": ["npx", "--yes", "rainskills@0.1.7", "runtime", "connect", "<target>", "--saas", "--intent-json", "<intent-json>"],
-      "private-existing": ["npx", "--yes", "rainskills@0.1.7", "runtime", "connect", "<target>", "--rainbond-url", "<rainbond-url>", "--intent-json", "<intent-json>"],
-      "install-private": ["npx", "--yes", "rainskills@0.1.7", "runtime", "connect", "<target>", "--install-private", "--location", "<private-location>", "--intent-json", "<intent-json>"]
+      "saas": ["node", "<home>/.rainbond/lib/rainskills/bin/rainskills.js", "runtime", "connect", "<target>", "--saas", "--intent-json", "<intent-json>"],
+      "private-existing": ["node", "<home>/.rainbond/lib/rainskills/bin/rainskills.js", "runtime", "connect", "<target>", "--rainbond-url", "<rainbond-url>", "--intent-json", "<intent-json>"],
+      "install-private": ["node", "<home>/.rainbond/lib/rainskills/bin/rainskills.js", "runtime", "connect", "<target>", "--install-private", "--location", "<private-location>", "--intent-json", "<intent-json>"]
     }
   }
   ```
   <!-- rainskills-runtime-contract:end -->
 
-  `deploy`/`create` 含 `service_id` 时属于 existing，否则属于 new；`query`、`troubleshoot`、`modify` 始终属于 existing。意图不明确时先澄清，不执行 connect。target 只允许 `codex`、`claude`、`all`。连接前校验 intent，只执行其 scope 在契约中允许的完整 argv。只消费 schema 为 `rainskills.next-action.v1` 且完成字段校验后的 `argv` 数组。
+  `deploy`/`create` 含 `service_id` 时属于 existing，否则属于 new；`query`、`troubleshoot`、`modify` 始终属于 existing。意图不明确时先澄清，不执行 connect。target 只允许 `codex`、`claude`、`pi`、`all`。连接前校验 intent，只执行其 scope 在契约中允许的完整 argv。只消费 schema 为 `rainskills.next-action.v1` 且完成字段校验后的 `argv` 数组。
 
   连接或平台安装完成后，用固定 `onboarding-id` 执行 launcher + `["intent", "resume", "--onboarding-id", "<同一 onboarding-id>"]`，恢复原始 intent 和 `resume_step`，不得重新猜测动作。
 

@@ -184,3 +184,56 @@ test("operation files reject unknown binding fields without rewriting bytes", ()
   assert.throws(() => operations.read(OP_A), /未知字段/);
   assert.deepEqual(fs.readFileSync(operationPath), before);
 });
+
+test("operation state failures are non-retryable instead of being reported as lock contention", () => {
+  const { createRuntimeOperationStore } = require(operationsPath);
+  const operations = createRuntimeOperationStore({
+    registry: {
+      read: () => ({ default_environment_id: null }),
+      get: () => null,
+    },
+    stateStore: {
+      acquireOperationLock() {
+        throw new Error("状态目录 owner 不匹配");
+      },
+    },
+  });
+
+  assert.throws(
+    () => operations.createPending({
+      operationId: OP_A,
+      intent: { type: "platform-query", resource: "current-enterprise" },
+    }),
+    (error) => {
+      assert.match(error.message, /本地受保护状态不可用/);
+      assert.match(error.message, /禁止自动重试/);
+      assert.doesNotMatch(error.message, /另一个进程/);
+      return true;
+    }
+  );
+});
+
+test("operation lock contention remains distinguishable from non-retryable state failure", () => {
+  const { createRuntimeOperationStore } = require(operationsPath);
+  const busy = new Error("该安装正在运行");
+  busy.code = "RAINSKILLS_OPERATION_LOCK_BUSY";
+  const operations = createRuntimeOperationStore({
+    registry: {
+      read: () => ({ default_environment_id: null }),
+      get: () => null,
+    },
+    stateStore: {
+      acquireOperationLock() {
+        throw busy;
+      },
+    },
+  });
+
+  assert.throws(
+    () => operations.createPending({
+      operationId: OP_A,
+      intent: { type: "platform-query", resource: "current-enterprise" },
+    }),
+    /另一个进程.*更新/
+  );
+});

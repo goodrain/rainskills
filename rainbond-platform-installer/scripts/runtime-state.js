@@ -14,7 +14,7 @@ const RUNTIME_SCHEMA = "rainskills.runtime-connection.v1";
 const STATUS_SCHEMA = "rainskills.runtime-status.v1";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const STATES = new Set(["not_started", "connecting", "connected"]);
-const TARGET_CLIENTS = new Set(["codex", "claude", "all"]);
+const TARGET_CLIENTS = new Set(["codex", "claude", "pi", "all"]);
 const ENVIRONMENT_KINDS = new Set(["saas", "private"]);
 const FAILURE_CATEGORIES = new Set(["credential-expired", "permission-denied"]);
 const MAX_RETRY_COUNT = 1000;
@@ -141,30 +141,27 @@ function persistPosixCredential({ home, stateStore, token, baseUrl }) {
 
 async function probeConfiguredMcp(state, { env, fetchImpl }) {
   const originalToken = env.RAINBOND_JWT;
-  let token = originalToken;
-  const clientPaths = state.target_client === "all"
-    ? ["codex", "claude-code"]
-    : [state.target_client === "claude" ? "claude-code" : "codex"];
-  for (const client of clientPaths) {
-    const preferredEndpoint = `${state.console_origin}/console/mcp/rainskills/${client}/query`;
-    const genericEndpoint = `${state.console_origin}/console/mcp/query`;
-    const validateEndpoint = (endpoint) => validateMcp({
+  const endpoint = `${state.console_origin}/console/mcp/rainskills/api/query`;
+  let validation;
+  try {
+    validation = await validateMcp({
       url: endpoint,
-      token,
+      token: originalToken,
       fetchImpl: (url, options) => {
         if (url !== endpoint) throw new Error("Rainbond MCP endpoint 请求地址不匹配");
         return fetchPinnedMcpEndpoint(endpoint, fetchImpl, options);
       },
     });
-    let validation;
-    try {
-      validation = await validateEndpoint(preferredEndpoint);
-    } catch (error) {
-      if (error.code !== "MCP_ENDPOINT_UNSUPPORTED") throw error;
-      validation = await validateEndpoint(genericEndpoint);
-    }
-    token = validation.token;
+  } catch (error) {
+    if (error.code !== "MCP_ENDPOINT_UNSUPPORTED") throw error;
+    const upgradeRequired = new Error(
+      "当前 Rainbond 版本不支持 Rainskills CLI，请先将 Rainbond 升级到 v6.9.9 或更高版本，然后从当前任务继续。",
+      { cause: error }
+    );
+    upgradeRequired.code = error.code;
+    throw upgradeRequired;
   }
+  const token = validation.token;
   return {
     usable: true,
     renewedCredential: token === originalToken

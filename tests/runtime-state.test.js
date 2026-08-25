@@ -249,14 +249,10 @@ test("runtime writes stay within the JSON allowlist without a revision field", a
   assert.equal(Object.hasOwn(JSON.parse(fs.readFileSync(manager.path, "utf8")), "revision"), false);
 });
 
-test("default live probe uses fixed client endpoints and only the process JWT", async () => {
+test("default live probe uses only the fixed Rainskills CLI endpoint and process JWT", async () => {
   const { createRuntimeStateManager } = require(runtimeStatePath);
   const token = "current.process.jwt";
-  for (const [targetClient, expectedPaths] of [
-    ["codex", ["/console/mcp/rainskills/codex/query"]],
-    ["claude", ["/console/mcp/rainskills/claude-code/query"]],
-    ["all", ["/console/mcp/rainskills/codex/query", "/console/mcp/rainskills/claude-code/query"]],
-  ]) {
+  for (const targetClient of ["codex", "claude", "pi", "all"]) {
     const home = temporaryHome();
     const stateStore = createPortableSecureStateStore(home);
     const input = { ...connectedInput(), target_client: targetClient };
@@ -278,7 +274,7 @@ test("default live probe uses fixed client endpoints and only the process JWT", 
           result: { serverInfo: { name: "rainbond-console-mcp" } },
         }), {
           status: 200,
-          headers: targetClient === "all" && calls.length === 1
+          headers: targetClient === "all"
             ? { "x-renewed-token": "renewed.process.jwt" }
             : {},
         });
@@ -286,10 +282,10 @@ test("default live probe uses fixed client endpoints and only the process JWT", 
     });
 
     assert.equal((await manager.status()).usable, true);
-    assert.deepEqual(calls.map(({ url }) => new URL(url).pathname), expectedPaths);
-    assert.deepEqual(calls.map(({ authorization }) => authorization), targetClient === "all"
-      ? [`GRJWT ${token}`, "GRJWT renewed.process.jwt"]
-      : expectedPaths.map(() => `GRJWT ${token}`));
+    assert.deepEqual(calls.map(({ url }) => new URL(url).pathname), [
+      "/console/mcp/rainskills/api/query",
+    ]);
+    assert.deepEqual(calls.map(({ authorization }) => authorization), [`GRJWT ${token}`]);
     assert.deepEqual(credentialWrites, targetClient === "all" ? [{
       token: "renewed.process.jwt",
       baseUrl: "https://console.rainbond.com",
@@ -297,7 +293,7 @@ test("default live probe uses fixed client endpoints and only the process JWT", 
   }
 });
 
-test("default live probe falls back to the same-origin generic MCP endpoint for an old Rainbond", async () => {
+test("default live probe rejects an old Rainbond without trying a second transport", async () => {
   const { createRuntimeStateManager } = require(runtimeStatePath);
   const home = temporaryHome();
   const stateStore = createPortableSecureStateStore(home);
@@ -311,7 +307,7 @@ test("default live probe falls back to the same-origin generic MCP endpoint for 
     env: { RAINBOND_JWT: "current.process.jwt" },
     async fetchImpl(url) {
       calls.push(url);
-      if (url.endsWith("/console/mcp/rainskills/codex/query")) {
+      if (url.endsWith("/console/mcp/rainskills/api/query")) {
         return new Response(JSON.stringify({ code: 404, msg: "not found" }), {
           status: 404,
           headers: { "content-type": "application/json" },
@@ -325,10 +321,9 @@ test("default live probe falls back to the same-origin generic MCP endpoint for 
     },
   });
 
-  assert.equal((await manager.status()).usable, true);
+  assert.equal((await manager.status()).usable, false);
   assert.deepEqual(calls.map((url) => new URL(url).pathname), [
-    "/console/mcp/rainskills/codex/query",
-    "/console/mcp/query",
+    "/console/mcp/rainskills/api/query",
   ]);
 });
 

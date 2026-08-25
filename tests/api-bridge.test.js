@@ -8,14 +8,77 @@ const test = require("node:test");
 
 const repoRoot = path.resolve(__dirname, "..");
 const bridgePath = path.join(repoRoot, "bin", "rainskills-tools.js");
+const ENVIRONMENT_ID = "11111111-1111-4111-8111-111111111111";
+const RUNTIME_OPERATION_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+
+function prepareProtectedRuntime(home, env) {
+  if (!env.RAINBOND_URL || !env.RAINBOND_JWT) return;
+  let origin;
+  try {
+    const parsed = new URL(env.RAINBOND_URL);
+    if (!["http:", "https:"].includes(parsed.protocol) || parsed.username || parsed.password || parsed.search || parsed.hash) return;
+    origin = parsed.origin;
+  } catch {
+    return;
+  }
+  const { createEnvironmentRegistry } = require("../rainbond-platform-installer/scripts/environment-registry.js");
+  const { createEnvironmentCredentialStore } = require("../rainbond-platform-installer/scripts/environment-credentials.js");
+  const { createRuntimeOperationStore } = require("../rainbond-platform-installer/scripts/runtime-operations.js");
+  const registry = createEnvironmentRegistry({ home, randomUUID: () => ENVIRONMENT_ID });
+  const environment = registry.add({
+    name: "API bridge test",
+    kind: "private",
+    consoleOrigin: origin,
+    connectionState: "connected",
+  }).environment;
+  createEnvironmentCredentialStore({ home }).write({
+    environmentId: environment.id,
+    origin,
+    token: env.RAINBOND_JWT,
+  });
+  const operations = createRuntimeOperationStore({ home, registry });
+  if (!operations.read(RUNTIME_OPERATION_ID)) {
+    operations.begin({
+      operationId: RUNTIME_OPERATION_ID,
+      environmentId: environment.id,
+      intent: { type: "deploy", project_root: "/workspace/demo" },
+    });
+  }
+  const manifestDirectory = path.join(home, ".rainbond", "bin");
+  const content = "---\nname: rainbond-app-assistant\n---\n# App assistant\n";
+  const digest = require("node:crypto").createHash("sha256").update(content).digest("hex");
+  fs.mkdirSync(manifestDirectory, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(path.join(manifestDirectory, "rainskills-skill-manifest.json"), `${JSON.stringify({
+    schema: "rainskills.skill-manifest.v1",
+    profile: "cli",
+    package_version: "test",
+    source_revision: null,
+    skills: [{
+      id: "rainbond-app-assistant",
+      name: "rainbond-app-assistant",
+      profile: "cli",
+      package_version: "test",
+      source_revision: null,
+      content_sha256: digest,
+      bundle_sha256: "a".repeat(64),
+      content,
+    }],
+  })}\n`, { mode: 0o600 });
+}
 
 function runBridge(args, { env = {}, input = "", allowInsecureHttp = true, home } = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [bridgePath, ...args], {
+    const actualHome = home || fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-bridge-home-"));
+    prepareProtectedRuntime(actualHome, env);
+    const commandArgs = [...args, "--operation-id", RUNTIME_OPERATION_ID];
+    if (args[0] === "call") {
+      commandArgs.push("--skill-id", "rainbond-app-assistant", "--root-skill-id", "rainbond-app-assistant");
+    }
+    const child = spawn(process.execPath, [bridgePath, ...commandArgs], {
       cwd: repoRoot,
       env: {
         ...process.env,
-        HOME: home || fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-bridge-home-")),
+        HOME: actualHome,
         ...(allowInsecureHttp ? { RAINBOND_ALLOW_INSECURE_HTTP: "true" } : {}),
         ...env,
       },
@@ -69,6 +132,47 @@ function rpcResult(response, id, result) {
   response.writeHead(200, { "Content-Type": "application/json" });
   response.end(JSON.stringify({ jsonrpc: "2.0", id, result }));
 }
+
+test("API bridge requires the current Rainbond CLI endpoint and recommends an upgrade", async () => {
+  await withRpcServer((_record, response) => {
+    response.writeHead(404, { "Content-Type": "text/html" });
+    response.end("<!doctype html><title>Not Found</title>");
+  }, async (baseUrl, requests) => {
+    const { rpcRequest } = require(bridgePath);
+    await assert.rejects(
+      rpcRequest(
+        { baseUrl: new URL(baseUrl).origin, jwt: "bridge-jwt.payload.signature" },
+        "tools/list",
+        {},
+        { timeoutMs: 1_000 }
+      ),
+      (error) => error.exitCode === 4 && /v6\.9\.9.*更高版本/.test(error.message)
+    );
+    assert.deepEqual(requests.map((request) => [request.url, request.body.method]), [
+      ["/console/mcp/rainskills/api/query", "tools/list"],
+    ]);
+  });
+});
+
+test("API bridge does not downgrade an unverified 404 response", async () => {
+  await withRpcServer((_record, response) => {
+    response.writeHead(404, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ detail: "upstream policy rejected the request" }));
+  }, async (baseUrl, requests) => {
+    const { rpcRequest } = require(bridgePath);
+    await assert.rejects(
+      rpcRequest(
+        { baseUrl: new URL(baseUrl).origin, jwt: "bridge-jwt.payload.signature" },
+        "tools/list",
+        {},
+        { timeoutMs: 1_000 }
+      ),
+      (error) => error.exitCode === 4
+    );
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].url, "/console/mcp/rainskills/api/query");
+  });
+});
 
 const CONTEXT_MEASUREMENT_FIXTURE = {
   tools: Array.from({ length: 12 }, (_unused, index) => ({
@@ -168,7 +272,7 @@ test("status, compact list, describe, and call use the dedicated JSON-RPC endpoi
   await withRpcServer((record, response) => {
     assert.equal(record.method, "POST");
     assert.equal(record.url, "/console/mcp/rainskills/api/query");
-    assert.equal(record.headers.authorization, "GRJWT bridge-jwt");
+    assert.equal(record.headers.authorization, "GRJWT bridge-jwt.payload.signature");
     assert.equal(record.headers.accept, "application/json");
     assert.equal(record.headers["content-type"], "application/json");
     assert.equal(record.headers["mcp-protocol-version"], "2025-03-26");
@@ -178,17 +282,22 @@ test("status, compact list, describe, and call use the dedicated JSON-RPC endpoi
       return;
     }
     assert.equal(record.body.method, "tools/call");
-    assert.deepEqual(record.body.params, {
-      name: "rainbond_create_app",
-      arguments: { app_name: "demo" },
-    });
+    assert.equal(record.body.params.name, "rainbond_create_app");
+    assert.deepEqual(record.body.params.arguments, { app_name: "demo" });
+    const auditMetadata = record.body.params._meta["com.rainbond/rainskills"];
+    assert.match(auditMetadata.operation_id, /^[0-9a-f-]{36}$/);
+    assert.equal(Object.hasOwn(auditMetadata, "runtime_operation_id"), false);
+    assert.equal(
+      record.body.params._meta["com.rainbond/rainskills"].skill.id,
+      "rainbond-app-assistant"
+    );
     rpcResult(response, record.body.id, {
       isError: false,
       content: [{ type: "text", text: "must not be printed" }],
       structuredContent: { app_id: 42 },
     });
   }, async (baseUrl, requests) => {
-    const env = { RAINBOND_URL: new URL(baseUrl).origin, RAINBOND_JWT: "bridge-jwt" };
+    const env = { RAINBOND_URL: new URL(baseUrl).origin, RAINBOND_JWT: "bridge-jwt.payload.signature" };
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-bridge-catalog-"));
 
     const status = await runBridge(["status"], { env, home });
@@ -223,7 +332,7 @@ test("status, compact list, describe, and call use the dedicated JSON-RPC endpoi
     assert.equal(confirmationPayload.operation_class, "write");
 
     const swappedArguments = await runBridge(
-      ["call", "rainbond_create_app", "--input", "-", "--confirm", confirmationPayload.operation_id],
+      ["call", "rainbond_create_app", "--input", "-", "--confirm", confirmationPayload.confirmation_id],
       { env, home, input: JSON.stringify({ app_name: "different-target" }) }
     );
     assert.equal(swappedArguments.code, 2);
@@ -231,7 +340,7 @@ test("status, compact list, describe, and call use the dedicated JSON-RPC endpoi
     assert.equal(requests.length, 1, "changed arguments must be rejected before execution");
 
     const call = await runBridge(
-      ["call", "rainbond_create_app", "--input", "-", "--confirm", confirmationPayload.operation_id],
+      ["call", "rainbond_create_app", "--input", "-", "--confirm", confirmationPayload.confirmation_id],
       { env, home, input: JSON.stringify({ app_name: "demo" }) }
     );
     assert.equal(call.code, 0, call.stderr);
@@ -253,7 +362,7 @@ test("write confirmation can be claimed by only one concurrent process", async (
       });
     }, 100);
   }, async (baseUrl, requests) => {
-    const env = { RAINBOND_URL: baseUrl, RAINBOND_JWT: "jwt" };
+    const env = { RAINBOND_URL: baseUrl, RAINBOND_JWT: "jwt.payload.signature" };
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-bridge-claim-"));
     const input = JSON.stringify({ app_name: "demo" });
     const pending = await runBridge(
@@ -261,7 +370,7 @@ test("write confirmation can be claimed by only one concurrent process", async (
       { env, home, input }
     );
     assert.equal(pending.code, 0, pending.stderr);
-    const { operation_id: operationId } = JSON.parse(pending.stdout);
+    const { confirmation_id: operationId } = JSON.parse(pending.stdout);
 
     const results = await Promise.all([
       runBridge(
@@ -291,7 +400,7 @@ test("read executes only read-classified tools and rejects writes before network
       structuredContent: { items: [{ enterprise_name: "demo" }] },
     });
   }, async (baseUrl, requests) => {
-    const env = { RAINBOND_URL: new URL(baseUrl).origin, RAINBOND_JWT: "bridge-jwt" };
+    const env = { RAINBOND_URL: new URL(baseUrl).origin, RAINBOND_JWT: "bridge-jwt.payload.signature" };
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-bridge-read-"));
 
     const read = await runBridge(
@@ -339,7 +448,7 @@ test("call removes sensitive fields from successful tool results before stdout",
   }, async (baseUrl) => {
     const result = await runBridge(
       ["call", "rainbond_query_regions", "--input", "-"],
-      { env: { RAINBOND_URL: baseUrl, RAINBOND_JWT: "jwt" }, input: "{}" }
+      { env: { RAINBOND_URL: baseUrl, RAINBOND_JWT: "jwt.payload.signature" }, input: "{}" }
     );
     assert.equal(result.code, 0, result.stderr);
     assert.deepEqual(JSON.parse(result.stdout), {
@@ -348,6 +457,43 @@ test("call removes sensitive fields from successful tool results before stdout",
       nested: { health_status: "ok" },
     });
     assert.doesNotMatch(result.stdout, /region-token|private-key-material|certificate-material|nested-password/);
+  });
+});
+
+test("call preserves only the explicit unauthenticated package upload mode", async () => {
+  await withRpcServer((record, response) => {
+    assert.equal(record.body.method, "tools/call");
+    rpcResult(response, record.body.id, {
+      isError: false,
+      structuredContent: {
+        event_id: "upload-event",
+        upload_request: {
+          method: "POST",
+          authorization: "none",
+          nested: { authorization: "Bearer nested-secret" },
+        },
+        authorization: "Bearer root-secret",
+        unsafe_upload_request: {
+          authorization: "bearer",
+        },
+      },
+    });
+  }, async (baseUrl) => {
+    const result = await runBridge(
+      ["read", "rainbond_query_package_upload_contract", "--input", "-"],
+      { env: { RAINBOND_URL: baseUrl, RAINBOND_JWT: "jwt.payload.signature" }, input: "{}" }
+    );
+    assert.equal(result.code, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), {
+      event_id: "upload-event",
+      upload_request: {
+        method: "POST",
+        authorization: "none",
+        nested: {},
+      },
+      unsafe_upload_request: {},
+    });
+    assert.doesNotMatch(result.stdout, /root-secret|nested-secret|bearer/i);
   });
 });
 
@@ -361,7 +507,7 @@ test("call rejects local JSON file paths and never opens a network connection", 
   }, async (baseUrl, requests) => {
     const result = await runBridge(
       ["call", "rainbond_query_apps", "--input", inputPath],
-      { env: { RAINBOND_URL: baseUrl, RAINBOND_JWT: "very-secret-jwt" } }
+      { env: { RAINBOND_URL: baseUrl, RAINBOND_JWT: "very-secret-jwt.payload.signature" } }
     );
     assert.equal(result.code, 2);
     assert.doesNotMatch(result.stderr, new RegExp(inputPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
@@ -369,26 +515,14 @@ test("call rejects local JSON file paths and never opens a network connection", 
   });
 });
 
-test("HTTP is rejected unless insecure HTTP is explicitly authorized", async () => {
-  await withRpcServer((_record, _response) => {
-    assert.fail("HTTP must be rejected before sending a JWT");
-  }, async (baseUrl, requests) => {
-    const blocked = await runBridge(["status"], {
-      env: { RAINBOND_URL: baseUrl, RAINBOND_JWT: "jwt" },
-      allowInsecureHttp: false,
-    });
-    assert.equal(blocked.code, 3);
-    assert.match(blocked.stderr, /HTTPS|insecure/i);
-    assert.equal(requests.length, 0);
-  });
-
+test("protected runtime environment carries the previously confirmed HTTP policy", async () => {
   await withRpcServer((record, response) => {
     rpcResult(response, record.body.id, { tools: [] });
   }, async (baseUrl, requests) => {
     const allowed = await runBridge(["status"], {
       env: {
         RAINBOND_URL: baseUrl,
-        RAINBOND_JWT: "jwt",
+        RAINBOND_JWT: "jwt.payload.signature",
         RAINBOND_ALLOW_INSECURE_HTTP: "true",
       },
     });
@@ -412,7 +546,7 @@ test("usage, input, configuration, transport, and tool errors have stable exit c
   const unsafeUrl = await runBridge(["status"], {
     env: {
       RAINBOND_URL: "https://example.com/?token=query-secret",
-      RAINBOND_JWT: "jwt",
+      RAINBOND_JWT: "jwt.payload.signature",
     },
   });
   assert.equal(unsafeUrl.code, 3);
@@ -435,7 +569,7 @@ test("usage, input, configuration, transport, and tool errors have stable exit c
     response.end(JSON.stringify({ detail: "token very-secret-jwt expired" }));
   }, async (baseUrl) => {
     const auth = await runBridge(["status"], {
-      env: { RAINBOND_URL: baseUrl, RAINBOND_JWT: "very-secret-jwt" },
+      env: { RAINBOND_URL: baseUrl, RAINBOND_JWT: "very-secret-jwt.payload.signature" },
     });
     assert.equal(auth.code, 3);
     assert.doesNotMatch(auth.stderr, /very-secret-jwt/);
@@ -446,7 +580,7 @@ test("usage, input, configuration, transport, and tool errors have stable exit c
     response.end(JSON.stringify({ detail: "not found" }));
   }, async (baseUrl, requests) => {
     const endpoint = await runBridge(["status"], {
-      env: { RAINBOND_URL: new URL(baseUrl).origin, RAINBOND_JWT: "jwt" },
+      env: { RAINBOND_URL: new URL(baseUrl).origin, RAINBOND_JWT: "jwt.payload.signature" },
     });
     assert.equal(endpoint.code, 4);
     assert.equal(requests.length, 1);
@@ -467,17 +601,17 @@ test("usage, input, configuration, transport, and tool errors have stable exit c
     const pending = await runBridge(
       ["call", "rainbond_create_app", "--input", "-"],
       {
-        env: { RAINBOND_URL: baseUrl, RAINBOND_JWT: "jwt" },
+        env: { RAINBOND_URL: baseUrl, RAINBOND_JWT: "jwt.payload.signature" },
         home,
         input: JSON.stringify({ password: "echoed-argument" }),
       }
     );
     assert.equal(pending.code, 0, pending.stderr);
-    const { operation_id: operationId } = JSON.parse(pending.stdout);
+    const { confirmation_id: operationId } = JSON.parse(pending.stdout);
     const business = await runBridge(
       ["call", "rainbond_create_app", "--input", "-", "--confirm", operationId],
       {
-        env: { RAINBOND_URL: baseUrl, RAINBOND_JWT: "jwt" },
+        env: { RAINBOND_URL: baseUrl, RAINBOND_JWT: "jwt.payload.signature" },
         home,
         input: JSON.stringify({ password: "echoed-argument" }),
       }
@@ -499,7 +633,7 @@ test("protocol errors and missing tools are distinguished", async () => {
     response.end("not-json");
   }, async (baseUrl) => {
     const malformed = await runBridge(["status"], {
-      env: { RAINBOND_URL: baseUrl, RAINBOND_JWT: "jwt" },
+      env: { RAINBOND_URL: baseUrl, RAINBOND_JWT: "jwt.payload.signature" },
     });
     assert.equal(malformed.code, 4);
   });
@@ -508,7 +642,7 @@ test("protocol errors and missing tools are distinguished", async () => {
     rpcResult(response, record.body.id, { tools: [] });
   }, async (baseUrl) => {
     const missing = await runBridge(["describe", "rainbond_removed_tool"], {
-      env: { RAINBOND_URL: baseUrl, RAINBOND_JWT: "jwt" },
+      env: { RAINBOND_URL: baseUrl, RAINBOND_JWT: "jwt.payload.signature" },
     });
     assert.equal(missing.code, 5);
   });
@@ -523,7 +657,7 @@ test("protocol errors and missing tools are distinguished", async () => {
       }));
     }, async (baseUrl) => {
       const rpcError = await runBridge(["list"], {
-        env: { RAINBOND_URL: baseUrl, RAINBOND_JWT: "jwt" },
+        env: { RAINBOND_URL: baseUrl, RAINBOND_JWT: "jwt.payload.signature" },
       });
       assert.equal(rpcError.code, 4, `JSON-RPC code ${code}`);
     });
@@ -543,7 +677,7 @@ test("protocol errors and missing tools are distinguished", async () => {
       }));
     }, async (baseUrl) => {
       const rpcError = await runBridge(["list"], {
-        env: { RAINBOND_URL: baseUrl, RAINBOND_JWT: "jwt" },
+        env: { RAINBOND_URL: baseUrl, RAINBOND_JWT: "jwt.payload.signature" },
       });
       assert.equal(rpcError.code, 5, `JSON-RPC code ${rpcErrorFixture.code}`);
     });
@@ -565,7 +699,7 @@ test("input and response bodies have fixed byte limits", async () => {
     {
       env: {
         RAINBOND_URL: "https://console.example",
-        RAINBOND_JWT: "jwt",
+        RAINBOND_JWT: "jwt.payload.signature",
       },
       input: oversizedInput,
     }
@@ -583,7 +717,7 @@ test("input and response bodies have fixed byte limits", async () => {
   }, async (baseUrl) => {
     await assert.rejects(
       rpcRequest(
-        { baseUrl, jwt: "jwt" },
+        { baseUrl, jwt: "jwt.payload.signature" },
         "tools/list",
         {},
         { maxResponseBytes: 64, timeoutMs: 1_000 }
@@ -608,7 +742,7 @@ test("request timeout is wall-clock based even when the response keeps dripping"
     const started = Date.now();
     await assert.rejects(
       rpcRequest(
-        { baseUrl, jwt: "jwt" },
+        { baseUrl, jwt: "jwt.payload.signature" },
         "tools/list",
         {},
         { timeoutMs: 60, maxResponseBytes: 1024 }
@@ -636,7 +770,7 @@ test("aborted and incomplete HTTP responses fail cleanly", async () => {
     }, async (baseUrl) => {
       await assert.rejects(
         rpcRequest(
-          { baseUrl, jwt: "jwt" },
+          { baseUrl, jwt: "jwt.payload.signature" },
           "tools/list",
           {},
           { timeoutMs: 500, maxResponseBytes: 1024 }
@@ -660,7 +794,7 @@ test("dedicated endpoint preserves a Console base path prefix", async () => {
       ["/prefix/", "/prefix/console/mcp/rainskills/api/query"],
     ]) {
       const result = await rpcRequest(
-        { baseUrl: `${origin}${basePath}`, jwt: "jwt" },
+        { baseUrl: `${origin}${basePath}`, jwt: "jwt.payload.signature" },
         "tools/list",
         {},
         { timeoutMs: 1_000 }

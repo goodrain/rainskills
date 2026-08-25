@@ -754,7 +754,7 @@ function resolveInstallDestinations(args, home = os.homedir()) {
   let target = "all";
   let customDestination = "";
   for (let index = 0; index < args.length; index += 1) {
-    if (["codex", "claude", "all"].includes(args[index])) target = args[index];
+    if (["codex", "claude", "pi", "all"].includes(args[index])) target = args[index];
     if (args[index] === "--dest" && typeof args[index + 1] === "string") {
       customDestination = path.resolve(args[index + 1]);
       index += 1;
@@ -763,7 +763,12 @@ function resolveInstallDestinations(args, home = os.homedir()) {
   if (customDestination) return [customDestination];
   if (target === "codex") return [path.join(home, ".codex", "skills")];
   if (target === "claude") return [path.join(home, ".claude", "skills")];
-  return [path.join(home, ".claude", "skills"), path.join(home, ".codex", "skills")];
+  if (target === "pi") return [path.join(home, ".pi", "agent", "skills")];
+  return [
+    path.join(home, ".claude", "skills"),
+    path.join(home, ".codex", "skills"),
+    path.join(home, ".pi", "agent", "skills"),
+  ];
 }
 
 function recordSkillInstallDestinations(args, {

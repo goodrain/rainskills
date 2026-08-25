@@ -1055,6 +1055,34 @@ test("authorization resume waits only for Windows Console before authorizing and
   assert.doesNotMatch(installWindows, /adapter\.finalize/, "fresh success must finalize only inside runResume");
 });
 
+test("platform completion keeps a successful install durable when authorization must be retried", async () => {
+  const {
+    resumeAfterPlatformCompletion,
+    isPlatformAuthorizationPending,
+  } = require(platformInstallerPath);
+  const rootCause = new Error("Rainbond CLI 接口校验失败");
+
+  await assert.rejects(
+    resumeAfterPlatformCompletion("1d6754d6-6fb3-4bda-9a04-15c2d261d178", {
+      resumeRunner: async () => { throw rootCause; },
+    }),
+    (error) => {
+      assert.equal(isPlatformAuthorizationPending(error), true);
+      assert.equal(error.cause, rootCause);
+      assert.match(error.message, /连接|授权/);
+      return true;
+    }
+  );
+
+  const source = fs.readFileSync(platformInstallerPath, "utf8");
+  assert.match(source, /if \(isPlatformAuthorizationPending\(error\)\) throw error;/);
+  assert.equal(
+    (source.match(/if \(isPlatformAuthorizationPending\(error\)\) throw error;/g) || []).length,
+    2,
+    "both the existing-platform recovery catch and the install catch must preserve completion"
+  );
+});
+
 test("WSL control paths bridge to Windows without parsing shell text", () => {
   const {
     normalizeWindowsExecutableForControl,
@@ -1752,7 +1780,7 @@ test("SSH authentication pauses cleanly when no interactive terminal is availabl
       "当前还不能通过 SSH 免密连接服务器。",
       "",
       "请打开你电脑上的系统终端，执行下面这一条命令：",
-      "npx --yes rainskills@0.1.7 ssh prepare --ssh root@192.168.1.20 --ssh-port 22",
+      `npx --yes rainskills@${rootPackageVersion} ssh prepare --ssh root@192.168.1.20 --ssh-port 22`,
       "",
       "这一步只准备 SSH 连接，不会安装 Rainbond。服务器指纹确认和 SSH 密码只会由系统 ssh 读取。",
       "完成后回到这里回复“已完成”，我会在当前任务中继续安装，不会重新选择流程。",

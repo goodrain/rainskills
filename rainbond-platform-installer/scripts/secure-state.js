@@ -254,7 +254,9 @@ function createSecureStateStore({
         if (error.code !== "EEXIST") throw error;
         const existing = readProtectedJson(lockPath);
         if (isProcessAlive(existing.pid, existing.process_identity)) {
-          throw new Error(`该安装正在运行；请查看现有进度，或稍后执行 resume：${operationId}`);
+          const busy = new Error(`该安装正在运行；请查看现有进度，或稍后执行 resume：${operationId}`);
+          busy.code = "RAINSKILLS_OPERATION_LOCK_BUSY";
+          throw busy;
         }
         const stalePath = path.join(
           lockDirectory,

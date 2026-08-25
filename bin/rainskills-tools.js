@@ -20,7 +20,12 @@ const CREDENTIALS_FILENAME = "credentials.env";
 const LEGACY_CREDENTIALS_FILENAME = "mcp.env";
 const CATALOG_FILENAME = "capabilities.json";
 const OPERATIONS_DIRECTORY = "operations";
+const SKILL_MANIFEST_FILENAME = "rainskills-skill-manifest.json";
 const OPERATION_ID_PATTERN = /^[a-f0-9]{8}-[a-f0-9-]{27,}$/;
+const SKILL_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,127}$/;
+const SHA256_PATTERN = /^[a-f0-9]{64}$/;
+const SKILL_CONTENT_MAX_BYTES = 128 * 1024;
+const SKILL_MANIFEST_MAX_BYTES = 4 * 1024 * 1024;
 const SENSITIVE_RESPONSE_KEY_PATTERN = /(?:authorization|jwt|token|password|secret|credential|private[_-]?key|key[_-]?file|certificate|cert[_-]?file|ssl[_-]?ca[_-]?cert)/i;
 const RISK_POLICY = Object.freeze({
   version: "1",
@@ -102,7 +107,73 @@ function readPrivateEnvFile(configPath) {
   }
 }
 
-function loadConfig({ env = process.env, homeDir = os.homedir(), includeRuntime = false } = {}) {
+function requireRuntimeModule(filename) {
+  const candidates = [
+    path.resolve(__dirname, "..", "rainbond-platform-installer", "scripts", filename),
+    path.resolve(__dirname, "..", "lib", "rainskills", "rainbond-platform-installer", "scripts", filename),
+    path.resolve(__dirname, "..", "lib", "rainbond-platform-installer", "scripts", filename),
+  ];
+  for (const candidate of candidates) {
+    try {
+      const info = fs.lstatSync(candidate);
+      if (info.isFile() && !info.isSymbolicLink()) return require(candidate);
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+  }
+  throw new BridgeError("installed Rainskills CLI runtime is incomplete", EXIT.CONFIG);
+}
+
+function loadOperationConfig({ homeDir, operationId, includeRuntime }) {
+  let operationStore;
+  const { createEnvironmentRegistry } = requireRuntimeModule("environment-registry.js");
+  const { createEnvironmentCredentialStore } = requireRuntimeModule("environment-credentials.js");
+  const { createRuntimeOperationStore } = requireRuntimeModule("runtime-operations.js");
+  const registry = createEnvironmentRegistry({
+    home: homeDir,
+    activeOperationIds: (environmentId) => operationStore?.activeOperationIds(environmentId) || [],
+  });
+  operationStore = createRuntimeOperationStore({ home: homeDir, registry });
+  const operation = operationStore.read(operationId);
+  if (!operation || !["active", "interrupted"].includes(operation.stage)) {
+    throw new BridgeError("protected runtime operation is missing or inactive", EXIT.CONFIG);
+  }
+  const environment = registry.get(operation.environment_id);
+  if (!environment || environment.connection_state !== "connected") {
+    throw new BridgeError("the operation environment is unavailable", EXIT.CONFIG);
+  }
+  const credential = createEnvironmentCredentialStore({ home: homeDir }).read({
+    environmentId: environment.id,
+    expectedOrigin: environment.console_origin,
+  });
+  const parsed = new URL(environment.console_origin);
+  const { INTENT_DEFINITIONS } = requireRuntimeModule("runtime-intents.js");
+  const requiredSkillId = INTENT_DEFINITIONS[operation.intent.type]?.skillId;
+  if (!requiredSkillId) {
+    throw new BridgeError("the protected runtime intent has no Skill binding", EXIT.CONFIG);
+  }
+  return {
+    baseUrl: environment.console_origin,
+    jwt: credential.token,
+    operationId: operation.operation_id,
+    environmentId: environment.id,
+    intent: operation.intent,
+    requiredSkillId,
+    ...(includeRuntime ? {
+      homeDir,
+      allowInsecureHttp: parsed.protocol === "http:",
+      isInsecureHttp: parsed.protocol === "http:",
+    } : {}),
+  };
+}
+
+function loadConfig({
+  env = process.env,
+  homeDir = os.homedir(),
+  includeRuntime = false,
+  operationId,
+} = {}) {
+  if (operationId) return loadOperationConfig({ homeDir, operationId, includeRuntime });
   const configDirectory = path.join(homeDir, CONFIG_DIRECTORY);
   const credentialsPath = path.join(configDirectory, CREDENTIALS_FILENAME);
   const legacyCredentialsPath = path.join(configDirectory, LEGACY_CREDENTIALS_FILENAME);
@@ -149,24 +220,50 @@ function loadConfig({ env = process.env, homeDir = os.homedir(), includeRuntime 
 }
 
 function parseCommand(args) {
-  const command = args[0];
-  if (command === "status" && args.length === 1) return { command };
+  const operationIndex = args.indexOf("--operation-id");
+  if (
+    operationIndex < 0
+    || !OPERATION_ID_PATTERN.test(args[operationIndex + 1] || "")
+    || args.indexOf("--operation-id", operationIndex + 1) !== -1
+  ) {
+    throw new BridgeError("every tools command requires --operation-id <uuid>", EXIT.USAGE);
+  }
+  const operationId = args[operationIndex + 1];
+  const remaining = [
+    ...args.slice(0, operationIndex),
+    ...args.slice(operationIndex + 2),
+  ];
+  const command = remaining[0];
+  if (command === "status" && remaining.length === 1) return { command, operationId };
   if (command === "list") {
-    if (args.length === 1) return { command };
-    if (args.length === 3 && args[1] === "--prefix" && args[2]) {
-      return { command, prefix: args[2] };
+    if (remaining.length === 1) return { command, operationId };
+    if (remaining.length === 3 && remaining[1] === "--prefix" && remaining[2]) {
+      return { command, prefix: remaining[2], operationId };
     }
   }
-  if (command === "describe" && args.length === 2 && args[1]) {
-    return { command, toolName: args[1] };
+  if (command === "describe" && remaining.length === 2 && remaining[1]) {
+    return { command, toolName: remaining[1], operationId };
   }
-  if (command === "read" && args.length === 4 && args[1] && args[2] === "--input" && args[3] === "-") {
-    return { command, toolName: args[1], input: args[3] };
+  if (command === "read" && remaining.length === 4 && remaining[1] && remaining[2] === "--input" && remaining[3] === "-") {
+    return { command, toolName: remaining[1], input: remaining[3], operationId };
   }
-  if (command === "call" && args.length >= 4 && args[1] && args[2] === "--input" && args[3] === "-") {
-    if (args.length === 4) return { command, toolName: args[1], input: args[3] };
-    if (args.length === 6 && args[4] === "--confirm" && OPERATION_ID_PATTERN.test(args[5])) {
-      return { command, toolName: args[1], input: args[3], confirmation: args[5] };
+  if (command === "call" && remaining.length >= 4 && remaining[1] && remaining[2] === "--input" && remaining[3] === "-") {
+    const parsed = { command, toolName: remaining[1], input: remaining[3], operationId };
+    const allowed = new Set(["--confirm", "--skill-id", "--root-skill-id"]);
+    for (let index = 4; index < remaining.length; index += 2) {
+      const option = remaining[index];
+      const value = remaining[index + 1];
+      if (!allowed.has(option) || !value || value.startsWith("--")) break;
+      if (option === "--confirm" && !parsed.confirmation && OPERATION_ID_PATTERN.test(value)) {
+        parsed.confirmation = value;
+      } else if (option === "--skill-id" && !parsed.skillId && SKILL_ID_PATTERN.test(value)) {
+        parsed.skillId = value;
+      } else if (option === "--root-skill-id" && !parsed.rootSkillId && SKILL_ID_PATTERN.test(value)) {
+        parsed.rootSkillId = value;
+      } else {
+        break;
+      }
+      if (index + 2 === remaining.length) return parsed;
     }
   }
   throw new BridgeError("invalid command; use status, list, describe, read, or call", EXIT.USAGE);
@@ -231,6 +328,62 @@ function catalogPath(config) {
 
 function operationsPath(config) {
   return path.join(config.homeDir || os.homedir(), CONFIG_DIRECTORY, OPERATIONS_DIRECTORY);
+}
+
+function skillManifestPath(config) {
+  return path.join(config.homeDir || os.homedir(), CONFIG_DIRECTORY, "bin", SKILL_MANIFEST_FILENAME);
+}
+
+function loadSkillBinding(config, skillId, rootSkillId) {
+  if (skillId !== config.requiredSkillId) {
+    throw new BridgeError("Skill does not match the protected runtime operation intent", EXIT.CONFIG);
+  }
+  const target = skillManifestPath(config);
+  let manifest;
+  try {
+    const info = fs.lstatSync(target);
+    if (
+      !info.isFile()
+      || info.isSymbolicLink()
+      || (process.platform !== "win32" && (info.mode & 0o077) !== 0)
+      || info.size > SKILL_MANIFEST_MAX_BYTES
+    ) throw new Error("unsafe manifest");
+    manifest = JSON.parse(fs.readFileSync(target, "utf8"));
+  } catch (_error) {
+    throw new BridgeError("RainSkills Skill manifest is missing or unsafe", EXIT.CONFIG);
+  }
+  if (
+    !manifest
+    || manifest.schema !== "rainskills.skill-manifest.v1"
+    || manifest.profile !== "cli"
+    || typeof manifest.package_version !== "string"
+    || !manifest.package_version
+    || !Array.isArray(manifest.skills)
+  ) {
+    throw new BridgeError("RainSkills Skill manifest schema is incompatible", EXIT.CONFIG);
+  }
+  const entry = manifest.skills.find((candidate) => candidate && candidate.id === skillId);
+  if (
+    !entry
+    || entry.profile !== "cli"
+    || entry.package_version !== manifest.package_version
+    || typeof entry.content !== "string"
+    || Buffer.byteLength(entry.content, "utf8") > SKILL_CONTENT_MAX_BYTES
+    || !SHA256_PATTERN.test(entry.content_sha256)
+    || !SHA256_PATTERN.test(entry.bundle_sha256)
+    || createHash("sha256").update(entry.content, "utf8").digest("hex") !== entry.content_sha256
+  ) {
+    throw new BridgeError("RainSkills Skill manifest entry is invalid", EXIT.CONFIG);
+  }
+  return {
+    skillId,
+    rootSkillId: rootSkillId || skillId,
+    packageVersion: entry.package_version,
+    sourceRevision: entry.source_revision || null,
+    contentSha256: entry.content_sha256,
+    bundleSha256: entry.bundle_sha256,
+    content: entry.content,
+  };
 }
 
 function classifyTool(toolName) {
@@ -298,13 +451,20 @@ function readOperation(config, operationId) {
   }
 }
 
-function prepareOperation(config, toolName, operationClass, argumentsValue) {
+function prepareOperation(config, toolName, operationClass, argumentsValue, skillBinding) {
   const operationId = randomUUID();
   const record = {
     operation_id: operationId,
     tool_name: toolName,
     operation_class: operationClass,
     arguments_digest: argumentsDigest(argumentsValue),
+    runtime_operation_id: config.operationId,
+    skill_id: skillBinding.skillId,
+    root_skill_id: skillBinding.rootSkillId,
+    skill_package_version: skillBinding.packageVersion,
+    skill_source_revision: skillBinding.sourceRevision,
+    skill_content_sha256: skillBinding.contentSha256,
+    skill_bundle_sha256: skillBinding.bundleSha256,
     policy_version: RISK_POLICY.version,
     created_at: new Date().toISOString(),
     status: "awaiting_confirmation",
@@ -318,12 +478,19 @@ function confirmOperation(
   operationId,
   toolName,
   operationClass,
-  argumentsValue
+  argumentsValue,
+  skillBinding
 ) {
   const record = readOperation(config, operationId);
   if (!record || record.status !== "awaiting_confirmation" || record.tool_name !== toolName ||
     record.operation_class !== operationClass ||
-    record.arguments_digest !== argumentsDigest(argumentsValue)) {
+    record.arguments_digest !== argumentsDigest(argumentsValue) ||
+    record.runtime_operation_id !== config.operationId ||
+    record.skill_id !== skillBinding.skillId ||
+    record.root_skill_id !== skillBinding.rootSkillId ||
+    record.skill_package_version !== skillBinding.packageVersion ||
+    record.skill_content_sha256 !== skillBinding.contentSha256 ||
+    record.skill_bundle_sha256 !== skillBinding.bundleSha256) {
     throw new BridgeError("operation confirmation is missing or does not match this tool", EXIT.USAGE);
   }
   let claim;
@@ -337,6 +504,25 @@ function confirmOperation(
   }
   updateOperation(config, record, "executing");
   return record;
+}
+
+function buildAuditMetadata(operation, skillBinding) {
+  return {
+    schema: "rainskills.operation-meta.v1",
+    operation_id: operation.operation_id,
+    cli_version: CLI_VERSION,
+    confirmation_type: "rainskills_cli",
+    root_skill_id: skillBinding.rootSkillId,
+    skill: {
+      id: skillBinding.skillId,
+      profile: "cli",
+      package_version: skillBinding.packageVersion,
+      source_revision: skillBinding.sourceRevision,
+      content_sha256: skillBinding.contentSha256,
+      bundle_sha256: skillBinding.bundleSha256,
+      content: skillBinding.content,
+    },
+  };
 }
 
 function updateOperation(config, record, status) {
@@ -392,15 +578,23 @@ function fitOutput(value) {
   };
 }
 
-function sanitizeToolResult(value) {
-  if (Array.isArray(value)) return value.map(sanitizeToolResult);
+function sanitizeToolResult(value, pathParts = []) {
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeToolResult(item, pathParts));
+  }
   if (!value || typeof value !== "object") return value;
   const safe = {};
   for (const [key, item] of Object.entries(value)) {
     // Console destructive operations may return this one-time control value.
     // It is not a credential and must remain available for the confirmation flow.
-    if (key !== "confirmation_token" && SENSITIVE_RESPONSE_KEY_PATTERN.test(key)) continue;
-    safe[key] = sanitizeToolResult(item);
+    const isPackageUploadAuthMode = key === "authorization"
+      && item === "none"
+      && pathParts.length === 1
+      && pathParts[0] === "upload_request";
+    if (key !== "confirmation_token"
+      && !isPackageUploadAuthMode
+      && SENSITIVE_RESPONSE_KEY_PATTERN.test(key)) continue;
+    safe[key] = sanitizeToolResult(item, [...pathParts, key]);
   }
   return safe;
 }
@@ -437,17 +631,12 @@ function safeJson(value, secrets = []) {
   return output;
 }
 
-function rpcRequest(config, method, params = {}, {
+function httpJsonRpcRequest(config, endpointPath, message, {
   timeoutMs = REQUEST_TIMEOUT_MS,
   maxResponseBytes = RESPONSE_MAX_BYTES,
 } = {}) {
-  const endpoint = new URL(`${config.baseUrl.replace(/\/+$/, "")}${ENDPOINT_PATH}`);
-  const payload = JSON.stringify({
-    jsonrpc: "2.0",
-    id: 1,
-    method,
-    params,
-  });
+  const endpoint = new URL(`${config.baseUrl.replace(/\/+$/, "")}${endpointPath}`);
+  const payload = JSON.stringify(message);
   const client = endpoint.protocol === "https:" ? https : http;
 
   return new Promise((resolve, reject) => {
@@ -508,47 +697,11 @@ function rpcRequest(config, method, params = {}, {
           return;
         }
         const body = Buffer.concat(chunks, responseBytes).toString("utf8");
-        if (response.statusCode === 401 || response.statusCode === 403) {
-          fail(new BridgeError("Rainbond authentication failed", EXIT.CONFIG));
-          return;
-        }
-        if (!response.statusCode || response.statusCode < 200 || response.statusCode >= 300) {
-          fail(new BridgeError(
-            response.statusCode === 404
-              ? "Rainskills API endpoint is unavailable; upgrade Rainbond Console"
-              : "Rainbond API request failed",
-            EXIT.TRANSPORT
-          ));
-          return;
-        }
-        let rpc;
-        try {
-          rpc = JSON.parse(body);
-        } catch (_error) {
-          fail(new BridgeError("Rainbond returned invalid JSON", EXIT.TRANSPORT));
-          return;
-        }
-        if (!rpc || rpc.jsonrpc !== "2.0" || rpc.id !== 1) {
-          fail(new BridgeError("Rainbond returned an invalid JSON-RPC response", EXIT.TRANSPORT));
-          return;
-        }
-        if (rpc.error) {
-          const protocolErrors = new Set([-32700, -32600, -32601]);
-          fail(new BridgeError(
-            "Rainbond rejected the tool request",
-            protocolErrors.has(rpc.error.code) ? EXIT.TRANSPORT : EXIT.TOOL,
-            {
-            code: rpc.error.code,
-            message: rpc.error.message,
-            }
-          ));
-          return;
-        }
-        if (!("result" in rpc)) {
-          fail(new BridgeError("Rainbond JSON-RPC result is missing", EXIT.TRANSPORT));
-          return;
-        }
-        settle(resolve, rpc.result);
+        settle(resolve, {
+          statusCode: response.statusCode || 0,
+          headers: response.headers,
+          body,
+        });
       });
     });
     request.on("error", (error) => {
@@ -560,6 +713,95 @@ function rpcRequest(config, method, params = {}, {
       fail(new BridgeError("Rainbond API request timed out", EXIT.TRANSPORT), true);
     }, timeoutMs);
     request.end(payload);
+  });
+}
+
+function parseJsonRpcBody(body, expectedId, { allowEmpty = false, contentType = "" } = {}) {
+  if (!body.trim() && allowEmpty) return null;
+  let serialized = body;
+  if (contentType.toLowerCase().includes("text/event-stream")) {
+    const data = body.split(/\r?\n/)
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trim())
+      .filter(Boolean)
+      .at(-1);
+    if (!data) throw new BridgeError("Rainbond returned invalid MCP event data", EXIT.TRANSPORT);
+    serialized = data;
+  }
+  let rpc;
+  try {
+    rpc = JSON.parse(serialized);
+  } catch (_error) {
+    throw new BridgeError("Rainbond returned invalid JSON", EXIT.TRANSPORT);
+  }
+  if (!rpc || rpc.jsonrpc !== "2.0" || (expectedId !== undefined && rpc.id !== expectedId)) {
+    throw new BridgeError("Rainbond returned an invalid JSON-RPC response", EXIT.TRANSPORT);
+  }
+  if (rpc.error) {
+    const protocolErrors = new Set([-32700, -32600, -32601]);
+    throw new BridgeError(
+      "Rainbond rejected the tool request",
+      protocolErrors.has(rpc.error.code) ? EXIT.TRANSPORT : EXIT.TOOL,
+      { code: rpc.error.code, message: rpc.error.message }
+    );
+  }
+  if (!("result" in rpc)) {
+    throw new BridgeError("Rainbond JSON-RPC result is missing", EXIT.TRANSPORT);
+  }
+  return rpc.result;
+}
+
+function assertRpcHttpSuccess(response, { endpointUnavailable = false } = {}) {
+  if (response.statusCode === 401 || response.statusCode === 403) {
+    throw new BridgeError("Rainbond authentication failed", EXIT.CONFIG);
+  }
+  if (response.statusCode < 200 || response.statusCode >= 300) {
+    throw new BridgeError(
+      endpointUnavailable && response.statusCode === 404
+        ? "Rainskills API endpoint is unavailable; upgrade Rainbond Console"
+        : "Rainbond API request failed",
+      EXIT.TRANSPORT
+    );
+  }
+}
+
+function isVerifiedMissingRpcRoute(response) {
+  if (response.statusCode !== 404) return false;
+  const contentType = String(response.headers["content-type"] || "").toLowerCase();
+  const body = response.body.trim();
+  if (contentType.includes("text/plain")) return body === "Not Found";
+  if (contentType.includes("text/html")) {
+    const normalized = body.toLowerCase();
+    return normalized.includes("<title") && normalized.includes("not found");
+  }
+  if (!contentType.includes("json")) return false;
+  try {
+    const payload = JSON.parse(body);
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+    if (["Not Found", "not found"].includes(payload.detail)) return true;
+    return ["code", "status", "status_code", "error_code"]
+      .some((key) => payload[key] === 404 || payload[key] === "404");
+  } catch {
+    return false;
+  }
+}
+
+async function rpcRequest(config, method, params = {}, options = {}) {
+  const response = await httpJsonRpcRequest(config, ENDPOINT_PATH, {
+    jsonrpc: "2.0",
+    id: 1,
+    method,
+    params,
+  }, options);
+  if (isVerifiedMissingRpcRoute(response)) {
+    throw new BridgeError(
+      "当前 Rainbond 版本不支持 Rainskills CLI，请先将 Rainbond 升级到 v6.9.9 或更高版本",
+      EXIT.TRANSPORT
+    );
+  }
+  assertRpcHttpSuccess(response);
+  return parseJsonRpcBody(response.body, 1, {
+    contentType: String(response.headers["content-type"] || ""),
   });
 }
 
@@ -581,6 +823,8 @@ async function execute(command, config) {
     return {
       status: "ok",
       cli_version: CLI_VERSION,
+      operation_id: config.operationId,
+      environment_id: config.environmentId,
       tool_count: tools.length,
       catalog_age_ms: cached ? Math.max(0, Math.round(cached.age)) : 0,
     };
@@ -611,17 +855,23 @@ async function execute(command, config) {
   }
   const argumentsValue = command.argumentsValue || readArguments(command.input);
   let operation = null;
+  let skillBinding = null;
   if (operationClass !== "read") {
+    if (!command.skillId) {
+      throw new BridgeError("mutable calls require --skill-id <active-skill-id>", EXIT.USAGE);
+    }
+    skillBinding = loadSkillBinding(config, command.skillId, command.rootSkillId);
     if (!command.confirmation) {
       operation = prepareOperation(
         config,
         command.toolName,
         operationClass,
-        argumentsValue
+        argumentsValue,
+        skillBinding
       );
       return {
         requires_confirmation: true,
-        operation_id: operation.operation_id,
+        confirmation_id: operation.operation_id,
         operation_class: operation.operation_class,
         summary: "Review the target and repeat this exact call with --confirm <operation_id> to execute it once.",
       };
@@ -631,15 +881,22 @@ async function execute(command, config) {
       command.confirmation,
       command.toolName,
       operationClass,
-      argumentsValue
+      argumentsValue,
+      skillBinding
     );
   }
 
   try {
-    const result = await rpcRequest(config, "tools/call", {
+    const params = {
       name: command.toolName,
       arguments: argumentsValue,
-    });
+    };
+    if (operation) {
+      params._meta = {
+        "com.rainbond/rainskills": buildAuditMetadata(operation, skillBinding),
+      };
+    }
+    const result = await rpcRequest(config, "tools/call", params);
     if (!result || typeof result !== "object") {
       throw new BridgeError("Rainbond tool result is invalid", EXIT.TRANSPORT);
     }
@@ -677,7 +934,10 @@ async function main(args = process.argv.slice(2)) {
       command.argumentsValue = argumentsValue;
       argumentRedactions = collectArgumentRedactions(argumentsValue);
     }
-    config = loadConfig({ includeRuntime: true });
+    config = loadConfig({
+      includeRuntime: true,
+      operationId: command.operationId,
+    });
     if (config.isInsecureHttp) {
       process.stderr.write('{"warning":"using insecure HTTP transport"}\n');
     }

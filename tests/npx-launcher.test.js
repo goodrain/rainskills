@@ -242,33 +242,14 @@ test("environment commands use immutable ids and operation begin has no project 
   ], { environmentRegistry, write: () => {} }), /环境 ID/);
 });
 
-test("mcp serve starts one local operation router for every supported agent client", async () => {
-  const { runBuiltin } = require(launcherPath);
-  for (const client of ["codex", "claude", "generic"]) {
-    const calls = [];
-    assert.equal(await runBuiltin(["mcp", "serve", "--client", client], {
-      environmentRegistry: { read() {}, get() {} },
-      environmentCredentialStore: { read() {} },
-      operationStore: { read() {} },
-      mcpServerRunner: async (input) => calls.push(input),
-    }), true);
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0].client, client);
-    assert.equal(typeof calls[0].environmentRegistry.read, "function");
-    assert.equal(typeof calls[0].environmentCredentialStore.read, "function");
-    assert.equal(typeof calls[0].operationStore.read, "function");
+test("mcp serve is rejected because business operations use the protected local CLI", async () => {
+  const { resolveInvocation } = require(launcherPath);
+  for (const client of ["codex", "claude", "generic", "unknown"]) {
+    assert.throws(
+      () => resolveInvocation(["mcp", "serve", "--client", client]),
+      /不再提供本地 MCP 服务/
+    );
   }
-
-  await assert.rejects(
-    () => runBuiltin(["mcp", "serve", "--client", "pi"], {}),
-    /mcp serve 参数无效/
-  );
-  await assert.rejects(
-    () => runBuiltin(["mcp", "serve", "--client", "unknown"], {
-      mcpServerRunner: async () => {},
-    }),
-    /mcp serve 参数无效/
-  );
 });
 
 test("control environment distinguishes native Windows, WSL, and POSIX", () => {
@@ -339,6 +320,10 @@ test("launcher has the Node shebang and classifies supported runtimes", () => {
   assert.deepEqual(resolveInvocation(["codex", "--skip-mcp"]), {
     executable: "bash",
     args: [path.join(repoRoot, "install.sh"), "codex", "--skip-mcp"],
+  });
+  assert.deepEqual(resolveInvocation(["pi", "--skip-mcp"]), {
+    executable: "bash",
+    args: [path.join(repoRoot, "install.sh"), "pi", "--skip-mcp"],
   });
   assert.deepEqual(resolveInvocation(["tools", "list", "--prefix", "rainbond_query_"]), {
     executable: process.execPath,
@@ -610,6 +595,9 @@ test("runtime connect parses fixed validated argv and rejects mixed environment 
     onboardingId: "",
     intent,
   });
+  assert.equal(parseRuntimeConnectArgs([
+    "runtime", "connect", "pi", "--saas", "--intent-json", JSON.stringify(intent),
+  ]).targetClient, "pi");
   assert.throws(() => parseRuntimeConnectArgs([
     "runtime", "connect", "all", "--saas", "--rainbond-url", "https://rainbond.example.com",
     "--intent-json", JSON.stringify(intent),

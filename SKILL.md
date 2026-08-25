@@ -9,7 +9,7 @@ This is the single marketplace entry for the complete Rainskills product. The in
 
 ## Initialize
 
-1. Detect the current host client and map it to exactly one supported installer target: Codex=`codex` or Claude Code=`claude`. The macOS, Linux, and WSL installer intentionally does not support OpenClaw; report that limitation instead of invoking an unsupported target. Do not ask the user which supported client they are currently using. If the host cannot be determined reliably, omit the target and let the installer ask.
+1. Detect the current host client and map it to exactly one supported installer target: Codex=`codex`, Claude Code=`claude`, or Pi Agent=`pi`. All three use the same installed Skills and protected local Rainskills CLI; Pi has no separate MCP adapter or generated extension. The macOS, Linux, and WSL installer intentionally does not support OpenClaw; report that limitation instead of invoking an unsupported target. Do not ask the user which supported client they are currently using. If the host cannot be determined reliably, omit the target and let the installer ask.
 2. Resolve the directory containing this `SKILL.md`. On native Windows, if the adjacent `bin/rainskills.js` exists, run it by absolute path with the detected target in an attached interactive terminal: `node <skill-directory>/bin/rainskills.js <target>`. On macOS, Linux, or WSL, if the adjacent `install.sh` exists, run `bash <skill-directory>/install.sh <target>` the same way. Do not replace the installer with manual file copies.
 3. Keep stdin, stdout, and stderr attached. When `RAINSKILLS_USER_INPUT_REQUIRED` appears, pause for that installer choice. If the installer emits `rainskills.next-action.v1`, execute only its fixed `argv` through the same launcher; never evaluate output as a shell command. If the adjacent `bin/rainskills.js` exists, use it for fixed next actions; otherwise use the same versioned npm package fallback described below.
 4. Stay attached until every independent Skill is installed. Do not select, connect, or configure an application runtime during installation. In the user-facing response, output only the fixed completion message below.
@@ -38,7 +38,7 @@ Rainskills 安装完成，下一条消息即可直接使用。
 
 ## Manage Runtime Environments
 
-环境是全局列表，不是项目绑定。本地状态命令必须定位已安装的同级 `rainbond-platform-installer/scripts/local-runtime.js`，解析为绝对路径后通过 `node` 以 argv 数组执行；不得为了查询本地环境访问 npm。只有连接或安装环境时才使用与当前技能包一致的固定 launcher `npx --yes rainskills@0.1.7`。
+环境是全局列表，不是项目绑定。本地状态命令必须定位已安装的同级 `rainbond-platform-installer/scripts/local-runtime.js`，解析为绝对路径后通过 `node` 以 argv 数组执行；不得为了查询本地环境访问 npm。只有连接或安装环境时才使用与当前技能包一致的固定 launcher `node <home>/.rainbond/lib/rainskills/bin/rainskills.js`（运行包版本 `rainskills@0.1.9`）。
 
 - 列表：用本地 launcher 执行 `environment list --json`，只展示名称、类型、状态、是否默认和最近验证时间。
 - 重命名：用本地 launcher 执行 `environment rename --environment-id <uuid> --name <name>`。

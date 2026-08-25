@@ -123,6 +123,8 @@ exit 0
                 "PATH": f"{bin_dir}:{env.get('PATH', '')}",
                 "SHELL": "/bin/bash",
                 "RAINSKILLS_CURL_LOG": str(curl_log),
+                "npm_config_cache": str(Path.home() / ".npm"),
+                "npm_config_offline": "true",
             }
         )
         for name in (

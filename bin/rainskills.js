@@ -80,7 +80,7 @@ function parseRuntimeAssertConnectArgs(args) {
     throw new Error("runtime connect 内部门禁参数无效");
   }
   if (!UUID_PATTERN.test(args[3] || "")) throw new Error("runtime connect operation 无效");
-  if (!["codex", "claude", "all"].includes(args[5])) throw new Error("runtime connect target 无效");
+  if (!["codex", "claude", "pi", "all"].includes(args[5])) throw new Error("runtime connect target 无效");
   if (!["saas", "private"].includes(args[7])) throw new Error("runtime connect environment kind 无效");
   return {
     operationId: args[3],
@@ -122,8 +122,8 @@ function parseRuntimeConnectArgs(args) {
     throw new Error("不是 runtime connect 命令");
   }
   const targetClient = args[2];
-  if (!["codex", "claude", "all"].includes(targetClient)) {
-    throw new Error("runtime connect 需要固定目标 codex、claude 或 all");
+  if (!["codex", "claude", "pi", "all"].includes(targetClient)) {
+    throw new Error("runtime connect 需要固定目标 codex、claude、pi 或 all");
   }
   let environmentChoice = "";
   let rainbondUrl = "";
@@ -332,39 +332,6 @@ function parseOperationBeginArgs(args) {
   return { operationId, environmentId: environmentId || undefined, intent };
 }
 
-function parseMcpServeArgs(args) {
-  if (
-    args.length !== 4
-    || args[0] !== "mcp"
-    || args[1] !== "serve"
-    || args[2] !== "--client"
-    || !["codex", "claude", "generic"].includes(args[3])
-  ) {
-    throw new Error("mcp serve 参数无效");
-  }
-  return { client: args[3] };
-}
-
-async function defaultMcpServerRunner({
-  environmentRegistry,
-  environmentCredentialStore,
-  operationStore,
-}) {
-  const { createMcpRouter } = require(
-    "../rainbond-platform-installer/scripts/mcp-router.js"
-  );
-  const { serveStdio } = require(
-    "../rainbond-platform-installer/scripts/mcp-server.js"
-  );
-  return serveStdio({
-    router: createMcpRouter({
-      registry: environmentRegistry,
-      credentialStore: environmentCredentialStore,
-      operationStore,
-    }),
-  });
-}
-
 function runAttached(executable, args, { env = process.env } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(executable, args, { env, stdio: "inherit" });
@@ -434,7 +401,6 @@ async function runBuiltin(args, {
   credentialEnvironment = process.env,
   credentialPersister,
   connectedCredentialReader,
-  mcpServerRunner = defaultMcpServerRunner,
 } = {}) {
   let environmentServices;
   const getEnvironmentServices = () => {
@@ -456,17 +422,6 @@ async function runBuiltin(args, {
       "../rainbond-platform-installer/scripts/runtime-state.js"
     ).createRuntimeStateManager(operationScoped ? { operationId } : {});
   };
-
-  if (args[0] === "mcp" && args[1] === "serve") {
-    const { client } = parseMcpServeArgs(args);
-    await mcpServerRunner({
-      client,
-      environmentRegistry: getEnvironmentRegistry(),
-      environmentCredentialStore: getEnvironmentCredentialStore(),
-      operationStore: getOperationStore(),
-    });
-    return true;
-  }
 
   if (args[0] === "environment" && args[1] === "list") {
     if (args.length !== 3 || args[2] !== "--json") {
@@ -997,6 +952,10 @@ function resolveInvocation(args, {
     "scripts",
     "windows-onboarding.js"
   );
+
+  if (args[0] === "mcp") {
+    throw new Error("Rainskills 不再提供本地 MCP 服务，请使用本地 CLI");
+  }
 
   if (args[0] === "tools") {
     return {

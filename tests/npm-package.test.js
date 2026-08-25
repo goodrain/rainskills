@@ -17,6 +17,7 @@ const skillNames = [
   "rainbond-env-sync",
   "rainbond-fullstack-bootstrap",
   "rainbond-fullstack-troubleshooter",
+  "rainbond-opensource-app-deploy",
   "rainbond-platform-installer",
   "rainbond-platform-query",
   "rainbond-project-init",
@@ -70,7 +71,6 @@ test("package metadata defines a public npx command with pinned runtime dependen
   assert.equal(manifest.publishConfig.access, "public");
   assert.deepEqual(manifest.os, ["darwin", "linux", "win32"]);
   assert.deepEqual(manifest.dependencies, {
-    "@modelcontextprotocol/sdk": "1.30.0",
     yaml: "2.9.0",
   });
   assert.equal(manifest.devDependencies, undefined);
@@ -81,12 +81,32 @@ test("package metadata defines a public npx command with pinned runtime dependen
   assert.equal(manifest.scripts["test:pi"], undefined);
   assert.equal(manifest.scripts.postinstall, undefined);
   assert.equal(
+    manifest.scripts["sync:runtime-version"],
+    "node scripts/sync-runtime-version.mjs"
+  );
+  assert.equal(
+    manifest.scripts["check:runtime-version"],
+    "node scripts/sync-runtime-version.mjs --check"
+  );
+  assert.equal(
+    manifest.scripts.version,
+    "npm run sync:runtime-version && npm run build:marketplace"
+  );
+  assert.equal(
+    manifest.scripts.prepack,
+    "node scripts/sync-runtime-version.mjs --check && node scripts/build-marketplace-package.mjs --check --quiet"
+  );
+  assert.equal(
     manifest.scripts["test:package-upload"],
     "python3 tests/package_upload_helper_test.py && python3 tests/package_upload_workflow_contract_test.py && python3 rainbond-fullstack-bootstrap/scripts/run_bootstrap_evals.py"
   );
   assert.equal(
     manifest.scripts.test,
-    "npm run test:auto-update && npm run test:launcher && npm run test:api-bridge && npm run test:skill-profile && npm run test:marketplace && npm run test:runtime-routing && npm run test:telemetry && npm run test:platform && npm run test:windows && npm run test:package-upload && npm run test:package && npm run test:installer && npm run test:signal && npm run test:npx-pty"
+    "npm run test:runtime-version && npm run test:auto-update && npm run test:launcher && npm run test:api-bridge && npm run test:skill-profile && npm run test:marketplace && npm run test:runtime-routing && npm run test:telemetry && npm run test:platform && npm run test:windows && npm run test:package-upload && npm run test:package && npm run test:installer && npm run test:signal && npm run test:npx-pty"
+  );
+  assert.equal(
+    manifest.scripts["test:runtime-version"],
+    "node --test tests/runtime-version-sync.test.js"
   );
   assert.equal(manifest.scripts["test:auto-update"], "node --test tests/auto-update.test.js");
   assert.equal(
@@ -109,6 +129,8 @@ test("packed artifact contains the installer and all skills but no development f
   assert(filePaths.has("agents/openai.yaml"));
   assert(filePaths.has("bin/rainskills.js"));
   assert(filePaths.has("bin/rainskills-tools.js"));
+  assert(filePaths.has("scripts/build-skill-manifest.mjs"));
+  assert(filePaths.has("scripts/install-local-cli.mjs"));
   assert(filePaths.has("install.sh"));
   assert(![...filePaths].some((filePath) => filePath.startsWith("pi/")));
   assert(filePaths.has("rainbond-platform-installer/scripts/platform-installer.js"));
@@ -137,13 +159,13 @@ test("packed artifact contains the installer and all skills but no development f
     "auto-update-worker.js",
     "installed-version.js",
     "ssh-key-setup.js",
-    "mcp-router.js",
-    "mcp-server.js",
     "user-message.js",
     "wsl-bootstrap.sh",
   ]) {
     assert(filePaths.has(`rainbond-platform-installer/scripts/${runtimeFile}`), `${runtimeFile} is missing`);
   }
+  assert.equal(filePaths.has("rainbond-platform-installer/scripts/mcp-router.js"), false);
+  assert.equal(filePaths.has("rainbond-platform-installer/scripts/mcp-server.js"), false);
   assert.equal(
     require("../rainbond-platform-installer/scripts/installed-version.js").version,
     require("../package.json").version,
@@ -198,6 +220,7 @@ test("npm exec installs from the packed skills without downloading a repository 
       encoding: "utf8",
       env: {
         ...process.env,
+        npm_config_offline: "true",
         PATH: `${fakeBin}${path.delimiter}${process.env.PATH || ""}`,
         RAINSKILLS_CURL_LOG: curlLog,
       },
@@ -246,6 +269,8 @@ test("the packed default installer installs only Skills and prints the approved 
       encoding: "utf8",
       env: {
         ...process.env,
+        npm_config_offline: "true",
+        npm_config_cache: path.join(os.homedir(), ".npm"),
         HOME: home,
         PATH: `${fakeBin}${path.delimiter}${process.env.PATH || ""}`,
         RAINBOND_JWT: "",
@@ -279,6 +304,17 @@ test("the packed default installer installs only Skills and prints the approved 
     assert.equal(output.includes(forbidden), false, `default install output contains ${forbidden}`);
   }
   assert.equal(fs.existsSync(path.join(home, ".codex", "skills", "rainbond-app-assistant", "SKILL.md")), true);
+  assert.equal(fs.existsSync(path.join(home, ".rainbond", "bin", "rainskills-tools.js")), true);
+  assert.equal(fs.existsSync(path.join(home, ".rainbond", "bin", "rainskills-skill-manifest.json")), true);
+  assert.equal(fs.existsSync(path.join(home, ".rainbond", "lib", "rainbond-platform-installer", "scripts", "runtime-operations.js")), true);
+  const installedRuntimeRoot = path.join(home, ".rainbond", "lib", "rainskills");
+  assert.equal(fs.existsSync(path.join(installedRuntimeRoot, "bin", "rainskills.js")), true);
+  assert.equal(fs.existsSync(path.join(installedRuntimeRoot, "install.sh")), true);
+  assert.equal(fs.existsSync(path.join(installedRuntimeRoot, "node_modules", "yaml", "package.json")), true);
+  assert.equal(
+    JSON.parse(fs.readFileSync(path.join(installedRuntimeRoot, "package.json"), "utf8")).version,
+    require("../package.json").version
+  );
   assert.equal(fs.existsSync(path.join(home, ".rainbond", "mcp.env")), false);
   assert.equal(fs.existsSync(path.join(home, ".rainbond", "rainskills-onboarding-v1.json")), false);
   assert.equal(fs.existsSync(path.join(home, ".rainbond", "platform-installer")), false);
@@ -300,7 +336,7 @@ test("the packed artifact exposes a real npx command", () => {
   const result = spawnSync(
     npxCommand,
     ["--yes", `--package=${packed.tarballPath}`, "rainskills", "--help"],
-    { cwd: tempDir, encoding: "utf8" }
+    { cwd: tempDir, encoding: "utf8", env: { ...process.env, npm_config_offline: "true" } }
   );
 
   assert.equal(result.status, 0, result.stderr || result.stdout);
@@ -318,7 +354,7 @@ test("the packed artifact exposes platform install and resume commands", () => {
     const result = spawnSync(
       npxCommand,
       ["--yes", `--package=${packed.tarballPath}`, "rainskills", ...args],
-      { cwd: tempDir, encoding: "utf8" }
+      { cwd: tempDir, encoding: "utf8", env: { ...process.env, npm_config_offline: "true" } }
     );
     assert.equal(result.status, 0, result.stderr || result.stdout);
     assert.match(result.stdout, /--onboarding-id ID/);

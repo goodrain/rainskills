@@ -13,6 +13,7 @@ const EMBEDDED_SKILLS = [
   "rainbond-delivery-verifier",
   "rainbond-fullstack-bootstrap",
   "rainbond-fullstack-troubleshooter",
+  "rainbond-opensource-app-deploy",
   "rainbond-platform-query",
   "rainbond-template-installer",
 ];

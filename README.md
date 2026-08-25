@@ -1,6 +1,6 @@
 # Rainskills
 
-Rainskills 是一组面向应用识别、部署、排障和交付的 AI Skills，支持 Codex 和 Claude Code。用户在市场中只会看到一个 `Rainskills` 产品，安装后 10 个 `rainbond-*` Skill 仍会独立触发。
+Rainskills 是一组面向应用识别、部署、排障和交付的 AI Skills，支持 Codex、Claude Code 和 Pi Agent。用户在市场中只会看到一个 `Rainskills` 产品，安装后 10 个 `rainbond-*` Skill 仍会独立触发。
 
 ## 安装
 
@@ -41,11 +41,11 @@ Claude Code：
 /reload-plugins
 ```
 
-安装流程支持 Codex 和 Claude Code；macOS、Linux 和 WSL 不支持 OpenClaw 安装。不要手工复制 Skill、拼接凭据或修改 MCP 配置。
+安装流程支持 Codex、Claude Code 和 Pi Agent；Pi 与其他 Agent 共用同一组 Skills 和本地 Rainskills CLI，不再提供单独的 Pi MCP adapter。macOS、Linux 和 WSL 不支持 OpenClaw 安装。不要手工复制 Skill、拼接凭据或修改 Agent 配置。
 
 ## 安装完成时用户会看到什么
 
-安装完成后只完成 Skills 安装并展示能力列表，不选择运行环境、不登录 Rainbond，也不配置业务 MCP：
+安装完成后只完成 Skills 和受保护本地 CLI 的安装并展示能力列表，不选择运行环境、不登录 Rainbond，也不配置 Agent MCP：
 
 ```text
 Rainskills 安装完成，下一条消息即可直接使用。
@@ -72,14 +72,14 @@ Rainskills 安装完成，下一条消息即可直接使用。
 固定 launcher 来自当前 `package.json` 版本：
 
 ```json
-["npx", "--yes", "rainskills@0.1.7"]
+["node", "<home>/.rainbond/lib/rainskills/bin/rainskills.js"]
 ```
 
 所有调用都把 launcher 与参数合并成 argv 数组后直接执行；不得使用 `rainskills@latest`，不得把参数拼成 shell 字符串。
 
-1. 执行 launcher + `["environment", "list", "--json"]`，先于项目扫描和任何业务 MCP。未指定环境时只使用全局默认环境，默认不可用时停止，不自动回退。
-2. 每个请求生成独立 operation UUID，并执行 `operation begin`；显式环境只写入这次 operation。每个 Rainbond MCP 调用都携带返回的 `rainskills_operation_id`。项目不保存环境、团队或应用绑定，同一项目可以部署到多个目标。
-3. 将动作转换为 `runtime-intents.js` 中对应的受限 intent 并完成字段校验。target 只允许 `codex`、`claude`、`all`；按用户选择构造 launcher + `["runtime", "connect", "<target>", ...环境参数, "--intent-json", "<JSON.stringify(已校验 intent)>"]`。
+1. 执行 launcher + `["environment", "list", "--json"]`，先于项目扫描和任何 Rainbond 业务调用。未指定环境时只使用全局默认环境，默认不可用时停止，不自动回退。
+2. 每个请求生成独立 operation UUID，并执行 `operation begin`；显式环境只写入这次 operation。所有 Rainbond 查询和变更都通过 `~/.rainbond/bin/rainskills-tools.js`，并绑定返回的 operation ID。项目不保存环境、团队或应用绑定，同一项目可以部署到多个目标。
+3. 将动作转换为 `runtime-intents.js` 中对应的受限 intent 并完成字段校验。target 只允许 `codex`、`claude`、`pi`、`all`；按用户选择构造 launcher + `["runtime", "connect", "<target>", ...环境参数, "--intent-json", "<JSON.stringify(已校验 intent)>"]`。
 4. 环境参数必须恰好选择一组且互斥：Cloud 用 `["--saas"]`，已有私有环境用 `["--rainbond-url", "<已验证 Console origin>"]`，新建私有环境用 `["--install-private", "--location", "local"]` 或 `["--install-private", "--location", "server"]`。
 5. 安装私有环境时，只消费完成 schema、action、onboarding id 和参数边界校验的 `rainskills.next-action.v1.argv`；拒绝字符串命令和其他输出字段。
 6. 探针失败进入 reconnect。连接或安装完成后执行 launcher + `["intent", "resume", "--onboarding-id", "<同一 onboarding-id>"]`，恢复受保护的原始 intent 和 `resume_step`，不重新猜测用户动作。
@@ -141,10 +141,10 @@ Rainskills 安装完成，下一条消息即可直接使用。
 - 第一个连接成功的环境自动成为全局默认环境；以后新增环境不修改默认值。
 - 用户未指定环境时使用默认环境；用户明确指定时只覆盖本次 operation。
 - 环境名称自动生成，可重命名；内部不可变 ID 不随重命名改变。
-- 添加、重命名、重新授权或删除环境不改项目配置，也不需要为每个环境重新配置 Agent MCP。
+- 添加、重命名、重新授权或删除环境不改项目配置，也不需要为每个 Agent 单独配置 MCP。
 - 新增环境直接建立独立连接，不读取或恢复旧版单环境状态；HTTPS 直接进入授权，明文 HTTP 只增加一次可信网络确认。
 - 新增环境与首次部署复用同一套固定选择：先选“云端环境（免费体验）/私有环境（去对接）”；选择私有环境后直接选“部署到本机/部署到独立服务器/部署到已有 Rainbond”，不再出现旧的接入方式中间步骤。
-- Agent 始终连接一个本地 Rainskills MCP。Rainskills 按 `operation_id` 从隔离凭据存储中选择目标 Rainbond。
+- Agent 始终执行同一个受保护的本地 Rainskills CLI。CLI 按 `operation_id` 从隔离凭据存储中选择目标 Rainbond；Rainskills 不提供本地 MCP 服务，Agent 也不得绕过 CLI 直接调用 Rainbond MCP。
 - 明确说“团队”表示默认或指定运行环境中的 Rainbond 团队；明确说“运行环境/平台”表示环境。裸名称同时匹配两者时必须询问。
 
 常用管理命令：
@@ -164,7 +164,7 @@ node <已安装的 Skills 根目录>/rainbond-platform-installer/scripts/local-r
 
 ### 认证与权限恢复
 
-业务 MCP 返回 401 时，依次执行以下 argv 参数：
+Rainbond 能力端点经 CLI 返回 401 时，依次执行以下 argv 参数：
 
 ```json
 ["runtime", "record-failure", "--onboarding-id", "<同一 onboarding-id>", "--step", "<当前固定步骤>", "--reason", "credential-expired"]
@@ -192,21 +192,21 @@ Windows 本地安装是预览能力，也可以改选 Linux 服务器。它要�
 
 ```bash
 # 本地单机
-npx --yes rainskills@0.1.7 platform install --onboarding-id <id> \
+node ~/.rainbond/lib/rainskills/bin/rainskills.js platform install --onboarding-id <id> \
   --location local --mode single-node
 
 # Linux 服务器单机
-npx --yes rainskills@0.1.7 platform install --onboarding-id <id> \
+node ~/.rainbond/lib/rainskills/bin/rainskills.js platform install --onboarding-id <id> \
   --location server --mode single-node --ssh <user@host>
 
 # 服务器主机集群（自动生成受保护示例文件）
-npx --yes rainskills@0.1.7 platform install --onboarding-id <id> \
+node ~/.rainbond/lib/rainskills/bin/rainskills.js platform install --onboarding-id <id> \
   --location server --mode host-cluster
 
 # 已有高级 ROI cluster.yaml 才追加：--cluster-config <path>
 
 # 已有 Kubernetes
-npx --yes rainskills@0.1.7 platform install --onboarding-id <id> \
+node ~/.rainbond/lib/rainskills/bin/rainskills.js platform install --onboarding-id <id> \
   --location server --mode existing-kubernetes \
   --kubeconfig <path> --kube-context <name> --chart-version <version>
 ```
@@ -228,9 +228,9 @@ npx --yes rainskills@0.1.7 platform install --onboarding-id <id> \
 
 Rainskills 会在用户下一次发起业务动作时，由本地运行时立即返回环境查询结果，并另行启动后台任务静默检查更新。更新只跟随 npm `latest` 指向的正式版。当前版本是 RC 或其他预发布版本时不会查询、不会自动升级；npm 上的新 RC 版本也不参与正式版自动升级。
 
-发现更高的正式版后，后台任务只委托到经过校验的精确版本，例如 `rainskills@1.2.3`，不会执行浮动的 `@latest` 业务代码。新版本原子刷新已经安装的 Rainskills Skills；当前业务继续使用启动时已经加载的版本，最迟从下一条新任务开始使用新版。npm 超时、版本检查失败、安装位置不安全或文件迁移失败时会保留旧版本，且不会阻塞或改变当前操作。
+发现更高的正式版后，后台任务只委托到经过校验的精确版本，例如 `rainskills@0.1.9`，不会执行浮动的 `@latest` 业务代码。新版本原子刷新已经安装的 Rainskills Skills；当前业务继续使用启动时已经加载的版本，最迟从下一条新任务开始使用新版。npm 超时、版本检查失败、安装位置不安全或文件迁移失败时会保留旧版本，且不会阻塞或改变当前操作。
 
-升级只更新 Rainskills 自身，不触发 Rainbond 安装、运行环境选择、登录授权、MCP 配置或重新对接。原始业务操作会继续执行；只有该业务操作本身需要运行环境时，才按既有门禁检查当前连接。可用连接直接复用，401 只重新授权一次，403 立即停止，从未连接过运行环境时才进入环境选择。
+升级只更新 Rainskills 自身，不触发 Rainbond 安装、运行环境选择、登录授权或重新对接，也不会新增 Agent MCP 配置。更新内容仅包括 Skills 和本地 CLI。原始业务操作会继续执行；只有该业务操作本身需要运行环境时，才按既有门禁检查当前连接。可用连接直接复用，401 只重新授权一次，403 立即停止，从未连接过运行环境时才进入环境选择。
 
 正在执行的部署、私有平台安装和授权流程继续使用启动时锁定的旧版本，自动升级不会插入这些流程。操作完成后会再次静默调度更新检查；检查进程有固定超时且不向用户输出远程 npx 命令。
 

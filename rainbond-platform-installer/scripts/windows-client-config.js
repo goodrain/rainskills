@@ -1,6 +1,5 @@
 "use strict";
 
-const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
@@ -132,55 +131,6 @@ function checkedSpawn(spawnImpl, command, args, options) {
   if (result.status !== 0) throw new Error(`${command} 配置失败，退出码 ${result.status}`);
 }
 
-function removeExistingClient(spawnImpl, command, args, options) {
-  const result = spawnImpl(command, args, options);
-  if (result.error) {
-    if (result.error.code === "ENOENT") throw new Error(`未找到所选客户端命令：${command}`);
-    throw result.error;
-  }
-  if (result.signal) throw new Error(`${command} 被信号 ${result.signal} 中断`);
-}
-
-function localMcpCommand(client, packageVersion = require("../../package.json").version) {
-  if (!["codex", "claude", "generic"].includes(client)) {
-    throw new Error("本地 MCP client 无效");
-  }
-  if (typeof packageVersion !== "string" || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(packageVersion)) {
-    throw new Error("Rainskills package version 无效");
-  }
-  return ["npx", "--yes", `rainskills@${packageVersion}`, "mcp", "serve", "--client", client];
-}
-
-function writeCodexMcpConfig({ packageVersion, home = process.env.USERPROFILE || os.homedir() }) {
-  const configDirectory = path.join(home, ".codex");
-  const configPath = path.join(configDirectory, "config.toml");
-  fs.mkdirSync(configDirectory, { recursive: true });
-  const original = fs.existsSync(configPath) ? fs.readFileSync(configPath, "utf8") : "";
-  const lines = original.replace(/\r\n?/g, "\n").split("\n");
-  const sectionPattern = /^\s*\[\s*mcp_servers\.rainbond\s*\]\s*(?:#.*)?$/;
-  const nextSectionPattern = /^\s*\[/;
-  const start = lines.findIndex((line) => sectionPattern.test(line));
-  const [command, ...args] = localMcpCommand("codex", packageVersion);
-  const block = [
-    "[mcp_servers.rainbond]",
-    `command = ${JSON.stringify(command)}`,
-    `args = ${JSON.stringify(args)}`,
-  ];
-
-  if (start >= 0) {
-    let end = start + 1;
-    while (end < lines.length && !nextSectionPattern.test(lines[end])) end += 1;
-    lines.splice(start, end - start, ...block, "");
-  } else {
-    while (lines.length > 0 && lines.at(-1) === "") lines.pop();
-    if (lines.length > 0) lines.push("");
-    lines.push(...block, "");
-  }
-
-  if (original) fs.copyFileSync(configPath, `${configPath}.rainskills-backup`);
-  fs.writeFileSync(configPath, lines.join("\n"), "utf8");
-}
-
 function persistWindowsEnvironment({
   token,
   baseUrl,
@@ -208,54 +158,8 @@ function persistWindowsEnvironment({
   process.env.RAINBOND_URL = normalizedBase;
 }
 
-function configureSelectedClients({
-  target,
-  baseUrl,
-  token,
-  spawnImpl = spawnSync,
-  home = process.env.USERPROFILE || os.homedir(),
-  packageVersion = require("../../package.json").version,
-}) {
-  if (!looksLikeJwt(token)) throw new Error("Rainbond JWT 格式无效");
-  if (!["codex", "claude", "all"].includes(target)) throw new Error("安装目标无效");
-  const normalizedBase = normalizeBaseUrl(baseUrl);
-  const environment = {
-    ...process.env,
-    RAINBOND_JWT: token,
-    RAINBOND_URL: normalizedBase,
-  };
-  const options = { encoding: "utf8", env: environment, windowsHide: true };
-  if (target === "codex" || target === "all") {
-    const remove = spawnImpl("codex", ["mcp", "remove", "rainbond"], options);
-    if (remove.error?.code === "ENOENT") {
-      writeCodexMcpConfig({ packageVersion, home });
-    } else {
-      if (remove.error) throw remove.error;
-      if (remove.signal) throw new Error(`codex 被信号 ${remove.signal} 中断`);
-      checkedSpawn(spawnImpl, "codex", [
-        "mcp", "add", "rainbond", "--", ...localMcpCommand("codex", packageVersion),
-      ], options);
-    }
-  }
-  if (target === "claude" || target === "all") {
-    removeExistingClient(spawnImpl, "claude", [
-      "mcp",
-      "remove",
-      "--scope",
-      "user",
-      "rainbond",
-    ], options);
-    checkedSpawn(spawnImpl, "claude", [
-      "mcp", "add", "--scope", "user", "rainbond", "--",
-      ...localMcpCommand("claude", packageVersion),
-    ], options);
-  }
-}
-
 module.exports = {
-  configureSelectedClients,
   isVerifiedMissingMcpRoute,
-  localMcpCommand,
   persistWindowsEnvironment,
   validateMcp,
 };

@@ -8,6 +8,7 @@ const os = require("node:os");
 const path = require("node:path");
 const readline = require("node:readline/promises");
 const { stdin, stdout } = require("node:process");
+const { pathToFileURL } = require("node:url");
 const { createSecureStateStore } = require("./secure-state.js");
 const { assertIntentCanInstallNewPlatform } = require("./runtime-intents.js");
 const { createWindowsSecureStateStore } = require("./windows-platform.js");
@@ -16,10 +17,7 @@ const {
   authorizeWithLoopback,
   openWindowsBrowser,
 } = require("./windows-auth.js");
-const {
-  configureSelectedClients,
-  validateMcp,
-} = require("./windows-client-config.js");
+const { validateMcp } = require("./windows-client-config.js");
 const { createLifecycleTelemetry } = require("./telemetry.js");
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -85,7 +83,7 @@ function parseWindowsInstallerArgs(argv) {
 
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
-    if (["codex", "claude", "all"].includes(argument)) {
+    if (["codex", "claude", "pi", "all"].includes(argument)) {
       options.target = argument;
     } else if (argument === "--dest") {
       options.customDest = requireValue(argv, index, argument);
@@ -123,10 +121,12 @@ function parseWindowsInstallerArgs(argv) {
 function destinationsForTarget(target, home) {
   if (target === "codex") return [path.join(home, ".codex", "skills")];
   if (target === "claude") return [path.join(home, ".claude", "skills")];
+  if (target === "pi") return [path.join(home, ".pi", "agent", "skills")];
   if (target === "all") {
     return [
       path.join(home, ".claude", "skills"),
       path.join(home, ".codex", "skills"),
+      path.join(home, ".pi", "agent", "skills"),
     ];
   }
   throw new Error(`未知安装目标：${target}`);
@@ -288,7 +288,7 @@ function createOnboardingCheckpoint({
   intent,
 }) {
   if (!UUID_PATTERN.test(operationId)) throw new Error("operation id 不是有效的 UUID");
-  if (!["codex", "claude", "all"].includes(target)) throw new Error("安装目标无效");
+  if (!["codex", "claude", "pi", "all"].includes(target)) throw new Error("安装目标无效");
   const controlDistro = validateControl(control);
   const store = stateStore || (
     process.platform === "win32"
@@ -346,7 +346,6 @@ async function authorizeAndConfigure({
   authorizeWithDeviceFlowImpl = authorizeWithDeviceFlow,
   authorizeWithLoopbackImpl = authorizeWithLoopback,
   validateMcpImpl = validateMcp,
-  configureSelectedClientsImpl = configureSelectedClients,
   fetchImpl = globalThis.fetch,
   sleep,
   now,
@@ -446,72 +445,38 @@ async function authorizeAndConfigure({
     });
   }
 
-  const endpoints = [];
-  if (target === "codex" || target === "all") {
-    endpoints.push(`${baseUrl}/console/mcp/rainskills/codex/query`);
-  }
-  if (target === "claude" || target === "all") {
-    endpoints.push(`${baseUrl}/console/mcp/rainskills/claude-code/query`);
-  }
-  if (endpoints.length === 0) throw new Error("安装目标无效");
-  const mcpUrls = {};
-  for (const url of endpoints) {
-    telemetry.record({
-      lifecycle_phase: "configure_mcp",
-      step: "verify_mcp",
-      lifecycle_action: "configure_mcp",
-      lifecycle_status: "started",
-      auth_method: authorizationMethod,
-      transport: "powershell",
-    });
-    try {
-      let selectedUrl = url;
-      let validation;
-      try {
-        validation = await validateMcpImpl({ fetchImpl, token, url });
-      } catch (error) {
-        if (error.code !== "MCP_ENDPOINT_UNSUPPORTED") throw error;
-        selectedUrl = `${baseUrl}/console/mcp/query`;
-        validation = await validateMcpImpl({ fetchImpl, token, url: selectedUrl });
-      }
-      token = validation.token;
-      if (url.includes("/codex/query")) mcpUrls.codex = selectedUrl;
-      else mcpUrls.claude = selectedUrl;
-    } catch (error) {
-      telemetry.record({
-        lifecycle_phase: "configure_mcp",
-        step: "verify_mcp",
-        lifecycle_action: "configure_mcp",
-        lifecycle_status: "failed",
-        error_code: "mcp_verification_failed",
-        error_stage: "configure_mcp",
-        reason_code: "mcp_verification_failed",
-        retryable: true,
-        auth_method: authorizationMethod,
-        transport: "powershell",
-      });
-      throw error;
-    }
-    telemetry.record({
-      lifecycle_phase: "configure_mcp",
-      step: "verify_mcp",
-      lifecycle_action: "configure_mcp",
-      lifecycle_status: "completed",
-      auth_method: authorizationMethod,
-      transport: "powershell",
-    });
-  }
+  if (!["codex", "claude", "pi", "all"].includes(target)) throw new Error("安装目标无效");
+  const cliUrl = `${baseUrl}/console/mcp/rainskills/api/query`;
+  telemetry.record({
+    lifecycle_phase: "configure_cli",
+    step: "verify_cli_api",
+    lifecycle_action: "configure_cli",
+    lifecycle_status: "started",
+    auth_method: authorizationMethod,
+    transport: "powershell",
+  });
   try {
-    configureSelectedClientsImpl({ baseUrl, mcpUrls, spawnImpl, target, token });
+    try {
+      const validation = await validateMcpImpl({ fetchImpl, token, url: cliUrl });
+      token = validation.token;
+    } catch (error) {
+      if (error.code !== "MCP_ENDPOINT_UNSUPPORTED") throw error;
+      const upgradeRequired = new Error(
+        "当前 Rainbond 版本不支持 Rainskills CLI，请先将 Rainbond 升级到 v6.9.9 或更高版本，然后从当前任务继续。",
+        { cause: error }
+      );
+      upgradeRequired.code = error.code;
+      throw upgradeRequired;
+    }
   } catch (error) {
     telemetry.record({
-      lifecycle_phase: "configure_mcp",
-      step: "configure_mcp",
-      lifecycle_action: "configure_mcp",
+      lifecycle_phase: "configure_cli",
+      step: "verify_cli_api",
+      lifecycle_action: "configure_cli",
       lifecycle_status: "failed",
-      error_code: "configuration_failed",
-      error_stage: "configure_mcp",
-      reason_code: "configuration_failed",
+      error_code: "cli_verification_failed",
+      error_stage: "configure_cli",
+      reason_code: "cli_verification_failed",
       retryable: true,
       auth_method: authorizationMethod,
       transport: "powershell",
@@ -519,15 +484,23 @@ async function authorizeAndConfigure({
     throw error;
   }
   telemetry.record({
-    lifecycle_phase: "configure_mcp",
-    step: "configure_mcp",
-    lifecycle_action: "configure_mcp",
+    lifecycle_phase: "configure_cli",
+    step: "verify_cli_api",
+    lifecycle_action: "configure_cli",
     lifecycle_status: "completed",
     auth_method: authorizationMethod,
     transport: "powershell",
   });
   await onConfiguredCredential(token);
   return { status: "configured" };
+}
+
+async function installLocalCli({ packageRoot, home }) {
+  const installer = path.join(packageRoot, "scripts", "install-local-cli.mjs");
+  if (!fs.existsSync(installer)) return { status: "not-packaged" };
+  const module = await import(pathToFileURL(installer).href);
+  module.installLocalCli({ source_root: packageRoot, home });
+  return { status: "installed" };
 }
 
 async function promptTarget() {
@@ -612,7 +585,7 @@ async function resolveDeployment(options, {
 }
 
 function usage() {
-  stdout.write("Usage: npx rainskills [codex|claude|all] [options]\n");
+  stdout.write("Usage: npx rainskills [codex|claude|pi|all] [options]\n");
 }
 
 async function main(argv, dependencies = {}) {
@@ -640,6 +613,9 @@ async function main(argv, dependencies = {}) {
     force: options.force,
     logger: detailLogger,
   });
+  if (!options.customDest) {
+    await (dependencies.installLocalCli || installLocalCli)({ packageRoot, home });
+  }
   detailLogger("");
   detailLogger(`安装完成。本次：${counts.installed} 项新装 / ${counts.updated} 项已更新 / ${counts.unchanged} 项已是最新 / ${counts.forced} 项强制覆盖`);
   detailLogger("");
@@ -655,6 +631,7 @@ module.exports = {
   createOnboardingCheckpoint,
   destinationsForTarget,
   discoverSkills,
+  installLocalCli,
   main,
   parseWindowsInstallerArgs,
   resolveDeployment,

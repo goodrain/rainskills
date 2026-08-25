@@ -204,6 +204,7 @@ Usage:
   ./install.sh
   ./install.sh claude
   ./install.sh codex
+  ./install.sh pi
   ./install.sh all
   ./install.sh --dest <path>
   ./install.sh all --saas
@@ -214,15 +215,13 @@ Usage:
 Options:
   claude                 Install and configure Claude Code
   codex                  Install and configure Codex
-  all                    Install and configure Codex and Claude Code
-  refresh                Re-run browser login and rewrite ~/.rainbond/mcp.env only
-                         (skips skill copy and Codex/Claude MCP re-registration;
-                          use when MCP returns 401/403 because the JWT expired —
-                          remember to restart Claude Code / Codex afterwards)
+  pi                     Install and configure Pi Agent
+  all                    Install and configure Codex, Claude Code, and Pi Agent
+  refresh                Re-run browser login and refresh the protected CLI credential
   --dest PATH            Install skills to a custom directory only
   --force                Overwrite existing installed skills
   --verbose              Show installation paths and copy diagnostics
-  --skip-mcp             Skip Rainbond MCP setup
+  --skip-mcp             Compatibility alias: skip Rainbond runtime connection
   --saas                 Use Rainbond Cloud (https://run.rainbond.com)
   --self-hosted          Use a self-hosted Rainbond Console (requires --rainbond-url)
   --non-interactive      Require all installer inputs through flags or env vars
@@ -295,6 +294,9 @@ rainskills_install_client_for_target() {
       ;;
     claude)
       printf 'claude_code\n'
+      ;;
+    pi)
+      printf 'pi\n'
       ;;
     all)
       printf 'all\n'
@@ -459,7 +461,7 @@ event = {
     "platform": platform,
     "control_mode": control_mode,
     "target": target,
-    "client": client if client in {"codex", "claude_code", "both", "unknown"} else "unknown",
+    "client": client if client in {"codex", "claude_code", "pi", "all", "both", "unknown"} else "unknown",
     "eid": eid or None,
     "phase": None,
     "lifecycle_phase": phase,
@@ -516,7 +518,7 @@ initialize_rainskills_installation_reporting() {
       connect)
         RAINSKILLS_INSTALL_ACTION="connect"
         ;;
-      codex|claude|all)
+      codex|claude|pi|all)
         target="$arg"
         ;;
     esac
@@ -756,6 +758,14 @@ validate_skill_dir() {
   fi
 }
 
+install_local_cli() {
+  command -v node >/dev/null 2>&1 || return 0
+  local installer="$SCRIPT_DIR/scripts/install-local-cli.mjs"
+  [[ -f "$installer" ]] || die "Rainskills 本地 CLI 安装器缺失。"
+  node "$installer" --source-root "$SCRIPT_DIR" --home "$HOME" >/dev/null \
+    || die "Rainskills 本地 CLI 安装失败。"
+}
+
 copy_skill() {
   local src="$1"
   local dest_root="$2"
@@ -806,12 +816,12 @@ parse_args() {
         ACTION="connect"
         shift
         ;;
-      claude|codex|all)
+      claude|codex|pi|all)
         TARGET="$1"
         shift
         ;;
       openclaw)
-        die "macOS/Linux 安装器不再支持 OpenClaw，请使用 Codex 或 Claude Code。"
+        die "macOS/Linux 安装器不再支持 OpenClaw，请使用 Codex、Claude Code 或 Pi Agent。"
         ;;
       --dest)
         [[ $# -ge 2 ]] || die "--dest 需要一个路径值"
@@ -899,7 +909,7 @@ assert_internal_connect_entry() {
   local target="" environment_kind="" console_origin="" mode=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      codex|claude|all)
+      codex|claude|pi|all)
         [[ -z "$target" ]] || return 1
         target="$1"
         shift
@@ -1003,10 +1013,11 @@ resolve_target() {
   log "请选择要安装和配置的平台："
   log "  1) Codex"
   log "  2) Claude Code"
-  log "  3) 全部"
+  log "  3) Pi Agent"
+  log "  4) 全部"
 
   while true; do
-    printf '请输入选项 [1-3]: '
+    printf '请输入选项 [1-4]: '
     read -r choice
     case "$choice" in
       1)
@@ -1017,12 +1028,16 @@ resolve_target() {
         TARGET="claude"
         return 0
         ;;
-      3|"")
+      3)
+        TARGET="pi"
+        return 0
+        ;;
+      4|"")
         TARGET="all"
         return 0
         ;;
       *)
-        log "请输入 1、2 或 3。"
+        log "请输入 1、2、3 或 4。"
         ;;
     esac
   done
@@ -1041,9 +1056,13 @@ collect_destinations() {
       codex)
         destinations+=("$HOME/.codex/skills")
         ;;
+      pi)
+        destinations+=("$HOME/.pi/agent/skills")
+        ;;
       all)
         destinations+=("$HOME/.claude/skills")
         destinations+=("$HOME/.codex/skills")
+        destinations+=("$HOME/.pi/agent/skills")
         ;;
       *)
         die "未知安装目标：$TARGET"
@@ -2091,153 +2110,6 @@ configure_shell_autoload() {
   log "[update] 已更新 $rc_file"
 }
 
-rainskills_package_spec() {
-  local package_version
-  package_version="$(node -p 'require(process.argv[1]).version' "$SCRIPT_DIR/package.json")"
-  [[ "$package_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] \
-    || die "Rainskills package version 无效"
-  printf 'rainskills@%s\n' "$package_version"
-}
-
-codex_local_mcp_matches() {
-  local package_spec="$1"
-  local config_file="$HOME/.codex/config.toml"
-  [[ -f "$config_file" ]] || return 1
-  python3 - "$config_file" "$package_spec" <<'PY' >/dev/null
-import re
-import sys
-
-content = open(sys.argv[1], encoding="utf-8").read()
-match = re.search(r'(?ms)^\[mcp_servers\.rainbond\]\s*(.*?)(?=^\[|\Z)', content)
-if not match:
-    raise SystemExit(1)
-block = match.group(1)
-expected = ["--yes", sys.argv[2], "mcp", "serve", "--client", "codex"]
-if re.search(r'^command\s*=\s*"npx"\s*$', block, re.M) and all(re.escape('"{}"'.format(v)) in block for v in expected):
-    raise SystemExit(0)
-raise SystemExit(1)
-PY
-}
-
-claude_local_mcp_matches() {
-  local package_spec="$1"
-  local config_file="$HOME/.claude.json"
-  [[ -f "$config_file" ]] || return 1
-  python3 - "$config_file" "$package_spec" <<'PY' >/dev/null
-import json
-import sys
-
-payload = json.load(open(sys.argv[1], encoding="utf-8"))
-server = ((payload.get("mcpServers") or {}).get("rainbond") or {})
-expected = ["--yes", sys.argv[2], "mcp", "serve", "--client", "claude"]
-if server.get("command") == "npx" and server.get("args") == expected:
-    raise SystemExit(0)
-raise SystemExit(1)
-PY
-}
-
-codex_config_matches() {
-  local mcp_url="$1"
-  local config_file="$HOME/.codex/config.toml"
-  [[ -f "$config_file" ]] || return 1
-
-  local current_url current_env
-  current_url="$(
-    awk '
-      $0 == "[mcp_servers.rainbond]" {in_section = 1; next}
-      in_section && /^\[/ {in_section = 0}
-      in_section && $1 == "url" {
-        sub(/^[^=]+=[[:space:]]*"/, "", $0)
-        sub(/"$/, "", $0)
-        print
-        exit
-      }
-    ' "$config_file"
-  )"
-  current_env="$(
-    awk '
-      $0 == "[mcp_servers.rainbond]" {in_section = 1; next}
-      in_section && /^\[/ {in_section = 0}
-      in_section && $1 == "bearer_token_env_var" {
-        sub(/^[^=]+=[[:space:]]*"/, "", $0)
-        sub(/"$/, "", $0)
-        print
-        exit
-      }
-    ' "$config_file"
-  )"
-
-  [[ "$current_url" == "$mcp_url" && "$current_env" == "RAINBOND_JWT" ]]
-}
-
-claude_config_matches() {
-  local mcp_url="$1"
-  local config_file="$HOME/.claude.json"
-  [[ -f "$config_file" ]] || return 1
-
-  python3 - "$config_file" "$mcp_url" <<'PY' >/dev/null
-import json
-import sys
-
-path, expected_url = sys.argv[1], sys.argv[2]
-
-with open(path, "r", encoding="utf-8") as fh:
-    payload = json.load(fh)
-
-server = ((payload.get("mcpServers") or {}).get("rainbond") or {})
-header = ((server.get("headers") or {}).get("Authorization"))
-
-if server.get("url") == expected_url and header == "GRJWT ${RAINBOND_JWT}":
-    sys.exit(0)
-
-sys.exit(1)
-PY
-}
-
-configure_codex_mcp() {
-  local package_spec
-  package_spec="$(rainskills_package_spec)"
-
-  if codex_local_mcp_matches "$package_spec"; then
-    log "[configure] Codex 已连接 Rainskills 本地 MCP"
-    return 0
-  fi
-
-  if ! command -v codex >/dev/null 2>&1; then
-    warn "未找到 Codex CLI，跳过 Codex MCP 配置。"
-    return 1
-  fi
-
-  backup_file "$HOME/.codex/config.toml"
-  codex mcp remove rainbond >/dev/null 2>&1 || true
-  if ! codex mcp add rainbond -- npx --yes "$package_spec" mcp serve --client codex >/dev/null; then
-    return 1
-  fi
-  log "[configure] 已配置 Codex MCP"
-}
-
-configure_claude_mcp() {
-  local package_spec
-  package_spec="$(rainskills_package_spec)"
-
-  if claude_local_mcp_matches "$package_spec"; then
-    log "[configure] Claude 已连接 Rainskills 本地 MCP"
-    return 0
-  fi
-
-  if ! command -v claude >/dev/null 2>&1; then
-    warn "未找到 Claude CLI，跳过 Claude MCP 配置。"
-    return 1
-  fi
-
-  backup_file "$HOME/.claude.json"
-  claude mcp remove --scope user rainbond >/dev/null 2>&1 || true
-  if ! claude mcp add --scope user rainbond -- npx --yes "$package_spec" mcp serve --client claude >/dev/null; then
-    return 1
-  fi
-  log "[configure] 已配置 Claude MCP"
-}
-
 validate_mcp_connectivity() {
   local mcp_url="$1"
   local token="$2"
@@ -2380,72 +2252,19 @@ PY
   log "[verify] Rainbond MCP 可访问"
 }
 
-select_compatible_mcp_endpoint() {
-  local preferred_url="$1"
-  local generic_url="$2"
-  local token="$3"
-  local validation_status
-  SELECTED_MCP_URL=""
-
-  if validate_mcp_connectivity "$preferred_url" "$token"; then
-    SELECTED_MCP_URL="$preferred_url"
+validate_runtime_mcp_connectivity() {
+  local base_url="$1"
+  local token="$2"
+  local status
+  if validate_mcp_connectivity "${base_url}/console/mcp/rainskills/api/query" "$token"; then
     return 0
   else
-    validation_status=$?
+    status=$?
   fi
-  if [[ "$validation_status" -ne 2 ]]; then
-    return "$validation_status"
+  if [[ "$status" -eq 2 ]]; then
+    die "当前 Rainbond 版本不支持 Rainskills CLI。请先将 Rainbond 升级到 v6.9.9 或更高版本，然后从当前任务继续。"
   fi
-
-  log "[compat] 当前 Rainbond 未提供 RainSkills 专用 MCP 地址，尝试兼容 MCP 地址。"
-  if validate_mcp_connectivity "$generic_url" "$token"; then
-    SELECTED_MCP_URL="$generic_url"
-    return 0
-  else
-    validation_status=$?
-  fi
-  if [[ "$validation_status" -eq 2 ]]; then
-    die "当前 Rainbond 未提供可用的 MCP 接口，请升级 Rainbond 后重试。"
-  fi
-  return "$validation_status"
-}
-
-migrate_codex_mcp_if_generic() {
-  local generic_url="$1"
-  local dedicated_url="$2"
-  local config_file="$HOME/.codex/config.toml"
-  if ! codex_config_matches "$generic_url" && ! codex_config_matches "$dedicated_url"; then
-    return 0
-  fi
-
-  local backup="${config_file}.rainskills-backup"
-  cp "$config_file" "$backup"
-  log "[backup] 已备份 $backup"
-  if ! configure_codex_mcp "$dedicated_url"; then
-    cp "$backup" "$config_file"
-    warn "Codex MCP 迁移失败，已恢复原配置。"
-    return 1
-  fi
-  log "[migrate] Codex MCP 已切换到 Rainskills 本地路由"
-}
-
-migrate_claude_mcp_if_generic() {
-  local generic_url="$1"
-  local dedicated_url="$2"
-  local config_file="$HOME/.claude.json"
-  if ! claude_config_matches "$generic_url" && ! claude_config_matches "$dedicated_url"; then
-    return 0
-  fi
-
-  local backup="${config_file}.rainskills-backup"
-  cp "$config_file" "$backup"
-  log "[backup] 已备份 $backup"
-  if ! configure_claude_mcp "$dedicated_url"; then
-    cp "$backup" "$config_file"
-    warn "Claude MCP 迁移失败，已恢复原配置。"
-    return 1
-  fi
-  log "[migrate] Claude MCP 已切换到 Rainskills 本地路由"
+  return "$status"
 }
 
 looks_like_jwt() {
@@ -2679,94 +2498,40 @@ do_refresh() {
   base_url="$(normalize_rainbond_url "$base_url_input")"
   confirm_insecure_http_if_needed "$base_url"
 
-  local token generic_mcp_url codex_mcp_url claude_mcp_url selected_codex_mcp_url selected_claude_mcp_url
-  local migrate_codex=0 migrate_claude=0
-  local validate_codex=0 validate_claude=0
-  local using_legacy_compat=0
+  local token
   obtain_rainbond_token "$base_url" "$DEPLOYMENT_MODE_INPUT"
   token="$OBTAINED_RAINBOND_TOKEN"
-  generic_mcp_url="${base_url}/console/mcp/query"
-  codex_mcp_url="${base_url}/console/mcp/rainskills/codex/query"
-  claude_mcp_url="${base_url}/console/mcp/rainskills/claude-code/query"
-
-  if codex_config_matches "$generic_mcp_url"; then
-    migrate_codex=1
-    validate_codex=1
-  elif codex_config_matches "$codex_mcp_url"; then
-    validate_codex=1
-  fi
-  if claude_config_matches "$generic_mcp_url"; then
-    migrate_claude=1
-    validate_claude=1
-  elif claude_config_matches "$claude_mcp_url"; then
-    validate_claude=1
-  fi
-  if (( validate_codex == 0 && validate_claude == 0 )); then
-    validate_codex=1
-  fi
-
-  local client_count=$((validate_codex + validate_claude))
-  if (( client_count > 1 )); then
-    RAINSKILLS_INSTALL_CLIENT="all"
-  elif (( validate_claude == 1 )); then
-    RAINSKILLS_INSTALL_CLIENT="claude_code"
-  else
-    RAINSKILLS_INSTALL_CLIENT="codex"
-  fi
   record_rainskills_authorization "$base_url" "$token"
 
   set_rainskills_failure_context "verification" "mcp_verification_failed"
-  if (( validate_codex == 1 )); then
-    select_compatible_mcp_endpoint "$codex_mcp_url" "$generic_mcp_url" "$token"
-    selected_codex_mcp_url="$SELECTED_MCP_URL"
-    [[ "$selected_codex_mcp_url" != "$generic_mcp_url" ]] || using_legacy_compat=1
-    token="$VALIDATED_TOKEN"
+  if ! validate_runtime_mcp_connectivity "$base_url" "$token"; then
+    die "Rainbond CLI 接口校验失败。"
   fi
-  if (( validate_claude == 1 )); then
-    select_compatible_mcp_endpoint "$claude_mcp_url" "$generic_mcp_url" "$token"
-    selected_claude_mcp_url="$SELECTED_MCP_URL"
-    [[ "$selected_claude_mcp_url" != "$generic_mcp_url" ]] || using_legacy_compat=1
-    token="$VALIDATED_TOKEN"
-  fi
+  token="$VALIDATED_TOKEN"
 
   export RAINBOND_JWT="$token"
   write_token_file "$token" "$base_url"
   configure_shell_autoload
-
-  set_rainskills_failure_context "configuration" "mcp_configuration_failed"
-  report_rainskills_lifecycle_event "configure_mcp" "configure_mcp" "configure_mcp" "started"
-  if (( validate_codex == 1 )); then
-    migrate_codex_mcp_if_generic "$generic_mcp_url" "$codex_mcp_url" \
-      || die "Codex MCP 本地路由迁移失败"
-  fi
-  if (( validate_claude == 1 )); then
-    migrate_claude_mcp_if_generic "$generic_mcp_url" "$claude_mcp_url" \
-      || die "Claude MCP 本地路由迁移失败"
-  fi
+  set_rainskills_failure_context "configuration" "cli_configuration_failed"
+  report_rainskills_lifecycle_event "configure_cli" "install_cli" "configure_cli" "started"
+  install_local_cli
   log ""
-  if (( using_legacy_compat == 1 )); then
-    log "JWT 刷新完成。当前 Rainbond 将继续使用兼容 MCP 地址。"
-  else
-    log "JWT 刷新完成。脚本管理的旧 MCP 地址已按需迁移到 Rainskills 本地路由。"
-  fi
-  if (( validate_codex == 1 || validate_claude == 1 )); then
-    log "请重启 Claude Code 或 Codex 让新 JWT 生效（它们在启动时一次性读取 RAINBOND_JWT）。"
-  fi
+  log "Rainskills 本地 CLI 凭据刷新完成。"
   if [[ -n "$ACTIVE_SHELL_RC" ]]; then
     log "如果想立刻在当前终端使用，请执行：source ${ACTIVE_SHELL_RC}"
   fi
   RAINSKILLS_INSTALL_TERMINAL_REPORTED=1
-  report_rainskills_lifecycle_event "configure_mcp" "configure_mcp" "configure_mcp" "completed"
+  report_rainskills_lifecycle_event "configure_cli" "install_cli" "configure_cli" "completed"
   report_rainskills_installation "configured" "success"
 }
 
-configure_mcp() {
+configure_runtime_connection() {
   [[ "$SKIP_MCP" -eq 0 ]] || return 0
   [[ -z "$CUSTOM_DEST" ]] || return 0
 
   if { [[ "$NON_INTERACTIVE" -eq 1 ]] || [[ ! -t 0 ]]; } && \
      [[ -z "$RAINBOND_URL_INPUT" && -z "$RAINBOND_TOKEN_INPUT" && -z "$DEPLOYMENT_MODE_INPUT" && -z "$RAINBOND_USERNAME_INPUT" && -z "$RAINBOND_PASSWORD_INPUT" ]]; then
-    log "非交互模式下未提供 Rainbond 连接信息，已跳过 MCP 配置。"
+    log "非交互模式下未提供 Rainbond 连接信息，已跳过运行环境连接。"
     return 0
   fi
 
@@ -2810,36 +2575,17 @@ configure_mcp() {
   base_url="$(normalize_rainbond_url "$base_url_input")"
   confirm_insecure_http_if_needed "$base_url"
 
-  local token generic_mcp_url codex_mcp_url claude_mcp_url selected_codex_mcp_url selected_claude_mcp_url
+  local token
   obtain_rainbond_token "$base_url" "$DEPLOYMENT_MODE_INPUT"
   token="$OBTAINED_RAINBOND_TOKEN"
   RAINSKILLS_INSTALL_CLIENT="$(rainskills_install_client_for_target "$TARGET")"
   record_rainskills_authorization "$base_url" "$token"
-  generic_mcp_url="${base_url}/console/mcp/query"
-  codex_mcp_url="${base_url}/console/mcp/rainskills/codex/query"
-  claude_mcp_url="${base_url}/console/mcp/rainskills/claude-code/query"
 
   set_rainskills_failure_context "verification" "mcp_verification_failed"
-  case "$TARGET" in
-    codex)
-      select_compatible_mcp_endpoint "$codex_mcp_url" "$generic_mcp_url" "$token"
-      selected_codex_mcp_url="$SELECTED_MCP_URL"
-      token="$VALIDATED_TOKEN"
-      ;;
-    claude)
-      select_compatible_mcp_endpoint "$claude_mcp_url" "$generic_mcp_url" "$token"
-      selected_claude_mcp_url="$SELECTED_MCP_URL"
-      token="$VALIDATED_TOKEN"
-      ;;
-    all)
-      select_compatible_mcp_endpoint "$codex_mcp_url" "$generic_mcp_url" "$token"
-      selected_codex_mcp_url="$SELECTED_MCP_URL"
-      token="$VALIDATED_TOKEN"
-      select_compatible_mcp_endpoint "$claude_mcp_url" "$generic_mcp_url" "$token"
-      selected_claude_mcp_url="$SELECTED_MCP_URL"
-      token="$VALIDATED_TOKEN"
-      ;;
-  esac
+  if ! validate_runtime_mcp_connectivity "$base_url" "$token"; then
+    die "Rainbond CLI 接口校验失败。"
+  fi
+  token="$VALIDATED_TOKEN"
 
   # Refresh this process's env for any downstream CLI behavior that resolves it.
   export RAINBOND_JWT="$token"
@@ -2852,31 +2598,21 @@ configure_mcp() {
     configure_shell_autoload
   fi
 
-  set_rainskills_failure_context "configuration" "mcp_configuration_failed"
-  report_rainskills_lifecycle_event "configure_mcp" "configure_mcp" "configure_mcp" "started"
-  local configured=0
-  case "$TARGET" in
-    codex)
-      configure_codex_mcp && configured=1 || true
-      ;;
-    claude)
-      configure_claude_mcp && configured=1 || true
-      ;;
-    all)
-      configure_codex_mcp && configured=$((configured + 1)) || true
-      configure_claude_mcp && configured=$((configured + 1)) || true
-      ;;
-  esac
-
-  (( configured > 0 )) || die "所选平台都未能完成 MCP 配置。"
+  set_rainskills_failure_context "configuration" "cli_configuration_failed"
+  report_rainskills_lifecycle_event "configure_cli" "install_cli" "configure_cli" "started"
+  install_local_cli
   RAINSKILLS_INSTALL_TERMINAL_REPORTED=1
-  report_rainskills_lifecycle_event "configure_mcp" "configure_mcp" "configure_mcp" "completed"
+  report_rainskills_lifecycle_event "configure_cli" "install_cli" "configure_cli" "completed"
   report_rainskills_installation "configured" "success"
 
   if [[ -n "$ACTIVE_SHELL_RC" ]]; then
-    log "当前 shell 提示：新开的终端会自动从 ${ACTIVE_SHELL_RC} 加载 RAINBOND_JWT。"
-    log "如果你想立刻在当前终端使用客户端，请执行：source ${ACTIVE_SHELL_RC}"
+    log "当前 shell 提示：新开的终端会自动从 ${ACTIVE_SHELL_RC} 加载 Rainbond 凭据。"
   fi
+}
+
+# Backward-compatible internal function name for older bootstrap callers.
+configure_mcp() {
+  configure_runtime_connection "$@"
 }
 
 main() {
@@ -2898,7 +2634,7 @@ main() {
     ALLOW_INSECURE_HTTP=1
     resolve_target
     RAINSKILLS_INSTALL_CLIENT="$(rainskills_install_client_for_target "$TARGET")"
-    configure_mcp
+    configure_runtime_connection
     if [[ "${RAINSKILLS_RUNTIME_CONNECT_COMPLETION:-0}" == "1" ]]; then
       node "$SCRIPT_DIR/bin/rainskills.js" runtime complete-connect \
         --onboarding-id "$RAINSKILLS_RUNTIME_OPERATION_ID"
@@ -2932,6 +2668,8 @@ main() {
       copy_skill "$skill_dir" "$dest"
     done
   done
+
+  install_local_cli
 
   install_detail_log ""
   install_detail_log "安装完成。本次：${INSTALL_COUNT_NEW} 项新装 / ${INSTALL_COUNT_UPDATED} 项已更新 / ${INSTALL_COUNT_UNCHANGED} 项已是最新 / ${INSTALL_COUNT_FORCED} 项强制覆盖"

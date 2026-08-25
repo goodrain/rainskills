@@ -138,8 +138,11 @@ function createRuntimeOperationStore({
     let lock;
     try {
       lock = stateStore.acquireOperationLock({ operationId: assertUuid(operationId, "operation_id ") });
-    } catch {
-      throw new Error("runtime operation 正在由另一个进程更新");
+    } catch (error) {
+      if (error?.code === "RAINSKILLS_OPERATION_LOCK_BUSY") {
+        throw new Error("runtime operation 正在由另一个进程更新");
+      }
+      throw new Error("runtime operation 本地受保护状态不可用，禁止自动重试；请重新安装 Rainskills 后再执行原始操作");
     }
     try {
       return action();

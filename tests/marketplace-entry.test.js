@@ -41,9 +41,8 @@ test("repository exposes one complete Rainskills marketplace entry", () => {
   assert.match(skill, /install\.sh/);
   assert.match(skill, /every bundled `rainbond-\*` Skill as an independent Skill/i);
   assert.match(skill, /Do not ask the user to choose only one/i);
-  assert.match(skill, /Codex=`codex` or Claude Code=`claude`/);
+  assert.match(skill, /Codex=`codex`.*Claude Code=`claude`.*Pi Agent=`pi`/);
   assert.match(skill, /does not support OpenClaw/);
-  assert.doesNotMatch(skill, /\bPi(?: Agent)?\b/);
   assert.match(skill, /attached interactive terminal/i);
   assert.match(skill, /RAINSKILLS_USER_INPUT_REQUIRED/);
   assert.match(skill, /rainskills\.next-action\.v1/);
@@ -172,6 +171,18 @@ test("marketplace generator reports committed output is current", () => {
   assert.match(result.stdout, /Marketplace package is current/);
 });
 
+test("marketplace generator can check quietly during npm pack JSON output", () => {
+  const result = spawnSync(
+    process.execPath,
+    ["scripts/build-marketplace-package.mjs", "--check", "--quiet"],
+    { cwd: repoRoot, encoding: "utf8" }
+  );
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, "");
+});
+
 test("release verifies marketplace output before building the repository tarball", () => {
   const workflow = read(".github/workflows/release.yml");
   const validationStep = workflow.indexOf("name: Verify marketplace package");
@@ -239,9 +250,8 @@ test("README documents one-product installation and adapter-neutral stable auto-
   assert.match(readme, /只跟随.*正式版/s);
   assert.match(readme, /RC.*不会.*自动升级/s);
   assert.match(readme, /升级只更新 Rainskills 自身，不触发 Rainbond/s);
-  assert.match(readme, /支持 Codex 和 Claude Code/);
+  assert.match(readme, /支持 Codex、Claude Code 和 Pi Agent/);
   assert.match(readme, /不支持 OpenClaw 安装/);
-  assert.doesNotMatch(readme, /\bPi(?: Agent)?\b/);
   assert.doesNotMatch(readme, /npx --yes rainskills openclaw/);
   assert.match(readme, /只会看到一个.*Rainskills/s);
   assert.match(readme, /安装完成后.*不会.*运行环境|安装完成后.*只.*Skills/s);
@@ -261,16 +271,13 @@ test("generated marketplace guidance installs Skills without eager runtime setup
   assert.doesNotMatch(completion, /reload|restart|重新加载|重启/i);
 });
 
-test("production entry points contain no Pi-specific adapter", () => {
-  for (const file of [
-    "package.json",
-    ".github/workflows/release.yml",
-    "SKILL.md",
-    "README.md",
-    "bin/rainskills.js",
-    "install.sh",
-    "rainbond-platform-installer/scripts/windows-client-config.js",
-  ]) {
-    assert.doesNotMatch(read(file), /\bpi\b|Pi Agent/i, file);
-  }
+test("Pi uses the generic Skills and CLI path without restoring its adapter", () => {
+  const manifest = readJson("package.json");
+  assert.match(read("SKILL.md"), /Pi Agent=`pi`/);
+  assert.match(read("install.sh"), /\.pi\/agent\/skills/);
+  assert.match(read("README.md"), /Codex、Claude Code 和 Pi Agent/);
+  assert.equal(manifest.pi, undefined);
+  assert(!manifest.files.includes("pi/"));
+  assert.equal(manifest.scripts["build:pi"], undefined);
+  assert.equal(manifest.scripts["test:pi"], undefined);
 });

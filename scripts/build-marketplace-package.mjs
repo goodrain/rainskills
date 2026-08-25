@@ -161,7 +161,7 @@ function marketplaceFiles(root) {
   return files;
 }
 
-function checkOutputs() {
+function checkOutputs({ quiet = false } = {}) {
   const errors = [];
   for (const [filePath, expected] of outputs) {
     if (!fs.existsSync(filePath)) {
@@ -192,7 +192,9 @@ function checkOutputs() {
     return;
   }
 
-  console.log(`Marketplace package is current for ${packageName}@${version}.`);
+  if (!quiet) {
+    console.log(`Marketplace package is current for ${packageName}@${version}.`);
+  }
 }
 
 function writeAtomically(filePath, content) {
@@ -215,7 +217,15 @@ if (args.length === 0) {
   writeOutputs();
 } else if (args.length === 1 && args[0] === "--check") {
   checkOutputs();
+} else if (
+  args.length === 2 &&
+  args[0] === "--check" &&
+  args[1] === "--quiet"
+) {
+  checkOutputs({ quiet: true });
 } else {
-  console.error("Usage: node scripts/build-marketplace-package.mjs [--check]");
+  console.error(
+    "Usage: node scripts/build-marketplace-package.mjs [--check [--quiet]]"
+  );
   process.exitCode = 2;
 }

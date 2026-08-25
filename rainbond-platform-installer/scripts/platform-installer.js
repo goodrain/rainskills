@@ -226,7 +226,7 @@ function readOnboardingState(filePath, expectedOperationId, stateStore = secureS
   if (!UUID_PATTERN.test(state.operation_id || "")) {
     throw new Error("状态文件中的 operation_id 无效");
   }
-  if (!["codex", "claude", "all"].includes(state.target)) {
+  if (!["codex", "claude", "pi", "all"].includes(state.target)) {
     throw new Error("状态文件中的安装目标无效");
   }
   if (state.deployment_mode !== "self-hosted") {
@@ -2608,6 +2608,28 @@ async function runResume(onboardingId, {
   }
 }
 
+const PLATFORM_AUTHORIZATION_PENDING_CODE = "RAINSKILLS_PLATFORM_AUTHORIZATION_PENDING";
+
+function isPlatformAuthorizationPending(error) {
+  return error?.code === PLATFORM_AUTHORIZATION_PENDING_CODE;
+}
+
+async function resumeAfterPlatformCompletion(onboardingId, {
+  abortState = null,
+  resumeRunner = runResume,
+} = {}) {
+  try {
+    await resumeRunner(onboardingId, { abortState });
+  } catch (error) {
+    const pending = new Error(
+      "Rainbond 运行环境已部署成功，但连接或授权尚未完成；请使用原任务继续。",
+      { cause: error }
+    );
+    pending.code = PLATFORM_AUTHORIZATION_PENDING_CODE;
+    throw pending;
+  }
+}
+
 async function completePlatform(onboarding, state, paths, verification, noResume, { abortState = null } = {}) {
   assertHostOperationActive(abortState);
   const controlConsoleUrl = verification.controlConsoleUrl || verification.consoleUrl;
@@ -2638,7 +2660,7 @@ async function completePlatform(onboarding, state, paths, verification, noResume
     platformCompletionMessage({ deploymentLocation, consoleUrl: verification.consoleUrl }),
   );
   assertHostOperationActive(abortState);
-  if (!noResume) await runResume(onboarding.operation_id, { abortState });
+  if (!noResume) await resumeAfterPlatformCompletion(onboarding.operation_id, { abortState });
 }
 
 function platformCompletionMessage({ deploymentLocation, consoleUrl }) {
@@ -3060,6 +3082,7 @@ async function runInstallOperation(options, {
       await completePlatform(onboarding, state, paths, verification, options.noResume);
       return;
     } catch (error) {
+      if (isPlatformAuthorizationPending(error)) throw error;
       state = updateState(paths.state, state, {
         status: "failed",
         blocker: `检测到已有 rainbond 容器，但尚未通过完整验证：${error.message}`,
@@ -3226,6 +3249,7 @@ async function runInstallOperation(options, {
     process.stdout.write("[4/4] Console 健康检查通过\n");
     await completePlatform(onboarding, state, paths, verification, options.noResume);
   } catch (error) {
+    if (isPlatformAuthorizationPending(error)) throw error;
     if (!interruptedSignal) {
       state = updateState(paths.state, state, { status: "failed", blocker: error.message });
       appendEvent(paths, state, state.stage, "failed");
@@ -3328,6 +3352,8 @@ module.exports = {
   prepareRemoteInstaller,
   readOnboardingState,
   readPlatformState,
+  resumeAfterPlatformCompletion,
+  isPlatformAuthorizationPending,
   refreshWindowsMachineBundleBeforeAuthorization,
   remoteInstallerInvocation,
   useBundledInstaller,
