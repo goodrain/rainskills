@@ -1,5 +1,5 @@
 "use strict";
 
 module.exports = Object.freeze({
-  version: "0.1.10",
+  version: "0.1.11",
 });
