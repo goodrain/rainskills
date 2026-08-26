@@ -197,6 +197,19 @@ test("release verifies marketplace output before building the repository tarball
   );
 });
 
+test("Windows workflow contracts install package dependencies before running Node tests", () => {
+  for (const workflowPath of [".github/workflows/release.yml", ".github/workflows/test.yml"]) {
+    const workflow = read(workflowPath);
+    const windowsJob = workflow.match(/windows[_-]contract:[\s\S]*?\n  [a-z][a-z_-]*:\n/)?.[0];
+    assert(windowsJob, `${workflowPath} must define a Windows contract job`);
+    const installStep = windowsJob.indexOf("npm ci --ignore-scripts");
+    const testStep = windowsJob.indexOf("node --test tests/windows-onboarding.test.js");
+    assert.notEqual(installStep, -1, `${workflowPath} must install package dependencies`);
+    assert.notEqual(testStep, -1, `${workflowPath} must run Windows installer contracts`);
+    assert(installStep < testStep, `${workflowPath} must install dependencies before tests`);
+  }
+});
+
 test("npm artifact includes the marketplace entry without a Pi adapter", () => {
   const manifest = readJson("package.json");
 

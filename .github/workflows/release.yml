@@ -23,6 +23,9 @@ jobs:
           node-version: '24'
           package-manager-cache: false
 
+      - name: Install package dependencies
+        run: npm ci --ignore-scripts
+
       - name: Parse PowerShell and verify browser data handling
         shell: powershell
         run: .\tests\windows-contract.ps1
