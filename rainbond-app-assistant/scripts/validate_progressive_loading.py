@@ -82,7 +82,6 @@ def validate_progressive_loading(skill_dir: Path) -> list[str]:
         "403",
         "写调用不得自动重放",
         "确认",
-        "TTY",
         "停止",
     ):
         require(required in root, f"root is missing required invariant: {required}", failures)
@@ -94,6 +93,15 @@ def validate_progressive_loading(skill_dir: Path) -> list[str]:
         '"runtime_status":',
         '"input_commands":',
         "## High-Level Workflow",
+        "fixed launcher",
+        "固定 launcher",
+        "Device Flow",
+        "TTY",
+        "tty: true",
+        "npm root -g",
+        "~/.rainbond",
+        "只读取当前项目内的 manifest",
+        "本地 secrets",
     ):
         require(forbidden not in root, f"root embeds staged content: {forbidden}", failures)
 
@@ -108,7 +116,10 @@ def validate_progressive_loading(skill_dir: Path) -> list[str]:
             "<!-- rainskills-runtime-routing:end -->",
             "rainskills.single-runtime-contract.v1",
             "rainskills-tools.js",
+            "固定 launcher",
+            "Device Flow",
             "tty: true",
+            "npm root -g",
             "401",
             "403",
             "new-application-environment",

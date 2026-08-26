@@ -41,6 +41,12 @@ const FORBIDDEN_EMBEDDED_MARKERS = [
   "single-runtime-v1.json",
   "--api-only",
   "/console/mcp/rainskills/api/query",
+  "require_escalated",
+  "Device Flow",
+  "tty: true",
+  "npm root -g",
+  "固定 launcher",
+  "fixed launcher",
 ];
 
 function usage() {

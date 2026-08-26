@@ -34,13 +34,12 @@ description: "Use only when the user actually supplies a third-party Docker Comp
 
 ## Runtime 与安全边界
 
-静态确认描述符后，任何 Rainbond 查询、环境连接、平台安装或变更前必须先读取 references/runtime-gate.md，并遵守其中固定 launcher、skill-id、context、确认、TTY、401/403 与单运行环境契约。
+静态确认描述符后，任何 Rainbond 查询、环境连接、平台安装或变更前必须先读取 references/runtime-gate.md；当前 profile 的 transport、鉴权、context、确认与运行时安全契约全部由该 Gate 提供。
 
-- 不得配置或直接调用客户端 MCP。
+- 不得绕过 Gate 选择的 transport、context 或授权边界，也不得读取相邻 Skill 的 Gate。
 - 可变调用必须先取得确认 ID，再用完全相同输入确认执行；写调用不得自动重放。
-- 连接/重新授权走 Device Flow 并使用交互 TTY；不得要求用户粘贴 JWT。
-- 401 只允许只读调用在 reconnect 后重试一次；403 立即停止且不重新授权。
-- 不回显密钥，不猜测 component state、内部地址、凭据或外部 URL。
+- 401 只允许只读调用按 Gate 允许的恢复流程重试一次；403 立即停止且不做未授权重试。
+- 不回显 JWT、密钥或凭据，不猜测 component state、内部地址或外部 URL。
 
 ## 执行边界
 

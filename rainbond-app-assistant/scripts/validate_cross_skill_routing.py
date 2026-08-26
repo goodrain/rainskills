@@ -100,21 +100,87 @@ def has_negation(statement: str) -> bool:
     return any(normalize(marker) in statement for marker in NEGATIONS)
 
 
+def has_local_negation(value: str) -> bool:
+    value = normalize(value)
+    return bool(re.search(r"\b(?:not|never)\b", value)) or any(
+        marker in value for marker in ("不得", "禁止", "不能", "不可", "不应")
+    )
+
+
+def category_is_locally_negated(statement: str, category: str) -> bool:
+    statement = normalize(statement)
+    category = normalize(category)
+    category_at = statement.find(category)
+    if category_at < 0:
+        return False
+    prefix_tokens = statement[:category_at].split()[-4:]
+    return has_local_negation(" ".join(prefix_tokens))
+
+
+def relation_has_positive_cue(relation: str, cues: tuple[str, ...]) -> bool:
+    relation = normalize(relation)
+    positions = [relation.rfind(normalize(cue)) for cue in cues]
+    cue_at = max(positions, default=-1)
+    if cue_at < 0:
+        return False
+    prefix_tokens = relation[:cue_at].split()[-4:]
+    local_window = " ".join(prefix_tokens + relation[cue_at:].split())
+    return not has_local_negation(local_window)
+
+
+def target_relation_after_contrast(
+    statement: str,
+    target_phrases: tuple[str, ...],
+) -> bool:
+    statement = normalize(statement)
+    contrast = ("while", "but", "whereas", "although", "however", "instead")
+    cues = ("route", "use", "to", "with", "delegate", "handled", "goes", "stay")
+    for marker in contrast:
+        marker_at = statement.rfind(marker)
+        if marker_at < 0:
+            continue
+        suffix = statement[marker_at + len(marker):]
+        for target in target_phrases:
+            target = normalize(target)
+            target_at = suffix.find(target)
+            if target_at >= 0 and relation_has_positive_cue(suffix[:target_at], cues):
+                return True
+    return False
+
+
 def directed_relation(
     statement: str,
     category_phrases: tuple[str, ...],
     target_phrases: tuple[str, ...],
+    *,
+    allow_negated_category: bool = False,
 ) -> bool:
     statement = normalize(statement)
     categories = [normalize(phrase) for phrase in category_phrases]
     targets = [normalize(phrase) for phrase in target_phrases]
-    forward_cues = ("route", "use", " to ", " with ", "delegate", "handled", "goes", "stay")
+    forward_cues = (
+        "route",
+        "use",
+        " to ",
+        " with ",
+        "delegate",
+        "handled",
+        "goes",
+        "stay",
+        "转到",
+        "改走",
+        "应转",
+        "留在",
+    )
     reverse_cues = ("handles", "owns", "accepts", "receives", "responsible for")
     contrast = ("while", "but", "whereas", "although", "however", "instead", "unrelated")
 
     for category in categories:
         category_at = statement.find(category)
-        if category_at < 0:
+        if category_at < 0 or (
+            not allow_negated_category
+            and category_is_locally_negated(statement, category)
+        ):
             continue
         for target in targets:
             target_at = statement.find(target)
@@ -128,8 +194,7 @@ def directed_relation(
                 cues = reverse_cues
             if len(relation) > 360 or any(word in relation for word in contrast):
                 continue
-            padded = f" {relation} "
-            if any(cue in padded for cue in cues):
+            if relation_has_positive_cue(relation, cues):
                 return True
     return False
 
@@ -151,11 +216,12 @@ def validate_description_boundaries(
         statement: str,
         category_phrases: tuple[str, ...],
     ) -> bool:
-        return statement.startswith("use when") or directed_relation(
-            statement,
-            category_phrases,
-            app_targets,
+        implicit_owner = statement.startswith("use when") and any(
+            contains(statement, category)
+            and not category_is_locally_negated(statement, category)
+            for category in category_phrases
         )
+        return implicit_owner or directed_relation(statement, category_phrases, app_targets)
 
     app_owner = all(
         any(predicate(statement) and app_category_owned(statement, categories) for statement in app_statements)
@@ -186,7 +252,12 @@ def validate_description_boundaries(
         any(
             "supplied" in statement
             and all(kind in statement for kind in ("compose", "helm", "image set", "descriptor"))
-            and directed_relation(statement, ("descriptor", "compose", "helm", "image set"), open_targets)
+            and directed_relation(
+                statement,
+                ("descriptor", "compose", "helm", "image set"),
+                open_targets,
+                allow_negated_category=True,
+            )
             for statement in app_statements
         ),
         "App description must exclude supplied descriptors to Open-source Deploy",
@@ -195,7 +266,12 @@ def validate_description_boundaries(
     require(
         any(
             "market template" in statement
-            and directed_relation(statement, ("market template",), template_targets)
+            and directed_relation(
+                statement,
+                ("market template",),
+                template_targets,
+                allow_negated_category=True,
+            )
             for statement in app_statements
         ),
         "App description must exclude confirmed market templates",
@@ -230,7 +306,12 @@ def validate_description_boundaries(
         and ("without a descriptor" in statement or "without descriptor" in statement)
         and "private image project" in statement
         and all(
-            directed_relation(statement, categories, app_targets)
+            directed_relation(
+                statement,
+                categories,
+                app_targets,
+                allow_negated_category=True,
+            )
             for categories in (
                 ("bare git",),
                 ("source project", "source directory", "source package"),
@@ -240,7 +321,12 @@ def validate_description_boundaries(
         for statement in open_statements
     ) and any(
         "market template" in statement
-        and directed_relation(statement, ("market template",), template_targets)
+        and directed_relation(
+            statement,
+            ("market template",),
+            template_targets,
+            allow_negated_category=True,
+        )
         for statement in open_statements
     )
     require(
@@ -288,8 +374,13 @@ def validate_routing_conflicts(
     source_to_open = any(
         any(category in statement for category in source_categories)
         and open_source_target(statement)
-        and has_route_marker(statement)
-        and not has_negation(statement)
+        and (
+            directed_relation(statement, source_categories, ("rainbond opensource app deploy", "open source"))
+            or target_relation_after_contrast(
+                statement,
+                ("rainbond opensource app deploy", "open source"),
+            )
+        )
         for statement in all_root_statements
     )
     require(not source_to_open, "source ownership boundary conflict", failures)
@@ -297,8 +388,17 @@ def validate_routing_conflicts(
     descriptor_to_app = any(
         any(kind in statement for kind in ("compose", "helm", "image set"))
         and contains(statement, "rainbond app assistant")
-        and has_route_marker(statement)
-        and not has_negation(statement)
+        and (
+            directed_relation(
+                statement,
+                ("compose", "helm", "image set", "descriptor"),
+                ("rainbond app assistant", "app assistant"),
+            )
+            or target_relation_after_contrast(
+                statement,
+                ("rainbond app assistant", "app assistant"),
+            )
+        )
         for statement in all_root_statements
     )
     require(not descriptor_to_app, "descriptor ownership boundary conflict", failures)

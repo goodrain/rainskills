@@ -31,24 +31,23 @@ description: "Use whenever a user asks to deploy, run, deliver, publish, inspect
 
 ## Runtime Gate
 
-任何 Rainbond 查询、环境连接、平台安装或变更前，必须先读取 references/runtime-gate.md。当前 Skill 在本会话首次调用 Rainbond 前强制加载且只加载自己的 Runtime Gate；随后按其中固定 launcher、skill-id、context、确认与鉴权契约执行。
+任何 Rainbond 查询、环境连接、平台安装或变更前，必须先读取 references/runtime-gate.md。当前 Skill 在本会话首次调用 Rainbond 前强制加载且只加载自己的 Runtime Gate；当前 profile 的 transport、鉴权、context、确认与运行时安全契约全部由该 Gate 提供。
 
 不可弱化的不变量：
 
-- 本机只连接一个 Rainbond 运行环境；不得配置或直接调用客户端 MCP。
-- 连接/重新授权走浏览器 Device Flow；需要交互时附加 TTY（Codex 使用 tty: true），不得要求用户粘贴 JWT。
-- 401：只读调用可在 reconnect 后重试一次；写调用不得自动重放，必须先查询真实状态。403：立即停止，不重新授权。
+- 不得绕过 Gate 选择的 transport、context 或授权边界，也不得读取相邻 Skill 的 Gate。
+- 401：只读调用仅可按 Gate 允许的恢复流程重试一次；写调用不得自动重放，必须先查询真实状态。403：立即停止，不做未授权重试。
 - 可变调用必须先取得确认 ID，再用完全相同输入附加确认执行；不得绕过确认。
-- 不修改 ~/.rainbond 权限，不复制受保护状态，不搜索 launcher，不运行 npm root -g。
+- JWT、凭据与密钥不得回显、复制到报告或通过替代 transport 绕过保护。
 
 ## 执行与安全
 
-- 只读取当前项目内的 manifest、binding、env 与 secrets 文件，不扫描 home、父目录或相邻仓库补绑定。
+- 项目上下文只可来自当前 profile 与 Gate 允许的输入源；不得越权扫描，或把不可用的客户端文件当成事实。
 - 一旦确认 source-backed 或 source ref，不得静默切换为 package/image/template 或改 branch；任何 delivery mode、workaround 或破坏性动作都需用户明确确认。
 - 多 team/app 且无可靠本地提示时停止询问，禁止默认选择第一个；自动选择必须报告依据。
 - 同类错误最多重试一次、同阶段最多两次，总流程默认不超过八分钟。
 - 到达 code_or_build_handoff_needed 后硬停止，不自动改代码、运行本地测试、提交、推送或重试。
-- 密钥只来自用户明确输入或本地 secrets 文件，永不回显或写入报告。
+- 密钥只来自当前 profile 允许的输入源，永不回显或写入报告。
 
 详细主线、operation/context 复用、代理规则、构建/运行时证据链、依赖、确认边界与尝试预算只在需要执行时读取 [workflow rules](references/workflow-rules.md)。
 

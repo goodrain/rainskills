@@ -112,6 +112,30 @@ test("embedded profile is explicit, transport-safe, and contains only Agent-comp
     assert.match(content, /Embedded Runtime Contract（最高优先级）/, skill);
     assert.match(content, /不读取本机项目目录或 `\.rainbond\/` 文件/, skill);
   }
+  for (const skill of [
+    "rainbond-app-assistant",
+    "rainbond-opensource-app-deploy",
+  ]) {
+    const embeddedRoot = fs.readFileSync(path.join(output, skill, "SKILL.md"), "utf8");
+    assert.doesNotMatch(
+      embeddedRoot,
+      /fixed launcher|固定 launcher|Device Flow|TTY|tty:\s*true|npm root -g|~\/\.rainbond|只读取当前项目内的 manifest|本地 secrets/i,
+      `${skill} root must remain transport-neutral in embedded profile`,
+    );
+    assert.match(embeddedRoot, /401[\s\S]*403/, skill);
+    assert.match(embeddedRoot, /确认/, skill);
+    assert.match(embeddedRoot, /JWT|密钥[\s\S]*不回显/, skill);
+
+    const localGate = fs.readFileSync(
+      path.join(repoRoot, skill, "references", "runtime-gate.md"),
+      "utf8",
+    );
+    assert.match(localGate, /固定 launcher/, skill);
+    assert.match(localGate, /Device Flow/, skill);
+    assert.match(localGate, /附加交互终端（TTY）[\s\S]*tty:\s*true/, skill);
+    assert.match(localGate, /npm root -g/, skill);
+    assert.match(localGate, /~\/\.rainbond/, skill);
+  }
   for (const markdownFile of markdownFiles(output)) {
     assert.doesNotMatch(
       fs.readFileSync(markdownFile, "utf8"),

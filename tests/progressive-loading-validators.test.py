@@ -434,6 +434,32 @@ class ProgressiveLoadingValidatorTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("pre-descriptor action boundary conflict", result.stdout)
 
+    def test_contrast_after_negated_app_route_still_rejects_open_source_target(self) -> None:
+        path = self.root / APP_NAME / "SKILL.md"
+        source = path.read_text(encoding="utf-8")
+        source += (
+            "\nCurrent project must not go to App Assistant and instead uses "
+            "rainbond-opensource-app-deploy.\n"
+        )
+        path.write_text(source, encoding="utf-8")
+
+        result = self.run_cross()
+
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("source ownership boundary conflict", result.stdout)
+
+    def test_locally_negated_app_category_is_not_positive_ownership(self) -> None:
+        path = self.root / APP_NAME / "SKILL.md"
+        source = path.read_text(encoding="utf-8")
+        self.assertIn("the current project", source)
+        source = source.replace("the current project", "not the current project", 1)
+        path.write_text(source, encoding="utf-8")
+
+        result = self.run_cross()
+
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("App description must positively own", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
