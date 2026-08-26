@@ -35,7 +35,7 @@ Node.js 前置检查通过后，平台只读查询只执行一次本地 `rainski
 {
   "schema": "rainskills.skill-runtime-contract.v1",
   "package_version": "rainskills@0.1.17",
-    "launcher": ["node", "<home>/.rainbond/lib/rainskills/bin/rainskills.js"],
+  "launcher": ["node", "<home>/.rainbond/lib/rainskills/bin/rainskills.js"],
   "local_launcher": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js"],
   "local_argv": {
     "environment-list": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js", "environment", "list", "--json"],
@@ -44,12 +44,36 @@ Node.js 前置检查通过后，平台只读查询只执行一次本地 `rainski
     "platform-query-selected": ["node", "<home>/.rainbond/bin/rainskills-tools.js", "query", "<tool>", "--environment-id", "<environment-id>", "--input", "-"]
   },
   "intents": {
-    "platform-query": {"required": ["resource"], "optional": ["enterprise_id", "team_id", "app_id"], "enums": {"resource": ["current-user", "current-enterprise", "teams", "regions", "apps", "team-apps", "components"]}}
+    "platform-query": {
+      "type": "platform-query",
+      "required": ["type", "resource"],
+      "optional": ["enterprise_id", "team_id", "app_id"],
+      "enums": {
+        "resource": ["current-user", "current-enterprise", "teams", "regions", "apps", "team-apps", "components"]
+      },
+      "example": {
+        "type": "platform-query",
+        "resource": "components",
+        "app_id": "app"
+      }
+    }
   },
-  "routes": {"existing": ["saas", "private-existing"]},
+  "routes": {
+    "existing": ["saas", "private-existing"]
+  },
   "connect_argv": {
     "saas": ["node", "<home>/.rainbond/lib/rainskills/bin/rainskills.js", "runtime", "connect", "<target>", "--saas", "--intent-json", "<intent-json>"],
     "private-existing": ["node", "<home>/.rainbond/lib/rainskills/bin/rainskills.js", "runtime", "connect", "<target>", "--rainbond-url", "<rainbond-url>", "--intent-json", "<intent-json>"]
+  },
+  "input_commands": {
+    "query-default": {
+      "argv": ["node", "<home>/.rainbond/bin/rainskills-tools.js", "query", "<tool>", "--input", "-"],
+      "stdin_schema_source": "tool-catalog"
+    },
+    "query-selected": {
+      "argv": ["node", "<home>/.rainbond/bin/rainskills-tools.js", "query", "<tool>", "--environment-id", "<environment-id>", "--input", "-"],
+      "stdin_schema_source": "tool-catalog"
+    }
   }
 }
 ```

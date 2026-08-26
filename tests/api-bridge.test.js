@@ -878,8 +878,8 @@ test("protected context resolve returns one combined workspace selection", async
       isError: false,
       structuredContent: {
         items: [
-          { team_id: "team-a", team_name: "开发", roles: ["developer"], region_list: [{ region_name: "r1", region_alias: "北京" }] },
-          { team_id: "team-b", team_name: "生产", roles: ["owner"], region_list: [{ region_name: "r2", region_alias: "上海" }] },
+          { team_id: "team-a", team_name: "dev-id", team_alias: "开发", roles: ["developer"], region_list: [{ region_name: "r1", region_alias: "北京" }] },
+          { team_id: "team-b", team_name: "prod-id", team_alias: "生产", roles: ["owner"], region_list: [{ region_name: "r2", region_alias: "上海" }] },
         ],
         total: 2,
         page: 1,
@@ -900,7 +900,10 @@ test("protected context resolve returns one combined workspace selection", async
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.state, "needs-selection");
     assert.equal(payload.dimension, "workspace-region");
-    assert.deepEqual(payload.options.map((entry) => entry.label), ["开发 / 北京", "生产 / 上海"]);
+    assert.deepEqual(payload.options.map((entry) => entry.label), [
+      "开发（dev-id） / 北京",
+      "生产（prod-id） / 上海",
+    ]);
   });
 });
 

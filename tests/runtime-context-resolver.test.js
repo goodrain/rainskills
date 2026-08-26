@@ -49,6 +49,7 @@ test("resolver obtains enterprise and auto-selects the only accessible workspace
         items: [{
           tenant_id: "team-1",
           tenant_name: "default",
+          team_alias: "默认工作空间",
           roles: ["owner"],
           region_list: [{ region_name: "rainbond", region_alias: "默认集群" }],
         }],
@@ -85,8 +86,8 @@ test("resolver returns one combined selection for multiple workspace-region choi
       teamQueries += 1;
       return {
         items: [
-          { tenant_id: "team-a", tenant_name: "开发", roles: ["developer"], region_list: [{ region_name: "r1", region_alias: "北京" }] },
-          { tenant_id: "team-b", tenant_name: "生产", roles: ["owner"], region_list: [{ region_name: "r2", region_alias: "上海" }] },
+          { tenant_id: "team-a", tenant_name: "dev-id", team_alias: "开发", roles: ["developer"], region_list: [{ region_name: "r1", region_alias: "北京" }] },
+          { tenant_id: "team-b", tenant_name: "prod-id", team_alias: "生产", roles: ["owner"], region_list: [{ region_name: "r2", region_alias: "上海" }] },
         ],
         total: 2,
         page: 1,
@@ -102,8 +103,8 @@ test("resolver returns one combined selection for multiple workspace-region choi
   assert.equal(pending.state, "needs-selection");
   assert.equal(pending.dimension, "workspace-region");
   assert.deepEqual(pending.options.map((entry) => entry.label), [
-    "开发 / 北京",
-    "生产 / 上海",
+    "开发（dev-id） / 北京",
+    "生产（prod-id） / 上海",
   ]);
 
   const selected = await resolver.select({
@@ -113,6 +114,7 @@ test("resolver returns one combined selection for multiple workspace-region choi
   });
   assert.equal(selected.state, "resolved");
   assert.equal(selected.context.team_id, "team-b");
+  assert.equal(selected.context.team_name, "prod-id");
   assert.equal(selected.context.region_name, "r2");
 
   const reused = await resolver.resolve({
