@@ -100,6 +100,40 @@ def has_negation(statement: str) -> bool:
     return any(normalize(marker) in statement for marker in NEGATIONS)
 
 
+def directed_relation(
+    statement: str,
+    category_phrases: tuple[str, ...],
+    target_phrases: tuple[str, ...],
+) -> bool:
+    statement = normalize(statement)
+    categories = [normalize(phrase) for phrase in category_phrases]
+    targets = [normalize(phrase) for phrase in target_phrases]
+    forward_cues = ("route", "use", " to ", " with ", "delegate", "handled", "goes", "stay")
+    reverse_cues = ("handles", "owns", "accepts", "receives", "responsible for")
+    contrast = ("while", "but", "whereas", "although", "however", "instead", "unrelated")
+
+    for category in categories:
+        category_at = statement.find(category)
+        if category_at < 0:
+            continue
+        for target in targets:
+            target_at = statement.find(target)
+            if target_at < 0:
+                continue
+            if category_at < target_at:
+                relation = statement[category_at + len(category):target_at]
+                cues = forward_cues
+            else:
+                relation = statement[target_at + len(target):category_at]
+                cues = reverse_cues
+            if len(relation) > 360 or any(word in relation for word in contrast):
+                continue
+            padded = f" {relation} "
+            if any(cue in padded for cue in cues):
+                return True
+    return False
+
+
 def validate_description_boundaries(
     app_description: str,
     open_description: str,
@@ -109,36 +143,34 @@ def validate_description_boundaries(
     open_statements = description_statements(open_description)
     app_normalized = normalize(app_description)
 
-    def app_target(statement: str) -> bool:
-        return contains(statement, "rainbond app assistant")
+    app_targets = ("rainbond app assistant", "app assistant")
+    open_targets = ("rainbond opensource app deploy", "open source")
+    template_targets = ("rainbond template installer", "template installer")
 
-    def open_target(statement: str) -> bool:
-        return contains(statement, "rainbond opensource app deploy") or "open source" in statement
-
-    def template_target(statement: str) -> bool:
-        return contains(statement, "rainbond template installer")
-
-    def app_owned(statement: str) -> bool:
-        return statement.startswith("use when") or (
-            app_target(statement) and has_route_marker(statement) and not has_negation(statement)
+    def app_category_owned(
+        statement: str,
+        category_phrases: tuple[str, ...],
+    ) -> bool:
+        return statement.startswith("use when") or directed_relation(
+            statement,
+            category_phrases,
+            app_targets,
         )
 
-    def open_owned(statement: str) -> bool:
-        return (
-            statement.startswith("use only when")
-            or statement.startswith("use this skill only when")
-            or (open_target(statement) and has_route_marker(statement) and not has_negation(statement))
-        )
-
-    app_owned_statements = [statement for statement in app_statements if app_owned(statement)]
     app_owner = all(
-        any(predicate(statement) for statement in app_owned_statements)
-        for predicate in (
-            lambda statement: "source code" in statement,
-            lambda statement: "current project" in statement,
-            lambda statement: "source directory" in statement and "package" in statement,
-            lambda statement: "bare git" in statement,
-            lambda statement: "named application" in statement and "without a descriptor" in statement,
+        any(predicate(statement) and app_category_owned(statement, categories) for statement in app_statements)
+        for predicate, categories in (
+            (lambda statement: "source code" in statement, ("source code",)),
+            (lambda statement: "current project" in statement, ("current project",)),
+            (
+                lambda statement: "source directory" in statement and "package" in statement,
+                ("source directory", "source package"),
+            ),
+            (lambda statement: "bare git" in statement, ("bare git",)),
+            (
+                lambda statement: "named application" in statement and "without a descriptor" in statement,
+                ("named application", "named app"),
+            ),
         )
     )
     app_actions = all(
@@ -154,8 +186,7 @@ def validate_description_boundaries(
         any(
             "supplied" in statement
             and all(kind in statement for kind in ("compose", "helm", "image set", "descriptor"))
-            and open_target(statement)
-            and (has_route_marker(statement) or has_negation(statement))
+            and directed_relation(statement, ("descriptor", "compose", "helm", "image set"), open_targets)
             for statement in app_statements
         ),
         "App description must exclude supplied descriptors to Open-source Deploy",
@@ -164,8 +195,7 @@ def validate_description_boundaries(
     require(
         any(
             "market template" in statement
-            and template_target(statement)
-            and (has_route_marker(statement) or has_negation(statement))
+            and directed_relation(statement, ("market template",), template_targets)
             for statement in app_statements
         ),
         "App description must exclude confirmed market templates",
@@ -173,7 +203,15 @@ def validate_description_boundaries(
     )
 
     open_owner = any(
-        open_owned(statement)
+        (
+            statement.startswith("use only when")
+            or statement.startswith("use this skill only when")
+            or directed_relation(
+                statement,
+                ("descriptor", "compose", "helm", "image set"),
+                open_targets,
+            )
+        )
         and ("actual" in statement or "supplied" in statement)
         and all(kind in statement for kind in ("compose", "helm", "image set", "descriptor"))
         for statement in open_statements
@@ -191,13 +229,18 @@ def validate_description_boundaries(
         and "named app" in statement
         and ("without a descriptor" in statement or "without descriptor" in statement)
         and "private image project" in statement
-        and app_target(statement)
-        and (has_route_marker(statement) or has_negation(statement))
+        and all(
+            directed_relation(statement, categories, app_targets)
+            for categories in (
+                ("bare git",),
+                ("source project", "source directory", "source package"),
+                ("named application", "named app"),
+            )
+        )
         for statement in open_statements
     ) and any(
         "market template" in statement
-        and template_target(statement)
-        and (has_route_marker(statement) or has_negation(statement))
+        and directed_relation(statement, ("market template",), template_targets)
         for statement in open_statements
     )
     require(

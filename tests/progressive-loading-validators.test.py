@@ -374,15 +374,8 @@ class ProgressiveLoadingValidatorTests(unittest.TestCase):
         with self.subTest(boundary="descriptor-to-open-source"):
             app = original_app.replace(
                 "Not for supplied third-party Compose, Helm, or image-set descriptors; use rainbond-opensource-app-deploy.",
-                "Not for supplied third-party Compose, Helm, or image-set descriptors; use rainbond-template-installer.",
+                "Not for supplied Compose, Helm, or image-set descriptors; use rainbond-template-installer while rainbond-opensource-app-deploy remains available.",
                 1,
-            )
-            app = re.sub(
-                r'^(description: ".*)"$',
-                r'\1 rainbond-opensource-app-deploy remains available for unrelated cases."',
-                app,
-                count=1,
-                flags=re.MULTILINE,
             )
             app_path.write_text(app, encoding="utf-8")
             app_result = self.run_cross()
@@ -395,15 +388,8 @@ class ProgressiveLoadingValidatorTests(unittest.TestCase):
         with self.subTest(boundary="source-to-app-assistant"):
             open_source = original_open.replace(
                 "route source and named-only requests to rainbond-app-assistant and market templates to rainbond-template-installer.",
-                "route source and named-only requests to rainbond-template-installer and market templates to rainbond-template-installer.",
+                "route source and named-only requests to rainbond-template-installer while rainbond-app-assistant remains available, and market templates to rainbond-template-installer.",
                 1,
-            )
-            open_source = re.sub(
-                r'^(description: ".*)"$',
-                r'\1 rainbond-app-assistant remains mentioned for unrelated context."',
-                open_source,
-                count=1,
-                flags=re.MULTILINE,
             )
             open_path.write_text(open_source, encoding="utf-8")
             open_result = self.run_cross()
