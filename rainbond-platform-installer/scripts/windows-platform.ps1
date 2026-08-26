@@ -303,7 +303,7 @@ function Get-StateAclFacts([string]$PathValue, [string]$Kind, [string]$HomeValue
       } finally {
         $hasher.Dispose()
       }
-      $fileIdentity = "sha256:$digest:$($stream.Length)"
+      $fileIdentity = "sha256:${digest}:$($stream.Length)"
     }
     return [ordered]@{
       ownerSid = Convert-IdentityToSid $acl.Owner

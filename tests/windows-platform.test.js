@@ -59,6 +59,12 @@ test("PowerShell source assertions treat CRLF and LF identically", () => {
   assert.equal(normalizeLineEndings("first\r\nsecond\r\n"), "first\nsecond\n");
 });
 
+test("PowerShell file identity delimits the digest before its separator", () => {
+  const source = readNormalizedSource(powershellPath);
+  assert.match(source, /"sha256:\$\{digest\}:\$\(\$stream\.Length\)"/);
+  assert.doesNotMatch(source, /"sha256:\$digest:/);
+});
+
 test("Windows lifecycle telemetry stays in the outer Node process and carries the persisted attempt", () => {
   const source = fs.readFileSync(platformInstallerPath, "utf8");
   assert.match(source, /createLifecycleTelemetry/);
