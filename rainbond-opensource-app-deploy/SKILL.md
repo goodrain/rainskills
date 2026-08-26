@@ -24,7 +24,7 @@ Node.js 前置检查通过后，每次请求先执行本地 launcher + `["enviro
 
 所有 Rainbond 查询和变更都必须执行本地 `~/.rainbond/bin/rainskills-tools.js`，不得让 Agent 直接调用 Rainbond MCP，也不得启动本地 Rainskills MCP 服务。固定业务 argv 为 `["node", "<home>/.rainbond/bin/rainskills-tools.js", "<status|list|describe|read|call>", "...", "--operation-id", "<uuid>", "--skill-id", "rainbond-opensource-app-deploy"]`；写操作必须只消费 CLI 返回的确认 ID，再用同一 argv 加 `--confirm <confirmation-id>` 执行。
 
-业务操作开始后，必须先用固定 argv `["node", "<home>/.rainbond/bin/rainskills-tools.js", "context", "resolve", "--input", "-", "--operation-id", "<uuid>", "--skill-id", "rainbond-opensource-app-deploy"]`，通过 stdin 传入 `{"required": ["enterprise", "workspace"]}`。返回 `resolved` 时只使用该 operation 已保存的企业、工作空间和集群上下文；返回 `needs-selection` 时，把 CLI 返回的“工作空间 + 集群”组合选项一次性列给用户，不得逐项询问，也不得让用户提供 enterprise_id。用户选择后执行 `context select`，stdin 只传 `{"selection_id":"<selection-id>","option_id":"<option-id>"}`；选择成功后继续原操作，同一 operation 不再重复查询上下文。
+业务操作开始后，必须使用 runtime contract 的 `input_commands.context-resolve` 完整 argv 和配套 stdin。返回 `resolved` 时只使用该 operation 已保存的企业、工作空间和集群上下文；返回 `needs-selection` 时，把 CLI 返回的“工作空间 + 集群”组合选项一次性列给用户，不得逐项询问，也不得让用户提供 enterprise_id。用户选择后必须使用 `input_commands.context-select` 的完整 argv 和配套 stdin；选择成功后继续原操作，同一 operation 不再重复查询上下文。
 
 只有 CLI 返回并通过校验的 `rainskills.next-action.v1` argv 才能执行续接。普通失败一律禁止自动重试：不得再次执行原命令，不得执行 `--help`、`sleep`、`rg`、`grep`，不得搜索 Rainskills 源码；同一 `operation complete` 最多执行一次。
 
@@ -33,22 +33,60 @@ Node.js 前置检查通过后，每次请求先执行本地 launcher + `["enviro
 {
   "schema": "rainskills.skill-runtime-contract.v1",
   "package_version": "rainskills@0.1.17",
-    "launcher": ["node", "<home>/.rainbond/lib/rainskills/bin/rainskills.js"],
+  "launcher": ["node", "<home>/.rainbond/lib/rainskills/bin/rainskills.js"],
   "local_launcher": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js"],
   "local_argv": {
     "environment-list": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js", "environment", "list", "--json"],
-    "operation-begin": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js", "operation", "begin", "--operation-id", "<uuid>", "--intent-json", "<intent-json>"],
+    "operation-begin-default": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js", "operation", "begin", "--operation-id", "<uuid>", "--intent-json", "<intent-json>"],
+    "operation-begin-selected": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js", "operation", "begin", "--operation-id", "<uuid>", "--environment-id", "<environment-id>", "--intent-json", "<intent-json>"],
     "operation-complete": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js", "operation", "complete", "--operation-id", "<uuid>"],
     "runtime-message": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js", "runtime", "message", "--id", "<message-id>"]
   },
   "intents": {
-    "opensource-deploy": {"required": ["source_kind"], "optional": ["project_root", "source_url"], "enums": {"source_kind": ["compose", "helm", "images"]}}
+    "opensource-deploy": {
+      "type": "opensource-deploy",
+      "required": ["type", "source_kind"],
+      "optional": ["project_root", "source_url", "image_refs"],
+      "enums": {
+        "source_kind": ["compose", "helm", "images"]
+      },
+      "example": {
+        "type": "opensource-deploy",
+        "source_kind": "images",
+        "image_refs": ["nginx:1.27"]
+      }
+    }
   },
-  "routes": {"new": ["saas", "private-existing", "install-private"]},
+  "routes": {
+    "new": ["saas", "private-existing", "install-private"]
+  },
   "connect_argv": {
     "saas": ["node", "<home>/.rainbond/lib/rainskills/bin/rainskills.js", "runtime", "connect", "<target>", "--saas", "--intent-json", "<intent-json>"],
     "private-existing": ["node", "<home>/.rainbond/lib/rainskills/bin/rainskills.js", "runtime", "connect", "<target>", "--rainbond-url", "<rainbond-url>", "--intent-json", "<intent-json>"],
     "install-private": ["node", "<home>/.rainbond/lib/rainskills/bin/rainskills.js", "runtime", "connect", "<target>", "--install-private", "--location", "<private-location>", "--intent-json", "<intent-json>"]
+  },
+  "input_commands": {
+    "context-resolve": {
+      "argv": ["node", "<home>/.rainbond/bin/rainskills-tools.js", "context", "resolve", "--input", "-", "--operation-id", "<uuid>", "--skill-id", "rainbond-opensource-app-deploy"],
+      "stdin": {
+        "required": ["enterprise", "workspace"]
+      }
+    },
+    "context-select": {
+      "argv": ["node", "<home>/.rainbond/bin/rainskills-tools.js", "context", "select", "--input", "-", "--operation-id", "<uuid>", "--skill-id", "rainbond-opensource-app-deploy"],
+      "stdin": {
+        "selection_id": "<selection-id>",
+        "option_id": "<option-id>"
+      }
+    },
+    "read": {
+      "argv": ["node", "<home>/.rainbond/bin/rainskills-tools.js", "read", "<tool>", "--input", "-", "--operation-id", "<uuid>", "--skill-id", "rainbond-opensource-app-deploy"],
+      "stdin_schema_source": "tool-catalog"
+    },
+    "call": {
+      "argv": ["node", "<home>/.rainbond/bin/rainskills-tools.js", "call", "<tool>", "--input", "-", "--operation-id", "<uuid>", "--skill-id", "rainbond-opensource-app-deploy"],
+      "stdin_schema_source": "tool-catalog"
+    }
   }
 }
 ```

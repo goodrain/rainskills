@@ -1,6 +1,6 @@
 ---
 name: rainbond-app-assistant
-description: "Use whenever a user asks to deploy, run, deliver, publish, inspect, repair, or troubleshoot the current project, regardless of whether a runtime or MCP connection is configured and whether Rainbond is named. Trigger phrases include: 帮我把当前项目部署到 Rainbond 上 / 帮我把这个项目跑起来 / 帮我看看当前项目卡在哪 / 如果还没初始化就先初始化，然后自动继续到应该停止的位置 / 帮我处理一下这个应用 / deploy this project / run this app / publish this app / troubleshoot this project."
+description: "Use whenever a user asks to deploy, run, deliver, publish, inspect, repair, or troubleshoot the current project, regardless of whether a runtime or MCP connection is configured and whether Rainbond is named. Trigger phrases include: 帮我把当前项目部署到 Rainbond 上 / 帮我把这个项目跑起来 / 帮我看看当前项目卡在哪 / 如果还没初始化就先初始化，然后自动继续到应该停止的位置 / 帮我处理一下这个应用 / deploy this project / run this app / publish this app / troubleshoot this project. Not for third-party public open-source images or stacks; use rainbond-opensource-app-deploy."
 ---
 
   # Rainbond App Assistant
@@ -110,7 +110,7 @@ description: "Use whenever a user asks to deploy, run, deliver, publish, inspect
 
   所有 Rainbond 查询和变更必须通过本地 `~/.rainbond/bin/rainskills-tools.js` 执行，并绑定本次 operation ID。禁止 Agent 直接调用 Rainbond MCP，也不得启动本地 Rainskills MCP 服务；只允许执行 CLI 返回的结构化结果与确认续接 argv。
 
-  业务操作开始后，必须先用固定 argv `["node", "<home>/.rainbond/bin/rainskills-tools.js", "context", "resolve", "--input", "-", "--operation-id", "<uuid>", "--skill-id", "rainbond-app-assistant"]`，通过 stdin 传入 `{"required": ["enterprise", "workspace"]}`。返回 `resolved` 时只使用该 operation 已保存的企业、工作空间和集群上下文；返回 `needs-selection` 时，把 CLI 返回的“工作空间 + 集群”组合选项一次性列给用户，不得逐项询问，也不得让用户提供 enterprise_id。用户选择后执行 `context select`，stdin 只传 `{"selection_id":"<selection-id>","option_id":"<option-id>"}`；选择成功后继续原操作，同一 operation 不再重复查询上下文。
+  业务操作开始后，必须使用 runtime contract 的 `input_commands.context-resolve` 完整 argv 和配套 stdin。返回 `resolved` 时只使用该 operation 已保存的企业、工作空间和集群上下文；返回 `needs-selection` 时，把 CLI 返回的“工作空间 + 集群”组合选项一次性列给用户，不得逐项询问，也不得让用户提供 enterprise_id。用户选择后必须使用 `input_commands.context-select` 的完整 argv 和配套 stdin；选择成功后继续原操作，同一 operation 不再重复查询上下文。
 
   只有 CLI 返回并通过校验的 `rainskills.next-action.v1` argv 才能执行续接。普通失败一律禁止自动重试：不得再次执行原命令，不得执行 `--help`、`sleep`、`rg`、`grep`，不得搜索 Rainskills 源码；同一 `operation complete` 最多执行一次。
 
@@ -123,20 +123,74 @@ description: "Use whenever a user asks to deploy, run, deliver, publish, inspect
     "local_launcher": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js"],
     "local_argv": {
       "environment-list": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js", "environment", "list", "--json"],
-      "operation-begin": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js", "operation", "begin", "--operation-id", "<uuid>", "--intent-json", "<intent-json>"],
+      "operation-begin-default": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js", "operation", "begin", "--operation-id", "<uuid>", "--intent-json", "<intent-json>"],
+      "operation-begin-selected": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js", "operation", "begin", "--operation-id", "<uuid>", "--environment-id", "<environment-id>", "--intent-json", "<intent-json>"],
       "operation-complete": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js", "operation", "complete", "--operation-id", "<uuid>"],
       "runtime-message": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js", "runtime", "message", "--id", "<message-id>"]
     },
     "intents": {
-      "deploy": {"required": [], "optional": ["project_root", "source_kind", "source_url", "service_id"], "enums": {"source_kind": ["local", "git", "image", "package"]}},
-      "create": {"required": [], "optional": ["project_root", "source_kind", "source_url", "service_id"], "enums": {"source_kind": ["local", "git", "image", "package"]}},
-      "query": {"required": ["operation"], "optional": ["team_id", "app_id", "service_id"], "enums": {"operation": ["summary", "components", "events", "logs", "access"]}},
-      "troubleshoot": {"required": ["operation"], "optional": ["team_id", "app_id", "service_id"], "enums": {"operation": ["auto", "build", "runtime", "access"]}},
-      "modify": {"required": ["team_id", "app_id", "operation"], "optional": ["service_id"], "enums": {"operation": ["component-config", "build-source", "ports", "env", "storage", "dependency"]}}
-    },
-    "minimal_intents": {
-      "deploy": {"type": "deploy"},
-      "create": {"type": "create"}
+      "deploy": {
+        "type": "deploy",
+        "required": ["type"],
+        "optional": ["project_root", "source_kind", "source_url", "image_ref", "service_id"],
+        "enums": {
+          "source_kind": ["local", "git", "image", "package"]
+        },
+        "example": {
+          "type": "deploy"
+        }
+      },
+      "create": {
+        "type": "create",
+        "required": ["type"],
+        "optional": ["project_root", "source_kind", "source_url", "image_ref", "service_id"],
+        "enums": {
+          "source_kind": ["local", "git", "image", "package"]
+        },
+        "example": {
+          "type": "create"
+        }
+      },
+      "query": {
+        "type": "query",
+        "required": ["type", "operation"],
+        "optional": ["team_id", "app_id", "service_id"],
+        "enums": {
+          "operation": ["summary", "components", "events", "logs", "access"]
+        },
+        "example": {
+          "type": "query",
+          "operation": "summary",
+          "app_id": "app"
+        }
+      },
+      "troubleshoot": {
+        "type": "troubleshoot",
+        "required": ["type", "operation"],
+        "optional": ["team_id", "app_id", "service_id"],
+        "enums": {
+          "operation": ["auto", "build", "runtime", "access"]
+        },
+        "example": {
+          "type": "troubleshoot",
+          "operation": "build",
+          "app_id": "app"
+        }
+      },
+      "modify": {
+        "type": "modify",
+        "required": ["type", "team_id", "app_id", "operation"],
+        "optional": ["service_id"],
+        "enums": {
+          "operation": ["component-config", "build-source", "ports", "env", "storage", "dependency"]
+        },
+        "example": {
+          "type": "modify",
+          "team_id": "team",
+          "app_id": "app",
+          "operation": "env"
+        }
+      }
     },
     "routes": {
       "new": ["saas", "private-existing", "install-private"],
@@ -146,6 +200,29 @@ description: "Use whenever a user asks to deploy, run, deliver, publish, inspect
       "saas": ["node", "<home>/.rainbond/lib/rainskills/bin/rainskills.js", "runtime", "connect", "<target>", "--saas", "--intent-json", "<intent-json>"],
       "private-existing": ["node", "<home>/.rainbond/lib/rainskills/bin/rainskills.js", "runtime", "connect", "<target>", "--rainbond-url", "<rainbond-url>", "--intent-json", "<intent-json>"],
       "install-private": ["node", "<home>/.rainbond/lib/rainskills/bin/rainskills.js", "runtime", "connect", "<target>", "--install-private", "--location", "<private-location>", "--intent-json", "<intent-json>"]
+    },
+    "input_commands": {
+      "context-resolve": {
+        "argv": ["node", "<home>/.rainbond/bin/rainskills-tools.js", "context", "resolve", "--input", "-", "--operation-id", "<uuid>", "--skill-id", "rainbond-app-assistant"],
+        "stdin": {
+          "required": ["enterprise", "workspace"]
+        }
+      },
+      "context-select": {
+        "argv": ["node", "<home>/.rainbond/bin/rainskills-tools.js", "context", "select", "--input", "-", "--operation-id", "<uuid>", "--skill-id", "rainbond-app-assistant"],
+        "stdin": {
+          "selection_id": "<selection-id>",
+          "option_id": "<option-id>"
+        }
+      },
+      "read": {
+        "argv": ["node", "<home>/.rainbond/bin/rainskills-tools.js", "read", "<tool>", "--input", "-", "--operation-id", "<uuid>", "--skill-id", "rainbond-app-assistant"],
+        "stdin_schema_source": "tool-catalog"
+      },
+      "call": {
+        "argv": ["node", "<home>/.rainbond/bin/rainskills-tools.js", "call", "<tool>", "--input", "-", "--operation-id", "<uuid>", "--skill-id", "rainbond-app-assistant"],
+        "stdin_schema_source": "tool-catalog"
+      }
     }
   }
   ```

@@ -31,16 +31,21 @@ function normalizeWorkspaceOptions(payload) {
     if (!item || typeof item !== "object") continue;
     const teamId = boundedString(item.team_id || item.tenant_id);
     const teamName = boundedString(item.team_name || item.tenant_name);
+    const teamAlias = boundedString(item.team_alias || item.tenant_alias);
     if (!teamId || !teamName || !Array.isArray(item.region_list)) continue;
     for (const region of item.region_list) {
       const regionName = boundedString(region?.region_name);
       if (!regionName) continue;
       const regionLabel = boundedString(region.region_alias) || regionName;
+      const workspaceLabel = teamAlias && teamAlias !== teamName
+        ? `${teamAlias}（${teamName}）`
+        : teamName;
       options.push({
         id: optionUuid(teamId, regionName),
-        label: `${teamName} / ${regionLabel}`,
+        label: `${workspaceLabel} / ${regionLabel}`,
         team_id: teamId,
         team_name: teamName,
+        team_alias: teamAlias,
         region_name: regionName,
       });
       if (options.length > MAX_OPTIONS) throw new Error("candidate-set-too-large");

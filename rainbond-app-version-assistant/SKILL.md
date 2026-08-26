@@ -24,7 +24,7 @@ description: "Use when a user explicitly asks for an existing Rainbond app versi
 
 所有 Rainbond 查询和变更必须通过本地 `~/.rainbond/bin/rainskills-tools.js` 执行，并绑定本次 operation ID。禁止 Agent 直接调用 Rainbond MCP，也不得启动本地 Rainskills MCP 服务；只允许执行 CLI 返回的结构化结果与确认续接 argv。
 
-业务操作开始后，必须先用固定 argv `["node", "<home>/.rainbond/bin/rainskills-tools.js", "context", "resolve", "--input", "-", "--operation-id", "<uuid>", "--skill-id", "rainbond-app-version-assistant"]`，通过 stdin 传入 `{"required": ["enterprise", "workspace"]}`。返回 `resolved` 时只使用该 operation 已保存的企业、工作空间和集群上下文；返回 `needs-selection` 时，把 CLI 返回的“工作空间 + 集群”组合选项一次性列给用户，不得逐项询问，也不得让用户提供 enterprise_id。用户选择后执行 `context select`，stdin 只传 `{"selection_id":"<selection-id>","option_id":"<option-id>"}`；选择成功后继续原操作，同一 operation 不再重复查询上下文。
+业务操作开始后，必须使用 runtime contract 的 `input_commands.context-resolve` 完整 argv 和配套 stdin。返回 `resolved` 时只使用该 operation 已保存的企业、工作空间和集群上下文；返回 `needs-selection` 时，把 CLI 返回的“工作空间 + 集群”组合选项一次性列给用户，不得逐项询问，也不得让用户提供 enterprise_id。用户选择后必须使用 `input_commands.context-select` 的完整 argv 和配套 stdin；选择成功后继续原操作，同一 operation 不再重复查询上下文。
 
 只有 CLI 返回并通过校验的 `rainskills.next-action.v1` argv 才能执行续接。普通失败一律禁止自动重试：不得再次执行原命令，不得执行 `--help`、`sleep`、`rg`、`grep`，不得搜索 Rainskills 源码；同一 `operation complete` 最多执行一次。
 
@@ -33,23 +33,89 @@ description: "Use when a user explicitly asks for an existing Rainbond app versi
 {
   "schema": "rainskills.skill-runtime-contract.v1",
   "package_version": "rainskills@0.1.17",
-    "launcher": ["node", "<home>/.rainbond/lib/rainskills/bin/rainskills.js"],
+  "launcher": ["node", "<home>/.rainbond/lib/rainskills/bin/rainskills.js"],
   "local_launcher": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js"],
   "local_argv": {
     "environment-list": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js", "environment", "list", "--json"],
-    "operation-begin": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js", "operation", "begin", "--operation-id", "<uuid>", "--intent-json", "<intent-json>"],
+    "operation-begin-default": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js", "operation", "begin", "--operation-id", "<uuid>", "--intent-json", "<intent-json>"],
+    "operation-begin-selected": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js", "operation", "begin", "--operation-id", "<uuid>", "--environment-id", "<environment-id>", "--intent-json", "<intent-json>"],
     "operation-complete": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js", "operation", "complete", "--operation-id", "<uuid>"],
     "runtime-message": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js", "runtime", "message", "--id", "<message-id>"]
   },
   "intents": {
-    "snapshot": {"required": ["team_id", "app_id", "operation"], "optional": ["snapshot_id"], "enums": {"operation": ["create", "inspect"]}},
-    "publish": {"required": ["team_id", "app_id", "destination"], "optional": ["snapshot_id", "market_id", "version"], "enums": {"destination": ["local-library", "cloud-market"]}},
-    "rollback": {"required": ["team_id", "app_id", "snapshot_id", "operation"], "optional": [], "enums": {"operation": ["preview", "apply"]}}
+    "snapshot": {
+      "type": "snapshot",
+      "required": ["type", "team_id", "app_id", "operation"],
+      "optional": ["snapshot_id"],
+      "enums": {
+        "operation": ["create", "inspect"]
+      },
+      "example": {
+        "type": "snapshot",
+        "team_id": "team",
+        "app_id": "app",
+        "operation": "create"
+      }
+    },
+    "publish": {
+      "type": "publish",
+      "required": ["type", "team_id", "app_id", "destination"],
+      "optional": ["snapshot_id", "market_id", "version"],
+      "enums": {
+        "destination": ["local-library", "cloud-market"]
+      },
+      "example": {
+        "type": "publish",
+        "team_id": "team",
+        "app_id": "app",
+        "destination": "local-library"
+      }
+    },
+    "rollback": {
+      "type": "rollback",
+      "required": ["type", "team_id", "app_id", "snapshot_id", "operation"],
+      "optional": [],
+      "enums": {
+        "operation": ["preview", "apply"]
+      },
+      "example": {
+        "type": "rollback",
+        "team_id": "team",
+        "app_id": "app",
+        "snapshot_id": "snapshot",
+        "operation": "preview"
+      }
+    }
   },
-  "routes": {"existing": ["saas", "private-existing"]},
+  "routes": {
+    "existing": ["saas", "private-existing"]
+  },
   "connect_argv": {
     "saas": ["node", "<home>/.rainbond/lib/rainskills/bin/rainskills.js", "runtime", "connect", "<target>", "--saas", "--intent-json", "<intent-json>"],
     "private-existing": ["node", "<home>/.rainbond/lib/rainskills/bin/rainskills.js", "runtime", "connect", "<target>", "--rainbond-url", "<rainbond-url>", "--intent-json", "<intent-json>"]
+  },
+  "input_commands": {
+    "context-resolve": {
+      "argv": ["node", "<home>/.rainbond/bin/rainskills-tools.js", "context", "resolve", "--input", "-", "--operation-id", "<uuid>", "--skill-id", "rainbond-app-version-assistant"],
+      "stdin": {
+        "required": ["enterprise", "workspace"]
+      }
+    },
+    "context-select": {
+      "argv": ["node", "<home>/.rainbond/bin/rainskills-tools.js", "context", "select", "--input", "-", "--operation-id", "<uuid>", "--skill-id", "rainbond-app-version-assistant"],
+      "stdin": {
+        "selection_id": "<selection-id>",
+        "option_id": "<option-id>"
+      }
+    },
+    "read": {
+      "argv": ["node", "<home>/.rainbond/bin/rainskills-tools.js", "read", "<tool>", "--input", "-", "--operation-id", "<uuid>", "--skill-id", "rainbond-app-version-assistant"],
+      "stdin_schema_source": "tool-catalog"
+    },
+    "call": {
+      "argv": ["node", "<home>/.rainbond/bin/rainskills-tools.js", "call", "<tool>", "--input", "-", "--operation-id", "<uuid>", "--skill-id", "rainbond-app-version-assistant"],
+      "stdin_schema_source": "tool-catalog"
+    }
   }
 }
 ```

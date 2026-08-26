@@ -16,6 +16,7 @@ const {
 } = require("../bin/rainskills.js");
 const {
   INTENT_DEFINITIONS,
+  INTENT_EXAMPLES,
   isExistingAppIntent,
   validateIntent,
 } = require("../rainbond-platform-installer/scripts/runtime-intents.js");
@@ -152,10 +153,12 @@ function assertTwoLevelNewRuntimeChoice(routing) {
 
 const intentSamples = {
   deploy: [
+    { type: "deploy" },
     { type: "deploy", project_root: "/workspace/app", source_kind: "local" },
     { type: "deploy", project_root: "/workspace/app", source_kind: "local", service_id: "service" },
   ],
   create: [
+    { type: "create" },
     { type: "create", project_root: "/workspace/app", source_kind: "git", source_url: "https://example.com/app.git" },
     { type: "create", project_root: "/workspace/app", source_kind: "local", service_id: "service" },
   ],
@@ -181,6 +184,56 @@ const intentSamples = {
   ],
   "opensource-deploy": [{ type: "opensource-deploy", source_kind: "compose", source_url: "https://example.com/compose.yaml" }],
 };
+
+const operationInputCommands = (skillId) => ({
+  "context-resolve": {
+    argv: [
+      "node", "<home>/.rainbond/bin/rainskills-tools.js",
+      "context", "resolve", "--input", "-",
+      "--operation-id", "<uuid>", "--skill-id", skillId,
+    ],
+    stdin: { required: ["enterprise", "workspace"] },
+  },
+  "context-select": {
+    argv: [
+      "node", "<home>/.rainbond/bin/rainskills-tools.js",
+      "context", "select", "--input", "-",
+      "--operation-id", "<uuid>", "--skill-id", skillId,
+    ],
+    stdin: { selection_id: "<selection-id>", option_id: "<option-id>" },
+  },
+  read: {
+    argv: [
+      "node", "<home>/.rainbond/bin/rainskills-tools.js",
+      "read", "<tool>", "--input", "-",
+      "--operation-id", "<uuid>", "--skill-id", skillId,
+    ],
+    stdin_schema_source: "tool-catalog",
+  },
+  call: {
+    argv: [
+      "node", "<home>/.rainbond/bin/rainskills-tools.js",
+      "call", "<tool>", "--input", "-",
+      "--operation-id", "<uuid>", "--skill-id", skillId,
+    ],
+    stdin_schema_source: "tool-catalog",
+  },
+});
+
+function expectedOperationInputCommands(skillId) {
+  const commands = operationInputCommands(skillId);
+  if (skillId === "rainbond-fullstack-bootstrap") {
+    commands["package-upload"] = {
+      argv: [
+        "node", "<home>/.rainbond/bin/rainskills-tools.js",
+        "package-upload", "--archive", "<archive-path>", "--input", "-",
+        "--operation-id", "<uuid>", "--skill-id", skillId,
+      ],
+      stdin_schema_source: "upload-request",
+    };
+  }
+  return commands;
+}
 
 const bootstrapScopeCases = [
   [{ type: "bootstrap", project_root: "/workspace/app" }, "new"],
@@ -269,11 +322,17 @@ test("generic deployment uses the approved copy and defers source intake until p
   const platformSkill = read("rainbond-platform-installer/SKILL.md");
 
   assert.deepEqual(contract.intents.deploy, {
-    required: [],
-    optional: ["project_root", "source_kind", "source_url", "service_id"],
+    type: "deploy",
+    required: ["type"],
+    optional: ["project_root", "source_kind", "source_url", "image_ref", "service_id"],
     enums: { source_kind: ["local", "git", "image", "package"] },
+    example: { type: "deploy" },
   });
-  assert.deepEqual(contract.intents.create, contract.intents.deploy);
+  assert.deepEqual(contract.intents.create, {
+    ...contract.intents.deploy,
+    type: "create",
+    example: { type: "create" },
+  });
   assert.match(routing, new RegExp(approvedNewApplicationRuntimeCopy.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.match(routing, /平台安装完成前.*不得.*应用来源|不得.*应用来源.*平台安装完成前/s);
   assert.match(routing, /项目路径.*Git 仓库.*镜像地址.*安装包路径/s);
@@ -379,10 +438,17 @@ for (const skill of runtimeSkills) {
     assert.deepEqual(contract.local_launcher, localLauncher);
     const expectedLocalArgv = {
       "environment-list": [...localLauncher, "environment", "list", "--json"],
-      "operation-begin": [
+      "operation-begin-default": [
         ...localLauncher,
         "operation", "begin",
         "--operation-id", "<uuid>",
+        "--intent-json", "<intent-json>",
+      ],
+      "operation-begin-selected": [
+        ...localLauncher,
+        "operation", "begin",
+        "--operation-id", "<uuid>",
+        "--environment-id", "<environment-id>",
         "--intent-json", "<intent-json>",
       ],
       "operation-complete": [
@@ -397,7 +463,8 @@ for (const skill of runtimeSkills) {
       ],
     };
     if (skillId === "rainbond-platform-query") {
-      delete expectedLocalArgv["operation-begin"];
+      delete expectedLocalArgv["operation-begin-default"];
+      delete expectedLocalArgv["operation-begin-selected"];
       delete expectedLocalArgv["operation-complete"];
       expectedLocalArgv["platform-query-default"] = [
         "node", "<home>/.rainbond/bin/rainskills-tools.js",
@@ -409,6 +476,20 @@ for (const skill of runtimeSkills) {
       ];
     }
     assert.deepEqual(contract.local_argv, expectedLocalArgv);
+    if (skillId === "rainbond-platform-query") {
+      assert.deepEqual(contract.input_commands, {
+        "query-default": {
+          argv: expectedLocalArgv["platform-query-default"],
+          stdin_schema_source: "tool-catalog",
+        },
+        "query-selected": {
+          argv: expectedLocalArgv["platform-query-selected"],
+          stdin_schema_source: "tool-catalog",
+        },
+      });
+    } else {
+      assert.deepEqual(contract.input_commands, expectedOperationInputCommands(skillId));
+    }
     const gate = markedSection(read(skill.file), "runtime-gate");
     assert.match(gate, /本地 launcher.*不得访问 npm|本地 launcher.*不访问 npm/s);
     assert.match(gate, /(相邻|同级).*rainbond-platform-installer.*local-runtime\.js/s);
@@ -432,9 +513,11 @@ for (const skill of runtimeSkills) {
     for (const type of skill.intentTypes) {
       const definition = INTENT_DEFINITIONS[type];
       assert.deepEqual(contract.intents[type], {
-        required: definition.required,
+        type,
+        required: ["type", ...definition.required],
         optional: definition.optional,
         enums: definition.enums,
+        example: INTENT_EXAMPLES[type],
       });
       for (const sample of intentSamples[type]) {
         const intent = validateIntent(sample);
@@ -554,18 +637,20 @@ test("root Rainskills manages a global default and adds later environments witho
   assert.doesNotMatch(management, /own-environment-connection|连接已有环境.*准备新环境/s);
 });
 
-test("new application onboarding always carries a concrete typed deploy intent", () => {
-  const skill = read("rainbond-app-assistant/SKILL.md");
-  const contract = runtimeContract(skill);
-
-  assert.deepEqual(contract.minimal_intents, {
-    deploy: { type: "deploy" },
-    create: { type: "create" },
-  });
+test("every runtime Skill publishes concrete typed intent examples", () => {
+  for (const skill of runtimeSkills) {
+    const contract = runtimeContract(read(skill.file));
+    for (const type of skill.intentTypes) {
+      const example = contract.intents[type].example;
+      assert.equal(example.type, type);
+      assert.deepEqual(validateIntent(example), example);
+    }
+  }
+  const appContract = runtimeContract(read("rainbond-app-assistant/SKILL.md"));
   assert.deepEqual(parseRuntimeConnectArgs([
     "runtime", "connect", "codex", "--install-private", "--location", "server",
-    "--intent-json", JSON.stringify(contract.minimal_intents.deploy),
-  ]).intent, contract.minimal_intents.deploy);
+    "--intent-json", JSON.stringify(appContract.intents.deploy.example),
+  ]).intent, appContract.intents.deploy.example);
   assert.throws(
     () => parseRuntimeConnectArgs([
       "runtime", "connect", "codex", "--install-private", "--location", "server",
@@ -573,6 +658,19 @@ test("new application onboarding always carries a concrete typed deploy intent",
     ]),
     /type/
   );
+});
+
+test("deployment Skill routing excludes neighboring public-image and market paths", () => {
+  const appAssistant = read("rainbond-app-assistant/SKILL.md").split(/^---\s*$/m)[1];
+  const openSource = read("rainbond-opensource-app-deploy/SKILL.md").split(/^---\s*$/m)[1];
+  const template = read("rainbond-template-installer/SKILL.md").split(/^---\s*$/m)[1];
+
+  assert.match(appAssistant, /not for.*third-party.*public.*image.*opensource-app-deploy/is);
+  assert.match(openSource, /container image set/is);
+  assert.match(openSource, /not for.*private-image.*app-assistant/is);
+  assert.match(openSource, /not for.*market.*template-installer/is);
+  assert.match(template, /market|template/i);
+  assert.match(template, /not for.*public.*image.*opensource-app-deploy/is);
 });
 
 test("CDN Skills-only installation works without Node and keeps completion unchanged", () => {
@@ -698,10 +796,16 @@ test("runtime-dependent Skills resolve enterprise and workspace through one prot
   ];
   for (const file of files) {
     const skill = read(file);
-    assert.match(skill, /"context", "resolve", "--input", "-"/);
-    assert.match(skill, /"required": \["enterprise", "workspace"\]/);
+    const contract = runtimeContract(skill);
+    assert.deepEqual(contract.input_commands["context-resolve"].stdin, {
+      required: ["enterprise", "workspace"],
+    });
+    assert.deepEqual(contract.input_commands["context-select"].stdin, {
+      selection_id: "<selection-id>",
+      option_id: "<option-id>",
+    });
     assert.match(skill, /needs-selection.*工作空间.*集群.*一次/s);
-    assert.match(skill, /context select.*selection_id.*option_id/s);
+    assert.match(skill, /input_commands\.context-select/);
     assert.doesNotMatch(skill, /system prompt 的 session-context|session-context 段提供/);
   }
 });

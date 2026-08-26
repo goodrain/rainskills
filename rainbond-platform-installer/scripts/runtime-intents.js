@@ -8,6 +8,8 @@ const IDENTIFIER_FIELDS = new Set(["enterprise_id", "team_id", "app_id", "servic
 const MAX_IDENTIFIER_LENGTH = 128;
 const MAX_PATH_LENGTH = 2048;
 const MAX_VERSION_LENGTH = 128;
+const MAX_IMAGE_REFERENCE_LENGTH = 512;
+const MAX_IMAGE_REFERENCES = 64;
 
 function deepFreeze(value) {
   if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
@@ -26,14 +28,14 @@ const INTENT_DEFINITIONS = deepFreeze({
   deploy: {
     skillId: "rainbond-app-assistant",
     required: [],
-    optional: ["project_root", "source_kind", "source_url", "service_id"],
+    optional: ["project_root", "source_kind", "source_url", "image_ref", "service_id"],
     enums: { source_kind: ["local", "git", "image", "package"] },
     steps: ["project-analysis", "topology", "build", "runtime", "access-verification"],
   },
   create: {
     skillId: "rainbond-app-assistant",
     required: [],
-    optional: ["project_root", "source_kind", "source_url", "service_id"],
+    optional: ["project_root", "source_kind", "source_url", "image_ref", "service_id"],
     enums: { source_kind: ["local", "git", "image", "package"] },
     steps: ["project-analysis", "topology", "build", "runtime", "access-verification"],
   },
@@ -110,7 +112,7 @@ const INTENT_DEFINITIONS = deepFreeze({
   "project-init": {
     skillId: "rainbond-project-init",
     required: ["project_root"],
-    optional: ["source_kind", "source_url"],
+    optional: ["source_kind", "source_url", "image_ref"],
     enums: { source_kind: ["local", "git", "image", "package"] },
     steps: ["project-analysis", "manifest", "link"],
   },
@@ -131,9 +133,48 @@ const INTENT_DEFINITIONS = deepFreeze({
   "opensource-deploy": {
     skillId: "rainbond-opensource-app-deploy",
     required: ["source_kind"],
-    optional: ["project_root", "source_url"],
+    optional: ["project_root", "source_url", "image_refs"],
     enums: { source_kind: ["compose", "helm", "images"] },
     steps: ["topology", "model", "deploy", "verify"],
+  },
+});
+
+const INTENT_EXAMPLES = deepFreeze({
+  "environment-add": { type: "environment-add" },
+  deploy: { type: "deploy" },
+  create: { type: "create" },
+  "template-install": {
+    type: "template-install",
+    template_id: "template",
+    install_scope: "new-app",
+  },
+  query: { type: "query", operation: "summary", app_id: "app" },
+  "platform-query": { type: "platform-query", resource: "components", app_id: "app" },
+  troubleshoot: { type: "troubleshoot", operation: "build", app_id: "app" },
+  modify: { type: "modify", team_id: "team", app_id: "app", operation: "env" },
+  "delivery-verify": { type: "delivery-verify", operation: "full", app_id: "app" },
+  snapshot: { type: "snapshot", team_id: "team", app_id: "app", operation: "create" },
+  publish: { type: "publish", team_id: "team", app_id: "app", destination: "local-library" },
+  rollback: {
+    type: "rollback",
+    team_id: "team",
+    app_id: "app",
+    snapshot_id: "snapshot",
+    operation: "preview",
+  },
+  "env-sync": {
+    type: "env-sync",
+    project_root: "/workspace/app",
+    environment: "production",
+    app_id: "app",
+  },
+  "project-init": { type: "project-init", project_root: "/workspace/app", source_kind: "local" },
+  bootstrap: { type: "bootstrap", project_root: "/workspace/app" },
+  "troubleshoot-phase": { type: "troubleshoot-phase", operation: "build", app_id: "app" },
+  "opensource-deploy": {
+    type: "opensource-deploy",
+    source_kind: "images",
+    image_refs: ["nginx:1.27"],
   },
 });
 
@@ -167,6 +208,80 @@ function canonicalHttpsSourceUrl(value) {
   return parsed.toString();
 }
 
+function canonicalImageReference(value, field = "image_ref") {
+  const reference = assertBoundedString(value, field, MAX_IMAGE_REFERENCE_LENGTH);
+  if (reference.trim() !== reference || /\s|[;`$\\]/u.test(reference)) {
+    throw new Error(`${field} 必须是安全的 OCI 镜像引用`);
+  }
+  if (reference.includes("://") || reference.includes("?") || reference.includes("#")) {
+    throw new Error(`${field} 不能是 URL`);
+  }
+
+  const digestParts = reference.split("@");
+  if (digestParts.length > 2) throw new Error(`${field} digest 无效`);
+  const [taggedName, digest] = digestParts;
+  if (digest && !/^sha256:[a-f0-9]{64}$/u.test(digest)) {
+    throw new Error(`${field} digest 无效`);
+  }
+
+  const lastSlash = taggedName.lastIndexOf("/");
+  const lastColon = taggedName.lastIndexOf(":");
+  let imageName = taggedName;
+  if (lastColon > lastSlash) {
+    const tag = taggedName.slice(lastColon + 1);
+    if (!/^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/u.test(tag)) {
+      throw new Error(`${field} tag 无效`);
+    }
+    imageName = taggedName.slice(0, lastColon);
+  }
+  if (!imageName || imageName.startsWith("/") || imageName.endsWith("/") || imageName.includes("//")) {
+    throw new Error(`${field} 镜像名称无效`);
+  }
+
+  const components = imageName.split("/");
+  const first = components[0];
+  if (components.length > 1 && first.includes(":")) {
+    const separator = first.lastIndexOf(":");
+    const host = first.slice(0, separator);
+    const port = first.slice(separator + 1);
+    if (!host || !/^[0-9]{1,5}$/u.test(port) || Number(port) < 1 || Number(port) > 65535) {
+      throw new Error(`${field} registry 端口无效`);
+    }
+    components[0] = host;
+  }
+  if (components.some((component) => (
+    !/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/u.test(component)
+  ))) {
+    throw new Error(`${field} 镜像名称无效`);
+  }
+  return reference;
+}
+
+function canonicalImageReferences(value) {
+  if (!Array.isArray(value) || value.length < 1 || value.length > MAX_IMAGE_REFERENCES) {
+    throw new Error(`image_refs 必须是包含 1-${MAX_IMAGE_REFERENCES} 个镜像引用的数组`);
+  }
+  const references = value.map((item) => canonicalImageReference(item, "image_refs"));
+  if (new Set(references).size !== references.length) throw new Error("image_refs 不能包含重复项");
+  return references;
+}
+
+function validateSourceFields(result) {
+  const kind = result.source_kind;
+  if (result.source_url && !kind) {
+    throw new Error("source_url 必须同时指定 source_kind");
+  }
+  if (result.source_url && ["local", "image", "images"].includes(kind)) {
+    throw new Error(`source_kind=${kind} 不能使用 source_url`);
+  }
+  if (result.image_ref && kind !== "image") {
+    throw new Error("image_ref 只允许用于 source_kind=image");
+  }
+  if (result.image_refs && kind !== "images") {
+    throw new Error("image_refs 只允许用于 source_kind=images");
+  }
+}
+
 function validateIntent(input, { pathApi = path } = {}) {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     throw new Error("intent 必须是对象");
@@ -183,6 +298,12 @@ function validateIntent(input, { pathApi = path } = {}) {
   const allowed = new Set(["type", ...definition.required, ...definition.optional]);
   for (const key of Object.keys(input)) {
     if (!allowed.has(key)) throw new Error(`intent 包含未知字段：${key}`);
+  }
+  if (input.source_url !== undefined && input.source_kind === "image") {
+    throw new Error("source_kind=image 必须使用 image_ref，不能使用 source_url");
+  }
+  if (input.source_url !== undefined && input.source_kind === "images") {
+    throw new Error("source_kind=images 必须使用 image_refs，不能使用 source_url");
   }
 
   const result = { type };
@@ -201,6 +322,10 @@ function validateIntent(input, { pathApi = path } = {}) {
       result[field] = value;
     } else if (field === "source_url") {
       result[field] = canonicalHttpsSourceUrl(value);
+    } else if (field === "image_ref") {
+      result[field] = canonicalImageReference(value);
+    } else if (field === "image_refs") {
+      result[field] = canonicalImageReferences(value);
     } else if (field === "project_root") {
       const projectRoot = assertBoundedString(value, field, MAX_PATH_LENGTH);
       if (!projectRoot.trim() || projectRoot.trim() !== projectRoot) {
@@ -214,9 +339,7 @@ function validateIntent(input, { pathApi = path } = {}) {
       result[field] = assertBoundedString(value, field, MAX_IDENTIFIER_LENGTH);
     }
   }
-  if (["deploy", "create"].includes(type) && result.source_url && !result.source_kind) {
-    throw new Error("应用来源 URL 必须同时指定 source_kind");
-  }
+  validateSourceFields(result);
   return result;
 }
 
@@ -252,10 +375,12 @@ function createIntentContinuation(input, resumeStep) {
 
 module.exports = {
   INTENT_DEFINITIONS,
+  INTENT_EXAMPLES,
   assertIntentCanInstallNewPlatform,
   canonicalHttpsSourceUrl,
   createIntentContinuation,
   deepFreeze,
   isExistingAppIntent,
   validateIntent,
+  canonicalImageReference,
 };

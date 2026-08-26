@@ -132,6 +132,77 @@ test("source_url is canonical HTTPS without credentials, query, or fragment", ()
   }
 });
 
+test("image-backed intents use bounded OCI image fields instead of source_url", () => {
+  const { validateIntent } = require(modulePath);
+
+  assert.deepEqual(validateIntent({
+    type: "create",
+    source_kind: "image",
+    image_ref: "nginx:1.27",
+  }), {
+    type: "create",
+    source_kind: "image",
+    image_ref: "nginx:1.27",
+  });
+  assert.deepEqual(validateIntent({
+    type: "opensource-deploy",
+    source_kind: "images",
+    image_refs: [
+      "registry.example.com:5000/team/web:v1",
+      `redis@sha256:${"a".repeat(64)}`,
+    ],
+  }), {
+    type: "opensource-deploy",
+    source_kind: "images",
+    image_refs: [
+      "registry.example.com:5000/team/web:v1",
+      `redis@sha256:${"a".repeat(64)}`,
+    ],
+  });
+
+  assert.throws(
+    () => validateIntent({ type: "create", source_kind: "image", source_url: "nginx:latest" }),
+    /image_ref/
+  );
+  assert.throws(
+    () => validateIntent({
+      type: "opensource-deploy",
+      source_kind: "images",
+      source_url: "https://example.com/images.txt",
+    }),
+    /image_refs/
+  );
+
+  for (const intent of [
+    { type: "create", source_kind: "local", source_url: "https://example.com/app.git" },
+    { type: "project-init", project_root: "/workspace/app", source_url: "https://example.com/app.git" },
+    { type: "create", source_kind: "git", image_ref: "nginx:1.27" },
+    { type: "opensource-deploy", source_kind: "compose", image_refs: ["nginx:1.27"] },
+  ]) {
+    assert.throws(() => validateIntent(intent), /source_kind|source_url|image_ref|镜像/i);
+  }
+
+  for (const image_ref of [
+    "",
+    " nginx:1.27",
+    "nginx:1.27 ",
+    "https://docker.io/library/nginx:latest",
+    "nginx:latest;touch-pwned",
+    "nginx:latest\nredis:7",
+    "registry.example.com:70000/team/web:v1",
+    `nginx@sha256:${"a".repeat(63)}`,
+  ]) {
+    assert.throws(
+      () => validateIntent({ type: "create", source_kind: "image", image_ref }),
+      /image_ref|镜像/i
+    );
+  }
+  assert.throws(
+    () => validateIntent({ type: "opensource-deploy", source_kind: "images", image_refs: [] }),
+    /image_refs|镜像/i
+  );
+});
+
 test("project_root is a canonical absolute path without surrounding whitespace", () => {
   const nodePath = require("node:path");
   const { validateIntent } = require(modulePath);
