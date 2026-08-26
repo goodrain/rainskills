@@ -38,6 +38,10 @@ class PackageUploadWorkflowContractTest(unittest.TestCase):
 
         self.assertIn("Never pass `source.local_path` to a Rainbond Tool", guidance)
         self.assertIn("complete `upload_request` object through stdin", guidance)
+        self.assertIn(
+            "--operation-id <uuid> --skill-id rainbond-fullstack-bootstrap",
+            guidance,
+        )
         self.assertNotIn("`upload_request.url` -> `--upload-url`", guidance)
         self.assertNotIn("`upload_request.upload_url`", guidance)
         self.assertNotIn("Run `upload_local_package.py upload`", guidance)

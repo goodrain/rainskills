@@ -1239,6 +1239,176 @@ test("intent resume emits continuation from live-probed protected runtime state 
   });
 });
 
+test("intent resume reads the operation-scoped connection created for a newly installed environment", async () => {
+  const { createEnvironmentRegistry } = require(path.join(
+    repoRoot, "rainbond-platform-installer", "scripts", "environment-registry.js"
+  ));
+  const { createRuntimeOperationStore } = require(path.join(
+    repoRoot, "rainbond-platform-installer", "scripts", "runtime-operations.js"
+  ));
+  const { createRuntimeStateManager } = require(path.join(
+    repoRoot, "rainbond-platform-installer", "scripts", "runtime-state.js"
+  ));
+  const { createPortableSecureStateStore } = require("./helpers/portable-secure-state.js");
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-environment-add-resume-"));
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  const otherOperationId = "b7c0af4f-5dd7-41ec-9d11-583203a71483";
+  const stateStore = createPortableSecureStateStore(home);
+  const registry = createEnvironmentRegistry({ home, stateStore });
+  const operations = createRuntimeOperationStore({ home, stateStore, registry });
+  operations.createPending({ operationId, intent: { type: "environment-add" } });
+
+  const scopedManager = createRuntimeStateManager({
+    home,
+    stateStore,
+    operationId,
+    liveProbe: async () => true,
+  });
+  const scopedConnection = {
+    target_client: "codex",
+    environment_kind: "private",
+    console_origin: "https://new.example.com",
+    intent: { type: "environment-add" },
+    operation_id: operationId,
+  };
+  scopedManager.startConnecting(scopedConnection);
+  await scopedManager.markConnected(scopedConnection);
+
+  const globalManager = createRuntimeStateManager({
+    home,
+    stateStore,
+    liveProbe: async () => true,
+  });
+  const unrelatedConnection = {
+    target_client: "codex",
+    environment_kind: "private",
+    console_origin: "https://existing.example.com",
+    intent: { type: "deploy" },
+    operation_id: otherOperationId,
+  };
+  globalManager.startConnecting(unrelatedConnection);
+  await globalManager.markConnected(unrelatedConnection);
+
+  const preloadPath = path.join(home, "mock-runtime-fetch.js");
+  fs.writeFileSync(preloadPath, [
+    "globalThis.fetch = async () => new Response(JSON.stringify({",
+    "  jsonrpc: '2.0', id: 1,",
+    "  result: { serverInfo: { name: 'rainbond-console-mcp' } },",
+    "}), { status: 200 });",
+    "",
+  ].join("\n"), { mode: 0o600 });
+
+  const result = spawnSync(process.execPath, [
+    launcherPath,
+    "intent",
+    "resume",
+    "--onboarding-id",
+    operationId,
+  ], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      HOME: home,
+      NODE_OPTIONS: `--require=${preloadPath}`,
+      RAINBOND_JWT: "current.process.jwt",
+    },
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), {
+    schema: "rainskills.intent-continuation.v1",
+    skill_id: "rainskills",
+    intent: { type: "environment-add" },
+    resume_step: "connect",
+  });
+});
+
+test("intent resume live-probes with the isolated credential bound to the operation environment", async () => {
+  const { createEnvironmentRegistry } = require(path.join(
+    repoRoot, "rainbond-platform-installer", "scripts", "environment-registry.js"
+  ));
+  const { createEnvironmentCredentialStore } = require(path.join(
+    repoRoot, "rainbond-platform-installer", "scripts", "environment-credentials.js"
+  ));
+  const { createRuntimeOperationStore } = require(path.join(
+    repoRoot, "rainbond-platform-installer", "scripts", "runtime-operations.js"
+  ));
+  const { createRuntimeStateManager } = require(path.join(
+    repoRoot, "rainbond-platform-installer", "scripts", "runtime-state.js"
+  ));
+  const { createPortableSecureStateStore } = require("./helpers/portable-secure-state.js");
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-isolated-resume-"));
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  const origin = "https://private.example.com";
+  const token = "isolatedHeader.isolatedPayload.isolatedSignature";
+  const stateStore = createPortableSecureStateStore(home);
+  const registry = createEnvironmentRegistry({ home, stateStore });
+  const credentialStore = createEnvironmentCredentialStore({ home, stateStore });
+  const operations = createRuntimeOperationStore({ home, stateStore, registry });
+  const environment = registry.add({
+    kind: "private",
+    consoleOrigin: origin,
+    connectionState: "connected",
+  }).environment;
+  credentialStore.write({ environmentId: environment.id, origin, token });
+  operations.begin({
+    operationId,
+    environmentId: environment.id,
+    intent: { type: "deploy" },
+  });
+
+  const manager = createRuntimeStateManager({ home, stateStore, liveProbe: async () => true });
+  const connection = {
+    target_client: "codex",
+    environment_kind: "private",
+    console_origin: origin,
+    intent: { type: "deploy" },
+    operation_id: operationId,
+  };
+  manager.startConnecting(connection);
+  await manager.markConnected(connection);
+
+  const preloadPath = path.join(home, "mock-isolated-runtime-fetch.js");
+  fs.writeFileSync(preloadPath, [
+    `const expected = ${JSON.stringify(`GRJWT ${token}`)};`,
+    "globalThis.fetch = async (_url, options = {}) => {",
+    "  const authorization = new Headers(options.headers).get('authorization');",
+    "  if (authorization !== expected) return new Response('{}', { status: 401 });",
+    "  return new Response(JSON.stringify({",
+    "    jsonrpc: '2.0', id: 1,",
+    "    result: { serverInfo: { name: 'rainbond-console-mcp' } },",
+    "  }), { status: 200 });",
+    "};",
+    "",
+  ].join("\n"), { mode: 0o600 });
+  const childEnv = {
+    ...process.env,
+    HOME: home,
+    NODE_OPTIONS: `--require=${preloadPath}`,
+  };
+  delete childEnv.RAINBOND_JWT;
+  delete childEnv.RAINBOND_URL;
+
+  const result = spawnSync(process.execPath, [
+    launcherPath,
+    "intent",
+    "resume",
+    "--onboarding-id",
+    operationId,
+  ], {
+    encoding: "utf8",
+    env: childEnv,
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), {
+    schema: "rainskills.intent-continuation.v1",
+    skill_id: "rainbond-app-assistant",
+    intent: { type: "deploy" },
+    resume_step: "project-analysis",
+  });
+});
+
 test("intent resume requires connected usable state and matching operation", async () => {
   const { runBuiltin } = require(launcherPath);
   const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";

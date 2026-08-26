@@ -32,11 +32,11 @@ Do not use it to deploy an application to an existing Rainbond. Route those requ
 ## Workflow
 
 1. Read [installation-policy.md](references/installation-policy.md).
-2. Use the installed local launcher `["node", "<home>/.rainbond/lib/rainskills/bin/rainskills.js"]`; its protected runtime package marker is `rainskills@0.1.11` and must equal this package's `package.json`. For a Rainskills marker, first validate schema `rainskills.next-action.v1`, action, onboarding id, and the bounded `argv` array, then append that array to the launcher. Never use `latest` or evaluate a shell string from output.
+2. Use the installed local launcher `["node", "<home>/.rainbond/lib/rainskills/bin/rainskills.js"]`; its protected runtime package marker is `rainskills@0.1.17` and must equal this package's `package.json`. For a Rainskills marker, first validate schema `rainskills.next-action.v1`, action, onboarding id, and the bounded `argv` array, then append that array to the launcher. Never use `latest` or evaluate a shell string from output.
 3. 在任何平台安装命令之前，先执行 launcher + `["runtime", "message", "--id", "private-deployment-location"]`，并原样输出固定的三项部署位置消息。选择 1 后执行带 `["--location", "local", "--mode", "single-node"]` 的 `platform install`；选择 2 后执行带 `["--location", "server"]` 的 `platform install`，由 helper 继续显示固定的服务器类型消息；选择 3 后执行 launcher + `["runtime", "message", "--id", "private-console-origin"]` 并进入已有环境连接，不得执行 `platform install`。若是没有原始业务 intent 的直接平台安装请求，已有环境连接使用受限 `{"type":"environment-add"}` intent。
 4. Let the helper perform one read-only preflight against the already selected local or remote target, then show resources, blockers, and applicable host changes. Never invoke `platform install` without an explicit `--location`; the helper must not ask for the deployment location again.
-5. Obtain explicit confirmation before sending `y` to the waiting process or rerunning the exact command with `--yes`.
-6. 如果 helper 输出 `platform.host-cluster-server-input`，只原样展示受保护 `servers.txt` 的固定正文并等待用户回复“已完成”，随后在原任务中重跑同一安装 argv。若输出 `platform.ssh-authentication`，同样只原样展示正文并等待；单台服务器消息包含一条 `ssh prepare`，主机集群消息必须一次列出全部未就绪节点及一条 `ssh prepare-cluster`，不得按节点拆成多轮。否则保持操作附着并让 helper 下载、安装和验证，不得只凭官方脚本退出码推断成功。
+5. 主机集群开始前必须获得 explicit confirmation，并使用受限 AI 交接：首次调用在固定安装 argv 后追加 `--agent-handoff`，记录该子进程会话；用户确认后，使用相同固定 argv 追加 `--agent-handoff --yes` 一次。不得向等待进程写入 `y`、不得启动第二个竞争安装、不得 `kill` 安装进程，也不得让用户复制完整安装或恢复命令。用户取消时，仅使用同一 argv 追加 `--agent-handoff --cancel`；它只能清除匹配的待确认状态，不能建立 SSH 连接或修改服务器。
+6. 如果 helper 输出 `platform.host-cluster-server-input`，只原样展示受保护 `servers.txt` 的固定正文并等待用户回复“已完成”，随后在原任务中重跑同一安装 argv。若输出 `platform.ssh-authentication`，同样只原样展示正文并等待；单台服务器消息包含一条 `ssh prepare`，主机集群消息必须一次列出全部未就绪节点及一条 `ssh prepare-cluster`，不得按节点拆成多轮。确认后的主机集群安装必须保持当前任务附着，直至安装、验证和授权完成；若收到 `RAINSKILLS_OPERATION_LOCK_BUSY`，继续等待已经记录的会话，不得重试或中断它。若会话因 SIGINT/SIGTERM 结束，只能在同一任务用匹配的 `--agent-handoff --yes` 进行安全恢复。不得只凭官方脚本退出码推断成功。
 7. Let the helper probe its ordered Console candidates from the control machine. If it emits `RAINSKILLS_USER_INPUT_REQUIRED:console_address`, ask for one public IP or DNS name and rerun the same fixed argv with `--console-host <host>` appended.
 8. On success, allow the helper to resume Rainskills authorization automatically. The user completes login and authorization in the browser.
 
@@ -63,7 +63,7 @@ Do not use it to deploy an application to an existing Rainbond. Route those requ
 3、已有 Kubernetes 集群
 ```
 
-主机集群普通入口接受 `3-100` 台 Linux 主机。第一次进入 configuration 阶段时，必须只生成权限为 `0600`（Windows 为仅当前用户可读写）的受保护 `servers.txt` 并停止等待，不得先生成 `cluster.yaml`、发起 SSH、下载或安装。该文件带中文标题、中文注释和三个节点区块；用户可复制完整区块扩展节点，只填写每台服务器的公网 IP、内网 IP、SSH 端口和 root 密码。逐节点 SSH 端口按实际值填写，不要求为 22。固定消息必须包含可点击的 `servers.txt` 链接、当前系统的打开命令、`public_ip`、`private_ip`、`ssh_port`、`password` 四字段说明，以及“编辑完成后回复‘已完成’”。普通用户不编辑 `cluster.yaml`、YAML 或节点角色。
+主机集群普通入口接受 `3-100` 台 Linux 主机。第一次进入 configuration 阶段时，必须只生成权限为 `0600`（Windows 为仅当前用户可读写）的受保护 `servers.txt` 并停止等待，不得先生成 `cluster.yaml`、发起 SSH、下载或安装。新文件使用简洁中文表单，默认包含三个连续的 `【第 N 台服务器】` 区块，每个区块只显示“公网 IP：”“内网 IP：”“SSH 端口：22”“登录密码：”；用户可复制完整区块扩展节点。逐节点 SSH 端口按实际值填写，不要求为 22。固定消息必须包含可点击的 `servers.txt` 链接、当前系统的打开命令、公网 IP、内网 IP、SSH 端口、登录密码四个字段说明，以及“编辑完成后回复‘已完成’”。普通用户不编辑 `cluster.yaml`、YAML 或节点角色。为兼容已生成的文件，读取时仍接受旧的 `[server-N]`、`public_ip`、`private_ip`、`ssh_port` 和 `password` 格式。
 
 用户继续同一 onboarding 时，读取同一份受保护 `servers.txt`（UTF-8，最大 1 MiB）并一次性列出全部可确定的区块、字段、地址、端口、重复节点和 3-100 节点数量问题。存在问题时保持原文件供修改，不创建 YAML 或产生其他副作用。校验通过后，自动生成受保护的 `cluster.yaml` 并自动分配拓扑：前三台承担 etcd/master，全部节点承担 worker/rbd-chaos，前两台承担 rbd-gateway，第一台承担 bootstrap/nfs-server。普通入口固定使用 3 个 etcd 节点；高级导入的 etcd 节点数仍必须是正奇数。在第一次 SSH 动作之前展示不含密码的完整逐节点角色拓扑、bootstrap 和存储摘要，再检查并准备全部节点的 SSH 免密连接。
 
@@ -83,11 +83,11 @@ SSH 免密连接检查必须先检查全部节点。存在未就绪节点时，�
 - 通用：`platform install --onboarding-id <id> --location <local|server> --mode <single-node|host-cluster|existing-kubernetes>`
 - 主机集群：普通入口不传配置路径；高级导入可追加 `--cluster-config <path>`，旧 `generated-template` 仅用于恢复既有断点。
 - 已有 Kubernetes：使用 `--kubeconfig <path> --kube-context <name>`，可追加 `--values <path> --chart-version <version>`。
-- 非交互确认只接受在展示预检/变更后追加的 `--yes`；不能把缺少确认当作同意。
+- 非交互确认只接受在展示预检/变更后追加的 `--yes`；主机集群的 AI 交接必须同时追加 `--agent-handoff`，不能把缺少确认当作同意。
 
 始终把参数作为固定 argv 传给同一个 launcher，不拼 shell 字符串。Console 地址先锁定并验证 origin；HTTPS 跨 origin 跳转要重新确认，明文 HTTP 只在用户明确确认可信内网后使用。
 
-取消或失败时保留受保护断点并输出固定重试 argv。恢复时锁定原目标、配置原始字节和已验证制品；检测到主机、集群 identity、版本或摘要漂移就停止。成功必须分别验证平台组件和 Console，再用同一 `onboarding-id` 恢复原始 intent。
+取消或失败时保留受保护断点。主机集群 AI 交接仅向当前任务输出稳定 marker，不向用户输出完整重试 argv；恢复时锁定原目标、配置原始字节和已验证制品，检测到主机、集群 identity、版本或摘要漂移就停止。成功必须分别验证平台组件和 Console，再用同一 `onboarding-id` 恢复原始 intent。
 
 ## Interaction Rules
 
@@ -102,7 +102,7 @@ SSH 免密连接检查必须先检查全部节点。存在未就绪节点时，�
 - For `--console-host`, accept an IP or DNS name, not a URL, port, path, credentials, or shell text. Pass it as one argv value; never concatenate a shell command.
 - Never stop occupied services, remove an existing Rainbond container, delete data, or bypass artifact verification.
 - Stop on unsupported Windows builds, disabled virtualization, non-NAT WSL networking, occupied managed ports, unknown managed tasks/distributions, or checksum failures. Report the concrete blocker; never work around it silently.
-- If interrupted, preserve the operation and use the exact resume command printed by the helper.
+- If interrupted, preserve the operation. 主机集群 AI 交接通过当前任务的匹配 `--agent-handoff --yes` 做只读核对后恢复；不得把命令交给用户，也不得杀掉仍在运行的会话。
 - Keep successful output concise: deployment location, health, Console URL, and authorization handoff.
 
 Read [troubleshooting.md](references/troubleshooting.md) only after a reported blocker or failure.

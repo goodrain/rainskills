@@ -45,6 +45,21 @@ const PACKAGE_UPLOAD_FIELDS = Object.freeze([
   "url", "url_scope", "method", "content_type", "file_field", "authorization",
 ]);
 const PACKAGE_UPLOAD_MAX_TIMEOUT_SECONDS = 3600;
+const PLATFORM_QUERY_TO_RESOURCE = Object.freeze({
+  rainbond_get_current_user: "current-user",
+  rainbond_query_enterprises: "current-enterprise",
+  rainbond_query_teams: "teams",
+  rainbond_query_regions: "regions",
+  rainbond_query_apps: "apps",
+  rainbond_get_team_apps: "team-apps",
+  rainbond_query_components: "components",
+});
+const ENTERPRISE_SCOPED_PLATFORM_QUERY_TOOLS = new Set([
+  "rainbond_query_teams",
+  "rainbond_query_regions",
+  "rainbond_query_apps",
+  "rainbond_query_components",
+]);
 
 const EXIT = Object.freeze({
   USAGE: 2,
@@ -186,6 +201,7 @@ function loadOperationConfig({ homeDir, operationId, includeRuntime }) {
     environmentId: environment.id,
     intent: operation.intent,
     requiredSkillId,
+    operationStore,
     ...(includeRuntime ? {
       homeDir,
       allowInsecureHttp: parsed.protocol === "http:",
@@ -246,7 +262,67 @@ function loadConfig({
   return config;
 }
 
+function loadEnvironmentConfig({
+  homeDir = os.homedir(),
+  environmentId,
+} = {}) {
+  const { createEnvironmentRegistry } = requireRuntimeModule("environment-registry.js");
+  const { createEnvironmentCredentialStore } = requireRuntimeModule("environment-credentials.js");
+  const registry = createEnvironmentRegistry({ home: homeDir });
+  const snapshot = registry.read();
+  const selectedId = environmentId || snapshot.default_environment_id;
+  if (!selectedId) {
+    throw new BridgeError("no default Rainbond environment is configured", EXIT.CONFIG);
+  }
+  const environment = snapshot.environments.find((entry) => entry.id === selectedId);
+  if (!environment || environment.connection_state !== "connected") {
+    throw new BridgeError("the selected Rainbond environment is unavailable", EXIT.CONFIG);
+  }
+  let credential;
+  try {
+    credential = createEnvironmentCredentialStore({ home: homeDir }).read({
+      environmentId: environment.id,
+      expectedOrigin: environment.console_origin,
+    });
+  } catch (_error) {
+    throw new BridgeError("the selected Rainbond environment credential is unavailable", EXIT.CONFIG);
+  }
+  const parsed = new URL(environment.console_origin);
+  return {
+    baseUrl: environment.console_origin,
+    jwt: credential.token,
+    environmentId: environment.id,
+    homeDir,
+    allowInsecureHttp: parsed.protocol === "http:",
+    isInsecureHttp: parsed.protocol === "http:",
+  };
+}
+
 function parseCommand(args) {
+  if (args[0] === "query") {
+    const toolName = args[1];
+    if (!Object.hasOwn(PLATFORM_QUERY_TO_RESOURCE, toolName || "")) {
+      throw new BridgeError("platform query tool is not allowed", EXIT.USAGE);
+    }
+    let environmentId;
+    let input;
+    for (let index = 2; index < args.length; index += 2) {
+      const option = args[index];
+      const value = args[index + 1];
+      if (!value || value.startsWith("--")) {
+        throw new BridgeError("platform query option requires a value", EXIT.USAGE);
+      }
+      if (option === "--environment-id" && !environmentId && OPERATION_ID_PATTERN.test(value)) {
+        environmentId = value;
+      } else if (option === "--input" && input === undefined && value === "-") {
+        input = value;
+      } else {
+        throw new BridgeError("invalid platform query command", EXIT.USAGE);
+      }
+    }
+    if (input !== "-") throw new BridgeError("platform query requires --input -", EXIT.USAGE);
+    return { command: "query", toolName, input, environmentId };
+  }
   const operationIndex = args.indexOf("--operation-id");
   if (
     operationIndex < 0
@@ -256,20 +332,51 @@ function parseCommand(args) {
     throw new BridgeError("every tools command requires --operation-id <uuid>", EXIT.USAGE);
   }
   const operationId = args[operationIndex + 1];
-  const remaining = [
+  const operationArgs = [
     ...args.slice(0, operationIndex),
     ...args.slice(operationIndex + 2),
   ];
+  const skillIndex = operationArgs.indexOf("--skill-id");
+  if (
+    skillIndex < 0
+    || !SKILL_ID_PATTERN.test(operationArgs[skillIndex + 1] || "")
+    || operationArgs.indexOf("--skill-id", skillIndex + 1) !== -1
+  ) {
+    throw new BridgeError(
+      "every tools command requires --skill-id <active-skill-id>",
+      EXIT.USAGE
+    );
+  }
+  const skillId = operationArgs[skillIndex + 1];
+  const remaining = [
+    ...operationArgs.slice(0, skillIndex),
+    ...operationArgs.slice(skillIndex + 2),
+  ];
   const command = remaining[0];
-  if (command === "status" && remaining.length === 1) return { command, operationId };
+  const context = { operationId, skillId };
+  if (
+    command === "context"
+    && ["resolve", "select"].includes(remaining[1])
+    && remaining.length === 4
+    && remaining[2] === "--input"
+    && remaining[3] === "-"
+  ) {
+    return {
+      command,
+      action: remaining[1],
+      input: remaining[3],
+      ...context,
+    };
+  }
+  if (command === "status" && remaining.length === 1) return { command, ...context };
   if (command === "list") {
-    if (remaining.length === 1) return { command, operationId };
+    if (remaining.length === 1) return { command, ...context };
     if (remaining.length === 3 && remaining[1] === "--prefix" && remaining[2]) {
-      return { command, prefix: remaining[2], operationId };
+      return { command, prefix: remaining[2], ...context };
     }
   }
   if (command === "describe" && remaining.length === 2 && remaining[1]) {
-    return { command, toolName: remaining[1], operationId };
+    return { command, toolName: remaining[1], ...context };
   }
   if (
     command === "package-upload"
@@ -280,13 +387,13 @@ function parseCommand(args) {
     && remaining[3] === "--input"
     && remaining[4] === "-"
   ) {
-    return { command, archive: remaining[2], input: remaining[4], operationId };
+    return { command, archive: remaining[2], input: remaining[4], ...context };
   }
   if (command === "read" && remaining.length === 4 && remaining[1] && remaining[2] === "--input" && remaining[3] === "-") {
-    return { command, toolName: remaining[1], input: remaining[3], operationId };
+    return { command, toolName: remaining[1], input: remaining[3], ...context };
   }
   if (command === "call" && remaining.length >= 4 && remaining[1] && remaining[2] === "--input" && remaining[3] === "-") {
-    const parsed = { command, toolName: remaining[1], input: remaining[3], operationId };
+    const parsed = { command, toolName: remaining[1], input: remaining[3], ...context };
     for (let index = 4; index < remaining.length; index += 2) {
       const option = remaining[index];
       const value = remaining[index + 1];
@@ -308,6 +415,51 @@ function parseCommand(args) {
     return parsed;
   }
   throw new BridgeError("invalid command; use status, list, describe, read, or call", EXIT.USAGE);
+}
+
+function platformQueryIntent(toolName, argumentsValue) {
+  const resource = PLATFORM_QUERY_TO_RESOURCE[toolName];
+  if (!resource) throw new BridgeError("platform query tool is not allowed", EXIT.USAGE);
+  const intent = { type: "platform-query", resource };
+  for (const field of ["enterprise_id", "team_id"]) {
+    if (argumentsValue[field] !== undefined) intent[field] = argumentsValue[field];
+  }
+  if (argumentsValue.app_id !== undefined) {
+    const value = argumentsValue.app_id;
+    if (!(
+      (Number.isInteger(value) && value > 0)
+      || (typeof value === "string" && /^[1-9][0-9]*$/.test(value))
+    )) {
+      throw new BridgeError("platform query app_id must be a positive integer", EXIT.USAGE);
+    }
+    intent.app_id = String(value);
+  }
+  try {
+    return requireRuntimeModule("runtime-intents.js").validateIntent(intent);
+  } catch (_error) {
+    throw new BridgeError("platform query intent is invalid", EXIT.USAGE);
+  }
+}
+
+async function resolvePlatformQueryArguments(toolName, argumentsValue, config) {
+  if (
+    !ENTERPRISE_SCOPED_PLATFORM_QUERY_TOOLS.has(toolName)
+    || (typeof argumentsValue.enterprise_id === "string" && argumentsValue.enterprise_id)
+  ) {
+    return argumentsValue;
+  }
+  const identity = await execute({
+    command: "read",
+    toolName: "rainbond_get_current_user",
+    argumentsValue: {},
+  }, config);
+  if (!identity || typeof identity.enterprise_id !== "string" || !identity.enterprise_id) {
+    throw new BridgeError(
+      "current Rainbond identity does not include an enterprise",
+      EXIT.TOOL
+    );
+  }
+  return { ...argumentsValue, enterprise_id: identity.enterprise_id };
 }
 
 function readArguments(input) {
@@ -1031,6 +1183,28 @@ async function validateToolArguments(config, toolName, argumentsValue) {
 }
 
 async function execute(command, config) {
+  if (command.command === "context") {
+    const { createRuntimeContextResolver } = requireRuntimeModule("runtime-context-resolver.js");
+    const resolver = createRuntimeContextResolver({
+      operationStore: config.operationStore,
+      queryTool: async (toolName, argumentsValue) => execute({
+        command: "read",
+        toolName,
+        argumentsValue,
+      }, config),
+    });
+    if (command.action === "resolve") {
+      return resolver.resolve({
+        operationId: config.operationId,
+        required: command.argumentsValue.required,
+      });
+    }
+    return resolver.select({
+      operationId: config.operationId,
+      selectionId: command.argumentsValue.selection_id,
+      optionId: command.argumentsValue.option_id,
+    });
+  }
   if (command.command === "package-upload") {
     return executePackageUpload(command, config);
   }
@@ -1147,15 +1321,41 @@ async function main(args = process.argv.slice(2)) {
   let argumentRedactions = [];
   try {
     command = parseCommand(args);
-    if (["read", "call", "package-upload"].includes(command.command)) {
+    if (["read", "call", "package-upload", "query", "context"].includes(command.command)) {
       const argumentsValue = readArguments(command.input);
       command.argumentsValue = argumentsValue;
       argumentRedactions = collectArgumentRedactions(argumentsValue);
+    }
+    if (command.command === "query") {
+      config = loadEnvironmentConfig({ environmentId: command.environmentId });
+      command.argumentsValue = await resolvePlatformQueryArguments(
+        command.toolName,
+        command.argumentsValue,
+        config
+      );
+      platformQueryIntent(command.toolName, command.argumentsValue);
+      command = {
+        command: "read",
+        toolName: command.toolName,
+        argumentsValue: command.argumentsValue,
+      };
+      if (config.isInsecureHttp) {
+        process.stderr.write('{"warning":"using insecure HTTP transport"}\n');
+      }
+      const output = await execute(command, config);
+      process.stdout.write(`${JSON.stringify(fitOutput(output))}\n`);
+      return;
     }
     config = loadConfig({
       includeRuntime: true,
       operationId: command.operationId,
     });
+    if (command.skillId !== config.requiredSkillId) {
+      throw new BridgeError(
+        "Skill does not match the protected runtime operation intent",
+        EXIT.CONFIG
+      );
+    }
     if (config.isInsecureHttp) {
       process.stderr.write('{"warning":"using insecure HTTP transport"}\n');
     }
@@ -1184,6 +1384,8 @@ module.exports = {
   packageUploadEnvironment,
   parseEnvFile,
   parseCommand,
+  platformQueryIntent,
+  loadEnvironmentConfig,
   rpcRequest,
   validateSchemaValue,
   validateToolArguments,

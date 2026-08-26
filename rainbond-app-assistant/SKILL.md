@@ -100,13 +100,17 @@ description: "Use whenever a user asks to deploy, run, deliver, publish, inspect
 
   生成新的 UUID，并执行本地 launcher + `["operation", "begin", "--operation-id", "<uuid>", "--intent-json", "<intent-json>"]`；用户明确指定已有环境时在 `--intent-json` 前加入 `["--environment-id", "<immutable-environment-id>"]`。保存返回的 `operation_id`，此后每个 Rainbond MCP 工具调用都必须在参数中加入 `rainskills_operation_id`。环境改名或修改全局默认值不能改变已开始操作的目标。同一项目可以在多个环境和团队分别部署，禁止写入或推断项目级默认环境。
 
+  每个 intent JSON 都必须显式包含顶层 `type`，下方 `required` 只表示除 `type` 外的业务字段要求，绝不表示可以传 `{}`。用户明确要求部署新应用时，最小 intent 是 `{"type":"deploy"}`；用户只给出 Harbor 这类应用名称、尚未提供来源描述符时，也必须先保留 `{"type":"deploy"}`，不得省略或延后补充 `type`。从首次构造开始复用同一份完整 intent JSON，依次传给 `operation begin`、`runtime connect` 和后续恢复；只在用户已明确提供且契约允许时增加字段，不得重新构造为不含 `type` 的对象。
+
   第一步检查 Node.js 是否存在且主版本不低于 18。Node.js 缺失或低于 18 时，只说明“Rainskills 执行组件需要 Node.js 18 或更高版本”并停止：不选择运行环境，不调用 MCP，不猜测替代命令。只有用户或 agent 明确同意后才安装或升级 Node.js，再从同一原始 intent 继续。
 
-  固定 launcher 是 `["node", "<home>/.rainbond/lib/rainskills/bin/rainskills.js"]`；运行包版本标记为 `rainskills@0.1.11`，且必须与本技能包 `package.json` 一致。把 launcher 与参数拼成 argv 数组直接执行，禁止使用 `rainskills@latest`，禁止拼接或执行 shell 字符串。
+  固定 launcher 是 `["node", "<home>/.rainbond/lib/rainskills/bin/rainskills.js"]`；运行包版本标记为 `rainskills@0.1.17`，且必须与本技能包 `package.json` 一致。把 launcher 与参数拼成 argv 数组直接执行，禁止使用 `rainskills@latest`，禁止拼接或执行 shell 字符串。
 
   本地 launcher 必须从当前 Skill 所在目录的同级目录定位 `rainbond-platform-installer/scripts/local-runtime.js`，解析为绝对路径后使用 `["node", "<绝对路径>"]` 执行。`environment list`、`operation begin`、`operation complete` 和 `runtime message` 只能使用本地 launcher；本地 launcher 只读取已安装文件和本机受保护状态，不得访问 npm 或其它网络。只有用户选定连接或安装运行环境后，才使用上面的固定本地 launcher。
 
   所有 Rainbond 查询和变更必须通过本地 `~/.rainbond/bin/rainskills-tools.js` 执行，并绑定本次 operation ID。禁止 Agent 直接调用 Rainbond MCP，也不得启动本地 Rainskills MCP 服务；只允许执行 CLI 返回的结构化结果与确认续接 argv。
+
+  业务操作开始后，必须先用固定 argv `["node", "<home>/.rainbond/bin/rainskills-tools.js", "context", "resolve", "--input", "-", "--operation-id", "<uuid>", "--skill-id", "rainbond-app-assistant"]`，通过 stdin 传入 `{"required": ["enterprise", "workspace"]}`。返回 `resolved` 时只使用该 operation 已保存的企业、工作空间和集群上下文；返回 `needs-selection` 时，把 CLI 返回的“工作空间 + 集群”组合选项一次性列给用户，不得逐项询问，也不得让用户提供 enterprise_id。用户选择后执行 `context select`，stdin 只传 `{"selection_id":"<selection-id>","option_id":"<option-id>"}`；选择成功后继续原操作，同一 operation 不再重复查询上下文。
 
   只有 CLI 返回并通过校验的 `rainskills.next-action.v1` argv 才能执行续接。普通失败一律禁止自动重试：不得再次执行原命令，不得执行 `--help`、`sleep`、`rg`、`grep`，不得搜索 Rainskills 源码；同一 `operation complete` 最多执行一次。
 
@@ -114,7 +118,7 @@ description: "Use whenever a user asks to deploy, run, deliver, publish, inspect
   ```json
   {
     "schema": "rainskills.skill-runtime-contract.v1",
-    "package_version": "rainskills@0.1.11",
+    "package_version": "rainskills@0.1.17",
     "launcher": ["node", "<home>/.rainbond/lib/rainskills/bin/rainskills.js"],
     "local_launcher": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js"],
     "local_argv": {
@@ -129,6 +133,10 @@ description: "Use whenever a user asks to deploy, run, deliver, publish, inspect
       "query": {"required": ["operation"], "optional": ["team_id", "app_id", "service_id"], "enums": {"operation": ["summary", "components", "events", "logs", "access"]}},
       "troubleshoot": {"required": ["operation"], "optional": ["team_id", "app_id", "service_id"], "enums": {"operation": ["auto", "build", "runtime", "access"]}},
       "modify": {"required": ["team_id", "app_id", "operation"], "optional": ["service_id"], "enums": {"operation": ["component-config", "build-source", "ports", "env", "storage", "dependency"]}}
+    },
+    "minimal_intents": {
+      "deploy": {"type": "deploy"},
+      "create": {"type": "create"}
     },
     "routes": {
       "new": ["saas", "private-existing", "install-private"],
@@ -146,6 +154,8 @@ description: "Use whenever a user asks to deploy, run, deliver, publish, inspect
   `deploy`/`create` 含 `service_id` 时属于 existing，否则属于 new；`query`、`troubleshoot`、`modify` 始终属于 existing。意图不明确时先澄清，不执行 connect。target 只允许 `codex`、`claude`、`pi`、`all`。连接前校验 intent，只执行其 scope 在契约中允许的完整 argv。只消费 schema 为 `rainskills.next-action.v1` 且完成字段校验后的 `argv` 数组。
 
   连接或平台安装完成后，用固定 `onboarding-id` 执行 launcher + `["intent", "resume", "--onboarding-id", "<同一 onboarding-id>"]`，恢复原始 intent 和 `resume_step`，不得重新猜测动作。
+
+  同一条附着命令先输出 `runtime.device-authorization`、随后输出 schema 为 `rainskills.runtime-connect-result.v1` 且 `state=connected` 时，最终 connected 结果覆盖前面的等待授权消息。不得再次展示旧授权消息、不得等待用户回复“已授权”；必须在同一轮立即使用同一 `onboarding-id` 执行 `intent resume`。
 
   业务 MCP 返回 401 时，先执行 launcher + `["runtime", "record-failure", "--onboarding-id", "<同一 onboarding-id>", "--step", "<当前固定步骤>", "--reason", "credential-expired"]`，再仅一次执行 launcher + `["runtime", "reconnect", "--onboarding-id", "<同一 onboarding-id>"]`，然后 resume 并只重试该步骤；第二次 401 立即停止。403 时执行 launcher + `["runtime", "record-failure", "--onboarding-id", "<同一 onboarding-id>", "--step", "<当前固定步骤>", "--reason", "permission-denied"]` 后停止，不得 reconnect、重新授权或自动重试，只说明缺少的权限。
 <!-- rainskills-runtime-gate:end -->
@@ -386,7 +396,7 @@ description: "Use whenever a user asks to deploy, run, deliver, publish, inspect
     反例（来自真实回归 case `cs_1779149681822_3u`，2026-05-19）：模型从 `rainbond_get_component_summary` 响应的 `recent_events` 段看到形如 `{"ID": 17740, "event_id": "...", "opt_type": "build-service"}`，直接把 `17740` 当成 `event_id` 传给 `rainbond_get_component_build_logs`，工具返回 `items: []`（找不到该 UUID 的日志）。正确做法：从同一 `recent_events[i].event_id` 字段取出 UUID 字符串，或调 `rainbond_get_component_events` 重查。
 35. **会话内部叙述纪律 + 内部 preflight 工具不要主动调**。下列四类是"内部会话状态"，对用户**无信息量**，禁止外漏到 assistant 可见消息：
     - **`select_skill_*` 工具调用本身**：这是 server 内部 hookup，把指定 skill 的执行手册拼到 system prompt 用的。调用前**不要**说"我先加载 bootstrap 手册"、"现在调用 select_skill_..."；调用后**不要**说"Bootstrap 手册已加载"、"skill ready" 这类回声。server 返回的 `loaded_skill` / `already active` ack 是给你看的内部信号，**直接进入下一个真实工具调用**，保持沉默。
-    - **`rainbond_get_current_user`**：本工具被 server 端 AuthSubjectResolver 在每次 HTTP 请求的 preflight 里跑过了。当前 user_id / username / enterprise_id / team_name / region_name **已经在 system prompt 的 session-context 段提供**，需要时直接读那里，**不要发 tool call 重新拉**。例外：用户明确说"我换了团队/企业，重新认一下"这种 explicit 重认证需求才调。
+    - **`rainbond_get_current_user`**：不得由 Agent 单独调用。企业、工作空间和集群上下文统一由受保护的 `context resolve` 命令解析并绑定到本次 operation；只有 CLI 明确返回需要选择时才询问用户。
     - **`rainbond_query_components` 同入参重复轮询**：服务端 30s 内的同 args 调用会走缓存；你**不要**在每个新 user turn 开头都"先查一下组件列表"，priorTurnMessages 里上一次的 query 结果在 contextSignature 不变时仍然有效。
     - **规则推理过程 / MCP 工具内部限制 / 分类决策叙述**：你内部基于哪条 Iron Law / hard rule / 推断信号做的决策、具体 MCP 工具签名 / 字段限制、对组件 / 服务的分类判断（"ClickHouse 是公认的列式分析数据库"这类），都属于内部状态，对用户**无信息量**。
       
@@ -480,7 +490,7 @@ description: "Use whenever a user asks to deploy, run, deliver, publish, inspect
     - 与 Iron Law 14（delivery mode 切换必须用户确认）配套：14 管 source↔package↔image↔template 的策略切换需用户确认，38 管"用户已经显式给了源码意图时，模板不是默认路径、且切换必须清理残留"。
 39. **轮次纪律：复用已知值，不重复无变化的调用**（与 Iron Law 35 的"内部 preflight 工具不要主动调"配套，35 管哪些工具不该调，39 管已拿到的值要复用）：
     - **复用创建返回的 `service_id` / `service_alias`**：`rainbond_create_component_*` 成功后会返回 `service_id` 和 `service_alias`（k8s component name），**记住并在本轮后续 mutating 操作里直接复用**。**禁止**在每次 `rainbond_manage_component_*` / `rainbond_operate_app` 之前都先 `rainbond_query_components` 重查一遍 alias —— 创建时已经返回过，重查只是浪费轮次（仅当 `service_id` 出处不明、按 Iron Law 34 必须重新建立 provenance 时才查）。
-    - **不重复调 `rainbond_get_current_user`**：身份（user_id / username / enterprise_id / team_name / region_name）在一次会话内不变，已在 system prompt 的 session-context 段提供，需要时直接读（见 Iron Law 35 第 2 类）。
+    - **不重复调 `rainbond_get_current_user`**：同一 operation 复用 `context resolve` 已保存的企业、工作空间和集群上下文；只有上下文失效或用户明确切换目标时才重新解析。
     - **同一 mutating 调用成功后禁止原样重复**：一个写工具用相同入参成功返回后，不要在同一轮再发一次相同调用"确认一下"——成功就是成功，要确认状态用读工具（`rainbond_get_component_summary` 等），不要重发写调用。
 40. **对外访问地址必须引用工具返回的真实值，禁止按格式拼装。** 组件的对外访问地址是**事实信息**，权威来源是 `rainbond_get_component_detail` 或 `rainbond_get_component_summary` 返回的 `access_infos` 字段（都来自网关真实绑定）。只需状态和访问地址时优先调用轻量的 detail；只有异常组件确实需要端口、env、存储或事件证据时才调用 summary。
     - 本轮已通过上述任一工具拿到真实地址 → 报告里引用 `access_infos` 的真实值。

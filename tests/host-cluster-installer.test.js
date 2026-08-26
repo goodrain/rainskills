@@ -327,6 +327,29 @@ function serverInput(count, overrides = {}) {
   )).join("\n\n");
 }
 
+function chineseServerInputSection(index, overrides = {}) {
+  const values = {
+    publicIp: `203.0.113.${index}`,
+    privateIp: `10.0.0.${index}`,
+    sshPort: "22",
+    password: `fixture-password-${index}`,
+    ...overrides,
+  };
+  return [
+    `【第 ${index} 台服务器】`,
+    `公网 IP：${values.publicIp}`,
+    `内网 IP：${values.privateIp}`,
+    `SSH 端口：${values.sshPort}`,
+    `登录密码：${values.password}`,
+  ].join("\n");
+}
+
+function chineseServerInput(count, overrides = {}) {
+  return Array.from({ length: count }, (_, index) => (
+    chineseServerInputSection(index + 1, overrides[index + 1])
+  )).join("\n\n");
+}
+
 function hostClusterWorkflowFixture(prefix = "rainskills-host-server-input-") {
   const root = tempOperation(prefix);
   const home = path.join(root, "home");
@@ -500,26 +523,31 @@ test("servers.txt template has Chinese guidance and three editable server input 
   const bytes = createHostServerInputTemplate();
   assert(Buffer.isBuffer(bytes));
   const text = bytes.toString("utf8");
-
-  const expectedGuidance = [
-    "# Rainbond 多节点服务器信息",
-    "# 密码只写入受保护的本地和远端安装文件，不会写入聊天、日志或状态；不要填写私钥或 Token。",
-    "# 超过三台服务器时，复制完整的 [server-N] 区块并按顺序编号。",
-  ];
-  assert.deepEqual(text.split("\n").slice(0, 3), expectedGuidance);
-  assert.deepEqual([...text.matchAll(/^\[server-(\d+)\]$/gm)].map((match) => match[1]), ["1", "2", "3"]);
-  for (const field of ["public_ip", "private_ip", "ssh_port", "password"]) {
-    assert.equal(text.match(new RegExp(`^${field}=`, "gm"))?.length, 3, field);
-  }
-  for (const guidance of [
-    "# 公网 IP：控制端通过 SSH 访问该服务器的地址；没有独立公网 IP 时可与内网 IP 相同",
-    "# 内网 IP：集群节点之间通信使用的地址",
-    "# SSH 端口：按服务器实际端口填写，不要求为 22",
-    "# root 密码：保留所有特殊字符；不要添加引号",
-  ]) {
-    assert.equal(text.split(guidance).length - 1, 3, guidance);
-  }
-  assert.doesNotMatch(text, /cluster\.yaml|YAML|角色/);
+  const expected = [
+    "# 没有公网 IP 时，公网 IP 和内网 IP 填写相同地址",
+    "# 增加服务器时，复制完整的一组并连续编号",
+    "",
+    "【第 1 台服务器】",
+    "公网 IP：",
+    "内网 IP：",
+    "SSH 端口：22",
+    "登录密码：",
+    "",
+    "【第 2 台服务器】",
+    "公网 IP：",
+    "内网 IP：",
+    "SSH 端口：22",
+    "登录密码：",
+    "",
+    "【第 3 台服务器】",
+    "公网 IP：",
+    "内网 IP：",
+    "SSH 端口：22",
+    "登录密码：",
+    "",
+  ].join("\n");
+  assert.equal(text, expected);
+  assert.doesNotMatch(text, /server-|public_ip|private_ip|ssh_port|password=|cluster\.yaml|YAML|角色/);
 });
 
 test("servers.txt prompt links the file and provides native open commands without YAML or role editing", () => {
@@ -530,15 +558,10 @@ test("servers.txt prompt links the file and provides native open commands withou
   const macOS = renderHostServerInputPrompt({ inputPath: posixPath, platform: "darwin" });
   assert.match(macOS, new RegExp(`\\[点击打开 servers\\.txt\\]\\(<${posixPath.replace(/\./g, "\\.").replace(/ /g, "%20")}>\\)`));
   assert.match(macOS, /open '\/Users\/example user\/.*servers\.txt'/);
-  assert.match(macOS, /public_ip、private_ip、ssh_port 和 password/);
-  assert.match(macOS, /公网 IP：控制端 SSH 地址；没有独立公网 IP 时可与内网 IP 相同。/);
-  assert.match(macOS, /内网 IP：节点通信地址。/);
-  assert.match(macOS, /SSH 端口：填写每台服务器的实际端口，不强制为 22。/);
-  assert.match(macOS, /root 密码：只写入受保护的本地和远端安装文件，不得发送到聊天。/);
+  assert.match(macOS, /公网 IP、内网 IP、SSH 端口和登录密码/);
   assert.match(macOS, /密码只写入受保护的本地和远端安装文件，不会写入聊天、日志或状态；不要填写私钥或 Token。/);
-  assert.doesNotMatch(macOS, /密码只保存在这个受保护的本地文件/);
   assert.match(macOS, /回复“已完成”/);
-  assert.doesNotMatch(macOS, /cluster\.yaml|YAML|角色/);
+  assert.doesNotMatch(macOS, /public_ip|private_ip|ssh_port|password|cluster\.yaml|YAML|角色/);
 
   assert.match(
     renderHostServerInputPrompt({ inputPath: posixPath, platform: "linux" }),
@@ -566,6 +589,54 @@ test("server input accepts UTF-8 BOM and CRLF and preserves password characters 
   assert.equal(result.hosts[1].sshPort, 65535);
   assert.equal(result.hosts[2].publicIp, "2001:db8::3");
   assert.equal(result.hosts[2].privateIp, "node-3.internal");
+});
+
+test("Chinese server input accepts both colons, preserves password bytes, and mixes legacy aliases", () => {
+  const { parseHostServerInput } = moduleUnderTest();
+  const sentinel = "  MUST-NOT-LEAK:中文：part=value#tail  ";
+  const text = [
+    "【第 1 台服务器】",
+    "公网 IP：203.0.113.1",
+    "内网 IP:10.0.0.1",
+    "SSH 端口：2201",
+    `登录密码：${sentinel}`,
+    "",
+    "[server-2]",
+    "公网 IP：203.0.113.2",
+    "内网 IP：10.0.0.2",
+    "SSH 端口:2202",
+    "登录密码:second",
+    "",
+    "【第 3 台服务器】",
+    "public_ip=203.0.113.3",
+    "private_ip=10.0.0.3",
+    "ssh_port=2203",
+    "password=third",
+  ].join("\n");
+  const result = parseHostServerInput(text);
+
+  assert.deepEqual(result.issues, []);
+  assert.deepEqual(result.hosts.map(({ publicIp, privateIp, sshPort }) => ({ publicIp, privateIp, sshPort })), [
+    { publicIp: "203.0.113.1", privateIp: "10.0.0.1", sshPort: 2201 },
+    { publicIp: "203.0.113.2", privateIp: "10.0.0.2", sshPort: 2202 },
+    { publicIp: "203.0.113.3", privateIp: "10.0.0.3", sshPort: 2203 },
+  ]);
+  assert.equal(result.hosts[0].password, sentinel);
+});
+
+test("Chinese server input rejects unapproved delimiters and reports Chinese field names", () => {
+  const { parseHostServerInput } = moduleUnderTest();
+  const sentinel = "MUST-NOT-LEAK-CHINESE-SERVER-INPUT";
+  const text = chineseServerInput(3)
+    .replace("公网 IP：203.0.113.1", "公网 IP=203.0.113.1")
+    .replace("内网 IP：10.0.0.2", "private_ip:10.0.0.2")
+    .replace("登录密码：fixture-password-3", `登录密码：${sentinel}`);
+  const result = parseHostServerInput(text);
+  const report = result.issues.join("\n");
+
+  assert.match(report, /公网 IP|字段格式/);
+  assert.match(report, /内网 IP|字段格式/);
+  assert.doesNotMatch(report, new RegExp(sentinel));
 });
 
 test("server input aggregates strict section and field errors without reflecting password values", () => {
@@ -598,12 +669,12 @@ test("server input aggregates strict section and field errors without reflecting
   const report = result.issues.join("\n");
 
   assert(result.issues.length >= 6, report);
-  assert.match(report, /重复.*server-1|server-1.*重复/);
+  assert.match(report, /重复.*第 1 台服务器|第 1 台服务器.*重复/);
   assert.match(report, /区块.*连续|连续.*区块/);
-  assert.match(report, /public_ip.*重复|重复.*public_ip/);
-  assert.match(report, /未知字段/);
-  assert.match(report, /private_ip.*缺失|缺失.*private_ip/);
-  assert.match(report, /password.*空|password.*未填写/);
+  assert.match(report, /公网 IP.*重复|重复.*公网 IP/);
+  assert.match(report, /字段格式无效/);
+  assert.match(report, /内网 IP.*缺失|缺失.*内网 IP/);
+  assert.match(report, /登录密码.*空|登录密码.*未填写/);
   assert.match(report, /未知区块/);
   assert.doesNotMatch(report, new RegExp(sentinel));
 });
@@ -683,9 +754,9 @@ test("server input validates address and port boundaries while allowing distinct
     3: { ssh_port: "22.5" },
   }));
   const report = invalid.issues.join("\n");
-  assert.match(report, /server-1.*public_ip|public_ip.*server-1/);
-  assert.match(report, /server-2.*private_ip|private_ip.*server-2/);
-  assert.equal(invalid.issues.filter((issue) => /ssh_port/.test(issue)).length, 3);
+  assert.match(report, /第 1 台服务器.*公网 IP|公网 IP.*第 1 台服务器/);
+  assert.match(report, /第 2 台服务器.*内网 IP|内网 IP.*第 2 台服务器/);
+  assert.equal(invalid.issues.filter((issue) => /SSH 端口/.test(issue)).length, 3);
 });
 
 test("server input rejects malformed IPv6 and DNS labels", () => {
@@ -704,7 +775,7 @@ test("generated-server-input rejects IPv6 zone ids as fixed invalid-address diag
   assert.doesNotThrow(() => {
     parsed = parseHostServerInput(serverInput(3, { 1: { public_ip: "fe80::1%eth0" } }));
   });
-  assert.match(parsed.issues.join("\n"), /server-1.*public_ip.*地址无效|public_ip.*地址无效/);
+  assert.match(parsed.issues.join("\n"), /第 1 台服务器.*公网 IP.*地址无效|公网 IP.*地址无效/);
 
   const imported = cluster();
   imported.hosts[0].address = "fe80::1%eth0";
@@ -727,8 +798,8 @@ test("server input detects case-insensitive DNS and equivalent IPv6 address conf
     3: { public_ip: "2001:db8::3", private_ip: "Node-3.Internal" },
     4: { public_ip: "2001:0db8:0:0:0:0:0:3", private_ip: "node-3.internal" },
   }));
-  assert.equal(result.issues.filter((issue) => /SSH endpoint/.test(issue)).length, 2, result.issues.join("\n"));
-  assert.equal(result.issues.filter((issue) => /private_ip.*重复/.test(issue)).length, 2, result.issues.join("\n"));
+  assert.equal(result.issues.filter((issue) => /SSH 地址和端口.*重复/.test(issue)).length, 2, result.issues.join("\n"));
+  assert.equal(result.issues.filter((issue) => /内网 IP.*重复/.test(issue)).length, 2, result.issues.join("\n"));
 });
 
 test("server input rejects duplicate SSH endpoints and private addresses without password leakage", () => {
@@ -741,7 +812,7 @@ test("server input rejects duplicate SSH endpoints and private addresses without
   }));
   const report = result.issues.join("\n");
   assert.match(report, /SSH.*重复|重复.*SSH/);
-  assert.match(report, /private_ip.*重复|重复.*private_ip/);
+  assert.match(report, /内网 IP.*重复|重复.*内网 IP/);
   assert.doesNotMatch(report, new RegExp(sentinel));
 });
 
@@ -937,8 +1008,8 @@ test("server input workflow first entry creates only protected servers.txt and w
   assert.match(message, new RegExp(`\\[点击打开 servers\\.txt\\]\\(<${fixture.serverInputPath}>\\)`));
   assert.match(message, new RegExp(`open '${fixture.serverInputPath}'`));
   assert.match(message, /编辑完成后回复“已完成”/);
-  assert.match(message, /public_ip、private_ip、ssh_port 和 password/);
-  assert.doesNotMatch(message, /cluster\.yaml|YAML|角色/);
+  assert.match(message, /公网 IP、内网 IP、SSH 端口和登录密码/);
+  assert.doesNotMatch(message, /public_ip|private_ip|ssh_port|password|cluster\.yaml|YAML|角色/);
 });
 
 test("generated-server-input invalid resume reports all issues once and never creates YAML or starts SSH", async () => {
@@ -1680,6 +1751,84 @@ test("ROI confirmation requires explicit acceptance before downloads or executio
   assert.equal(acceptedEffects, 1);
 });
 
+test("agent handoff confirmation never reads from the terminal and records a resumable non-secret binding", async () => {
+  const { installHostCluster } = moduleUnderTest();
+  const root = tempOperation("rainskills-agent-handoff-confirm-");
+  const home = path.join(root, "home");
+  fs.mkdirSync(home, { mode: 0o700 });
+  const stateStore = require("./helpers/portable-secure-state.js").createPortableSecureStateStore(home);
+  const source = path.join(home, "source.yaml");
+  fs.writeFileSync(source, YAML.stringify(cluster()), { mode: 0o600 });
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  const paths = { root: path.join(home, ".rainbond", "platform-installer", operationId) };
+  stateStore.ensurePrivateDirectory(paths.root);
+  let promptReads = 0;
+  const result = await installHostCluster({
+    onboarding: { operation_id: operationId }, state: { operation_id: operationId }, paths,
+    options: { clusterConfig: source, agentHandoff: true, yes: false },
+  }, {
+    stateStore,
+    interactive: true,
+    createPrompt: () => ({ question: async () => { promptReads += 1; return "yes"; }, close: () => {} }),
+    sessionFactory: async () => ({ controlPath: null, interactive: false }),
+    closeSession: () => {},
+  });
+  assert.equal(result.waiting, true);
+  assert.equal(promptReads, 0);
+  const driverState = stateStore.readProtectedJson(path.join(paths.root, "host-cluster", "state.json"));
+  assert.equal(driverState.stage, "confirmation");
+  assert.equal(driverState.status, "waiting_user");
+  assert.equal(driverState.agent_handoff.phase, "waiting_confirmation");
+  assert.match(driverState.agent_handoff.invocation_sha256, /^[a-f0-9]{64}$/);
+  assert.doesNotMatch(JSON.stringify(driverState.agent_handoff), /fixture-password/);
+});
+
+test("agent handoff cancellation clears only a matching pending confirmation before SSH", async () => {
+  const { installHostCluster } = moduleUnderTest();
+  const root = tempOperation("rainskills-agent-handoff-cancel-");
+  const home = path.join(root, "home");
+  fs.mkdirSync(home, { mode: 0o700 });
+  const stateStore = require("./helpers/portable-secure-state.js").createPortableSecureStateStore(home);
+  const source = path.join(home, "source.yaml");
+  fs.writeFileSync(source, YAML.stringify(cluster()), { mode: 0o600 });
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  const paths = { root: path.join(home, ".rainbond", "platform-installer", operationId) };
+  stateStore.ensurePrivateDirectory(paths.root);
+  let ssh = 0;
+  await installHostCluster({
+    onboarding: { operation_id: operationId }, state: { operation_id: operationId }, paths,
+    options: { clusterConfig: source, agentHandoff: true, yes: false },
+  }, { stateStore, interactive: false, sessionFactory: async () => { ssh += 1; return { controlPath: null }; }, closeSession: () => {} });
+  const cancelled = await installHostCluster({
+    onboarding: { operation_id: operationId }, state: { operation_id: operationId }, paths,
+    options: { clusterConfig: source, agentHandoff: true, cancel: true },
+  }, { stateStore, sessionFactory: async () => { ssh += 1; throw new Error("cancel must not connect SSH"); } });
+  assert.equal(cancelled.cancelled, true);
+  assert.equal(ssh, 1);
+  const driverState = stateStore.readProtectedJson(path.join(paths.root, "host-cluster", "state.json"));
+  assert.equal(driverState.status, "cancelled");
+  assert.equal(driverState.agent_handoff, null);
+});
+
+test("agent handoff --yes without the persisted confirmation binding refuses before SSH", async () => {
+  const { installHostCluster } = moduleUnderTest();
+  const root = tempOperation("rainskills-agent-handoff-unbound-yes-");
+  const home = path.join(root, "home");
+  fs.mkdirSync(home, { mode: 0o700 });
+  const stateStore = require("./helpers/portable-secure-state.js").createPortableSecureStateStore(home);
+  const source = path.join(home, "source.yaml");
+  fs.writeFileSync(source, YAML.stringify(cluster()), { mode: 0o600 });
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  const paths = { root: path.join(home, ".rainbond", "platform-installer", operationId) };
+  stateStore.ensurePrivateDirectory(paths.root);
+  let ssh = 0;
+  await assert.rejects(() => installHostCluster({
+    onboarding: { operation_id: operationId }, state: { operation_id: operationId }, paths,
+    options: { clusterConfig: source, agentHandoff: true, yes: true },
+  }, { stateStore, sessionFactory: async () => { ssh += 1; return { controlPath: null }; } }), /确认交接状态.*不匹配|确认交接状态.*不存在/);
+  assert.equal(ssh, 0);
+});
+
 test("host installer TTY confirmation has a real prompt and reject has zero artifact or execution effects", async () => {
   const { installHostCluster } = moduleUnderTest();
   for (const answer of ["no", "yes"]) {
@@ -2044,7 +2193,8 @@ test("ROI execution transfers fixed bytes, invokes attached roi up, redacts logs
   assert.doesNotMatch(JSON.stringify(states), /secret|database|registry|password/i);
   assert.doesNotMatch(fs.readFileSync(logPath, "utf8"), /secret|multiline-log-must-not-leak|stderr-log-must-not-leak|PREFIX-(?:LOG|PEM-LOG)|MULTI-KEY-LOG|AUTH-LOG|COOKIE-LOG|API-LOG|GRJWT-LOG|NAKED-PEM-LOG|JWT-LOG|FIRST-MULTI-LOG|SECOND-MULTI-LOG|COOKIE-MULTI-LOG|AUTH-MULTI-LOG/i);
   assert.match(fs.readFileSync(logPath, "utf8"), /\[REDACTED\]/);
-  assert.match(output.join(""), new RegExp(`npx rainskills@${packageVersion.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} platform install --onboarding-id`));
+  assert.match(output.join(""), /RAINSKILLS_AGENT_CONTINUATION_REQUIRED:host_cluster_interrupted/);
+  assert.doesNotMatch(output.join(""), /npx rainskills|platform install --onboarding-id/);
   assert.doesNotMatch(output.join(""), /secret|database\.password|registry password/i);
 
   const terminatedStates = [];
@@ -2806,7 +2956,7 @@ test("executing resume only reuses locked bytes after reconciliation proves ROI 
   assert.equal(downloads, 0);
 });
 
-test("unknown host resume state reconciles read-only then blocks with the fixed resume command", async () => {
+test("unknown host resume state reconciles read-only then returns a task continuation marker without a raw command", async () => {
   const { installHostCluster } = moduleUnderTest();
   const root = tempOperation("rainskills-unknown-reconcile-");
   const home = path.join(root, "home");
@@ -2841,7 +2991,8 @@ test("unknown host resume state reconciles read-only then blocks with the fixed 
   assert.equal(result.blocked, true);
   assert.equal(reconciliations, 1);
   assert.equal(sideEffects, 0);
-  assert.match(output.join(""), /RAINSKILLS_ACTION_REQUIRED:host_cluster_resume_blocked/);
+  assert.match(output.join(""), /RAINSKILLS_AGENT_CONTINUATION_REQUIRED:host_cluster_resume_blocked/);
+  assert.doesNotMatch(output.join(""), /npx rainskills|platform install --onboarding-id/);
   assert.deepEqual(result.resumeArgv, ["npx", `rainskills@${require("../package.json").version}`, "platform", "install", "--onboarding-id", operationId]);
 });
 

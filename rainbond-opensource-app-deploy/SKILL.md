@@ -18,11 +18,13 @@ Node.js 前置检查通过后，每次请求先执行本地 launcher + `["enviro
 
 第一步检查 Node.js 是否存在且主版本不低于 18。Node.js 缺失或低于 18 时，只说明“Rainskills 执行组件需要 Node.js 18 或更高版本”并停止：不选择运行环境，不调用 MCP，不猜测替代命令。只有用户或 agent 明确同意后才安装或升级 Node.js，再从同一原始 intent 继续。
 
-固定 launcher 是 `["node", "<home>/.rainbond/lib/rainskills/bin/rainskills.js"]`；运行包版本标记为 `rainskills@0.1.11`，且必须与本技能包 `package.json` 一致。把 launcher 与参数拼成 argv 数组直接执行，禁止 `rainskills@latest`，禁止拼接或执行 shell 字符串。
+固定 launcher 是 `["node", "<home>/.rainbond/lib/rainskills/bin/rainskills.js"]`；运行包版本标记为 `rainskills@0.1.17`，且必须与本技能包 `package.json` 一致。把 launcher 与参数拼成 argv 数组直接执行，禁止 `rainskills@latest`，禁止拼接或执行 shell 字符串。
 
 本地 launcher 必须从当前 Skill 所在目录的同级目录定位 `rainbond-platform-installer/scripts/local-runtime.js`，解析为绝对路径后使用 `["node", "<绝对路径>"]` 执行。`environment list`、`operation begin`、`operation complete` 和 `runtime message` 只能使用本地 launcher；本地 launcher 只读取已安装文件和本机受保护状态，不得访问 npm 或其它网络。只有用户选定连接或安装运行环境后，才使用固定 launcher。
 
 所有 Rainbond 查询和变更都必须执行本地 `~/.rainbond/bin/rainskills-tools.js`，不得让 Agent 直接调用 Rainbond MCP，也不得启动本地 Rainskills MCP 服务。固定业务 argv 为 `["node", "<home>/.rainbond/bin/rainskills-tools.js", "<status|list|describe|read|call>", "...", "--operation-id", "<uuid>", "--skill-id", "rainbond-opensource-app-deploy"]`；写操作必须只消费 CLI 返回的确认 ID，再用同一 argv 加 `--confirm <confirmation-id>` 执行。
+
+业务操作开始后，必须先用固定 argv `["node", "<home>/.rainbond/bin/rainskills-tools.js", "context", "resolve", "--input", "-", "--operation-id", "<uuid>", "--skill-id", "rainbond-opensource-app-deploy"]`，通过 stdin 传入 `{"required": ["enterprise", "workspace"]}`。返回 `resolved` 时只使用该 operation 已保存的企业、工作空间和集群上下文；返回 `needs-selection` 时，把 CLI 返回的“工作空间 + 集群”组合选项一次性列给用户，不得逐项询问，也不得让用户提供 enterprise_id。用户选择后执行 `context select`，stdin 只传 `{"selection_id":"<selection-id>","option_id":"<option-id>"}`；选择成功后继续原操作，同一 operation 不再重复查询上下文。
 
 只有 CLI 返回并通过校验的 `rainskills.next-action.v1` argv 才能执行续接。普通失败一律禁止自动重试：不得再次执行原命令，不得执行 `--help`、`sleep`、`rg`、`grep`，不得搜索 Rainskills 源码；同一 `operation complete` 最多执行一次。
 
@@ -30,7 +32,7 @@ Node.js 前置检查通过后，每次请求先执行本地 launcher + `["enviro
 ```json
 {
   "schema": "rainskills.skill-runtime-contract.v1",
-  "package_version": "rainskills@0.1.11",
+  "package_version": "rainskills@0.1.17",
     "launcher": ["node", "<home>/.rainbond/lib/rainskills/bin/rainskills.js"],
   "local_launcher": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js"],
   "local_argv": {

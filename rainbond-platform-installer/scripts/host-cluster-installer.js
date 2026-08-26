@@ -28,6 +28,18 @@ const MAX_SERVER_INPUT_BYTES = 1024 * 1024;
 const MAX_SERVER_INPUT_HOSTS = 100;
 const MAX_SERVER_INPUT_ISSUES = 200;
 const SERVER_INPUT_FIELDS = ["public_ip", "private_ip", "ssh_port", "password"];
+const SERVER_INPUT_FIELD_LABELS = Object.freeze({
+  public_ip: "公网 IP",
+  private_ip: "内网 IP",
+  ssh_port: "SSH 端口",
+  password: "登录密码",
+});
+const SERVER_INPUT_CHINESE_FIELDS = new Map([
+  ["公网IP", "public_ip"],
+  ["内网IP", "private_ip"],
+  ["SSH端口", "ssh_port"],
+  ["登录密码", "password"],
+]);
 const SERVER_INPUT_VALIDATION_ERROR = "servers.txt 解析结果无效";
 const CHILD_OUTPUT_LIMIT_ERROR = "子进程输出超过安全上限";
 const TEMPLATE_ADDRESSES = new Map([
@@ -76,20 +88,15 @@ function renderHostClusterConfigPrompt({ configPath, platform = process.platform
 
 function createHostServerInputTemplate() {
   const heading = [
-    "# Rainbond 多节点服务器信息",
-    "# 密码只写入受保护的本地和远端安装文件，不会写入聊天、日志或状态；不要填写私钥或 Token。",
-    "# 超过三台服务器时，复制完整的 [server-N] 区块并按顺序编号。",
+    "# 没有公网 IP 时，公网 IP 和内网 IP 填写相同地址",
+    "# 增加服务器时，复制完整的一组并连续编号",
   ];
   const sections = Array.from({ length: 3 }, (_, index) => [
-    `[server-${index + 1}]`,
-    "# 公网 IP：控制端通过 SSH 访问该服务器的地址；没有独立公网 IP 时可与内网 IP 相同",
-    "public_ip=",
-    "# 内网 IP：集群节点之间通信使用的地址",
-    "private_ip=",
-    "# SSH 端口：按服务器实际端口填写，不要求为 22",
-    "ssh_port=22",
-    "# root 密码：保留所有特殊字符；不要添加引号",
-    "password=",
+    `【第 ${index + 1} 台服务器】`,
+    "公网 IP：",
+    "内网 IP：",
+    "SSH 端口：22",
+    "登录密码：",
   ].join("\n"));
   return Buffer.from(`${heading.join("\n")}\n\n${sections.join("\n\n")}\n`, "utf8");
 }
@@ -120,11 +127,7 @@ function renderHostServerInputPrompt({ inputPath, platform = process.platform, i
     hostServerInputOpenCommand(inputPath, platform),
     "```",
     "",
-    "请为每台服务器填写 public_ip、private_ip、ssh_port 和 password。",
-    "- 公网 IP：控制端 SSH 地址；没有独立公网 IP 时可与内网 IP 相同。",
-    "- 内网 IP：节点通信地址。",
-    "- SSH 端口：填写每台服务器的实际端口，不强制为 22。",
-    "- root 密码：只写入受保护的本地和远端安装文件，不得发送到聊天。",
+    "请在文件中填写每台服务器的公网 IP、内网 IP、SSH 端口和登录密码。",
     "密码只写入受保护的本地和远端安装文件，不会写入聊天、日志或状态；不要填写私钥或 Token。",
     "",
     "编辑完成后回复“已完成”，我会检查全部服务器信息。",
@@ -288,6 +291,28 @@ function sha256(bytes) {
   return crypto.createHash("sha256").update(bytes).digest("hex");
 }
 
+function agentHandoffBinding({ state, options, driverState }) {
+  const sourcePath = options.clusterConfig || driverState.import_source_path || "";
+  const argv = [
+    "platform", "install", "--onboarding-id", state.operation_id,
+    "--location", "server", "--mode", "host-cluster",
+    ...(sourcePath ? ["--cluster-config", path.resolve(sourcePath)] : []),
+  ];
+  return {
+    version: 1,
+    argv,
+    invocation_sha256: sha256(Buffer.from(JSON.stringify(argv))),
+  };
+}
+
+function assertMatchingAgentHandoff(binding, expected) {
+  if (!binding || binding.version !== 1 || !Array.isArray(binding.argv)
+    || binding.invocation_sha256 !== expected.invocation_sha256
+    || JSON.stringify(binding.argv) !== JSON.stringify(expected.argv)) {
+    throw new Error("AI 确认交接状态不存在或与原安装调用不匹配，已拒绝继续");
+  }
+}
+
 function assertOperationNotAborted(abortState) {
   if (!abortState?.aborted) return;
   const error = new Error("主机集群安装已被信号中断");
@@ -319,6 +344,27 @@ function normalizeServerInputAddress(value) {
     || !/^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/.test(label)
   ))) return null;
   return value.toLowerCase();
+}
+
+function parseServerInputSection(line) {
+  const value = line.trim();
+  const legacy = /^\[server-(\d+)\]$/.exec(value);
+  if (legacy) return { number: Number(legacy[1]), numberText: legacy[1] };
+  const chinese = /^【第\s*(\d+)\s*台服务器】$/.exec(value);
+  if (chinese) return { number: Number(chinese[1]), numberText: chinese[1] };
+  return null;
+}
+
+function parseServerInputField(line) {
+  const legacy = /^\s*(public_ip|private_ip|ssh_port|password)\s*=(.*)$/.exec(line);
+  if (legacy) return { field: legacy[1], rawValue: legacy[2] };
+
+  const chinese = /^\s*(公网\s*IP|内网\s*IP|SSH\s*端口|登录密码)\s*[：:](.*)$/.exec(line);
+  if (!chinese) return null;
+  return {
+    field: SERVER_INPUT_CHINESE_FIELDS.get(chinese[1].replace(/\s/g, "")),
+    rawValue: chinese[2],
+  };
 }
 
 function parseHostServerInput(input) {
@@ -367,7 +413,7 @@ function parseHostServerInput(input) {
     const line = lines[lineIndex].endsWith("\r") ? lines[lineIndex].slice(0, -1) : lines[lineIndex];
     if (line.trim() === "" || line.trimStart().startsWith("#")) continue;
 
-    const sectionMatch = /^\[server-(\d+)\]$/.exec(line);
+    const sectionMatch = parseServerInputSection(line);
     if (sectionMatch) {
       if (sections.length >= MAX_SERVER_INPUT_HOSTS) {
         add("servers.txt 最多允许 100 个节点区块");
@@ -376,57 +422,54 @@ function parseHostServerInput(input) {
         continue;
       }
       current = {
-        number: Number(sectionMatch[1]),
-        numberText: sectionMatch[1],
+        number: sectionMatch.number,
+        numberText: sectionMatch.numberText,
         line: lineNumber,
         fields: new Map(),
       };
       sections.push(current);
       continue;
     }
-    if (line.startsWith("[") && line.endsWith("]")) {
+    const trimmedLine = line.trim();
+    if ((trimmedLine.startsWith("[") && trimmedLine.endsWith("]"))
+      || (trimmedLine.startsWith("【") && trimmedLine.endsWith("】"))) {
       add(`第 ${lineNumber} 行是未知区块`);
       current = null;
       continue;
     }
 
-    const separator = line.indexOf("=");
-    if (separator < 0) {
+    const parsedField = parseServerInputField(line);
+    if (!parsedField) {
       add(`第 ${lineNumber} 行字段格式无效`);
       continue;
     }
     if (!current) {
-      add(`第 ${lineNumber} 行字段不属于任何 server 区块`);
+      add(`第 ${lineNumber} 行字段不属于任何服务器区块`);
       continue;
     }
-    const field = line.slice(0, separator);
-    if (!SERVER_INPUT_FIELDS.includes(field)) {
-      add(`第 ${lineNumber} 行包含未知字段`);
-      continue;
-    }
+    const { field, rawValue } = parsedField;
     if (current.fields.has(field)) {
-      add(`第 ${lineNumber} 行的 ${field} 字段重复`);
+      add(`第 ${lineNumber} 行的${SERVER_INPUT_FIELD_LABELS[field]}字段重复`);
       continue;
     }
-    const rawValue = line.slice(separator + 1);
     current.fields.set(field, field === "password" ? rawValue : rawValue.trim());
   }
 
-  if (sections.length < 3) add("servers.txt 至少需要 3 个节点区块");
+  if (sections.length < 3) add("servers.txt 至少需要 3 个服务器区块");
   const sectionNumbers = new Set();
   for (let index = 0; index < sections.length; index += 1) {
     const section = sections[index];
-    const label = `server-${section.number}`;
-    if (sectionNumbers.has(section.number)) add(`第 ${section.line} 行的 ${label} 区块重复`);
+    const label = `第 ${section.number} 台服务器`;
+    if (sectionNumbers.has(section.number)) add(`第 ${section.line} 行的${label}区块重复`);
     sectionNumbers.add(section.number);
-    if (section.numberText !== String(index + 1)) add(`第 ${section.line} 行的区块编号必须从 server-1 开始连续`);
+    if (section.numberText !== String(index + 1)) add(`第 ${section.line} 行的区块编号必须从第 1 台服务器开始连续`);
     for (const field of SERVER_INPUT_FIELDS) {
       if (!section.fields.has(field)) {
-        add(`${label} 的 ${field} 字段缺失`);
+        add(`${label}的${SERVER_INPUT_FIELD_LABELS[field]}字段缺失`);
       } else if (field === "password" && section.fields.get(field).trim() === "") {
-        add(`${label} 的 password 未填写或只有空白`);
+        add(`${label}的登录密码未填写或只有空白`);
       } else if (field !== "password" && section.fields.get(field) === "") {
-        add(`${label} 的 ${field} 字段未填写`);
+        add(`${label}的${SERVER_INPUT_FIELD_LABELS[field]}未填写`);
       }
     }
   }
@@ -442,7 +485,7 @@ function parseHostServerInput(input) {
   for (let index = 0; index < sections.length; index += 1) {
     const section = sections[index];
     const host = hosts[index];
-    const label = `server-${section.number}`;
+    const label = `第 ${section.number} 台服务器`;
     const publicIp = section.fields.get("public_ip");
     const privateIp = section.fields.get("private_ip");
     const portText = section.fields.get("ssh_port");
@@ -456,16 +499,16 @@ function parseHostServerInput(input) {
     const privateValid = privateNormalized !== null;
     const portValid = typeof portText === "string" && /^\d+$/.test(portText)
       && Number.isInteger(host.sshPort) && host.sshPort >= 1 && host.sshPort <= 65535;
-    if (typeof publicIp === "string" && publicIp !== "" && !publicValid) add(`${label} 的 public_ip 地址无效`);
-    if (typeof privateIp === "string" && privateIp !== "" && !privateValid) add(`${label} 的 private_ip 地址无效`);
-    if (typeof portText === "string" && portText !== "" && !portValid) add(`${label} 的 ssh_port 必须是 1 到 65535 的整数`);
+    if (typeof publicIp === "string" && publicIp !== "" && !publicValid) add(`${label}的公网 IP 地址无效`);
+    if (typeof privateIp === "string" && privateIp !== "" && !privateValid) add(`${label}的内网 IP 地址无效`);
+    if (typeof portText === "string" && portText !== "" && !portValid) add(`${label}的 SSH 端口必须是 1 到 65535 的整数`);
     if (publicValid && portValid) {
       const endpoint = `${publicNormalized}\0${host.sshPort}`;
-      if (sshEndpoints.has(endpoint)) add(`${label} 的 SSH endpoint 与前面的区块重复`);
+      if (sshEndpoints.has(endpoint)) add(`${label}的 SSH 地址和端口与前面的区块重复`);
       sshEndpoints.add(endpoint);
     }
     if (privateValid) {
-      if (privateAddresses.has(privateNormalized)) add(`${label} 的 private_ip 与前面的区块重复`);
+      if (privateAddresses.has(privateNormalized)) add(`${label}的内网 IP 与前面的区块重复`);
       privateAddresses.add(privateNormalized);
     }
   }
@@ -2082,7 +2125,7 @@ async function executeRoiInstall({
   atomicWriteProtectedBytes(logPath, protectedInstallLogBytes(execution, sensitiveValues), { stateStore });
   if (execution.signal || execution.code === 130) {
     persistState({ stage: "executing", status: "interrupted", configSha256: configDigest, artifactSha256: artifactDigest, resumeArgv });
-    write(`\n安装已中断，状态已保留。继续时执行：\n  ${resumeArgv.join(" ")}\n`);
+    write("\n[RAINSKILLS_AGENT_CONTINUATION_REQUIRED:host_cluster_interrupted]\n安装会话已中断，受保护状态已保留；当前任务将先进行安全核对再继续。\n");
     return { interrupted: true, signal: execution.signal || "SIGINT", resumeArgv };
   }
   if (execution.code !== 0) {
@@ -2326,6 +2369,39 @@ async function installHostCluster({ onboarding, state, paths, options }, depende
     throw new Error("当前流程已绑定另一份外部 cluster.yaml，不能切换配置来源");
   }
 
+  const handoff = options.agentHandoff
+    ? agentHandoffBinding({ state, options, driverState })
+    : null;
+  if (options.agentHandoff && !options.yes && !options.cancel && driverState.agent_handoff) {
+    assertMatchingAgentHandoff(driverState.agent_handoff, handoff);
+    if (driverState.agent_handoff.phase === "waiting_confirmation"
+      && driverState.stage === "confirmation" && driverState.status === "waiting_user") {
+      return { waiting: true };
+    }
+    throw new Error("当前 AI 确认状态不能重新创建安装会话");
+  }
+  if (options.agentHandoff && options.cancel) {
+    assertMatchingAgentHandoff(driverState.agent_handoff, handoff);
+    if (driverState.agent_handoff.phase !== "waiting_confirmation"
+      || driverState.stage !== "confirmation" || driverState.status !== "waiting_user") {
+      throw new Error("当前没有可取消的 AI 安装确认");
+    }
+    persistDriverState({ stage: "confirmation", status: "cancelled", agent_handoff: null });
+    return { waiting: true, cancelled: true };
+  }
+  if (options.agentHandoff && options.yes) {
+    assertMatchingAgentHandoff(driverState.agent_handoff, handoff);
+    const pendingConfirmation = driverState.agent_handoff.phase === "waiting_confirmation"
+      && driverState.stage === "confirmation" && ["waiting_user", "interrupted"].includes(driverState.status);
+    const safeResume = driverState.agent_handoff.phase === "approved"
+      && ((["artifact", "executing", "verifying"].includes(driverState.stage)
+        && ["interrupted", "running"].includes(driverState.status))
+        || (driverState.stage === "completed" && driverState.status === "completed"));
+    if (!pendingConfirmation && !safeResume) {
+      throw new Error("当前 AI 确认状态不能继续安装");
+    }
+  }
+
   let config;
   if (driverState.config_source === "generated-server-input") {
     if (driverState.server_input_path !== serverInputPath) {
@@ -2559,7 +2635,7 @@ async function installHostCluster({ onboarding, state, paths, options }, depende
     const blockResume = (reason) => {
       persistDriverState({ stage: driverState.stage, status: "blocked", blocked_reason: reason, resumeArgv });
       (dependencies.write || ((value) => process.stdout.write(value)))(
-        `\n[RAINSKILLS_ACTION_REQUIRED:host_cluster_resume_blocked]\n无法安全判断 ROI 安装是否已经启动，已停止自动重试。请核对集群状态后使用原命令继续：\n  ${resumeArgv.join(" ")}\n`
+        "\n[RAINSKILLS_AGENT_CONTINUATION_REQUIRED:host_cluster_resume_blocked]\n无法安全确认 ROI 的远端状态；已保留受保护断点，当前任务需要先完成安全核对。\n"
       );
       return { waiting: true, blocked: true, reason, resumeArgv };
     };
@@ -2645,13 +2721,17 @@ async function installHostCluster({ onboarding, state, paths, options }, depende
     const summary = { ...summarizeTopology(config), configPath };
     const confirmation = await (dependencies.confirm || confirmRoiInstall)({
       summary,
-      interactive: dependencies.interactive,
+      interactive: options.agentHandoff ? false : dependencies.interactive,
       yes: options.yes,
       ask: dependencies.ask,
       createPrompt: dependencies.createPrompt,
       write: dependencies.write,
       onAccepted: async () => {
-        persistDriverState({ execution_approved: true, resumeArgv });
+        persistDriverState({
+          execution_approved: true,
+          resumeArgv,
+          ...(options.agentHandoff ? { agent_handoff: { ...handoff, phase: "approved" } } : {}),
+        });
         const artifactPath = path.join(hostRoot, "roi");
         let artifact;
         try {
@@ -2700,7 +2780,13 @@ async function installHostCluster({ onboarding, state, paths, options }, depende
       },
     });
     if (!confirmation.accepted) {
-      persistDriverState({ stage: "confirmation", status: confirmation.waiting ? "waiting_user" : "cancelled" });
+      persistDriverState({
+        stage: "confirmation",
+        status: confirmation.waiting ? "waiting_user" : "cancelled",
+        ...(options.agentHandoff && confirmation.waiting
+          ? { agent_handoff: { ...handoff, phase: "waiting_confirmation" } }
+          : {}),
+      });
       return { waiting: true, cancelled: confirmation.cancelled === true };
     }
     return confirmation.value;

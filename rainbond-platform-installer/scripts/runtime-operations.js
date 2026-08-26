@@ -8,18 +8,49 @@ const { isDeepStrictEqual } = require("node:util");
 const { createSecureStateStore } = require("./secure-state.js");
 const { INTENT_DEFINITIONS, validateIntent } = require("./runtime-intents.js");
 
-const OPERATION_SCHEMA = "rainskills.runtime-operation.v1";
+const OPERATION_SCHEMA_V1 = "rainskills.runtime-operation.v1";
+const OPERATION_SCHEMA = "rainskills.runtime-operation.v2";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CONTROL_PATTERN = /[\u0000-\u001f\u007f-\u009f]/u;
 const STAGES = new Set(["awaiting-environment", "active", "interrupted", "completed"]);
 const ACTIVE_STAGES = new Set(["awaiting-environment", "active", "interrupted"]);
 const FAILURE_CATEGORIES = new Set(["credential-expired", "permission-denied"]);
-const OPERATION_FIELDS = new Set([
+const OPERATION_FIELDS_V1 = new Set([
   "schema", "version", "operation_id", "environment_id", "intent",
   "team_id", "app_id", "service_id", "stage", "failed_step",
   "retry_count", "retry_budget", "last_failure_category",
   "created_at", "updated_at",
 ]);
+const OPERATION_FIELDS = new Set([
+  "schema", "version", "operation_id", "environment_id", "intent",
+  "context", "context_revision", "pending_selection", "stage", "failed_step",
+  "retry_count", "retry_budget", "last_failure_category",
+  "created_at", "updated_at",
+]);
+const CONTEXT_FIELDS = new Set([
+  "enterprise_id", "team_id", "team_name", "region_name", "app_id", "app_name",
+  "service_id", "service_name", "created_services", "template_source", "market_name",
+  "app_model_id", "app_model_version", "snapshot_version_id",
+]);
+
+function emptyContext() {
+  return {
+    enterprise_id: null,
+    team_id: null,
+    team_name: null,
+    region_name: null,
+    app_id: null,
+    app_name: null,
+    service_id: null,
+    service_name: null,
+    created_services: {},
+    template_source: null,
+    market_name: null,
+    app_model_id: null,
+    app_model_version: null,
+    snapshot_version_id: null,
+  };
+}
 
 function isIsoTimestamp(value) {
   return typeof value === "string"
@@ -49,6 +80,77 @@ function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+function validateContext(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new Error("runtime operation context 无效");
+  }
+  if (Object.keys(input).length !== CONTEXT_FIELDS.size) {
+    throw new Error("runtime operation context schema 无效");
+  }
+  for (const field of Object.keys(input)) {
+    if (!CONTEXT_FIELDS.has(field)) throw new Error(`runtime operation context 包含未知字段：${field}`);
+  }
+  const context = emptyContext();
+  for (const field of CONTEXT_FIELDS) {
+    if (field === "created_services") continue;
+    context[field] = normalizeIdentifier(input[field], `context ${field}`);
+  }
+  if (!input.created_services || typeof input.created_services !== "object" || Array.isArray(input.created_services)) {
+    throw new Error("runtime operation created_services 无效");
+  }
+  context.created_services = {};
+  for (const [logicalName, service] of Object.entries(input.created_services)) {
+    const normalizedName = normalizeIdentifier(logicalName, "logical service name");
+    if (!service || typeof service !== "object" || Array.isArray(service)
+      || !Object.hasOwn(service, "service_id") || !Object.hasOwn(service, "service_name")
+      || Object.keys(service).length !== 2) {
+      throw new Error("runtime operation created service 无效");
+    }
+    context.created_services[normalizedName] = {
+      service_id: normalizeIdentifier(service.service_id, "created service_id"),
+      service_name: normalizeIdentifier(service.service_name, "created service_name"),
+    };
+  }
+  return context;
+}
+
+function validatePendingSelection(input) {
+  if (input === null) return null;
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new Error("runtime operation pending selection 无效");
+  }
+  const allowed = new Set(["selection_id", "dimension", "options", "context_revision"]);
+  for (const field of Object.keys(input)) {
+    if (!allowed.has(field)) throw new Error(`runtime operation pending selection 包含未知字段：${field}`);
+  }
+  assertUuid(input.selection_id, "selection_id ");
+  const dimension = normalizeIdentifier(input.dimension, "selection dimension");
+  if (!Array.isArray(input.options) || input.options.length < 1 || input.options.length > 256) {
+    throw new Error("runtime operation selection options 无效");
+  }
+  const options = input.options.map((option) => {
+    if (!option || typeof option !== "object" || Array.isArray(option)) {
+      throw new Error("runtime operation selection option 无效");
+    }
+    return {
+      id: assertUuid(option.id, "selection option id "),
+      label: normalizeIdentifier(option.label, "selection option label"),
+      team_id: normalizeIdentifier(option.team_id, "selection team_id"),
+      team_name: normalizeIdentifier(option.team_name, "selection team_name"),
+      region_name: normalizeIdentifier(option.region_name, "selection region_name"),
+    };
+  });
+  if (!Number.isInteger(input.context_revision) || input.context_revision < 0) {
+    throw new Error("runtime operation selection revision 无效");
+  }
+  return {
+    selection_id: input.selection_id,
+    dimension,
+    options,
+    context_revision: input.context_revision,
+  };
+}
+
 function createRuntimeOperationStore({
   platform = process.platform,
   home = os.homedir(),
@@ -65,17 +167,17 @@ function createRuntimeOperationStore({
     return path.join(directory, `${assertUuid(operationId, "operation_id ")}.json`);
   }
 
-  function validateStoredOperation(input) {
+  function validateOperationCommon(input, expectedFields, schema, version) {
     if (!input || typeof input !== "object" || Array.isArray(input)) {
       throw new Error("runtime operation 无效");
     }
     for (const field of Object.keys(input)) {
-      if (!OPERATION_FIELDS.has(field)) throw new Error(`runtime operation 包含未知字段：${field}`);
+      if (!expectedFields.has(field)) throw new Error(`runtime operation 包含未知字段：${field}`);
     }
     if (
-      Object.keys(input).length !== OPERATION_FIELDS.size
-      || input.schema !== OPERATION_SCHEMA
-      || input.version !== 1
+      Object.keys(input).length !== expectedFields.size
+      || input.schema !== schema
+      || input.version !== version
       || !STAGES.has(input.stage)
     ) {
       throw new Error("runtime operation schema 无效");
@@ -103,14 +205,9 @@ function createRuntimeOperationStore({
       throw new Error("runtime operation timestamp 无效");
     }
     return {
-      schema: OPERATION_SCHEMA,
-      version: 1,
       operation_id: operationId,
       environment_id: environmentId,
       intent,
-      team_id: normalizeIdentifier(input.team_id, "team_id"),
-      app_id: normalizeIdentifier(input.app_id, "app_id"),
-      service_id: normalizeIdentifier(input.service_id, "service_id"),
       stage: input.stage,
       failed_step: input.failed_step,
       retry_count: input.retry_count,
@@ -121,7 +218,65 @@ function createRuntimeOperationStore({
     };
   }
 
-  function read(operationId) {
+  function validateLegacyOperation(input) {
+    const common = validateOperationCommon(input, OPERATION_FIELDS_V1, OPERATION_SCHEMA_V1, 1);
+    return {
+      schema: OPERATION_SCHEMA_V1,
+      version: 1,
+      ...common,
+      team_id: normalizeIdentifier(input.team_id, "team_id"),
+      app_id: normalizeIdentifier(input.app_id, "app_id"),
+      service_id: normalizeIdentifier(input.service_id, "service_id"),
+    };
+  }
+
+  function validateStoredOperation(input) {
+    if (input?.schema === OPERATION_SCHEMA_V1 || input?.version === 1) {
+      return validateLegacyOperation(input);
+    }
+    const common = validateOperationCommon(input, OPERATION_FIELDS, OPERATION_SCHEMA, 2);
+    if (!Number.isInteger(input.context_revision) || input.context_revision < 0) {
+      throw new Error("runtime operation context revision 无效");
+    }
+    return {
+      schema: OPERATION_SCHEMA,
+      version: 2,
+      ...common,
+      context: validateContext(input.context),
+      context_revision: input.context_revision,
+      pending_selection: validatePendingSelection(input.pending_selection),
+    };
+  }
+
+  function migrateLegacyOperation(legacy) {
+    if (legacy.intent.template_id || legacy.intent.snapshot_id) {
+      throw new Error("runtime-operation-migration-blocked");
+    }
+    return {
+      schema: OPERATION_SCHEMA,
+      version: 2,
+      operation_id: legacy.operation_id,
+      environment_id: legacy.environment_id,
+      intent: legacy.intent,
+      context: {
+        ...emptyContext(),
+        team_id: legacy.team_id,
+        app_id: legacy.app_id,
+        service_id: legacy.service_id,
+      },
+      context_revision: 0,
+      pending_selection: null,
+      stage: legacy.stage,
+      failed_step: legacy.failed_step,
+      retry_count: legacy.retry_count,
+      retry_budget: legacy.retry_budget,
+      last_failure_category: legacy.last_failure_category,
+      created_at: legacy.created_at,
+      updated_at: legacy.updated_at,
+    };
+  }
+
+  function readRaw(operationId) {
     const target = pathFor(operationId);
     if (!fs.existsSync(target)) return null;
     return clone(validateStoredOperation(stateStore.readProtectedJson(target)));
@@ -129,6 +284,7 @@ function createRuntimeOperationStore({
 
   function writeUnlocked(operation) {
     const validated = validateStoredOperation(operation);
+    if (validated.version !== 2) throw new Error("runtime operation 只允许写入 v2");
     stateStore.ensurePrivateDirectory(directory);
     stateStore.atomicWriteJson(pathFor(validated.operation_id), validated);
     return clone(validated);
@@ -151,17 +307,29 @@ function createRuntimeOperationStore({
     }
   }
 
+  function readUnlocked(operationId) {
+    const current = readRaw(operationId);
+    if (!current || current.version === 2) return current;
+    return writeUnlocked(migrateLegacyOperation(current));
+  }
+
+  function read(operationId) {
+    const current = readRaw(operationId);
+    if (!current || current.version === 2) return current;
+    return withLock(operationId, () => readUnlocked(operationId));
+  }
+
   function initialOperation({ operationId, environmentId, intent, stage }) {
     const timestamp = now();
     return {
       schema: OPERATION_SCHEMA,
-      version: 1,
+      version: 2,
       operation_id: operationId,
       environment_id: environmentId,
       intent: validateIntent(intent),
-      team_id: null,
-      app_id: null,
-      service_id: null,
+      context: emptyContext(),
+      context_revision: 0,
+      pending_selection: null,
       stage,
       failed_step: null,
       retry_count: 0,
@@ -174,7 +342,7 @@ function createRuntimeOperationStore({
 
   function createPending({ operationId, intent } = {}) {
     return withLock(operationId, () => {
-      const existing = read(operationId);
+      const existing = readUnlocked(operationId);
       const requested = initialOperation({
         operationId,
         environmentId: null,
@@ -205,7 +373,7 @@ function createRuntimeOperationStore({
     if (!resolvedId) throw new Error("目前还没有可用的应用运行环境");
     assertConnectedEnvironment(resolvedId);
     return withLock(operationId, () => {
-      const existing = read(operationId);
+      const existing = readUnlocked(operationId);
       const requested = initialOperation({
         operationId,
         environmentId: resolvedId,
@@ -226,7 +394,7 @@ function createRuntimeOperationStore({
   function bindEnvironment(operationId, environmentId) {
     assertConnectedEnvironment(environmentId);
     return withLock(operationId, () => {
-      const current = read(operationId);
+      const current = readUnlocked(operationId);
       if (!current) throw new Error("runtime operation 不存在");
       if (current.environment_id !== null) throw new Error("runtime operation 已经锁定运行环境");
       if (current.stage !== "awaiting-environment") throw new Error("runtime operation 当前不能绑定环境");
@@ -240,14 +408,56 @@ function createRuntimeOperationStore({
   }
 
   function updateTargets(operationId, { teamId, appId, serviceId } = {}) {
+    const current = read(operationId);
+    if (!current) throw new Error("runtime operation 不存在");
+    return updateContext(operationId, {
+      expectedRevision: current.context_revision,
+      values: {
+        ...(teamId === undefined ? {} : { team_id: teamId }),
+        ...(appId === undefined ? {} : { app_id: appId }),
+        ...(serviceId === undefined ? {} : { service_id: serviceId }),
+      },
+    });
+  }
+
+  function updateContext(operationId, {
+    expectedRevision,
+    values = {},
+    pendingSelection,
+  } = {}) {
+    if (!Number.isInteger(expectedRevision) || expectedRevision < 0) {
+      throw new Error("runtime operation context revision 无效");
+    }
+    if (!values || typeof values !== "object" || Array.isArray(values)) {
+      throw new Error("runtime operation context update 无效");
+    }
+    for (const field of Object.keys(values)) {
+      if (!CONTEXT_FIELDS.has(field)) throw new Error(`runtime operation context 包含未知字段：${field}`);
+    }
     return withLock(operationId, () => {
-      const current = read(operationId);
+      const current = readUnlocked(operationId);
       if (!current || current.stage === "completed") throw new Error("runtime operation 不可更新");
+      if (current.context_revision !== expectedRevision) {
+        throw new Error("runtime operation context revision 已变化");
+      }
+      const nextContext = clone(current.context);
+      for (const [field, value] of Object.entries(values)) {
+        const normalized = field === "created_services"
+          ? validateContext({ ...nextContext, created_services: value }).created_services
+          : normalizeIdentifier(value, `context ${field}`);
+        if (nextContext[field] !== null && field !== "created_services"
+          && normalized !== nextContext[field]) {
+          throw new Error(`runtime operation context ${field} 已经锁定`);
+        }
+        nextContext[field] = normalized;
+      }
       return writeUnlocked({
         ...current,
-        team_id: teamId === undefined ? current.team_id : normalizeIdentifier(teamId, "team_id"),
-        app_id: appId === undefined ? current.app_id : normalizeIdentifier(appId, "app_id"),
-        service_id: serviceId === undefined ? current.service_id : normalizeIdentifier(serviceId, "service_id"),
+        context: nextContext,
+        context_revision: current.context_revision + 1,
+        pending_selection: pendingSelection === undefined
+          ? current.pending_selection
+          : pendingSelection,
         updated_at: now(),
       });
     });
@@ -256,7 +466,7 @@ function createRuntimeOperationStore({
   function recordFailure(operationId, { step, reason } = {}) {
     if (!FAILURE_CATEGORIES.has(reason)) throw new Error("runtime failure reason 无效");
     return withLock(operationId, () => {
-      const current = read(operationId);
+      const current = readUnlocked(operationId);
       if (!current || current.stage === "completed") throw new Error("runtime operation 不可更新");
       if (!INTENT_DEFINITIONS[current.intent.type].steps.includes(step)) {
         throw new Error("runtime failure step 无效");
@@ -273,7 +483,7 @@ function createRuntimeOperationStore({
 
   function consumeRetry(operationId) {
     return withLock(operationId, () => {
-      const current = read(operationId);
+      const current = readUnlocked(operationId);
       if (!current) throw new Error("runtime operation 不存在");
       if (current.last_failure_category === "permission-denied") {
         throw new Error("当前操作权限不足，不能自动重试");
@@ -292,7 +502,7 @@ function createRuntimeOperationStore({
 
   function complete(operationId) {
     return withLock(operationId, () => {
-      const current = read(operationId);
+      const current = readUnlocked(operationId);
       if (!current || current.environment_id === null) throw new Error("runtime operation 不能完成");
       return writeUnlocked({ ...current, stage: "completed", updated_at: now() });
     });
@@ -328,6 +538,7 @@ function createRuntimeOperationStore({
     pathFor,
     read,
     recordFailure,
+    updateContext,
     updateTargets,
   };
 }

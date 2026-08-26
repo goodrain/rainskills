@@ -125,13 +125,14 @@ async function withServer(callback) {
   }
 }
 
-test("every tools command requires one protected runtime operation", async () => {
+test("every tools command requires one protected runtime operation and Skill", async () => {
   await withServer(async (origin, requests) => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-cli-operation-"));
     createProtectedOperation(home, origin);
 
     const result = await runCli([
       "status", "--operation-id", OPERATION_ID,
+      "--skill-id", "rainbond-app-assistant",
     ], { home });
     assert.equal(result.code, 0, result.stderr);
     assert.equal(JSON.parse(result.stdout).operation_id, OPERATION_ID);
@@ -139,9 +140,17 @@ test("every tools command requires one protected runtime operation", async () =>
     assert.equal(requests[0].url, "/console/mcp/rainskills/api/query");
     assert.equal(requests[0].authorization, `GRJWT ${JWT}`);
 
-    const missing = await runCli(["status"], { home });
-    assert.equal(missing.code, 2);
-    assert.match(missing.stderr, /operation/i);
+    const missingSkill = await runCli([
+      "status", "--operation-id", OPERATION_ID,
+    ], { home });
+    assert.equal(missingSkill.code, 2);
+    assert.match(missingSkill.stderr, /skill-id/i);
+
+    const missingOperation = await runCli([
+      "status", "--skill-id", "rainbond-app-assistant",
+    ], { home });
+    assert.equal(missingOperation.code, 2);
+    assert.match(missingOperation.stderr, /operation/i);
     assert.equal(requests.length, 1);
   });
 });

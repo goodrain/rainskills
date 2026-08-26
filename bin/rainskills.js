@@ -412,15 +412,44 @@ async function runBuiltin(args, {
   const getOperationStore = () => operationStore || getEnvironmentServices().operationStore;
   const getEnvironmentCredentialStore = () => environmentCredentialStore
     || getEnvironmentServices().environmentCredentialStore;
-  const getRuntimeStateManager = (operationId, { scoped = false } = {}) => {
+  const getRuntimeStateManager = (operationId, {
+    scoped = false,
+    protectedOperation = null,
+  } = {}) => {
     if (runtimeStateManager) return runtimeStateManager;
     const operationScoped = scoped || (
       credentialEnvironment.RAINSKILLS_RUNTIME_STATE_SCOPE === "operation"
       && credentialEnvironment.RAINSKILLS_RUNTIME_OPERATION_ID === operationId
     );
+    const managerOptions = operationScoped ? { operationId } : {};
+    if (protectedOperation?.environment_id) {
+      const environment = getEnvironmentRegistry().get(protectedOperation.environment_id);
+      if (!environment || environment.connection_state !== "connected") {
+        throw new Error("runtime operation 绑定的运行环境当前不可用");
+      }
+      const credentialStore = getEnvironmentCredentialStore();
+      const credential = credentialStore.read({
+        environmentId: environment.id,
+        expectedOrigin: environment.console_origin,
+      });
+      managerOptions.env = {
+        RAINBOND_JWT: credential.token,
+        RAINBOND_URL: credential.origin,
+      };
+      managerOptions.credentialWriter = ({ token, baseUrl }) => {
+        if (baseUrl !== environment.console_origin) {
+          throw new Error("runtime renewed credential origin 不匹配");
+        }
+        credentialStore.write({
+          environmentId: environment.id,
+          origin: baseUrl,
+          token,
+        });
+      };
+    }
     return require(
       "../rainbond-platform-installer/scripts/runtime-state.js"
-    ).createRuntimeStateManager(operationScoped ? { operationId } : {});
+    ).createRuntimeStateManager(managerOptions);
   };
 
   if (args[0] === "environment" && args[1] === "list") {
@@ -905,10 +934,18 @@ async function runBuiltin(args, {
     if (args.length !== 4 || args[2] !== "--onboarding-id" || !args[3]) {
       throw new Error("intent resume 需要固定参数 --onboarding-id <uuid>");
     }
-    const manager = runtimeStateManager || require(
-      "../rainbond-platform-installer/scripts/runtime-state.js"
-    ).createRuntimeStateManager();
-    manager.assertContinuationEligible(args[3]);
+    const protectedOperation = runtimeStateManager ? null : getOperationStore().read(args[3]);
+    const manager = getRuntimeStateManager(args[3], {
+      scoped: protectedOperation?.intent?.type === "environment-add",
+      protectedOperation,
+    });
+    const eligible = manager.assertContinuationEligible(args[3]);
+    if (protectedOperation?.environment_id) {
+      const environment = getEnvironmentRegistry().get(protectedOperation.environment_id);
+      if (!environment || eligible.console_origin !== environment.console_origin) {
+        throw new Error("runtime operation 与已锁定运行环境不匹配");
+      }
+    }
     const status = await manager.status();
     if (status.state !== "connected" || status.usable !== true) {
       throw new Error("runtime 尚未 connected 且通过 live probe，不能恢复 intent");

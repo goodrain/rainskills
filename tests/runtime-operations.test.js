@@ -110,10 +110,85 @@ test("team and app ids belong only to one operation and survive process restart"
   const { createRuntimeOperationStore } = require(operationsPath);
   const restarted = createRuntimeOperationStore({ home, stateStore, registry, now });
 
-  assert.equal(restarted.read(OP_A).team_id, "team-test");
-  assert.equal(restarted.read(OP_A).app_id, "app-demo");
-  assert.equal(restarted.read(OP_A).service_id, "service-web");
+  assert.equal(restarted.read(OP_A).schema, "rainskills.runtime-operation.v2");
+  assert.equal(restarted.read(OP_A).context.team_id, "team-test");
+  assert.equal(restarted.read(OP_A).context.app_id, "app-demo");
+  assert.equal(restarted.read(OP_A).context.service_id, "service-web");
   assert.equal(registry.get(testing.id).name, "测试环境");
+});
+
+test("context updates use a revision CAS and preserve one workspace selection", () => {
+  const { operations } = createFixture();
+  const created = operations.begin({ operationId: OP_A, intent: { type: "deploy" } });
+
+  const selected = operations.updateContext(OP_A, {
+    expectedRevision: created.context_revision,
+    values: {
+      enterprise_id: "enterprise-1",
+      team_id: "team-1",
+      team_name: "default",
+      region_name: "rainbond",
+    },
+  });
+
+  assert.equal(selected.context_revision, created.context_revision + 1);
+  assert.deepEqual(selected.context, {
+    enterprise_id: "enterprise-1",
+    team_id: "team-1",
+    team_name: "default",
+    region_name: "rainbond",
+    app_id: null,
+    app_name: null,
+    service_id: null,
+    service_name: null,
+    created_services: {},
+    template_source: null,
+    market_name: null,
+    app_model_id: null,
+    app_model_version: null,
+    snapshot_version_id: null,
+  });
+  assert.throws(() => operations.updateContext(OP_A, {
+    expectedRevision: created.context_revision,
+    values: { team_id: "team-2" },
+  }), /context revision/);
+  assert.throws(() => operations.updateContext(OP_A, {
+    expectedRevision: selected.context_revision,
+    values: { team_id: "team-2" },
+  }), /已经锁定/);
+});
+
+test("legacy v1 operations migrate locally without losing locked target ids", () => {
+  const { operations } = createFixture();
+  operations.begin({ operationId: OP_A, intent: { type: "deploy" } });
+  const target = operations.pathFor(OP_A);
+  const current = JSON.parse(fs.readFileSync(target, "utf8"));
+  const legacy = {
+    schema: "rainskills.runtime-operation.v1",
+    version: 1,
+    operation_id: current.operation_id,
+    environment_id: current.environment_id,
+    intent: current.intent,
+    team_id: "team-old",
+    app_id: "42",
+    service_id: "service-old",
+    stage: current.stage,
+    failed_step: current.failed_step,
+    retry_count: current.retry_count,
+    retry_budget: current.retry_budget,
+    last_failure_category: current.last_failure_category,
+    created_at: current.created_at,
+    updated_at: current.updated_at,
+  };
+  fs.writeFileSync(target, `${JSON.stringify(legacy)}\n`, { mode: 0o600 });
+
+  const migrated = operations.read(OP_A);
+
+  assert.equal(migrated.schema, "rainskills.runtime-operation.v2");
+  assert.equal(migrated.context.team_id, "team-old");
+  assert.equal(migrated.context.app_id, "42");
+  assert.equal(migrated.context.service_id, "service-old");
+  assert.equal(JSON.parse(fs.readFileSync(target, "utf8")).version, 2);
 });
 
 test("credential expiry has one retry while permission denial has none", () => {

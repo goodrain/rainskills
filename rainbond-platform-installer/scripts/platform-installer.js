@@ -90,6 +90,8 @@ Options:
   --rainbond-image IMAGE
                       Override the complete Rainbond all-in-one image
   --yes               Confirm the displayed installation effects non-interactively
+  --agent-handoff     Restrict confirmation continuation to the current AI installation task
+  --cancel            Cancel a pending AI confirmation without changing any server
   --no-resume         Stop after verified platform installation
   -h, --help          Show this help
 `);
@@ -112,6 +114,8 @@ function parseArgs(argv) {
     consoleHost: "",
     rainbondImage: "",
     yes: false,
+    agentHandoff: false,
+    cancel: false,
     noResume: false,
   };
   for (let index = 1; index < argv.length; index += 1) {
@@ -176,6 +180,10 @@ function parseArgs(argv) {
       index += 1;
     } else if (argument === "--yes") {
       result.yes = true;
+    } else if (argument === "--agent-handoff") {
+      result.agentHandoff = true;
+    } else if (argument === "--cancel") {
+      result.cancel = true;
     } else if (argument === "--no-resume") {
       result.noResume = true;
     } else if (argument === "-h" || argument === "--help") {
@@ -197,7 +205,23 @@ function parseArgs(argv) {
   if ((result.kubeconfig || result.kubeContext || result.values || result.chartVersion) && result.mode !== "existing-kubernetes") {
     throw new Error("--kubeconfig、--kube-context、--values 和 --chart-version 只能与 --mode existing-kubernetes 一起使用");
   }
+  if (result.cancel && !result.agentHandoff) throw new Error("--cancel 只能与 --agent-handoff 一起使用");
+  if (result.yes && result.cancel) throw new Error("--yes 和 --cancel 不能同时使用");
+  if (result.agentHandoff && result.noResume) throw new Error("--agent-handoff 不能与 --no-resume 同时使用");
+  if (result.command === "resume" && (result.agentHandoff || result.cancel)) {
+    throw new Error("platform resume 不支持 --agent-handoff 或 --cancel");
+  }
   return result;
+}
+
+function assertAgentHandoffRoute(options, savedTarget) {
+  if (!options.agentHandoff) return;
+  const location = savedTarget?.location || options.location;
+  const mode = savedTarget?.mode || options.mode;
+  if (options.command && options.command !== "install") throw new Error("--agent-handoff 只能用于 platform install");
+  if (location !== "server" || mode !== "host-cluster") {
+    throw new Error("--agent-handoff 只能用于独立服务器的 host-cluster 安装");
+  }
 }
 
 function assertOperationId(operationId) {
@@ -2680,7 +2704,7 @@ async function waitForHostClusterConfiguration({ write = (value) => process.stdo
   writeUserMessage(
     write,
     "platform.host-cluster-configuration",
-    "多节点主机集群模式已选择。Rainskills 将生成带中文说明的受保护 servers.txt；填写服务器信息后，会自动生成集群配置。",
+    "多节点主机集群模式已选择。Rainskills 将生成受保护的中文 servers.txt 表单；填写服务器信息后，会自动生成集群配置。",
   );
   return { waiting: true };
 }
@@ -2793,6 +2817,7 @@ async function runInstallOperation(options, {
   validatePersistedRouteTuple(state, { controlPlatform });
   const savedTarget = savedRouteFromState(state);
   validateRoutingRequest({ platform: controlPlatform, options, savedRoute: savedTarget });
+  assertAgentHandoffRoute(options, savedTarget);
   if (!UUID_PATTERN.test(state.installation_id || "")) {
     state = { ...state, installation_id: crypto.randomUUID() };
   }
@@ -2903,7 +2928,7 @@ async function runInstallOperation(options, {
     }
     state = stateUpdater(paths.state, state, {
       stage: result?.waitingStage || "mode-configuration",
-      status: "waiting_user",
+      status: result?.cancelled ? "cancelled" : "waiting_user",
       input_path: result?.inputPath ?? null,
     });
     activeOperation.state = state;
@@ -3304,7 +3329,11 @@ function interruptActiveOperation(signal) {
       const state = JSON.parse(fs.readFileSync(paths.state, "utf8"));
       const interrupted = updateState(paths.state, state, { status: "interrupted" });
       appendEvent(paths, interrupted, interrupted.stage, "interrupted");
-      process.stderr.write(`\n安装已中断，状态已保留。继续时执行：\n  npx rainskills@${packageManifest.version} platform install --onboarding-id ${activeOperation.onboardingId}\n`);
+      if (interrupted.target_kind === "host-cluster") {
+        process.stderr.write("\n[RAINSKILLS_AGENT_CONTINUATION_REQUIRED:host_cluster_interrupted]\n安装会话已中断，受保护状态已保留；当前任务将先进行安全核对再继续。\n");
+      } else {
+        process.stderr.write(`\n安装已中断，状态已保留。继续时执行：\n  npx rainskills@${packageManifest.version} platform install --onboarding-id ${activeOperation.onboardingId}\n`);
+      }
     } catch (error) {
       process.stderr.write(`\n保存中断状态失败：${error.message}\n`);
     }
@@ -3321,6 +3350,14 @@ async function main(argv) {
   if (options.command === "install") await runInstall(options);
   else if (options.command === "resume") await runResume(options.onboardingId);
   else throw new Error(`未知命令：${options.command}`);
+}
+
+function printCliError(error, write = (value) => process.stderr.write(value)) {
+  if (error?.code === "RAINSKILLS_OPERATION_LOCK_BUSY") {
+    write("[RAINSKILLS_OPERATION_LOCK_BUSY]\n已有安装会话仍在运行；当前任务将继续等待该会话。\n");
+    return;
+  }
+  write(`错误：${error.message}\n`);
 }
 
 module.exports = {
@@ -3346,6 +3383,7 @@ module.exports = {
   normalizeRemoteTarget,
   normalizeWindowsExecutableForControl,
   parseArgs,
+  printCliError,
   platformCompletionMessage,
   printPreflight,
   printWindowsPreflight,
@@ -3397,7 +3435,7 @@ if (require.main === module) {
   });
   main(process.argv.slice(2)).catch((error) => {
     if (!interruptedSignal) {
-      process.stderr.write(`错误：${error.message}\n`);
+      printCliError(error);
       process.exitCode = 1;
     }
   });

@@ -138,7 +138,7 @@ test("platform branch handoffs and completion text are fixed by the helper", asy
   );
   assert.equal(
     userMessageBody(hostOutput.join(""), "platform.host-cluster-configuration"),
-    "多节点主机集群模式已选择。Rainskills 将生成带中文说明的受保护 servers.txt；填写服务器信息后，会自动生成集群配置。",
+    "多节点主机集群模式已选择。Rainskills 将生成受保护的中文 servers.txt 表单；填写服务器信息后，会自动生成集群配置。",
   );
 
   const kubernetesOutput = [];
@@ -1144,6 +1144,61 @@ test("platform CLI accepts fixed location and mode flags while preserving explic
   assert.equal(legacy.sshPort, null);
   assert.throws(() => parseArgs(["install", "--location", "cluster"]), /--location/);
   assert.throws(() => parseArgs(["install", "--mode", "automatic"]), /--mode/);
+});
+
+test("agent handoff flags are explicit, mutually exclusive, and never disable automatic authorization", () => {
+  const { parseArgs } = require(platformInstallerPath);
+  const accepted = parseArgs([
+    "install",
+    "--onboarding-id", "1d6754d6-6fb3-4bda-9a04-15c2d261d178",
+    "--location", "server",
+    "--mode", "host-cluster",
+    "--agent-handoff",
+  ]);
+  assert.equal(accepted.agentHandoff, true);
+  assert.equal(accepted.cancel, false);
+  assert.equal(accepted.noResume, false);
+  assert.throws(() => parseArgs(["install", "--agent-handoff", "--no-resume"]), /agent-handoff.*no-resume|no-resume.*agent-handoff/i);
+  assert.throws(() => parseArgs(["install", "--cancel"]), /cancel.*agent-handoff|agent-handoff.*cancel/i);
+  assert.throws(() => parseArgs(["install", "--agent-handoff", "--cancel", "--yes"]), /yes.*cancel|cancel.*yes/i);
+});
+
+test("agent handoff rejects any non-host-cluster route before target selection", async () => {
+  const { runInstallOperation } = require(platformInstallerPath);
+  const operationId = "1d6754d6-6fb3-4bda-9a04-15c2d261d178";
+  let selected = 0;
+  await assert.rejects(() => runInstallOperation({
+    onboardingId: operationId,
+    location: "server",
+    mode: "single-node",
+    agentHandoff: true,
+  }, {
+    onboardingPathResolver: () => "/protected/onboarding.json",
+    ensurePrivateDirectory: () => {},
+    onboardingReader: () => ({
+      schema: "rainskills.onboarding.v1", version: 1, operation_id: operationId,
+      stage: "awaiting-platform", target: "codex", deployment_mode: "self-hosted", control_mode: "posix",
+      intent: { type: "deploy", project_root: "/workspace/app", source_kind: "local" },
+    }),
+    pathsResolver: () => ({
+      root: "/protected/op", state: "/protected/op/state.json", events: "/protected/op/events.jsonl",
+      log: "/protected/op/install.log", installer: "/protected/op/rainbond-install.sh",
+    }),
+    stateWriter: () => {},
+    targetSelector: async () => { selected += 1; return {}; },
+  }), /agent-handoff.*host-cluster|host-cluster.*agent-handoff/i);
+  assert.equal(selected, 0);
+});
+
+test("an occupied install lock emits a stable task-waiting marker instead of a recovery command", () => {
+  const { printCliError } = require(platformInstallerPath);
+  const output = [];
+  const error = new Error("operation lock busy");
+  error.code = "RAINSKILLS_OPERATION_LOCK_BUSY";
+  printCliError(error, (value) => output.push(value));
+  assert.match(output.join(""), /^\[RAINSKILLS_OPERATION_LOCK_BUSY\]/);
+  assert.match(output.join(""), /当前任务将继续等待/);
+  assert.doesNotMatch(output.join(""), /platform install|npx /);
 });
 
 test("resuming a saved single-node server route preserves its SSH port when no override is supplied", async () => {
@@ -3216,8 +3271,8 @@ test("published guidance describes local and remote target selection", () => {
 
 function assertSimpleHostClusterGuidance(guidance) {
   assert.match(guidance, /受保护的.*servers\.txt|servers\.txt.*受保护/);
-  assert.match(guidance, /中文标题[^。\n]*中文注释|中文标题.*中文注释/is);
-  assert.match(guidance, /公网\s*IP.*内网\s*IP.*SSH\s*端口.*root\s*密码/is);
+  assert.match(guidance, /中文.*表单|表单.*中文/is);
+  assert.match(guidance, /公网\s*IP.*内网\s*IP.*SSH\s*端口.*登录密码/is);
   assert.match(guidance, /3\s*[-–—至到]\s*100/);
   assert.match(guidance, /SSH\s*端口.*不要求.*22|非\s*22.*SSH\s*端口/is);
   assert.match(guidance, /最大\s*1\s*MiB|1\s*MiB[^。\n]*(?:上限|最大)/i);
@@ -3268,21 +3323,17 @@ test("published host cluster guidance agrees with the real helper contract", () 
   assert.match(skill, /可点击[^。\n]*链接[^。\n]*打开命令[^。\n]*四个字段[^。\n]*已完成/);
 
   const prompt = renderHostServerInputPrompt({ inputPath: "/protected/servers.txt", platform: "linux" });
-  for (const explanation of [
-    /公网 IP：控制端 SSH 地址/,
-    /内网 IP：节点通信地址/,
-    /SSH 端口：.*不强制为 22/,
-    /root 密码：只写入受保护的本地和远端安装文件/,
-  ]) assert.match(prompt, explanation);
+  assert.match(prompt, /公网 IP、内网 IP、SSH 端口和登录密码/);
+  assert.doesNotMatch(prompt, /public_ip|private_ip|ssh_port|password/);
   assert.doesNotMatch(prompt, /cluster\.yaml|节点角色|密码只(?:保存在|写入).*servers\.txt[；。]/);
 
   const sentinel = "MUST-NOT-LEAK-DOCUMENT-CONTRACT-PASSWORD";
   let publicIp = 0;
   let privateIp = 0;
   const populated = createHostServerInputTemplate().toString("utf8")
-    .replace(/^public_ip=$/gm, () => `public_ip=203.0.113.${publicIp += 1}`)
-    .replace(/^private_ip=$/gm, () => `private_ip=10.0.0.${privateIp += 1}`)
-    .replace(/^password=$/gm, `password=${sentinel}`);
+    .replace(/^公网 IP：$/gm, () => `公网 IP：203.0.113.${publicIp += 1}`)
+    .replace(/^内网 IP：$/gm, () => `内网 IP：10.0.0.${privateIp += 1}`)
+    .replace(/^登录密码：$/gm, `登录密码：${sentinel}`);
   const parsed = parseHostServerInput(populated);
   assert.deepEqual(parsed.issues, []);
   assert(parsed.hosts.every(({ password }) => password === sentinel));
