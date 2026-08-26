@@ -488,6 +488,20 @@ class ProgressiveLoadingValidatorTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_but_with_direct_positive_cue_inherits_the_source_category(self) -> None:
+        path = self.root / APP_NAME / "SKILL.md"
+        source = path.read_text(encoding="utf-8")
+        source += (
+            "\nCurrent project must not go to App Assistant but uses "
+            "rainbond-opensource-app-deploy.\n"
+        )
+        path.write_text(source, encoding="utf-8")
+
+        result = self.run_cross()
+
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("source ownership boundary conflict", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

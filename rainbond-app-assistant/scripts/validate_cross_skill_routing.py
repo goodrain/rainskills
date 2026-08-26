@@ -144,9 +144,17 @@ def target_relation_after_contrast(
     target_phrases: tuple[str, ...],
 ) -> bool:
     statement = normalize(statement)
-    contrast = ("instead", "rather", "而是", "改为")
+    explicit_alternatives = ("instead", "rather", "而是", "改为")
+    controlled_but = ("but", "但是", "但")
     cues = ("route", "use", "to", "with", "delegate", "handled", "goes", "stay")
-    for marker in contrast:
+
+    def starts_with_inherited_cue(value: str) -> bool:
+        value = normalize(value)
+        cue = r"(?:routes?|uses?|go(?:es)?|delegates?|handled|转到|改走|应转|留在)"
+        pronoun = r"(?:it|they|this|that|these|those|request|requests|它|其|该请求|这些请求)"
+        return bool(re.match(rf"^(?:{cue}|{pronoun}\s*{cue})(?:\s|$)", value))
+
+    for marker in explicit_alternatives + controlled_but:
         marker_at = statement.rfind(marker)
         if marker_at < 0:
             continue
@@ -154,7 +162,13 @@ def target_relation_after_contrast(
         for target in target_phrases:
             target = normalize(target)
             target_at = suffix.find(target)
-            if target_at >= 0 and relation_has_positive_cue(suffix[:target_at], cues):
+            if target_at < 0:
+                continue
+            relation = suffix[:target_at]
+            if marker in controlled_but:
+                if starts_with_inherited_cue(relation):
+                    return True
+            elif relation_has_positive_cue(relation, cues):
                 return True
     return False
 
