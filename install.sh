@@ -2652,6 +2652,11 @@ main() {
   done < <(find "$SCRIPT_DIR" -maxdepth 1 -mindepth 1 -type d -name 'rainbond-*' | sort)
   [[ "${#skills[@]}" -gt 0 ]] || die "在 $SCRIPT_DIR 下没有找到 rainbond-* skill 目录。"
 
+  local root_skill_dir="$SCRIPT_DIR/marketplace/rainskills/skills/rainskills"
+  if [[ -d "$root_skill_dir" ]]; then
+    skills+=("$root_skill_dir")
+  fi
+
   for skill_dir in "${skills[@]}"; do
     validate_skill_dir "$skill_dir"
   done

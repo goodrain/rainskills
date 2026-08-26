@@ -102,7 +102,11 @@ test("package metadata defines a public npx command with pinned runtime dependen
   );
   assert.equal(
     manifest.scripts.test,
-    "npm run test:runtime-version && npm run test:auto-update && npm run test:launcher && npm run test:api-bridge && npm run test:skill-profile && npm run test:marketplace && npm run test:runtime-routing && npm run test:telemetry && npm run test:platform && npm run test:windows && npm run test:package-upload && npm run test:package && npm run test:installer && npm run test:signal && npm run test:npx-pty"
+    "npm run test:runtime-version && npm run test:auto-update && npm run test:launcher && npm run test:api-bridge && npm run test:console-contract && npm run test:skill-profile && npm run test:marketplace && npm run test:runtime-routing && npm run test:telemetry && npm run test:platform && npm run test:windows && npm run test:package-upload && npm run test:package && npm run test:installer && npm run test:signal && npm run test:npx-pty"
+  );
+  assert.equal(
+    manifest.scripts["test:console-contract"],
+    "python3 tests/console_tool_contract_test.py"
   );
   assert.equal(
     manifest.scripts["test:runtime-version"],
@@ -304,6 +308,9 @@ test("the packed default installer installs only Skills and prints the approved 
     assert.equal(output.includes(forbidden), false, `default install output contains ${forbidden}`);
   }
   assert.equal(fs.existsSync(path.join(home, ".codex", "skills", "rainbond-app-assistant", "SKILL.md")), true);
+  const installedRootSkill = path.join(home, ".codex", "skills", "rainskills", "SKILL.md");
+  assert.equal(fs.existsSync(installedRootSkill), true);
+  assert.match(fs.readFileSync(installedRootSkill, "utf8"), /"type":"environment-add"/);
   assert.equal(fs.existsSync(path.join(home, ".rainbond", "bin", "rainskills-tools.js")), true);
   assert.equal(fs.existsSync(path.join(home, ".rainbond", "bin", "rainskills-skill-manifest.json")), true);
   assert.equal(fs.existsSync(path.join(home, ".rainbond", "lib", "rainbond-platform-installer", "scripts", "runtime-operations.js")), true);

@@ -162,6 +162,14 @@ function discoverSkills(packageRoot) {
     .filter((entry) => entry.name.startsWith("rainbond-") && entry.isDirectory())
     .map((entry) => path.join(packageRoot, entry.name))
     .sort();
+  const rootSkill = path.join(
+    packageRoot,
+    "marketplace",
+    "rainskills",
+    "skills",
+    "rainskills"
+  );
+  if (fs.existsSync(rootSkill)) skills.push(rootSkill);
   if (skills.length === 0) {
     throw new Error(`在 ${packageRoot} 下没有找到 rainbond-* skill 目录`);
   }

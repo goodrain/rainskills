@@ -30,6 +30,12 @@ function makeSourceRoot() {
     fs.writeFileSync(path.join(directory, "SKILL.md"), content);
     fs.writeFileSync(path.join(directory, "references", "contract.md"), `${skillId}\n`);
   }
+  const rootSkill = path.join(root, "marketplace", "rainskills", "skills", "rainskills");
+  fs.mkdirSync(rootSkill, { recursive: true });
+  fs.writeFileSync(
+    path.join(rootSkill, "SKILL.md"),
+    "---\nname: rainskills\ndescription: Manage Rainskills environments\n---\n# Rainskills\n"
+  );
   return root;
 }
 
@@ -57,6 +63,7 @@ test("builder records exact Skill content and deterministic protected bundle dig
   assert.deepEqual(manifest.skills.map(({ id }) => id), [
     "rainbond-app-assistant",
     "rainbond-opensource-app-deploy",
+    "rainskills",
   ]);
   for (const entry of manifest.skills) {
     assert.equal(entry.package_version, "9.8.7");
