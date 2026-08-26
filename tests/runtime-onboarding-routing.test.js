@@ -91,3 +91,32 @@ test("root Skill manages one replaceable runtime and never configures client MCP
   assert.match(source, /不得配置客户端 MCP/);
   assert.doesNotMatch(source, /environment set-default|environment rename|environment remove/);
 });
+
+test("new-application Skills expose the four runtime choices without a private-environment submenu", () => {
+  const newApplicationSkillIds = [
+    "rainbond-app-assistant",
+    "rainbond-fullstack-bootstrap",
+    "rainbond-opensource-app-deploy",
+    "rainbond-project-init",
+    "rainbond-template-installer",
+  ];
+  for (const skillId of newApplicationSkillIds) {
+    const source = fs.readFileSync(path.join(root, skillId, "SKILL.md"), "utf8");
+    assert.match(
+      source,
+      /1\) 云端环境（免费体验）\s+2\) 本机环境\s+3\) 独立服务器\s+4\) 已有 Rainbond/,
+      `${skillId} must show the flattened environment menu`,
+    );
+    assert.doesNotMatch(source, /私有环境（去对接）/);
+    assert.doesNotMatch(source, /"private-deployment-location"/);
+  }
+});
+
+test("platform installer reuses the location selected by the flattened environment menu", () => {
+  const source = fs.readFileSync(
+    path.join(root, "rainbond-platform-installer", "SKILL.md"),
+    "utf8",
+  );
+  assert.match(source, /next-action[^。\n]*--location[^。\n]*不得再次调用[^。\n]*private-deployment-location/);
+  assert.match(source, /只有用户直接要求安装 Rainbond 平台[^。\n]*尚未选择部署位置/);
+});

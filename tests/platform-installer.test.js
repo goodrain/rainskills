@@ -54,7 +54,27 @@ function userMessageBody(output, messageId) {
 }
 
 test("user-message protocol renders one stable bounded message and rejects marker injection", () => {
-  const { renderUserMessage } = require(userMessagePath);
+  const { renderCatalogUserMessage, renderUserMessage } = require(userMessagePath);
+  assert.equal(
+    userMessageBody(
+      renderCatalogUserMessage("new-application-environment"),
+      "runtime.new-application-environment",
+    ),
+    [
+      "可以，我会帮你完成应用识别、构建、部署和访问验证。",
+      "",
+      "不过目前还没有可用的应用运行环境。",
+      "",
+      "你刚安装的 Rainskills 是负责“部署”的 AI 助手，它会分析项目并执行部署流程；Rainbond 负责为应用提供稳定运行环境。",
+      "",
+      "请选择应用要运行的环境：",
+      "",
+      "1) 云端环境（免费体验）",
+      "2) 本机环境",
+      "3) 独立服务器",
+      "4) 已有 Rainbond",
+    ].join("\n"),
+  );
   assert.equal(
     renderUserMessage("platform.location", "请选择部署位置：\n\n1、部署到本机\n2、部署到独立服务器\n3、部署到已有 Rainbond"),
     "[RAINSKILLS_USER_MESSAGE_BEGIN:platform.location]\n"
@@ -3057,8 +3077,8 @@ test("published guidance describes local and remote target selection", () => {
   for (const blocker of ["19041", "虚拟化", "NAT", "端口", "UAC", "计划任务", "摘要"]) {
     assert.match(troubleshooting, new RegExp(blocker));
   }
-  assert.match(readme, /云端环境（免费体验）.*私有环境（去对接）.*部署到本机.*部署到独立服务器.*部署到已有 Rainbond/s);
-  assert.match(readme, /部署到本机.*部署到独立服务器.*部署到已有 Rainbond/s);
+  assert.match(readme, /云端环境（免费体验）.*本机环境.*独立服务器.*已有 Rainbond/s);
+  assert.doesNotMatch(readme, /私有环境（去对接）/);
   assert.match(policy, /远程 Linux/);
   assert.doesNotMatch(policy, /不支持远程 SSH/);
 });

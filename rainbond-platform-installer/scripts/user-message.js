@@ -15,7 +15,9 @@ const USER_MESSAGES = Object.freeze({
       "请选择应用要运行的环境：",
       "",
       "1) 云端环境（免费体验）",
-      "2) 私有环境（去对接）",
+      "2) 本机环境",
+      "3) 独立服务器",
+      "4) 已有 Rainbond",
     ].join("\n"),
   },
   "private-console-origin": {

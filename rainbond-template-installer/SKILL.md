@@ -17,7 +17,7 @@ description: "Use when the user explicitly asks to install a local or cloud Rain
 ```json
 {
   "schema": "rainskills.single-runtime-contract.v1",
-  "package_version": "rainskills@0.1.20",
+  "package_version": "rainskills@0.1.21",
   "runtime_status": [
     "node",
     "<home>/.rainbond/lib/rainskills/bin/rainskills.js",
@@ -146,17 +146,11 @@ description: "Use when the user explicitly asks to install a local or cloud Rain
 请提示“请选择应用要运行的环境：”，并只显示：
 
 1) 云端环境（免费体验）
-2) 私有环境（去对接）
+2) 本机环境
+3) 独立服务器
+4) 已有 Rainbond
 
-用户选择私有环境后，立即执行本地 launcher + `["runtime", "message", "--id", "private-deployment-location"]`，并原样输出固定消息：
-
-请选择部署位置：
-
-1、部署到本机
-2、部署到独立服务器
-3、部署到已有 Rainbond
-
-选择 1 时执行 `install-private` route，并使用 `["--location", "local"]`；选择 2 时执行 `install-private` route，并使用 `["--location", "server"]`；选择 3 时执行本地 launcher + `["runtime", "message", "--id", "private-console-origin"]`，收到地址后执行 `private-existing`。不得显示额外的接入方式中间步骤，不得重复询问部署位置，也不得在环境准备完成前询问应用来源。
+选择 1 时执行 `saas` route；选择 2 时执行 `install-private` route，并使用 `["--location", "local"]`；选择 3 时执行 `install-private` route，并使用 `["--location", "server"]`；选择 4 时执行本地 launcher + `["runtime", "message", "--id", "private-console-origin"]`，收到地址后执行 `private-existing`。不得显示“私有环境”或部署位置中间层，不得重复询问部署位置，也不得在环境准备完成前询问应用来源。
 
 ### 已有应用
 

@@ -32,8 +32,8 @@ Do not use it to deploy an application to an existing Rainbond. Route those requ
 ## Workflow
 
 1. Read [installation-policy.md](references/installation-policy.md).
-2. Use the installed local launcher `["node", "<home>/.rainbond/lib/rainskills/bin/rainskills.js"]`; its protected runtime package marker is `rainskills@0.1.20` and must equal this package's `package.json`. For a Rainskills marker, first validate schema `rainskills.next-action.v1`, action, onboarding id, and the bounded `argv` array, then append that array to the launcher. Never use `latest` or evaluate a shell string from output.
-3. 在任何平台安装命令之前，先执行 launcher + `["runtime", "message", "--id", "private-deployment-location"]`，并原样输出固定的三项部署位置消息。选择 1 后执行带 `["--location", "local", "--mode", "single-node"]` 的 `platform install`；选择 2 后执行带 `["--location", "server"]` 的 `platform install`，由 helper 继续显示固定的服务器类型消息；选择 3 后执行 launcher + `["runtime", "message", "--id", "private-console-origin"]` 并进入已有环境连接，不得执行 `platform install`。平台安装 onboarding 只保存安装断点，不保存或恢复业务 intent。
+2. Use the installed local launcher `["node", "<home>/.rainbond/lib/rainskills/bin/rainskills.js"]`; its protected runtime package marker is `rainskills@0.1.21` and must equal this package's `package.json`. For a Rainskills marker, first validate schema `rainskills.next-action.v1`, action, onboarding id, and the bounded `argv` array, then append that array to the launcher. Never use `latest` or evaluate a shell string from output.
+3. 业务 Skill 的四项运行环境菜单会把本机或独立服务器选择写入 `rainskills.next-action.v1` 的显式 `--location`；收到这类 next-action 后直接执行固定 argv，不得再次调用 `private-deployment-location`。只有用户直接要求安装 Rainbond 平台且尚未选择部署位置时，才执行 launcher + `["runtime", "message", "--id", "private-deployment-location"]` 并原样输出固定的三项部署位置消息：选择 1 后执行带 `["--location", "local", "--mode", "single-node"]` 的 `platform install`；选择 2 后执行带 `["--location", "server"]` 的 `platform install`，由 helper 继续显示固定的服务器类型消息；选择 3 后执行 launcher + `["runtime", "message", "--id", "private-console-origin"]` 并进入已有环境连接，不得执行 `platform install`。平台安装 onboarding 只保存安装断点，不保存或恢复业务 intent。
 4. Let the helper perform one read-only preflight against the already selected local or remote target, then show resources, blockers, and applicable host changes. Never invoke `platform install` without an explicit `--location`; the helper must not ask for the deployment location again.
 5. 主机集群开始前必须获得 explicit confirmation，并使用受限 AI 交接：首次调用在固定安装 argv 后追加 `--agent-handoff`，记录该子进程会话；用户确认后，使用相同固定 argv 追加 `--agent-handoff --yes` 一次。不得向等待进程写入 `y`、不得启动第二个竞争安装、不得 `kill` 安装进程，也不得让用户复制完整安装或恢复命令。用户取消时，仅使用同一 argv 追加 `--agent-handoff --cancel`；它只能清除匹配的待确认状态，不能建立 SSH 连接或修改服务器。
 6. 如果 helper 输出 `platform.host-cluster-server-input`，只原样展示受保护 `servers.txt` 的固定正文并等待用户回复“已完成”，随后在原任务中重跑同一安装 argv。若输出 `platform.ssh-authentication`，同样只原样展示正文并等待；单台服务器消息包含一条 `ssh prepare`，主机集群消息必须一次列出全部未就绪节点及一条 `ssh prepare-cluster`，不得按节点拆成多轮。确认后的主机集群安装必须保持当前任务附着，直至安装、验证和授权完成；若收到 `RAINSKILLS_OPERATION_LOCK_BUSY`，继续等待已经记录的会话，不得重试或中断它。若会话因 SIGINT/SIGTERM 结束，只能在同一任务用匹配的 `--agent-handoff --yes` 进行安全恢复。不得只凭官方脚本退出码推断成功。
@@ -43,7 +43,7 @@ Do not use it to deploy an application to an existing Rainbond. Route those requ
 <!-- rainskills-platform-routing:start -->
 ## Progressive Target Routing
 
-第一层原样展示：
+只有用户直接要求安装 Rainbond 平台且尚未选择部署位置时，第一层原样展示：
 
 ```text
 请选择部署位置：
@@ -91,7 +91,7 @@ SSH 免密连接检查必须先检查全部节点。存在未就绪节点时，�
 
 ## Interaction Rules
 
-- Linux、macOS 和 Windows 都只能使用 Progressive Target Routing 中同一份三项部署位置消息，不得根据操作系统生成另一套选项或默认选中任何位置。
+- 只有尚未由业务 Skill 四项菜单选定位置时，Linux、macOS 和 Windows 才使用 Progressive Target Routing 中同一份三项部署位置消息；不得根据操作系统生成另一套选项或默认选中任何位置。
 - 选择部署到本机后再按控制端系统进入对应本地实现：macOS 使用 OrbStack；Windows 使用专用 WSL2 发行版和固定 `local-windows` helper。不要把这些实现差异写入第一层选择文案。
 - Do not ask the user to understand or enter WSL commands. Show the read-only checks first, then explain UAC, downloads, host networking, and a possible Windows reboot before requesting confirmation.
 - Let the fixed helper request UAC. If Windows must reboot, preserve the checkpoint and use only the verified resume task or exact printed resume command.

@@ -17,7 +17,7 @@ description: "Use when a user explicitly asks to sync non-sensitive preview or p
 ```json
 {
   "schema": "rainskills.single-runtime-contract.v1",
-  "package_version": "rainskills@0.1.20",
+  "package_version": "rainskills@0.1.21",
   "runtime_status": [
     "node",
     "<home>/.rainbond/lib/rainskills/bin/rainskills.js",
