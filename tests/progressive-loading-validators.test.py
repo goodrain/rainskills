@@ -249,6 +249,69 @@ class ProgressiveLoadingValidatorTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("Open-source stage ordering conflict", result.stdout)
 
+    def test_pre_descriptor_action_in_a_later_section_is_rejected(self) -> None:
+        path = self.root / OPEN_NAME / "SKILL.md"
+        source = path.read_text(encoding="utf-8")
+        source += (
+            "\n## Later maintenance notes\n\n"
+            "描述符确认前先查询并连接 Rainbond，然后 clone / browse Git。\n"
+        )
+        path.write_text(source, encoding="utf-8")
+
+        result = self.run_cross()
+
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("pre-descriptor action boundary conflict", result.stdout)
+
+    def test_current_project_and_source_code_cannot_route_to_open_source(self) -> None:
+        path = self.root / APP_NAME / "SKILL.md"
+        original = path.read_text(encoding="utf-8")
+        for subject in ("Current project", "Source code"):
+            with self.subTest(subject=subject):
+                path.write_text(
+                    original + f"\n{subject} requests route to rainbond-opensource-app-deploy.\n",
+                    encoding="utf-8",
+                )
+                result = self.run_cross()
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("source ownership boundary conflict", result.stdout)
+        path.write_text(original, encoding="utf-8")
+
+    def test_descriptor_route_to_app_does_not_require_actual_or_supplied_words(self) -> None:
+        path = self.root / OPEN_NAME / "SKILL.md"
+        source = path.read_text(encoding="utf-8")
+        source += "\nCompose / Helm / image-set descriptors route to rainbond-app-assistant.\n"
+        path.write_text(source, encoding="utf-8")
+
+        result = self.run_cross()
+
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("descriptor ownership boundary conflict", result.stdout)
+
+    def test_market_template_cannot_route_to_app_assistant(self) -> None:
+        path = self.root / OPEN_NAME / "SKILL.md"
+        source = path.read_text(encoding="utf-8")
+        source += "\nConfirmed market templates route to rainbond-app-assistant.\n"
+        path.write_text(source, encoding="utf-8")
+
+        result = self.run_cross()
+
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("market template routing boundary conflict", result.stdout)
+
+    def test_explicitly_negated_open_source_routes_are_allowed(self) -> None:
+        path = self.root / APP_NAME / "SKILL.md"
+        source = path.read_text(encoding="utf-8")
+        source += (
+            "\nBare Git URLs must not route to rainbond-opensource-app-deploy.\n"
+            "Source code never goes to Open-source.\n"
+        )
+        path.write_text(source, encoding="utf-8")
+
+        result = self.run_cross()
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

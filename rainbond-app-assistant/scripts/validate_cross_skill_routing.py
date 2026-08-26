@@ -24,7 +24,18 @@ OPEN_STAGE_ROWS = (
     "[failure-mode playbook](references/failure-mode-playbook.md) |",
 )
 NEGATIONS = ("不得", "禁止", "不加载", "never", "must not", "do not", "cannot")
-ROUTE_MARKERS = ("route", "use", "转到", "改走", "应转", "留在", "remain", "stay")
+ROUTE_MARKERS = (
+    "route",
+    "use",
+    "goes",
+    "go to",
+    "转到",
+    "改走",
+    "应转",
+    "留在",
+    "remain",
+    "stay",
+)
 
 
 def require(condition: bool, message: str, failures: list[str]) -> None:
@@ -59,6 +70,10 @@ def parse_description(source: str) -> str:
     if not isinstance(metadata, dict) or not isinstance(metadata.get("description"), str):
         return ""
     return metadata["description"]
+
+
+def markdown_body(source: str) -> str:
+    return re.sub(r"\A---\s*\n.*?\n---\s*\n", "", source, count=1, flags=re.DOTALL)
 
 
 def bounded_section(source: str, start_heading: str, end_heading: str) -> str:
@@ -171,43 +186,69 @@ def validate_routing_conflicts(
     require(bool(phase_zero), "Open-source Phase 0 section bounds are invalid", failures)
     require(bool(staged_loading), "Open-source staged-loading section bounds are invalid", failures)
 
-    routing_statements = statements(open_description) + statements(phase_zero) + statements(staged_loading)
+    body_statements = statements(markdown_body(app_root)) + statements(markdown_body(open_root))
     all_root_statements = (
         statements(app_description)
         + statements(open_description)
-        + statements(app_root)
-        + statements(open_root)
+        + body_statements
     )
 
-    source_categories = ("bare git", "source project", "named only", "named application")
+    source_categories = (
+        "bare git",
+        "source project",
+        "source code",
+        "source directory",
+        "source package",
+        "current project",
+        "named only",
+        "named application",
+    )
+
+    def open_source_target(statement: str) -> bool:
+        return contains(statement, "rainbond opensource app deploy") or "open source" in statement
+
     source_to_open = any(
         any(category in statement for category in source_categories)
-        and contains(statement, "rainbond opensource app deploy")
+        and open_source_target(statement)
         and has_route_marker(statement)
+        and not has_negation(statement)
         for statement in all_root_statements
     )
     require(not source_to_open, "source ownership boundary conflict", failures)
 
     descriptor_to_app = any(
-        ("actual" in statement or "supplied" in statement)
-        and any(kind in statement for kind in ("compose", "helm", "image set"))
+        any(kind in statement for kind in ("compose", "helm", "image set"))
         and contains(statement, "rainbond app assistant")
         and has_route_marker(statement)
+        and not has_negation(statement)
         for statement in all_root_statements
     )
     require(not descriptor_to_app, "descriptor ownership boundary conflict", failures)
 
-    market_conflict = any(
-        contains(statement, "market template")
-        and (
-            re.search(r"(?:not route|do not route|不转)\s+rainbond template installer", statement)
-            or (
-                contains(statement, "rainbond opensource app deploy")
-                and any(marker in statement for marker in ("留在", "remain", "stay"))
-            )
+    market_conflict = False
+    for statement in all_root_statements:
+        if not contains(statement, "market template"):
+            continue
+        rejects_installer = re.search(
+            r"(?:not route|do not route|不转)\s+rainbond template installer",
+            statement,
         )
-        for statement in all_root_statements
-    )
+        stays_open = contains(statement, "rainbond opensource app deploy") and any(
+            marker in statement for marker in ("留在", "remain", "stay")
+        )
+        routes_to_app = bool(
+            re.search(
+                r"market templates?.{0,40}(?:route|goes|go to|转到|改走|应转).{0,40}rainbond app assistant",
+                statement,
+            )
+            or re.search(
+                r"(?:route|转到|改走|应转).{0,20}market templates?.{0,40}rainbond app assistant",
+                statement,
+            )
+        ) and not has_negation(statement)
+        if rejects_installer or stays_open or routes_to_app:
+            market_conflict = True
+            break
     require(not market_conflict, "market template routing boundary conflict", failures)
 
     def unconfirmed(statement: str) -> bool:
@@ -245,7 +286,7 @@ def validate_routing_conflicts(
         )
 
     require(
-        not any(pre_descriptor_action(statement) for statement in routing_statements),
+        not any(pre_descriptor_action(statement) for statement in body_statements),
         "pre-descriptor action boundary conflict",
         failures,
     )
