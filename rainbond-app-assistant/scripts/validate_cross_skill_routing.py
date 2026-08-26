@@ -57,7 +57,7 @@ def contains(value: str, phrase: str) -> bool:
 def statements(value: str) -> list[str]:
     return [
         normalize(part)
-        for part in re.split(r"[!?。！？\n]+|\.(?=\s|$)", value)
+        for part in re.split(r"[!?。！？;；\n]+|\.(?=\s|$)", value)
         if normalize(part)
     ]
 
@@ -126,20 +126,14 @@ def validate_description_boundaries(
         failures,
     )
     require(
-        any(
-            contains(statement, "not for supplied third party compose helm or image set descriptors")
-            and contains(statement, "rainbond opensource app deploy")
-            for statement in app_statements
-        ),
+        contains(app_normalized, "not for supplied third party compose helm or image set descriptors")
+        and contains(app_normalized, "rainbond opensource app deploy"),
         "App description must exclude supplied descriptors to Open-source Deploy",
         failures,
     )
     require(
-        any(
-            contains(statement, "not for a confirmed market template")
-            and contains(statement, "rainbond template installer")
-            for statement in app_statements
-        ),
+        contains(app_normalized, "not for a confirmed market template")
+        and contains(app_normalized, "rainbond template installer"),
         "App description must exclude confirmed market templates",
         failures,
     )
@@ -157,15 +151,17 @@ def validate_description_boundaries(
         "Open-source description must positively own only supplied descriptors",
         failures,
     )
-    open_exclusion = any(
-        contains(statement, "never use for a bare git url")
-        and contains(statement, "source project directory package")
-        and contains(statement, "named application without a descriptor")
-        and contains(statement, "private image project")
-        and contains(statement, "confirmed market template")
-        and contains(statement, "rainbond app assistant")
-        and contains(statement, "rainbond template installer")
-        for statement in open_statements
+    open_exclusion = all(
+        contains(open_normalized, phrase)
+        for phrase in (
+            "never use for a bare git url",
+            "source project directory package",
+            "named application without a descriptor",
+            "private image project",
+            "confirmed market template",
+            "rainbond app assistant",
+            "rainbond template installer",
+        )
     )
     require(
         open_exclusion,
@@ -186,7 +182,9 @@ def validate_routing_conflicts(
     require(bool(phase_zero), "Open-source Phase 0 section bounds are invalid", failures)
     require(bool(staged_loading), "Open-source staged-loading section bounds are invalid", failures)
 
-    body_statements = statements(markdown_body(app_root)) + statements(markdown_body(open_root))
+    app_body_statements = statements(markdown_body(app_root))
+    open_body_statements = statements(markdown_body(open_root))
+    body_statements = app_body_statements + open_body_statements
     all_root_statements = (
         statements(app_description)
         + statements(open_description)
@@ -266,9 +264,7 @@ def validate_routing_conflicts(
         )
 
     def pre_descriptor_action(statement: str) -> bool:
-        actions = (
-            "读取 runtime gate",
-            "加载 runtime gate",
+        non_gate_actions = (
             "查询",
             "连接 rainbond",
             "clone",
@@ -277,7 +273,10 @@ def validate_routing_conflicts(
             "浏览 git",
         )
         positive_markers = ("允许", "先", "可以", "may", "can", "should", "must load", "must read")
-        has_action = any(action in statement for action in actions)
+        has_gate_action = "runtime gate" in statement and any(
+            action in statement for action in ("读取", "加载", "read", "load", "允许")
+        )
+        has_action = has_gate_action or any(action in statement for action in non_gate_actions)
         explicitly_positive = any(marker in statement for marker in positive_markers)
         return (
             unconfirmed(statement)
@@ -286,7 +285,7 @@ def validate_routing_conflicts(
         )
 
     require(
-        not any(pre_descriptor_action(statement) for statement in body_statements),
+        not any(pre_descriptor_action(statement) for statement in open_body_statements),
         "pre-descriptor action boundary conflict",
         failures,
     )
@@ -300,21 +299,17 @@ def validate_routing_conflicts(
     )
     require(not stage_conflict, "Open-source stage ordering conflict", failures)
 
-    guard_statement = next(
-        (
-            statement
-            for statement in statements(phase_zero)
-            if unconfirmed(statement)
-            and contains(statement, "runtime gate")
-            and "rainbond" in statement
-            and ("克隆" in statement or "clone" in statement)
-            and ("浏览 git" in statement or "browse git" in statement)
-            and has_negation(statement)
-            and not pre_descriptor_action(statement)
-        ),
-        None,
+    guard_scope = normalize(phase_zero)
+    guard_complete = (
+        unconfirmed(guard_scope)
+        and contains(guard_scope, "runtime gate")
+        and "rainbond" in guard_scope
+        and ("克隆" in guard_scope or "clone" in guard_scope)
+        and ("浏览 git" in guard_scope or "browse git" in guard_scope)
+        and has_negation(guard_scope)
+        and not any(pre_descriptor_action(statement) for statement in statements(phase_zero))
     )
-    require(guard_statement is not None, "Open-source descriptor guard is missing or reversed", failures)
+    require(guard_complete, "Open-source descriptor guard is missing or reversed", failures)
 
 
 def validate_cross_skill_routing(repo_root: Path) -> list[str]:

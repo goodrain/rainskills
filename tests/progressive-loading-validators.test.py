@@ -312,6 +312,62 @@ class ProgressiveLoadingValidatorTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_semicolon_cannot_extend_negation_over_a_conflicting_clause(self) -> None:
+        cases = (
+            (
+                APP_NAME,
+                "不得改变其它规则；Current project routes to rainbond-opensource-app-deploy.",
+                "source ownership boundary conflict",
+            ),
+            (
+                OPEN_NAME,
+                "Do not change other rules; Compose descriptors route to rainbond-app-assistant.",
+                "descriptor ownership boundary conflict",
+            ),
+        )
+        for skill_name, rule, expected_error in cases:
+            with self.subTest(expected_error=expected_error):
+                path = self.root / skill_name / "SKILL.md"
+                original = path.read_text(encoding="utf-8")
+                path.write_text(original + f"\n{rule}\n", encoding="utf-8")
+                result = self.run_cross()
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn(expected_error, result.stdout)
+                path.write_text(original, encoding="utf-8")
+
+    def test_semicolon_separated_correct_ownership_rules_are_allowed(self) -> None:
+        path = self.root / APP_NAME / "SKILL.md"
+        source = path.read_text(encoding="utf-8")
+        source += (
+            "\nCurrent projects stay with App Assistant；"
+            "use Open-source only for supplied Compose descriptors.\n"
+        )
+        path.write_text(source, encoding="utf-8")
+
+        result = self.run_cross()
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_pre_descriptor_action_scope_is_open_source_only(self) -> None:
+        rule = "描述符未确认时，App Assistant 先加载自己的 Runtime Gate，再连接 Rainbond。"
+        app_path = self.root / APP_NAME / "SKILL.md"
+        original_app = app_path.read_text(encoding="utf-8")
+        app_path.write_text(original_app + f"\n{rule}\n", encoding="utf-8")
+
+        app_result = self.run_cross()
+
+        self.assertEqual(app_result.returncode, 0, app_result.stdout + app_result.stderr)
+        app_path.write_text(original_app, encoding="utf-8")
+
+        open_path = self.root / OPEN_NAME / "SKILL.md"
+        open_source = open_path.read_text(encoding="utf-8")
+        open_path.write_text(open_source + f"\n{rule}\n", encoding="utf-8")
+
+        open_result = self.run_cross()
+
+        self.assertNotEqual(open_result.returncode, 0, open_result.stdout + open_result.stderr)
+        self.assertIn("pre-descriptor action boundary conflict", open_result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
