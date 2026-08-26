@@ -4,7 +4,6 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const os = require("node:os");
 const { spawn } = require("node:child_process");
-const { isDeepStrictEqual } = require("node:util");
 const {
   detectControlEnvironment,
 } = require("../rainbond-platform-installer/scripts/control-environment.js");
@@ -30,31 +29,16 @@ const RUNTIME_CHILD_ENVIRONMENT_KEYS = Object.freeze([
   "RAINSKILLS_INSTALL_REPORT_URL", "RAINSKILLS_LIFECYCLE_REPORT_URL",
 ]);
 
-function runtimeChildEnvironment(source = process.env, extra = {}, expectedOrigin = "") {
+function runtimeChildEnvironment(source = process.env, extra = {}) {
   const environment = {};
   for (const key of RUNTIME_CHILD_ENVIRONMENT_KEYS) {
     if (typeof source[key] === "string") environment[key] = source[key];
   }
   for (const key of Object.keys(extra)) {
-    if (!["RAINSKILLS_RUNTIME_CONNECT_COMPLETION", "RAINSKILLS_RUNTIME_OPERATION_ID", "RAINSKILLS_RUNTIME_STATE_SCOPE"].includes(key)) {
+    if (!["RAINSKILLS_RUNTIME_CONNECT_COMPLETION", "RAINSKILLS_RUNTIME_OPERATION_ID"].includes(key)) {
       throw new Error("runtime child environment 包含未知字段");
     }
     environment[key] = extra[key];
-  }
-  if (
-    expectedOrigin
-    && typeof source.RAINBOND_JWT === "string"
-    && /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(source.RAINBOND_JWT)
-    && typeof source.RAINBOND_URL === "string"
-  ) {
-    try {
-      if (normalizeConsoleOrigin(source.RAINBOND_URL) === normalizeConsoleOrigin(expectedOrigin)) {
-        environment.RAINBOND_JWT = source.RAINBOND_JWT;
-        environment.RAINBOND_URL = normalizeConsoleOrigin(expectedOrigin);
-      }
-    } catch {
-      // An inherited credential is optional. Invalid or origin-drifted pairs are discarded.
-    }
   }
   return environment;
 }
@@ -103,20 +87,6 @@ function assertConnectingState(current, expected) {
   }
 }
 
-function assertExactConnectedState(current, expected) {
-  if (
-    !current
-    || current.state !== "connected"
-    || current.operation_id !== expected.operation_id
-    || current.target_client !== expected.target_client
-    || current.environment_kind !== expected.environment_kind
-    || current.console_origin !== expected.console_origin
-    || !isDeepStrictEqual(current.intent, expected.intent)
-  ) {
-    throw new Error("runtime reconnect 完成状态与 protected connection 不匹配");
-  }
-}
-
 function parseRuntimeConnectArgs(args) {
   if (args[0] !== "runtime" || args[1] !== "connect") {
     throw new Error("不是 runtime connect 命令");
@@ -128,8 +98,6 @@ function parseRuntimeConnectArgs(args) {
   let environmentChoice = "";
   let rainbondUrl = "";
   let allowInsecureHttp = false;
-  let onboardingId = "";
-  let intentInput = "";
   let privateLocation = "";
   for (let index = 3; index < args.length; index += 1) {
     const argument = args[index];
@@ -149,31 +117,13 @@ function parseRuntimeConnectArgs(args) {
         throw new Error("runtime connect 私有部署位置只支持 local 或 server");
       }
       index += 1;
-    } else if (argument === "--onboarding-id") {
-      onboardingId = requireFixedValue(args, index, argument);
-      index += 1;
-    } else if (argument === "--intent-json") {
-      intentInput = requireFixedValue(args, index, argument);
-      index += 1;
+    } else if (["--intent-json", "--onboarding-id"].includes(argument)) {
+      throw new Error(`runtime connect 不再支持 ${argument}`);
     } else {
       throw new Error("runtime connect 包含未知参数");
     }
   }
   if (!environmentChoice) throw new Error("runtime connect 必须选择一个应用运行环境");
-  if (!intentInput || intentInput.length > 16384) throw new Error("runtime connect 需要受限的 intent JSON");
-  let rawIntent;
-  try {
-    rawIntent = JSON.parse(intentInput);
-  } catch {
-    throw new Error("intent JSON 无效");
-  }
-  const { assertIntentCanInstallNewPlatform, validateIntent } = require(
-    "../rainbond-platform-installer/scripts/runtime-intents.js"
-  );
-  const intent = environmentChoice === "install-private"
-    ? assertIntentCanInstallNewPlatform(rawIntent)
-    : validateIntent(rawIntent);
-  if (onboardingId && !UUID_PATTERN.test(onboardingId)) throw new Error("onboarding id 无效");
   if (allowInsecureHttp && environmentChoice !== "private-existing") {
     throw new Error("--allow-insecure-http 只适用于明确的私有 Console 地址");
   }
@@ -185,9 +135,7 @@ function parseRuntimeConnectArgs(args) {
     environmentChoice,
     rainbondUrl,
     allowInsecureHttp,
-    onboardingId,
-    intent,
-    ...(privateLocation ? { privateLocation } : {}),
+    privateLocation: privateLocation || undefined,
   };
 }
 
@@ -197,139 +145,23 @@ function runtimeConnectionInvocation(options, origin) {
   if (options.environmentChoice === "saas") args.push("--saas");
   else args.push("--self-hosted", "--rainbond-url", origin);
   if (options.allowInsecureHttp) args.push("--allow-insecure-http");
+  args.push("--no-cached-token");
   return {
     executable: "bash",
     args,
   };
 }
 
-function runtimeConnectRetryAction(options, origin, operationId) {
+function runtimeConnectRetryAction(options, origin) {
   const argv = ["runtime", "connect", options.targetClient];
   if (options.environmentChoice === "saas") argv.push("--saas");
   else argv.push("--rainbond-url", origin);
   if (options.allowInsecureHttp) argv.push("--allow-insecure-http");
-  argv.push("--onboarding-id", operationId, "--intent-json", JSON.stringify(options.intent));
   return {
     schema: "rainskills.next-action.v1",
     action: "retry-runtime-connect",
-    onboarding_id: operationId,
     argv,
   };
-}
-
-function runtimeReconnectRetryAction(operationId) {
-  return {
-    schema: "rainskills.next-action.v1",
-    action: "retry-runtime-reconnect",
-    onboarding_id: operationId,
-    argv: ["runtime", "reconnect", "--onboarding-id", operationId],
-  };
-}
-
-function parseRuntimeFailureArgs(args) {
-  if (
-    args.length !== 8
-    || args[0] !== "runtime"
-    || args[1] !== "record-failure"
-    || args[2] !== "--onboarding-id"
-    || args[4] !== "--step"
-    || args[6] !== "--reason"
-  ) {
-    throw new Error("runtime record-failure 参数无效");
-  }
-  if (!UUID_PATTERN.test(args[3] || "")) throw new Error("runtime failure onboarding operation 无效");
-  if (!args[5] || args[5].startsWith("--")) throw new Error("runtime failure step 无效");
-  if (!["credential-expired", "permission-denied"].includes(args[7])) {
-    throw new Error("runtime failure reason 无效");
-  }
-  return { operationId: args[3], step: args[5], reason: args[7] };
-}
-
-function parseRuntimeReconnectArgs(args) {
-  if (
-    args.length !== 4
-    || args[0] !== "runtime"
-    || args[1] !== "reconnect"
-    || args[2] !== "--onboarding-id"
-    || !UUID_PATTERN.test(args[3] || "")
-  ) {
-    throw new Error("runtime reconnect 参数无效");
-  }
-  return { operationId: args[3] };
-}
-
-function createEnvironmentRuntimeServices() {
-  const { createEnvironmentRegistry } = require(
-    "../rainbond-platform-installer/scripts/environment-registry.js"
-  );
-  const { createRuntimeOperationStore } = require(
-    "../rainbond-platform-installer/scripts/runtime-operations.js"
-  );
-  const { createEnvironmentCredentialStore } = require(
-    "../rainbond-platform-installer/scripts/environment-credentials.js"
-  );
-  let operations;
-  const registry = createEnvironmentRegistry({
-    activeOperationIds: (environmentId) => operations?.activeOperationIds(environmentId) || [],
-  });
-  operations = createRuntimeOperationStore({ registry });
-  return {
-    environmentCredentialStore: createEnvironmentCredentialStore(),
-    environmentRegistry: registry,
-    operationStore: operations,
-  };
-}
-
-function parseEnvironmentMutationArgs(args) {
-  const action = args[1];
-  if (!new Set(["rename", "set-default", "remove"]).has(action)) {
-    throw new Error("environment action 无效");
-  }
-  if (args[2] !== "--environment-id" || !UUID_PATTERN.test(args[3] || "")) {
-    throw new Error("环境 ID 无效");
-  }
-  if (action === "rename") {
-    if (args.length !== 6 || args[4] !== "--name" || !args[5] || args[5].startsWith("--")) {
-      throw new Error("environment rename 参数无效");
-    }
-    return { action, environmentId: args[3], name: args[5] };
-  }
-  if (args.length !== 4) throw new Error(`environment ${action} 参数无效`);
-  return { action, environmentId: args[3] };
-}
-
-function parseOperationBeginArgs(args) {
-  if (args[0] !== "operation" || args[1] !== "begin") {
-    throw new Error("operation begin 参数无效");
-  }
-  let operationId = "";
-  let environmentId = "";
-  let intentInput = "";
-  for (let index = 2; index < args.length; index += 1) {
-    const argument = args[index];
-    if (argument === "--operation-id") {
-      operationId = requireFixedValue(args, index, argument);
-      index += 1;
-    } else if (argument === "--environment-id") {
-      environmentId = requireFixedValue(args, index, argument);
-      index += 1;
-    } else if (argument === "--intent-json") {
-      intentInput = requireFixedValue(args, index, argument);
-      index += 1;
-    } else {
-      throw new Error("operation begin 包含未知参数");
-    }
-  }
-  if (!UUID_PATTERN.test(operationId)) throw new Error("operation ID 无效");
-  if (environmentId && !UUID_PATTERN.test(environmentId)) throw new Error("环境 ID 无效");
-  if (!intentInput || intentInput.length > 16384) throw new Error("operation begin 缺少 intent JSON");
-  let intent;
-  try {
-    intent = JSON.parse(intentInput);
-  } catch {
-    throw new Error("operation begin intent JSON 无效");
-  }
-  return { operationId, environmentId: environmentId || undefined, intent };
 }
 
 function runAttached(executable, args, { env = process.env } = {}) {
@@ -362,16 +194,13 @@ async function defaultConnectionRunner(invocation, {
     RAINSKILLS_RUNTIME_CONNECT_COMPLETION: "1",
     RAINSKILLS_RUNTIME_OPERATION_ID: operationId,
   };
-  if (options.intent?.type === "environment-add") {
-    childEnvironment.RAINSKILLS_RUNTIME_STATE_SCOPE = "operation";
-  }
   const result = await runAttached(invocation.executable, invocation.args, {
     env: runtimeChildEnvironment(process.env, childEnvironment, origin),
   });
   return { ...result, completesRuntimeState: true };
 }
 
-function defaultPrivateInstallerScheduler({ control, intent, operationId, target, privateLocation }) {
+function defaultPrivateInstallerScheduler({ control, operationId, target, privateLocation }) {
   const {
     createNextAction,
     createOnboardingCheckpoint,
@@ -383,16 +212,13 @@ function defaultPrivateInstallerScheduler({ control, intent, operationId, target
     packageVersion,
     control,
     operationId,
-    intent,
   });
   return createNextAction(operationId, privateLocation);
 }
 
 async function runBuiltin(args, {
   runtimeStateManager,
-  environmentCredentialStore,
-  environmentRegistry,
-  operationStore,
+  singleRuntimeStore,
   write = (value) => process.stdout.write(value),
   control = detectControlEnvironment(),
   originInspector,
@@ -402,120 +228,16 @@ async function runBuiltin(args, {
   credentialPersister,
   connectedCredentialReader,
 } = {}) {
-  let environmentServices;
-  const getEnvironmentServices = () => {
-    environmentServices ||= createEnvironmentRuntimeServices();
-    return environmentServices;
-  };
-  const getEnvironmentRegistry = () => environmentRegistry
-    || getEnvironmentServices().environmentRegistry;
-  const getOperationStore = () => operationStore || getEnvironmentServices().operationStore;
-  const getEnvironmentCredentialStore = () => environmentCredentialStore
-    || getEnvironmentServices().environmentCredentialStore;
-  const getRuntimeStateManager = (operationId, {
-    scoped = false,
-    protectedOperation = null,
-  } = {}) => {
+  const getSingleRuntimeStore = () => singleRuntimeStore || require(
+    "../rainbond-platform-installer/scripts/single-runtime.js"
+  ).createSingleRuntimeStore();
+  const getRuntimeStateManager = () => {
     if (runtimeStateManager) return runtimeStateManager;
-    const operationScoped = scoped || (
-      credentialEnvironment.RAINSKILLS_RUNTIME_STATE_SCOPE === "operation"
-      && credentialEnvironment.RAINSKILLS_RUNTIME_OPERATION_ID === operationId
-    );
-    const managerOptions = operationScoped ? { operationId } : {};
-    if (protectedOperation?.environment_id) {
-      const environment = getEnvironmentRegistry().get(protectedOperation.environment_id);
-      if (!environment || environment.connection_state !== "connected") {
-        throw new Error("runtime operation 绑定的运行环境当前不可用");
-      }
-      const credentialStore = getEnvironmentCredentialStore();
-      const credential = credentialStore.read({
-        environmentId: environment.id,
-        expectedOrigin: environment.console_origin,
-      });
-      managerOptions.env = {
-        RAINBOND_JWT: credential.token,
-        RAINBOND_URL: credential.origin,
-      };
-      managerOptions.credentialWriter = ({ token, baseUrl }) => {
-        if (baseUrl !== environment.console_origin) {
-          throw new Error("runtime renewed credential origin 不匹配");
-        }
-        credentialStore.write({
-          environmentId: environment.id,
-          origin: baseUrl,
-          token,
-        });
-      };
-    }
     return require(
       "../rainbond-platform-installer/scripts/runtime-state.js"
-    ).createRuntimeStateManager(managerOptions);
+    ).createRuntimeStateManager();
   };
 
-  if (args[0] === "environment" && args[1] === "list") {
-    if (args.length !== 3 || args[2] !== "--json") {
-      throw new Error("environment list 只支持固定参数 --json");
-    }
-    const current = getEnvironmentRegistry().read();
-    write(`${JSON.stringify({
-      schema: "rainskills.environment-list.v1",
-      default_environment_id: current.default_environment_id,
-      environments: current.environments,
-    })}\n`);
-    return true;
-  }
-  if (args[0] === "environment" && ["rename", "set-default", "remove"].includes(args[1])) {
-    const input = parseEnvironmentMutationArgs(args);
-    const registry = getEnvironmentRegistry();
-    let environment;
-    let action;
-    if (input.action === "rename") {
-      environment = registry.rename(input.environmentId, input.name);
-      action = "renamed";
-    } else if (input.action === "set-default") {
-      environment = registry.setDefault(input.environmentId);
-      action = "default-changed";
-    } else {
-      environment = registry.remove(input.environmentId);
-      getEnvironmentCredentialStore().remove(input.environmentId);
-      action = "removed";
-    }
-    write(`${JSON.stringify({
-      schema: "rainskills.environment-result.v1",
-      action,
-      environment,
-    })}\n`);
-    return true;
-  }
-  if (args[0] === "operation" && args[1] === "begin") {
-    const input = parseOperationBeginArgs(args);
-    const operation = getOperationStore().begin(input);
-    write(`${JSON.stringify({
-      schema: "rainskills.operation-begin-result.v1",
-      operation_id: operation.operation_id,
-      environment_id: operation.environment_id,
-      intent: operation.intent,
-      stage: operation.stage,
-    })}\n`);
-    return true;
-  }
-  if (args[0] === "operation" && args[1] === "complete") {
-    if (
-      args.length !== 4
-      || args[2] !== "--operation-id"
-      || !UUID_PATTERN.test(args[3] || "")
-    ) {
-      throw new Error("operation complete 参数无效");
-    }
-    const operation = getOperationStore().complete(args[3]);
-    write(`${JSON.stringify({
-      schema: "rainskills.operation-complete-result.v1",
-      operation_id: operation.operation_id,
-      environment_id: operation.environment_id,
-      stage: operation.stage,
-    })}\n`);
-    return true;
-  }
   if (args[0] === "runtime" && args[1] === "message") {
     if (args.length !== 4 || args[2] !== "--id") {
       throw new Error("runtime message 只支持固定参数 --id");
@@ -529,163 +251,102 @@ async function runBuiltin(args, {
     if (args.length !== 3 || args[2] !== "--json") {
       throw new Error("runtime status 只支持固定参数 --json");
     }
-    const manager = runtimeStateManager || require(
-      "../rainbond-platform-installer/scripts/runtime-state.js"
-    ).createRuntimeStateManager();
-    write(`${JSON.stringify(await manager.status())}\n`);
-    return true;
-  }
-  if (args[0] === "runtime" && args[1] === "record-failure") {
-    const failure = parseRuntimeFailureArgs(args);
-    const manager = runtimeStateManager || require(
-      "../rainbond-platform-installer/scripts/runtime-state.js"
-    ).createRuntimeStateManager();
-    const state = manager.recordFailure(failure);
-    write(`${JSON.stringify({
-      schema: "rainskills.runtime-failure-record.v1",
-      onboarding_id: failure.operationId,
-      failure_category: state.last_failure_category,
-      retry_available: state.retry_budget === 1,
-    })}\n`);
+    if (runtimeStateManager) {
+      write(`${JSON.stringify(await runtimeStateManager.status())}\n`);
+      return true;
+    }
+    const runtime = getSingleRuntimeStore().read();
+    if (!runtime) {
+      write(`${JSON.stringify({
+        schema: "rainskills.runtime-status.v1",
+        state: "not_started",
+        usable: false,
+      })}\n`);
+      return true;
+    }
+    try {
+      const validation = await require(
+        "../rainbond-platform-installer/scripts/windows-client-config.js"
+      ).validateMcp({
+        url: `${runtime.console_origin}/console/mcp/rainskills/api/query`,
+        token: runtime.token,
+      });
+      if (validation.token !== runtime.token) {
+        getSingleRuntimeStore().write({
+          consoleOrigin: runtime.console_origin,
+          kind: runtime.kind,
+          token: validation.token,
+          allowInsecureHttp: runtime.allow_insecure_http,
+        });
+      }
+      write(`${JSON.stringify({
+        schema: "rainskills.runtime-status.v1",
+        state: "connected",
+        usable: true,
+        console_origin: runtime.console_origin,
+        environment_kind: runtime.kind,
+      })}\n`);
+    } catch {
+      write(`${JSON.stringify({
+        schema: "rainskills.runtime-status.v1",
+        state: "needs_reconnect",
+        usable: false,
+        console_origin: runtime.console_origin,
+        environment_kind: runtime.kind,
+      })}\n`);
+    }
     return true;
   }
   if (args[0] === "runtime" && args[1] === "reconnect") {
-    const { operationId } = parseRuntimeReconnectArgs(args);
-    const multiEnvironmentEnabled = Boolean(
-      environmentRegistry
-      || operationStore
-      || environmentCredentialStore
-      || !runtimeStateManager
-    );
-    let reconnectedEnvironment = null;
-    const manager = runtimeStateManager || require(
-      "../rainbond-platform-installer/scripts/runtime-state.js"
-    ).createRuntimeStateManager();
-    const reconnectResult = await manager.withReconnectLease(operationId, async (connection) => {
-      try {
-        const inspect = originInspector || require(
-          "../rainbond-platform-installer/scripts/console-origin.js"
-        ).inspectConsoleOrigin;
-        const inspection = await inspect(connection.console_origin);
-        if (inspection.pendingRedirectOrigin || inspection.origin !== connection.console_origin) {
-          throw new Error("protected Console origin 在重连检查中发生变化");
-        }
-        const options = {
-          targetClient: connection.target_client,
-          environmentChoice: connection.environment_kind === "saas" ? "saas" : "private-existing",
-          rainbondUrl: connection.console_origin,
-          allowInsecureHttp: connection.console_origin.startsWith("http://"),
-          onboardingId: operationId,
-          intent: connection.intent,
-        };
-        const invocation = runtimeConnectionInvocation(options, connection.console_origin);
-        let completedWithCredential = false;
-        const completeWithCredential = async (credential) => {
-          const priorToken = process.env.RAINBOND_JWT;
-          try {
-            process.env.RAINBOND_JWT = credential;
-            await manager.markConnected(connection);
-            if (multiEnvironmentEnabled) {
-              const protectedOperation = getOperationStore().read(operationId);
-              if (!protectedOperation?.environment_id) {
-                throw new Error("runtime reconnect 缺少已锁定的运行环境");
-              }
-              const registration = require(
-                "../rainbond-platform-installer/scripts/environment-credentials.js"
-              ).registerConnectedEnvironment({
-                registry: getEnvironmentRegistry(),
-                credentialStore: getEnvironmentCredentialStore(),
-                origin: connection.console_origin,
-                token: credential,
-                kind: connection.environment_kind,
-              });
-              if (registration.environment.id !== protectedOperation.environment_id) {
-                throw new Error("runtime reconnect 不能切换已锁定的运行环境");
-              }
-              reconnectedEnvironment = registration.environment;
-            }
-            completedWithCredential = true;
-          } finally {
-            if (priorToken === undefined) delete process.env.RAINBOND_JWT;
-            else process.env.RAINBOND_JWT = priorToken;
-          }
-        };
-        const result = await connectionRunner(invocation, {
-          completeWithCredential,
-          control,
-          options,
-          origin: connection.console_origin,
-          operationId,
-        });
-        if (result.signal || result.code !== 0) {
-          throw new Error("RainSkills 运行环境重新授权未完成");
-        }
-        if (result.completesRuntimeState) {
-          assertExactConnectedState(manager.read(), connection);
-        } else {
-          if (completedWithCredential) throw new Error("运行环境重连器返回了矛盾状态");
-          await manager.markConnected(connection);
-          assertExactConnectedState(manager.read(), connection);
-        }
-        return {
-          environmentKind: connection.environment_kind,
-          consoleOrigin: connection.console_origin,
-        };
-      } catch {
-        write(`${JSON.stringify(runtimeReconnectRetryAction(operationId))}\n`);
-        throw new Error("RainSkills 运行环境重新授权失败");
-      }
-    });
-    if (multiEnvironmentEnabled) {
-      const operations = getOperationStore();
-      const protectedOperation = operations.read(operationId);
-      if (!protectedOperation || !protectedOperation.environment_id) {
-        throw new Error("runtime reconnect 缺少已锁定的运行环境");
-      }
-      if (!reconnectedEnvironment) {
-        if (connectedCredentialReader) {
-          const credential = await connectedCredentialReader(reconnectResult.consoleOrigin);
-          reconnectedEnvironment = require(
-            "../rainbond-platform-installer/scripts/environment-credentials.js"
-          ).registerConnectedEnvironment({
-            registry: getEnvironmentRegistry(),
-            credentialStore: getEnvironmentCredentialStore(),
-            origin: reconnectResult.consoleOrigin,
-            token: credential.token,
-            kind: reconnectResult.environmentKind,
-          }).environment;
-        } else {
-          const existing = getEnvironmentRegistry().findByOrigin(reconnectResult.consoleOrigin);
-          if (!existing || !getEnvironmentCredentialStore().has(existing.id)) {
-            throw new Error("runtime reconnect 未写入目标环境凭据");
-          }
-          getEnvironmentCredentialStore().read({
-            environmentId: existing.id,
-            expectedOrigin: reconnectResult.consoleOrigin,
-          });
-          reconnectedEnvironment = existing;
-        }
-      }
-      if (reconnectedEnvironment.id !== protectedOperation.environment_id) {
-        throw new Error("runtime reconnect 不能切换已锁定的运行环境");
-      }
+    if (args.length !== 3 || !["codex", "claude", "pi", "all"].includes(args[2])) {
+      throw new Error("runtime reconnect 参数无效");
     }
-    write(`${JSON.stringify({
-      schema: "rainskills.runtime-reconnect-result.v1",
-      state: "connected",
-      onboarding_id: operationId,
-      environment_kind: reconnectResult.environmentKind,
-      ...(reconnectedEnvironment ? {
-        environment_id: reconnectedEnvironment.id,
-        environment_name: reconnectedEnvironment.name,
-      } : {}),
-    })}\n`);
-    return true;
+    const current = getSingleRuntimeStore().read();
+    if (!current) throw new Error("目前还没有已连接的 Rainbond 运行环境");
+    const reconnectArgs = ["runtime", "connect", args[2]];
+    if (current.kind === "saas") reconnectArgs.push("--saas");
+    else reconnectArgs.push("--rainbond-url", current.console_origin);
+    if (current.allow_insecure_http) reconnectArgs.push("--allow-insecure-http");
+    return runBuiltin(reconnectArgs, {
+      runtimeStateManager,
+      singleRuntimeStore: getSingleRuntimeStore(),
+      write,
+      control,
+      originInspector,
+      connectionRunner,
+      privateInstallerScheduler,
+      credentialEnvironment,
+      credentialPersister,
+      connectedCredentialReader,
+    });
   }
   if (args[0] === "runtime" && args[1] === "assert-connect") {
     const expected = parseRuntimeAssertConnectArgs(args);
     const manager = getRuntimeStateManager(expected.operationId);
     assertConnectingState(manager.read(), expected);
+    return true;
+  }
+  if (args[0] === "runtime" && args[1] === "store-credential") {
+    if (
+      args.length < 6
+      || args[2] !== "--console-origin"
+      || args[4] !== "--kind"
+      || !["saas", "private"].includes(args[5])
+      || (args.length === 7 && args[6] !== "--allow-insecure-http")
+      || args.length > 7
+    ) {
+      throw new Error("runtime store-credential 参数无效");
+    }
+    const token = credentialEnvironment.RAINBOND_JWT;
+    if (typeof token !== "string" || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(token)) {
+      throw new Error("runtime store-credential 缺少有效凭据");
+    }
+    getSingleRuntimeStore().write({
+      consoleOrigin: args[3],
+      kind: args[5],
+      token,
+      allowInsecureHttp: args[6] === "--allow-insecure-http",
+    });
     return true;
   }
   if (args[0] === "runtime" && args[1] === "persist-connect-credential") {
@@ -707,63 +368,22 @@ async function runBuiltin(args, {
     }
     if (credentialPersister) {
       await credentialPersister({ token, baseUrl: current.console_origin });
-    } else if (
-      environmentRegistry
-      || operationStore
-      || environmentCredentialStore
-      || !runtimeStateManager
-    ) {
-      const registration = require(
-        "../rainbond-platform-installer/scripts/environment-credentials.js"
-      ).registerConnectedEnvironment({
-        registry: getEnvironmentRegistry(),
-        credentialStore: getEnvironmentCredentialStore(),
-        origin: current.console_origin,
-        token,
-        kind: current.environment_kind,
-      });
-      const operations = getOperationStore();
-      const operation = operations.read(args[3]);
-      if (!operation) throw new Error("runtime connect operation 不存在");
-      if (operation.environment_id === null) {
-        operations.bindEnvironment(args[3], registration.environment.id);
-      } else if (operation.environment_id !== registration.environment.id) {
-        throw new Error("runtime connect 不能改变已锁定的运行环境");
-      }
     } else {
-      if (typeof manager.persistConnectingCredential !== "function") {
-        throw new Error("runtime connect credential writer 不可用");
-      }
-      await manager.persistConnectingCredential({ operationId: args[3], token });
+      getSingleRuntimeStore().write({
+        consoleOrigin: current.console_origin,
+        kind: current.environment_kind,
+        token,
+        allowInsecureHttp: current.console_origin.startsWith("http://"),
+      });
     }
     return true;
   }
   if (args[0] === "runtime" && args[1] === "connect") {
     const options = parseRuntimeConnectArgs(args);
-    const operationId = options.onboardingId || crypto.randomUUID();
-    const multiEnvironmentEnabled = Boolean(
-      environmentRegistry
-      || operationStore
-      || environmentCredentialStore
-      || !runtimeStateManager
-    );
-    let operations;
-    if (multiEnvironmentEnabled) {
-      operations = getOperationStore();
-      const existingOperation = operations.read(operationId);
-      if (!existingOperation) {
-        operations.createPending({ operationId, intent: options.intent });
-      } else if (
-        existingOperation.stage !== "awaiting-environment"
-        || !isDeepStrictEqual(existingOperation.intent, options.intent)
-      ) {
-        throw new Error("runtime connect operation 与受保护的原始 intent 不匹配");
-      }
-    }
+    const operationId = crypto.randomUUID();
     if (options.environmentChoice === "install-private") {
       const nextAction = privateInstallerScheduler({
         control,
-        intent: options.intent,
         operationId,
         target: options.targetClient,
         privateLocation: options.privateLocation,
@@ -785,17 +405,14 @@ async function runBuiltin(args, {
     if (inspection.httpConfirmationRequired && !options.allowInsecureHttp) {
       throw new Error("明文 HTTP 需要单独显式确认；确认可信内网后使用 --allow-insecure-http");
     }
-    const manager = getRuntimeStateManager(operationId, {
-      scoped: options.intent.type === "environment-add",
-    });
+    const manager = getRuntimeStateManager(operationId);
     const connection = {
       target_client: options.targetClient,
       environment_kind: options.environmentChoice === "saas" ? "saas" : "private",
       console_origin: inspection.origin,
-      intent: options.intent,
+      intent: null,
       operation_id: operationId,
     };
-    let registeredEnvironment = null;
     manager.startConnecting(connection);
     try {
       const invocation = runtimeConnectionInvocation(options, inspection.origin);
@@ -805,23 +422,12 @@ async function runBuiltin(args, {
         try {
           process.env.RAINBOND_JWT = credential;
           await manager.markConnected(connection);
-          if (multiEnvironmentEnabled) {
-            registeredEnvironment = require(
-              "../rainbond-platform-installer/scripts/environment-credentials.js"
-            ).registerConnectedEnvironment({
-              registry: getEnvironmentRegistry(),
-              credentialStore: getEnvironmentCredentialStore(),
-              origin: inspection.origin,
-              token: credential,
-              kind: connection.environment_kind,
-            }).environment;
-            const pending = operations.read(operationId);
-            if (pending.environment_id === null) {
-              operations.bindEnvironment(operationId, registeredEnvironment.id);
-            } else if (pending.environment_id !== registeredEnvironment.id) {
-              throw new Error("runtime connect 不能改变已锁定的运行环境");
-            }
-          }
+          getSingleRuntimeStore().write({
+            consoleOrigin: inspection.origin,
+            kind: connection.environment_kind,
+            token: credential,
+            allowInsecureHttp: inspection.origin.startsWith("http://"),
+          });
           completedWithCredential = true;
         } finally {
           if (priorToken === undefined) delete process.env.RAINBOND_JWT;
@@ -848,67 +454,34 @@ async function runBuiltin(args, {
         await manager.markConnected(connection);
       }
     } catch (error) {
-      write(`${JSON.stringify(runtimeConnectRetryAction(options, inspection.origin, operationId))}\n`);
+      write(`${JSON.stringify(runtimeConnectRetryAction(options, inspection.origin))}\n`);
       throw error;
     }
-    if (multiEnvironmentEnabled) {
-      if (!registeredEnvironment) {
-        if (connectedCredentialReader) {
-          const credential = await connectedCredentialReader(inspection.origin);
-          if (!credential || credential.origin !== inspection.origin) {
-            throw new Error("运行环境凭据与已验证 Console origin 不匹配");
-          }
-          registeredEnvironment = require(
-            "../rainbond-platform-installer/scripts/environment-credentials.js"
-          ).registerConnectedEnvironment({
-            registry: getEnvironmentRegistry(),
-            credentialStore: getEnvironmentCredentialStore(),
-            origin: inspection.origin,
-            token: credential.token,
-            kind: connection.environment_kind,
-          }).environment;
-        } else {
-          const existing = getEnvironmentRegistry().findByOrigin(inspection.origin);
-          if (!existing || !getEnvironmentCredentialStore().has(existing.id)) {
-            throw new Error("runtime connect 未写入目标环境凭据");
-          }
-          getEnvironmentCredentialStore().read({
-            environmentId: existing.id,
-            expectedOrigin: inspection.origin,
-          });
-          registeredEnvironment = existing;
-        }
+    let storedRuntime = getSingleRuntimeStore().read();
+    if (!storedRuntime || storedRuntime.console_origin !== inspection.origin) {
+      if (!connectedCredentialReader) {
+        throw new Error("runtime connect 未写入唯一运行环境凭据");
       }
-      const protectedOperation = operations.read(operationId);
-      if (protectedOperation.environment_id === null) {
-        operations.bindEnvironment(operationId, registeredEnvironment.id);
-      } else if (protectedOperation.environment_id !== registeredEnvironment.id) {
-        throw new Error("runtime connect 不能改变已锁定的运行环境");
+      const credential = await connectedCredentialReader(inspection.origin);
+      if (!credential || credential.origin !== inspection.origin) {
+        throw new Error("运行环境凭据与已验证 Console origin 不匹配");
       }
+      getSingleRuntimeStore().write({
+        consoleOrigin: inspection.origin,
+        kind: connection.environment_kind,
+        token: credential.token,
+        allowInsecureHttp: inspection.origin.startsWith("http://"),
+      });
+      storedRuntime = getSingleRuntimeStore().read();
     }
-    const environmentSnapshot = registeredEnvironment && options.intent.type === "environment-add"
-      ? getEnvironmentRegistry().read()
-      : null;
+    if (!storedRuntime || storedRuntime.console_origin !== inspection.origin) {
+      throw new Error("唯一运行环境凭据与已连接 Console origin 不匹配");
+    }
     write(`${JSON.stringify({
       schema: "rainskills.runtime-connect-result.v1",
       state: "connected",
-      onboarding_id: operationId,
+      console_origin: inspection.origin,
       environment_kind: connection.environment_kind,
-      ...(registeredEnvironment ? {
-        environment_id: registeredEnvironment.id,
-        environment_name: registeredEnvironment.name,
-      } : {}),
-      ...(environmentSnapshot ? {
-        default_environment_id: environmentSnapshot.default_environment_id,
-        environments: environmentSnapshot.environments,
-        user_message: require(
-          "../rainbond-platform-installer/scripts/user-message.js"
-        ).renderEnvironmentConnectedList({
-          environments: environmentSnapshot.environments,
-          defaultEnvironmentId: environmentSnapshot.default_environment_id,
-          addedEnvironmentId: registeredEnvironment.id,
-        }),
-      } : {}),
     })}\n`);
     return true;
   }
@@ -928,33 +501,6 @@ async function runBuiltin(args, {
       intent: current.intent,
       operation_id: current.operation_id,
     });
-    return true;
-  }
-  if (args[0] === "intent" && args[1] === "resume") {
-    if (args.length !== 4 || args[2] !== "--onboarding-id" || !args[3]) {
-      throw new Error("intent resume 需要固定参数 --onboarding-id <uuid>");
-    }
-    const protectedOperation = runtimeStateManager ? null : getOperationStore().read(args[3]);
-    const manager = getRuntimeStateManager(args[3], {
-      scoped: protectedOperation?.intent?.type === "environment-add",
-      protectedOperation,
-    });
-    const eligible = manager.assertContinuationEligible(args[3]);
-    if (protectedOperation?.environment_id) {
-      const environment = getEnvironmentRegistry().get(protectedOperation.environment_id);
-      if (!environment || eligible.console_origin !== environment.console_origin) {
-        throw new Error("runtime operation 与已锁定运行环境不匹配");
-      }
-    }
-    const status = await manager.status();
-    if (status.state !== "connected" || status.usable !== true) {
-      throw new Error("runtime 尚未 connected 且通过 live probe，不能恢复 intent");
-    }
-    const runtime = manager.prepareContinuation(args[3]);
-    const { createIntentContinuation } = require(
-      "../rainbond-platform-installer/scripts/runtime-intents.js"
-    );
-    write(`${JSON.stringify(createIntentContinuation(runtime.intent, runtime.failed_step || undefined))}\n`);
     return true;
   }
   return false;
@@ -1220,8 +766,6 @@ async function run() {
 module.exports = {
   AUTO_UPDATE_FALLBACK_EXIT_CODE,
   classifyNodeMajor,
-  parseRuntimeFailureArgs,
-  parseRuntimeReconnectArgs,
   parseRuntimeConnectArgs,
   resolveInvocation,
   runAutoUpdatePhase,
@@ -1229,7 +773,6 @@ module.exports = {
   runtimeChildEnvironment,
   runtimeConnectRetryAction,
   runtimeConnectionInvocation,
-  runtimeReconnectRetryAction,
 };
 
 if (require.main === module) {

@@ -67,7 +67,7 @@ Rainskills 安装完成，下一条消息即可直接使用。
 
 每个业务 Skill 都必须先通过相同门禁：
 
-0. 第一步检查 Node.js 是否存在且主版本不低于 18。缺失或低于 18 时，只说明 Rainskills 执行组件需要 Node.js 18 或更高版本并停止；不选择运行环境、不调用 MCP、不猜测替代命令。只有用户或 agent 明确同意后才安装或升级 Node.js，再从同一原始 intent 继续。
+0. 第一步检查 Node.js 是否存在且主版本不低于 18。缺失或低于 18 时，只说明 Rainskills 执行组件需要 Node.js 18 或更高版本并停止；不连接运行环境、不调用 CLI、不猜测替代命令。
 
 固定 launcher 来自当前 `package.json` 版本：
 
@@ -77,12 +77,11 @@ Rainskills 安装完成，下一条消息即可直接使用。
 
 所有调用都把 launcher 与参数合并成 argv 数组后直接执行；不得使用 `rainskills@latest`，不得把参数拼成 shell 字符串。
 
-1. 执行 launcher + `["environment", "list", "--json"]`，先于项目扫描和任何 Rainbond 业务调用。未指定环境时只使用全局默认环境，默认不可用时停止，不自动回退。
-2. 每个请求生成独立 operation UUID，并执行 `operation begin`；显式环境只写入这次 operation。所有 Rainbond 查询和变更都通过 `~/.rainbond/bin/rainskills-tools.js`，并绑定返回的 operation ID。项目不保存环境、团队或应用绑定，同一项目可以部署到多个目标。
-3. 将动作转换为 `runtime-intents.js` 中对应的受限 intent 并完成字段校验。target 只允许 `codex`、`claude`、`pi`、`all`；按用户选择构造 launcher + `["runtime", "connect", "<target>", ...环境参数, "--intent-json", "<JSON.stringify(已校验 intent)>"]`。
-4. 环境参数必须恰好选择一组且互斥：Cloud 用 `["--saas"]`，已有私有环境用 `["--rainbond-url", "<已验证 Console origin>"]`，新建私有环境用 `["--install-private", "--location", "local"]` 或 `["--install-private", "--location", "server"]`。
-5. 安装私有环境时，只消费完成 schema、action、onboarding id 和参数边界校验的 `rainskills.next-action.v1.argv`；拒绝字符串命令和其他输出字段。
-6. 探针失败进入 reconnect。连接或安装完成后执行 launcher + `["intent", "resume", "--onboarding-id", "<同一 onboarding-id>"]`，恢复受保护的原始 intent 和 `resume_step`，不重新猜测用户动作。
+1. 本会话首次使用时执行 launcher + `["runtime", "status", "--json"]`。只有返回 `connected` 且 `usable=true` 才进入业务流程。
+2. 本机只保存一个 Rainbond 运行环境。没有环境时使用 `runtime connect` 连接 Cloud、已有私有 Rainbond，或安装一个私有 Rainbond；重新授权使用 `runtime reconnect <target>`。
+3. 所有 Rainbond 查询和变更都直接通过 `~/.rainbond/bin/rainskills-tools.js`。不配置客户端 MCP，不创建业务 runtime operation，不传环境 ID、operation ID 或 intent JSON。
+4. 写操作仍由 CLI 生成 confirmation ID；只有完全相同的输入追加 `--confirm` 后才执行一次。
+5. 安装私有环境时，只消费完成 schema、action、onboarding id 和参数边界校验的 `rainskills.next-action.v1.argv`；onboarding id 只属于平台安装断点。
 
 `deploy`/`create` 允许先只保存动作类型。选择私有环境后，先完整完成本地单机、服务器单机、主机集群或已有 Kubernetes 的平台安装和验收；此阶段不得询问本地项目路径、Git 仓库 URL、镜像地址或安装包路径。恢复到 `project-analysis` 后才识别当前项目或询问缺失的应用来源。
 
@@ -132,31 +131,35 @@ Rainskills 安装完成，下一条消息即可直接使用。
 5. 指纹和一次服务器密码均由系统 SSH 读取；两种命令都只准备公钥连接，不安装 Rainbond。全部节点处理完后，用户统一回复一次“已完成”。
 6. Agent 使用同一版本、同一 `onboarding-id` 和原安装参数继续。不得重新询问环境、安装模式、节点或应用来源。
 7. 后续传输、安装和验收全部使用免密 SSH；系统终端不会继续安装或授权。
-8. Rainbond 验收通过后只进行一次浏览器授权，随后自动恢复最初的应用任务；不得回到 Agent 后再次授权。
+8. Rainbond 验收通过后只进行一次浏览器授权；授权成功后由当前 Agent 会话继续应用任务。
 
 主机密钥发生变化时直接阻断并要求人工核对，不自动替换 `known_hosts`。聊天中永远不接收密码、私钥或 Token。
 
-## 多运行环境
+## 单运行环境
 
-- 第一个连接成功的环境自动成为全局默认环境；以后新增环境不修改默认值。
-- 用户未指定环境时使用默认环境；用户明确指定时只覆盖本次 operation。
-- 环境名称自动生成，可重命名；内部不可变 ID 不随重命名改变。
-- 添加、重命名、重新授权或删除环境不改项目配置，也不需要为每个 Agent 单独配置 MCP。
-- 新增环境直接建立独立连接，不读取或恢复旧版单环境状态；HTTPS 直接进入授权，明文 HTTP 只增加一次可信网络确认。
-- 新增环境与首次部署复用同一套固定选择：先选“云端环境（免费体验）/私有环境（去对接）”；选择私有环境后直接选“部署到本机/部署到独立服务器/部署到已有 Rainbond”，不再出现旧的接入方式中间步骤。
-- Agent 始终执行同一个受保护的本地 Rainskills CLI。CLI 按 `operation_id` 从隔离凭据存储中选择目标 Rainbond；Rainskills 不提供本地 MCP 服务，Agent 也不得绕过 CLI 直接调用 Rainbond MCP。
-- 明确说“团队”表示默认或指定运行环境中的 Rainbond 团队；明确说“运行环境/平台”表示环境。裸名称同时匹配两者时必须询问。
+- 本机只保存一个 Rainbond Console origin 和对应凭据。
+- 更换环境时，新凭据通过 live probe 后才覆盖当前运行环境。
+- 连接和重新授权始终进入浏览器 Device Flow，不复用 Shell 中缓存的 JWT。
+- Agent 始终执行受保护的本地 Rainskills CLI，不配置或直接调用客户端 MCP。
+- 项目的 preview/production 配置仍属于应用配置投影，与本机连接的 Rainbond 运行环境不是同一概念。
 
-常用管理命令：
+业务 CLI 默认忽略 Shell 中遗留的 `RAINBOND_URL` / `RAINBOND_JWT`。CI 需要使用环境变量凭据时，显式设置：
 
 ```bash
-node <已安装的 Skills 根目录>/rainbond-platform-installer/scripts/local-runtime.js environment list --json
-node <已安装的 Skills 根目录>/rainbond-platform-installer/scripts/local-runtime.js environment rename --environment-id <uuid> --name <name>
-node <已安装的 Skills 根目录>/rainbond-platform-installer/scripts/local-runtime.js environment set-default --environment-id <uuid>
-node <已安装的 Skills 根目录>/rainbond-platform-installer/scripts/local-runtime.js environment remove --environment-id <uuid>
+RAINSKILLS_CREDENTIAL_SOURCE=environment \
+RAINBOND_URL=https://rainbond.example.com \
+RAINBOND_JWT="$RAINBOND_JWT" \
+node ~/.rainbond/bin/rainskills-tools.js status --skill-id rainbond-platform-query
 ```
 
-这些本地状态命令不访问 npm 或网络。Agent 从当前已加载 Skill 的同级目录解析实际绝对路径；只有连接或安装运行环境时才调用固定版本的 npx launcher。
+常用命令：
+
+```bash
+node ~/.rainbond/lib/rainskills/bin/rainskills.js runtime status --json
+node ~/.rainbond/lib/rainskills/bin/rainskills.js runtime reconnect codex
+```
+
+`runtime status` 会通过当前唯一环境执行 live probe。业务 Tool 继续通过 `~/.rainbond/bin/rainskills-tools.js` 调用。
 
 ### 已有应用环境选择
 
@@ -164,15 +167,13 @@ node <已安装的 Skills 根目录>/rainbond-platform-installer/scripts/local-r
 
 ### 认证与权限恢复
 
-Rainbond 能力端点经 CLI 返回 401 时，依次执行以下 argv 参数：
+Rainbond CLI 返回 401 时执行：
 
 ```json
-["runtime", "record-failure", "--onboarding-id", "<同一 onboarding-id>", "--step", "<当前固定步骤>", "--reason", "credential-expired"]
-["runtime", "reconnect", "--onboarding-id", "<同一 onboarding-id>"]
-["intent", "resume", "--onboarding-id", "<同一 onboarding-id>"]
+["runtime", "reconnect", "<target>"]
 ```
 
-只允许重新授权一次，并只重试记录的步骤；第二次 401 停止。403 时执行 `["runtime", "record-failure", "--onboarding-id", "<同一 onboarding-id>", "--step", "<当前固定步骤>", "--reason", "permission-denied"]`，随后立即停止，不 reconnect、不重新授权、不自动重试。
+只读调用可在重新授权后重试一次。写调用不得自动重放，必须先查询平台真实状态。403 立即停止，不 reconnect。
 
 凭据只由受保护的本地状态和客户端配置处理。不要在聊天、intent、日志或命令行参数中发送密码、JWT、Token 或私钥。
 

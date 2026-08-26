@@ -1,14 +1,12 @@
 "use strict";
 
-const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { isDeepStrictEqual } = require("node:util");
 
 const { createSecureStateStore } = require("./secure-state.js");
-const { persistWindowsEnvironment, validateMcp } = require("./windows-client-config.js");
-const { INTENT_DEFINITIONS, validateIntent } = require("./runtime-intents.js");
+const { validateMcp } = require("./windows-client-config.js");
 
 const RUNTIME_SCHEMA = "rainskills.runtime-connection.v1";
 const STATUS_SCHEMA = "rainskills.runtime-status.v1";
@@ -16,13 +14,10 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3
 const STATES = new Set(["not_started", "connecting", "connected"]);
 const TARGET_CLIENTS = new Set(["codex", "claude", "pi", "all"]);
 const ENVIRONMENT_KINDS = new Set(["saas", "private"]);
-const FAILURE_CATEGORIES = new Set(["credential-expired", "permission-denied"]);
-const MAX_RETRY_COUNT = 1000;
 const RUNTIME_STATE_LOCK_ID = "cf1c1a85-63e7-45f8-9dd5-20ea1d511c48";
 const STATE_FIELDS = new Set([
   "schema", "version", "state", "target_client", "environment_kind", "console_origin",
-  "validated_probe_at", "intent", "operation_id", "created_at", "updated_at", "failed_step",
-  "retry_count", "retry_budget", "last_failure_category",
+  "validated_probe_at", "operation_id", "created_at", "updated_at",
 ]);
 
 function normalizeConsoleOrigin(value) {
@@ -84,61 +79,6 @@ async function fetchPinnedMcpEndpoint(endpoint, fetchImpl, options) {
   return response;
 }
 
-function shellSingleQuote(value) {
-  return `'${String(value).replaceAll("'", `'"'"'`)}'`;
-}
-
-function persistPosixCredential({ home, stateStore, token, baseUrl }) {
-  const directory = stateStore.ensurePrivateDirectory(path.join(home, ".rainbond"));
-  const target = stateStore.assertInsideHome(path.join(directory, "mcp.env"), "凭据文件");
-  try {
-    fs.lstatSync(target);
-    stateStore.assertProtectedRegularFile(target);
-  } catch (error) {
-    if (error.code !== "ENOENT") throw error;
-  }
-  const temporary = path.join(
-    directory,
-    `.mcp.env.${process.pid}.${crypto.randomBytes(8).toString("hex")}`
-  );
-  const content = [
-    `export RAINBOND_JWT=${shellSingleQuote(token)}`,
-    `export RAINBOND_URL=${shellSingleQuote(baseUrl)}`,
-    "",
-  ].join("\n");
-  let fd;
-  try {
-    fd = fs.openSync(temporary, "wx", 0o600);
-    fs.writeFileSync(fd, content, "utf8");
-    fs.fsyncSync(fd);
-    fs.closeSync(fd);
-    fd = undefined;
-    stateStore.protectRegularFile(temporary);
-    try {
-      fs.lstatSync(target);
-      stateStore.assertProtectedRegularFile(target);
-    } catch (error) {
-      if (error.code !== "ENOENT") throw error;
-    }
-    fs.renameSync(temporary, target);
-    stateStore.protectRegularFile(target);
-    const directoryFd = fs.openSync(directory, "r");
-    try {
-      fs.fsyncSync(directoryFd);
-    } finally {
-      fs.closeSync(directoryFd);
-    }
-  } catch (error) {
-    if (fd !== undefined) fs.closeSync(fd);
-    try {
-      fs.unlinkSync(temporary);
-    } catch (cleanupError) {
-      if (cleanupError.code !== "ENOENT") throw cleanupError;
-    }
-    throw error;
-  }
-}
-
 async function probeConfiguredMcp(state, { env, fetchImpl }) {
   const originalToken = env.RAINBOND_JWT;
   const endpoint = `${state.console_origin}/console/mcp/rainskills/api/query`;
@@ -197,22 +137,21 @@ function createRuntimeStateManager({
   platform = process.platform,
   home = os.homedir(),
   stateStore = createDefaultStore(platform, home),
-  operationId,
   liveProbe,
   fetchImpl = globalThis.fetch,
   env = process.env,
   credentialWriter,
   now = () => new Date().toISOString(),
 } = {}) {
-  if (operationId !== undefined && !UUID_PATTERN.test(operationId || "")) {
-    throw new Error("runtime state operation_id 无效");
-  }
-  const statePath = operationId
-    ? path.join(home, ".rainbond", "rainskills", "runtime-connections-v1", `${operationId}.json`)
-    : path.join(home, ".rainbond", "rainskills", "runtime-connection-v1.json");
-  const writeCredential = credentialWriter || (platform === "win32"
-    ? ({ token, baseUrl }) => persistWindowsEnvironment({ token, baseUrl })
-    : ({ token, baseUrl }) => persistPosixCredential({ home, stateStore, token, baseUrl }));
+  const statePath = path.join(home, ".rainbond", "rainskills", "runtime-connection-v1.json");
+  const writeCredential = credentialWriter || (({ token, baseUrl, kind }) => require(
+    "./single-runtime.js"
+  ).createSingleRuntimeStore({ platform, home, stateStore }).write({
+    consoleOrigin: baseUrl,
+    kind,
+    token,
+    allowInsecureHttp: baseUrl.startsWith("http://"),
+  }));
   const probe = liveProbe || ((state) => probeConfiguredMcp(state, {
     env,
     fetchImpl,
@@ -230,30 +169,15 @@ function createRuntimeStateManager({
     if (!ENVIRONMENT_KINDS.has(state.environment_kind)) throw new Error("environment_kind 无效");
     const consoleOrigin = normalizeConsoleOrigin(state.console_origin);
     if (!UUID_PATTERN.test(state.operation_id || "")) throw new Error("operation_id 无效");
-    const intent = state.intent === undefined || state.intent === null ? null : validateIntent(state.intent);
     if (!isIsoTimestamp(state.created_at) || !isIsoTimestamp(state.updated_at)) {
       throw new Error("runtime state timestamp 无效");
     }
     if (state.validated_probe_at !== null && !isIsoTimestamp(state.validated_probe_at)) {
       throw new Error("runtime state validated probe timestamp 无效");
     }
-    const fixedSteps = intent ? INTENT_DEFINITIONS[intent.type].steps : [];
-    if (state.failed_step !== null && !fixedSteps.includes(state.failed_step)) {
-      throw new Error("runtime state failed step 不是 intent 的固定步骤");
-    }
-    if (!Number.isInteger(state.retry_count) || state.retry_count < 0 || state.retry_count > MAX_RETRY_COUNT) {
-      throw new Error("runtime state retry count 无效");
-    }
-    if (!Number.isInteger(state.retry_budget) || state.retry_budget < 0 || state.retry_budget > 1) {
-      throw new Error("runtime state retry budget 无效");
-    }
-    if (state.last_failure_category !== null && !FAILURE_CATEGORIES.has(state.last_failure_category)) {
-      throw new Error("runtime state failure category 无效");
-    }
     return {
       ...state,
       console_origin: consoleOrigin,
-      intent,
     };
   }
 
@@ -271,7 +195,6 @@ function createRuntimeStateManager({
       target_client: input.target_client,
       environment_kind: input.environment_kind,
       console_origin: normalizeConsoleOrigin(input.console_origin),
-      intent: input.intent === undefined ? null : validateIntent(input.intent),
       operation_id: input.operation_id,
     };
   }
@@ -321,7 +244,7 @@ function createRuntimeStateManager({
       }
       if (renewedCredential) {
         try {
-          await writeCredential(renewedCredential);
+          await writeCredential({ ...renewedCredential, kind: state.environment_kind });
         } catch {
           const failed = credentialFailureState
             ? writeStateUnlocked(credentialFailureState(current))
@@ -340,26 +263,18 @@ function createRuntimeStateManager({
       && left.operation_id === right.operation_id
       && left.target_client === right.target_client
       && left.environment_kind === right.environment_kind
-      && left.console_origin === right.console_origin
-      && JSON.stringify(left.intent) === JSON.stringify(right.intent);
+      && left.console_origin === right.console_origin;
   }
 
   function startConnecting(input) {
     return withRuntimeStateLock(() => {
       const prior = read();
       const fields = connectionFields(input);
-      if (prior.operation_id === fields.operation_id && prior.last_failure_category !== null) {
-        if (prior.last_failure_category === "permission-denied") {
-          throw new Error("permission denied 不允许重新授权");
-        }
-        throw new Error("凭据失效恢复必须使用受保护的 runtime reconnect 重试门禁");
-      }
       if (prior.state === "connecting") {
         const identical = prior.operation_id === fields.operation_id
           && prior.target_client === fields.target_client
           && prior.environment_kind === fields.environment_kind
-          && prior.console_origin === fields.console_origin
-          && isDeepStrictEqual(prior.intent, fields.intent);
+          && prior.console_origin === fields.console_origin;
         if (identical) return prior;
         throw new Error("另一个 runtime connecting operation 正在进行中");
       }
@@ -372,26 +287,7 @@ function createRuntimeStateManager({
         validated_probe_at: null,
         created_at: prior.created_at || timestamp,
         updated_at: timestamp,
-        failed_step: null,
-        retry_count: 0,
-        retry_budget: 0,
-        last_failure_category: null,
       });
-    });
-  }
-
-  function persistConnectingCredential({ operationId, token }) {
-    if (!UUID_PATTERN.test(operationId || "")) throw new Error("operation_id 无效");
-    if (typeof token !== "string" || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(token)) {
-      throw new Error("runtime credential 无效");
-    }
-    return withRuntimeStateLock(() => {
-      const current = read();
-      if (current.state !== "connecting" || current.operation_id !== operationId) {
-        throw new Error("runtime credential 与 connecting operation 不匹配");
-      }
-      writeCredential({ token, baseUrl: current.console_origin });
-      return { persisted: true };
     });
   }
 
@@ -406,7 +302,6 @@ function createRuntimeStateManager({
       || prior.target_client !== fields.target_client
       || prior.environment_kind !== fields.environment_kind
       || prior.console_origin !== fields.console_origin
-      || JSON.stringify(prior.intent) !== JSON.stringify(fields.intent)
     ) {
       throw new Error("connected 写入必须匹配当前 connecting operation");
     }
@@ -429,10 +324,6 @@ function createRuntimeStateManager({
       validated_probe_at: timestamp,
       created_at: prior.created_at || timestamp,
       updated_at: timestamp,
-      failed_step: prior.failed_step || null,
-      retry_count: prior.retry_count || 0,
-      retry_budget: prior.retry_budget || 0,
-      last_failure_category: prior.last_failure_category || null,
     }, {
       renewedCredential: probeResult.renewedCredential,
     });
@@ -503,143 +394,16 @@ function createRuntimeStateManager({
     };
   }
 
-  function assertMatchingOperation(current, operationId) {
-    if (!UUID_PATTERN.test(operationId || "")) throw new Error("operation_id 无效");
-    if (current.state === "not_started" || current.operation_id !== operationId) {
-      throw new Error("runtime operation_id 与参数不匹配");
-    }
-    if (!current.intent) throw new Error("runtime state 缺少 validated intent");
-  }
-
-  function recordFailure({ operationId, step, reason } = {}) {
-    if (!FAILURE_CATEGORIES.has(reason)) throw new Error("runtime failure reason 无效");
-    return withRuntimeStateLock(() => {
-      const current = read();
-      assertMatchingOperation(current, operationId);
-      const fixedSteps = INTENT_DEFINITIONS[current.intent.type].steps;
-      if (!fixedSteps.includes(step)) throw new Error("runtime failure step 不是 intent 的固定步骤");
-
-      if (
-        reason === "credential-expired"
-        && current.state === "connecting"
-        && current.last_failure_category === reason
-        && current.failed_step === step
-        && current.retry_count === 0
-        && current.retry_budget === 1
-      ) {
-        return current;
-      }
-      if (current.state !== "connected") {
-        throw new Error("只有 connected runtime 才能记录业务操作失败");
-      }
-
-      const credentialExpired = reason === "credential-expired";
-      const retryBudget = credentialExpired && current.retry_count === 0 ? 1 : 0;
-      return writeStateUnlocked({
-        ...current,
-        state: credentialExpired ? "connecting" : "connected",
-        validated_probe_at: credentialExpired ? null : current.validated_probe_at,
-        failed_step: step,
-        retry_budget: retryBudget,
-        last_failure_category: reason,
-        updated_at: now(),
-      });
-    });
-  }
-
-  function reconnectInput(operationId) {
-    return withRuntimeStateLock(() => {
-      const current = read();
-      assertMatchingOperation(current, operationId);
-      if (current.last_failure_category === "permission-denied") {
-        throw new Error("permission denied 不允许重新授权或重试");
-      }
-      if (
-        current.state !== "connecting"
-        || current.last_failure_category !== "credential-expired"
-        || current.retry_budget !== 1
-        || current.retry_count !== 0
-      ) {
-        throw new Error("runtime credential retry budget 已用尽或尚未记录凭据失效");
-      }
-      return connectionFields(current);
-    });
-  }
-
-  async function withReconnectLease(operationId, action) {
-    if (!UUID_PATTERN.test(operationId || "")) throw new Error("operation_id 无效");
-    if (typeof action !== "function") throw new Error("runtime reconnect action 无效");
-    let lease;
-    try {
-      lease = stateStore.acquireOperationLock({ operationId });
-    } catch {
-      throw new Error("该 runtime reconnect 正在运行；请稍后重试");
-    }
-    try {
-      const connection = reconnectInput(operationId);
-      return await action(connection);
-    } finally {
-      lease.release();
-    }
-  }
-
-  function assertContinuationEligible(operationId) {
-    return withRuntimeStateLock(() => {
-      const current = read();
-      assertMatchingOperation(current, operationId);
-      if (current.state !== "connected") throw new Error("runtime 尚未 connected，不能恢复 intent");
-      if (current.last_failure_category === "permission-denied") {
-        throw new Error("permission denied：当前操作没有权限，不能自动重试");
-      }
-      if (
-        current.last_failure_category === "credential-expired"
-        && (current.retry_budget !== 1 || current.retry_count !== 0)
-      ) {
-        throw new Error("runtime credential retry budget 已用尽");
-      }
-      return current;
-    });
-  }
-
-  function prepareContinuation(operationId) {
-    return withRuntimeStateLock(() => {
-      const current = read();
-      assertMatchingOperation(current, operationId);
-      if (current.state !== "connected") throw new Error("runtime 尚未 connected，不能恢复 intent");
-      if (current.last_failure_category === "permission-denied") {
-        throw new Error("permission denied：当前操作没有权限，不能自动重试");
-      }
-      if (current.last_failure_category !== "credential-expired") return current;
-      if (current.retry_budget !== 1 || current.retry_count !== 0) {
-        throw new Error("runtime credential retry budget 已用尽");
-      }
-      return writeStateUnlocked({
-        ...current,
-        retry_count: current.retry_count + 1,
-        retry_budget: 0,
-        updated_at: now(),
-      });
-    });
-  }
-
   return {
     markConnected,
     path: statePath,
-    persistConnectingCredential,
-    assertContinuationEligible,
-    prepareContinuation,
     read,
-    reconnectInput,
-    recordFailure,
     startConnecting,
     status,
-    withReconnectLease,
   };
 }
 
 module.exports = {
-  FAILURE_CATEGORIES,
-  MAX_RETRY_COUNT,
   RUNTIME_STATE_LOCK_ID,
   RUNTIME_SCHEMA,
   STATUS_SCHEMA,
@@ -648,6 +412,5 @@ module.exports = {
   normalizeConsoleOrigin,
   normalizeProbeResult,
   fetchPinnedMcpEndpoint,
-  persistPosixCredential,
   probeConfiguredMcp,
 };

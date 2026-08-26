@@ -281,19 +281,6 @@ test("the background updater never forwards credentials or TLS/npm overrides", (
   });
 });
 
-test("runtime operation files suppress automatic updates until user work completes", () => {
-  const { hasActiveOperation } = require(autoUpdatePath);
-  const home = temporaryHome();
-  const operations = path.join(home, ".rainbond", "rainskills", "operations");
-  fs.mkdirSync(operations, { recursive: true, mode: 0o700 });
-  const operation = path.join(operations, "1d6754d6-6fb3-4bda-9a04-15c2d261d178.json");
-  fs.writeFileSync(operation, `${JSON.stringify({ stage: "active" })}\n`, { mode: 0o600 });
-
-  assert.equal(hasActiveOperation({ home, platform: "linux" }), true);
-  fs.writeFileSync(operation, `${JSON.stringify({ stage: "completed" })}\n`, { mode: 0o600 });
-  assert.equal(hasActiveOperation({ home, platform: "linux" }), false);
-});
-
 test("official npm metadata is pinned to the rainskills registry artifact", () => {
   const { validateOfficialLatestMetadata } = require(autoUpdatePath);
   assert.deepEqual(validateOfficialLatestMetadata({

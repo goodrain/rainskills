@@ -49,37 +49,6 @@ test("historical mcp.env cannot bypass not_started", async () => {
   assert.equal(probes, 0);
 });
 
-test("adding an environment uses operation-scoped state and ignores stale legacy connecting state", () => {
-  const { createRuntimeStateManager } = require(runtimeStatePath);
-  const home = temporaryHome();
-  const legacy = createRuntimeStateManager({
-    home,
-    stateStore: createPortableSecureStateStore(home),
-    liveProbe: async () => true,
-  });
-  const stale = connectedInput();
-  legacy.startConnecting(stale);
-
-  const operationId = "b7c0af4f-5dd7-41ec-9d11-583203a71483";
-  const scoped = createRuntimeStateManager({
-    home,
-    stateStore: createPortableSecureStateStore(home),
-    operationId,
-    liveProbe: async () => true,
-  });
-  const next = {
-    ...connectedInput(),
-    operation_id: operationId,
-    console_origin: "https://second.example.com",
-    intent: { type: "environment-add" },
-  };
-
-  assert.deepEqual(scoped.read(), { state: "not_started" });
-  assert.equal(scoped.startConnecting(next).operation_id, operationId);
-  assert.equal(legacy.read().operation_id, stale.operation_id);
-  assert.notEqual(scoped.path, legacy.path);
-});
-
 test("runtime status is usable only after connected state passes a live probe", async () => {
   const { createRuntimeStateManager } = require(runtimeStatePath);
   const home = temporaryHome();
@@ -177,7 +146,7 @@ test("an active connect rejects a competitor during live probe and completes con
   assert.equal((await manager.markConnected(connectedInput())).state, "connected");
   assert.match(competingError.message, /active|connecting|进行中|另一个/i);
   assert.equal(manager.read().operation_id, connectedInput().operation_id);
-  assert.deepEqual(manager.read().intent, connectedInput().intent);
+  assert.equal(Object.hasOwn(manager.read(), "intent"), false);
 });
 
 test("status does not downgrade a newer operation started during live probe", async () => {
@@ -289,6 +258,7 @@ test("default live probe uses only the fixed Rainskills CLI endpoint and process
     assert.deepEqual(credentialWrites, targetClient === "all" ? [{
       token: "renewed.process.jwt",
       baseUrl: "https://console.rainbond.com",
+      kind: "saas",
     }] : []);
   }
 });
@@ -369,7 +339,7 @@ test("default live probe rejects redirects and endpoint drift", async () => {
   }
 });
 
-test("renewed POSIX credential is atomically protected without runtime or output leakage", async () => {
+test("renewed credential is atomically written to the single runtime without output leakage", async () => {
   const { createRuntimeStateManager } = require(runtimeStatePath);
   const home = temporaryHome();
   const stateStore = createPortableSecureStateStore(home);
@@ -389,45 +359,14 @@ test("renewed POSIX credential is atomically protected without runtime or output
   });
 
   const output = JSON.stringify(await manager.status());
-  const credentialPath = path.join(home, ".rainbond", "mcp.env");
+  const credentialPath = path.join(home, ".rainbond", "rainskills", "single-runtime-v1.json");
   assert.equal(output.includes(renewedToken), false);
   assert.equal(fs.statSync(credentialPath).mode & 0o777, 0o600);
-  assert.equal(fs.readFileSync(credentialPath, "utf8"), [
-    `export RAINBOND_JWT='${renewedToken}'`,
-    "export RAINBOND_URL='https://console.rainbond.com'",
-    "",
-  ].join("\n"));
+  const stored = JSON.parse(fs.readFileSync(credentialPath, "utf8"));
+  assert.equal(stored.token, renewedToken);
+  assert.equal(stored.console_origin, "https://console.rainbond.com");
+  assert.equal(stored.kind, "saas");
   assert.equal(fs.readFileSync(manager.path, "utf8").includes(renewedToken), false);
-});
-
-test("connecting credential writer rejects symlink and unsafe existing targets", () => {
-  const { createRuntimeStateManager } = require(runtimeStatePath);
-  const token = "fixtureHeader.fixturePayload.fixtureSignature";
-  for (const unsafeTarget of ["symlink", "mode"]) {
-    const home = temporaryHome();
-    const manager = createRuntimeStateManager({ home, liveProbe: async () => true });
-    const input = connectedInput();
-    manager.startConnecting(input);
-    const credentialPath = path.join(home, ".rainbond", "mcp.env");
-    fs.mkdirSync(path.dirname(credentialPath), { recursive: true, mode: 0o700 });
-    if (unsafeTarget === "symlink") {
-      const outside = path.join(home, "outside.env");
-      fs.writeFileSync(outside, "untouched\n", { mode: 0o600 });
-      fs.symlinkSync(outside, credentialPath);
-      assert.throws(() => manager.persistConnectingCredential({
-        operationId: input.operation_id,
-        token,
-      }), /symlink|符号链接|regular|普通文件|安全|权限/i);
-      assert.equal(fs.readFileSync(outside, "utf8"), "untouched\n");
-    } else {
-      fs.writeFileSync(credentialPath, "unsafe\n", { mode: 0o644 });
-      assert.throws(() => manager.persistConnectingCredential({
-        operationId: input.operation_id,
-        token,
-      }), /0600|mode|权限|安全/i);
-      assert.equal(fs.readFileSync(credentialPath, "utf8"), "unsafe\n");
-    }
-  }
 });
 
 test("credential persistence failure makes renewal probe fail closed", async () => {
@@ -605,26 +544,21 @@ test("stored runtime state validates fixed values and returns a fresh object", (
     schema: "rainskills.runtime-connection.v1",
     version: 1,
     state: "connecting",
-    ...connectedInput(),
+    target_client: "codex",
+    environment_kind: "saas",
+    console_origin: "https://console.rainbond.com",
+    operation_id: "1d6754d6-6fb3-4bda-9a04-15c2d261d178",
     validated_probe_at: null,
     created_at: "2026-08-14T00:00:00.000Z",
     updated_at: "2026-08-14T00:00:00.000Z",
-    failed_step: "resolve-target",
-    retry_count: 1,
-    retry_budget: 1,
-    last_failure_category: "credential-expired",
   };
 
   for (const mutation of [
     { created_at: "not-a-time" },
     { updated_at: null },
     { validated_probe_at: "yesterday" },
-    { failed_step: "shell" },
-    { retry_count: -1 },
-    { retry_count: 1.5 },
-    { retry_count: 1001 },
-    { retry_budget: 2 },
-    { last_failure_category: "raw secret output" },
+    { intent: { type: "query", operation: "summary" } },
+    { retry_budget: 1 },
   ]) {
     const home = temporaryHome();
     const stateStore = createPortableSecureStateStore(home);
@@ -639,8 +573,7 @@ test("stored runtime state validates fixed values and returns a fresh object", (
   stateStore.atomicWriteJson(manager.path, validState);
   const read = manager.read();
   assert.notEqual(read, validState);
-  assert.notEqual(read.intent, validState.intent);
-  assert.deepEqual(validState.intent, connectedInput().intent);
+  assert.deepEqual(read, validState);
 });
 
 test("runtime state uses POSIX protected directories and 0600 file", () => {
@@ -693,106 +626,4 @@ test("runtime state delegates Windows protection to the secure store", () => {
   assert.equal(aclCalls.some(([operation, , kind]) => operation === "protect" && kind === "directory"), true);
   assert.equal(aclCalls.some(([operation, , kind]) => operation === "protect" && kind === "file"), true);
   assert.equal(aclCalls.some(([operation, , kind]) => operation === "inspect" && kind === "file"), true);
-});
-
-test("credential failure records one fixed retry while permission failure never retries", async () => {
-  const { createRuntimeStateManager } = require(runtimeStatePath);
-  for (const reason of ["credential-expired", "permission-denied"]) {
-    const home = temporaryHome();
-    const manager = createRuntimeStateManager({
-      home,
-      stateStore: createPortableSecureStateStore(home),
-      liveProbe: async () => true,
-    });
-    manager.startConnecting(connectedInput());
-    await manager.markConnected(connectedInput());
-
-    const failed = manager.recordFailure({
-      operationId: connectedInput().operation_id,
-      step: "read",
-      reason,
-    });
-    assert.equal(failed.failed_step, "read");
-    assert.equal(failed.last_failure_category, reason);
-    assert.equal(failed.retry_budget, reason === "credential-expired" ? 1 : 0);
-    assert.equal(failed.state, reason === "credential-expired" ? "connecting" : "connected");
-
-    if (reason === "credential-expired") {
-      assert.deepEqual(manager.reconnectInput(connectedInput().operation_id), connectedInput());
-    } else {
-      assert.throws(
-        () => manager.reconnectInput(connectedInput().operation_id),
-        /permission|权限|retry|重试/i
-      );
-      assert.throws(
-        () => manager.prepareContinuation(connectedInput().operation_id),
-        /permission|权限/i
-      );
-    }
-  }
-});
-
-test("retry continuation atomically consumes its one-shot budget before returning", async () => {
-  const { createRuntimeStateManager } = require(runtimeStatePath);
-  const home = temporaryHome();
-  const stateStore = createPortableSecureStateStore(home);
-  const input = connectedInput();
-  const manager = createRuntimeStateManager({ home, stateStore, liveProbe: async () => true });
-  manager.startConnecting(input);
-  await manager.markConnected(input);
-  manager.recordFailure({ operationId: input.operation_id, step: "read", reason: "credential-expired" });
-  await manager.markConnected(input);
-
-  const first = manager.prepareContinuation(input.operation_id);
-  assert.equal(first.retry_count, 1);
-  assert.equal(first.retry_budget, 0);
-  assert.equal(first.failed_step, "read");
-  assert.equal(manager.read().retry_count, 1);
-  const competingManager = createRuntimeStateManager({
-    home,
-    stateStore: createPortableSecureStateStore(home),
-    liveProbe: async () => true,
-  });
-  assert.throws(
-    () => competingManager.prepareContinuation(input.operation_id),
-    /retry|重试|budget|次数/i
-  );
-
-  const secondFailure = manager.recordFailure({
-    operationId: input.operation_id,
-    step: "read",
-    reason: "credential-expired",
-  });
-  assert.equal(secondFailure.retry_budget, 0);
-  assert.throws(() => manager.reconnectInput(input.operation_id), /retry|重试|budget|次数/i);
-});
-
-test("failure and continuation APIs reject unknown operation, step, and reason", async () => {
-  const { createRuntimeStateManager } = require(runtimeStatePath);
-  const home = temporaryHome();
-  const manager = createRuntimeStateManager({
-    home,
-    stateStore: createPortableSecureStateStore(home),
-    liveProbe: async () => true,
-  });
-  manager.startConnecting(connectedInput());
-  await manager.markConnected(connectedInput());
-  const otherOperation = "b7c0af4f-5dd7-41ec-9d11-583203a71483";
-
-  assert.throws(() => manager.recordFailure({
-    operationId: otherOperation,
-    step: "read",
-    reason: "credential-expired",
-  }), /operation|匹配/i);
-  assert.throws(() => manager.recordFailure({
-    operationId: connectedInput().operation_id,
-    step: "shell",
-    reason: "credential-expired",
-  }), /step|步骤|固定/i);
-  assert.throws(() => manager.recordFailure({
-    operationId: connectedInput().operation_id,
-    step: "read",
-    reason: "invalid_token",
-  }), /reason|原因|failure|失败/i);
-  assert.throws(() => manager.prepareContinuation(otherOperation), /operation|匹配/i);
 });

@@ -1,22 +1,9 @@
 "use strict";
 
 const os = require("node:os");
-const path = require("node:path");
-const { spawnSync } = require("node:child_process");
 const { looksLikeJwt } = require("./windows-auth.js");
 
 const MAX_MISSING_ROUTE_BODY_BYTES = 64 * 1024;
-
-function normalizeBaseUrl(value) {
-  const url = new URL(value);
-  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) {
-    throw new Error("Rainbond Console 地址必须是无凭据的 HTTP(S) URL");
-  }
-  url.search = "";
-  url.hash = "";
-  url.pathname = url.pathname.replace(/\/$/, "");
-  return url.toString().replace(/\/$/, "");
-}
 
 async function readBoundedResponseText(response) {
   const declaredLength = Number(response.headers?.get?.("content-length") || 0);
@@ -121,45 +108,7 @@ async function validateMcp({ url, token, fetchImpl = globalThis.fetch }) {
   return { token: looksLikeJwt(renewed) ? renewed : token };
 }
 
-function checkedSpawn(spawnImpl, command, args, options) {
-  const result = spawnImpl(command, args, options);
-  if (result.error) {
-    if (result.error.code === "ENOENT") throw new Error(`未找到所选客户端命令：${command}`);
-    throw result.error;
-  }
-  if (result.signal) throw new Error(`${command} 被信号 ${result.signal} 中断`);
-  if (result.status !== 0) throw new Error(`${command} 配置失败，退出码 ${result.status}`);
-}
-
-function persistWindowsEnvironment({
-  token,
-  baseUrl,
-  spawnImpl = spawnSync,
-  helperPath = path.join(__dirname, "windows-client-config.ps1"),
-}) {
-  if (!looksLikeJwt(token)) throw new Error("Rainbond JWT 格式无效");
-  const normalizedBase = normalizeBaseUrl(baseUrl);
-  const environment = {
-    ...process.env,
-    RAINSKILLS_RAINBOND_JWT: token,
-    RAINSKILLS_RAINBOND_URL: normalizedBase,
-  };
-  checkedSpawn(spawnImpl, "powershell.exe", [
-    "-NoProfile",
-    "-NonInteractive",
-    "-File",
-    helperPath,
-  ], {
-    encoding: "utf8",
-    env: environment,
-    windowsHide: true,
-  });
-  process.env.RAINBOND_JWT = token;
-  process.env.RAINBOND_URL = normalizedBase;
-}
-
 module.exports = {
   isVerifiedMissingMcpRoute,
-  persistWindowsEnvironment,
   validateMcp,
 };

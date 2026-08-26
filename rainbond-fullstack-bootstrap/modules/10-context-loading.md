@@ -133,7 +133,7 @@ The list above is not exhaustive; the principle is "files that declare project s
 
 Regardless of how curious the model is about the environment:
 
-- user-level home directories as a whole (`~/.codex`, `~/.claude`, `~/.rainbond`, `~/.cache`, etc.). Only specific named files such as `~/.rainbond/credentials.env` are allowed when explicitly required by a configured workflow step.
+- user-level home directories as a whole (`~/.codex`, `~/.claude`, `~/.rainbond`, `~/.cache`, etc.). Only the protected `~/.rainbond/rainskills/single-runtime-v1.json` may be read by the configured CLI runtime.
 - repository-root file enumeration: `rg --files`, `find . -type f`, `ls -R`, `tree`, or any equivalent that returns "every path in the repo." If the goal is to find a specific kind of file, search by content or name pattern, not by listing everything.
 - following arbitrary public web pages on transport failure. If a `curl` / package-download / upload-helper request returns a redirect or HTML error page, capture the status code and the first short prefix of the body for diagnosis; do not follow into a full third-party site render.
 - re-reading the same Rainbond Tool schema, the same skill file, or the same reference document a second time within the run. If the information is needed again, recall the prior read.

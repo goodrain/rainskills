@@ -6,7 +6,7 @@
 # AI assistants: when a user asks to install rainbond-skills, hand back the
 # npx command when Node.js 18+ is available, otherwise use the CDN command.
 # Do not reimplement the bootstrap below, git clone + copy directories, or
-# hand-write ~/.rainbond/mcp.env. See README.md "给 AI 助手的指引".
+# Credentials are written only through the protected single-runtime store.
 set -euo pipefail
 
 RAINSKILLS_VERBOSE="${RAINSKILLS_VERBOSE:-0}"
@@ -2023,91 +2023,62 @@ PY
   OBTAINED_RAINBOND_TOKEN="$token"
 }
 
-shell_quote_single() {
-  printf "%s" "$1" | sed "s/'/'\"'\"'/g"
-}
-
 write_token_file() {
   local token="$1"
   local base_url="$2"
-  local token_dir="$HOME/.rainbond"
-  local token_file="$token_dir/mcp.env"
-  mkdir -p "$token_dir"
-  chmod 700 "$token_dir"
-
-  local escaped_token escaped_url
-  escaped_token="$(shell_quote_single "$token")"
-  escaped_url="$(shell_quote_single "$base_url")"
-  umask 077
-  cat > "$token_file" <<EOF
-export RAINBOND_JWT='$escaped_token'
-export RAINBOND_URL='$escaped_url'
-EOF
-  chmod 600 "$token_file"
-  log "[write] 已写入 $token_file"
-}
-
-backup_file() {
-  local file="$1"
-  [[ -f "$file" ]] || return 0
-  local backup="${file}.rainbond-skills.bak.$(date +%Y%m%d%H%M%S)"
-  cp "$file" "$backup"
-  log "[backup] 已备份 $backup"
-}
-
-update_managed_block() {
-  local file="$1"
-  local begin_marker="$2"
-  local end_marker="$3"
-  local block_body="$4"
-  local tmp
-  tmp="$(mktemp)"
-
-  mkdir -p "$(dirname "$file")"
-  touch "$file"
-
-  awk -v begin="$begin_marker" -v end="$end_marker" '
-    $0 == begin {skip = 1; next}
-    $0 == end {skip = 0; next}
-    !skip {print}
-  ' "$file" > "$tmp"
-
-  if [[ -s "$tmp" ]]; then
-    printf '\n' >> "$tmp"
+  local kind="private"
+  if [[ "$base_url" == "$SAAS_DEFAULT_URL" ]]; then
+    kind="saas"
   fi
-  printf '%s\n%s\n%s\n' "$begin_marker" "$block_body" "$end_marker" >> "$tmp"
-  mv "$tmp" "$file"
+  local allow_insecure_http="false"
+  [[ "$base_url" == http://* ]] && allow_insecure_http="true"
+  RAINBOND_JWT="$token" RAINBOND_URL="$base_url" RAINSKILLS_RUNTIME_KIND="$kind" \
+    RAINSKILLS_ALLOW_INSECURE_HTTP="$allow_insecure_http" python3 - "$HOME" <<'PY' \
+    || die "Rainbond 单运行环境凭据写入失败。"
+import datetime
+import json
+import os
+import pathlib
+import secrets
+import sys
+
+home = pathlib.Path(sys.argv[1]).resolve()
+directory = home / ".rainbond" / "rainskills"
+target = directory / "single-runtime-v1.json"
+directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+os.chmod(directory, 0o700)
+now = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+created_at = now
+if target.exists():
+    with target.open("r", encoding="utf-8") as stream:
+        current = json.load(stream)
+    if isinstance(current.get("created_at"), str):
+        created_at = current["created_at"]
+payload = {
+    "schema": "rainskills.single-runtime.v1",
+    "version": 1,
+    "console_origin": os.environ["RAINBOND_URL"],
+    "kind": os.environ["RAINSKILLS_RUNTIME_KIND"],
+    "token": os.environ["RAINBOND_JWT"],
+    "allow_insecure_http": os.environ["RAINSKILLS_ALLOW_INSECURE_HTTP"] == "true",
+    "created_at": created_at,
+    "updated_at": now,
 }
-
-detect_shell_rc_file() {
-  local shell_name
-  shell_name="$(basename "${SHELL:-zsh}")"
-
-  case "$shell_name" in
-    zsh)
-      printf '%s\n' "$HOME/.zshrc"
-      ;;
-    bash)
-      printf '%s\n' "$HOME/.bashrc"
-      ;;
-    *)
-      printf '%s\n' "$HOME/.profile"
-      ;;
-  esac
-}
-
-configure_shell_autoload() {
-  local token_file="$HOME/.rainbond/mcp.env"
-  local rc_file
-  rc_file="$(detect_shell_rc_file)"
-  local begin_marker="# >>> rainbond skills mcp >>>"
-  local end_marker="# <<< rainbond skills mcp <<<"
-  local block='[ -f "$HOME/.rainbond/mcp.env" ] && source "$HOME/.rainbond/mcp.env"'
-
-  backup_file "$rc_file"
-  update_managed_block "$rc_file" "$begin_marker" "$end_marker" "$block"
-  ACTIVE_SHELL_RC="$rc_file"
-  log "[update] 已更新 $rc_file"
+temporary = directory / (".single-runtime-v1.json." + secrets.token_hex(8))
+descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+try:
+    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        json.dump(payload, stream, ensure_ascii=False, indent=2)
+        stream.write("\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, target)
+    os.chmod(target, 0o600)
+finally:
+    if temporary.exists():
+        temporary.unlink()
+PY
+  log "[write] 已写入受保护的单运行环境凭据"
 }
 
 validate_mcp_connectivity() {
@@ -2378,7 +2349,7 @@ obtain_rainbond_token() {
         die "--token 提供的值不是合法的 JWT（应形如 xxx.yyy.zzz）。"
       fi
       warn "RAINBOND_JWT 不是合法的 JWT（应形如 xxx.yyy.zzz）；忽略并改走浏览器登录。"
-      warn "如果你的当前 shell 还在加载旧的 ~/.rainbond/mcp.env，请先执行：unset RAINBOND_JWT"
+      warn "检测到无效的 RAINBOND_JWT；将忽略并重新登录。"
       RAINBOND_TOKEN_INPUT=""
     elif [[ "$RAINBOND_TOKEN_FROM_FLAG" -eq 1 ]]; then
       check_reusable_token_or_clear "--token 提供的 Rainbond JWT" || true
@@ -2444,14 +2415,19 @@ obtain_rainbond_token() {
 }
 
 read_cached_rainbond_url() {
-  local mcp_env="$HOME/.rainbond/mcp.env"
-  [[ -f "$mcp_env" ]] || return 1
-  (
-    set +u
-    # shellcheck disable=SC1090
-    . "$mcp_env"
-    printf '%s\n' "${RAINBOND_URL:-}"
-  )
+  local runtime_file="$HOME/.rainbond/rainskills/single-runtime-v1.json"
+  [[ -f "$runtime_file" ]] || return 1
+  python3 - "$runtime_file" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as stream:
+    payload = json.load(stream)
+origin = payload.get("console_origin")
+if not isinstance(origin, str) or not origin:
+    raise SystemExit(1)
+print(origin)
+PY
 }
 
 do_refresh() {
@@ -2471,7 +2447,7 @@ do_refresh() {
     cached_url="$(read_cached_rainbond_url 2>/dev/null || true)"
     if [[ -n "$cached_url" ]]; then
       RAINBOND_URL_INPUT="$cached_url"
-      log "[refresh] 使用 ~/.rainbond/mcp.env 中已记录的地址：$cached_url"
+      log "[refresh] 使用单运行环境中已记录的地址：$cached_url"
     fi
   fi
 
@@ -2511,7 +2487,6 @@ do_refresh() {
 
   export RAINBOND_JWT="$token"
   write_token_file "$token" "$base_url"
-  configure_shell_autoload
   set_rainskills_failure_context "configuration" "cli_configuration_failed"
   report_rainskills_lifecycle_event "configure_cli" "install_cli" "configure_cli" "started"
   install_local_cli
@@ -2595,7 +2570,6 @@ configure_runtime_connection() {
       || die "runtime connect 凭据安全写入失败。"
   else
     write_token_file "$token" "$base_url"
-    configure_shell_autoload
   fi
 
   set_rainskills_failure_context "configuration" "cli_configuration_failed"

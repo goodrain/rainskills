@@ -622,15 +622,6 @@ function hasActiveOperation({
       stateStore
     );
     if (onboarding && onboarding.stage !== "configured") return true;
-    const operationsDirectory = path.join(home, ".rainbond", "rainskills", "operations");
-    if (!fs.existsSync(operationsDirectory)) return false;
-    const directoryInfo = fs.lstatSync(operationsDirectory);
-    if (directoryInfo.isSymbolicLink() || !directoryInfo.isDirectory()) return true;
-    for (const entry of fs.readdirSync(operationsDirectory, { withFileTypes: true })) {
-      if (!entry.isFile() || !entry.name.endsWith(".json")) return true;
-      const operation = stateStore.readProtectedJson(path.join(operationsDirectory, entry.name));
-      if (["awaiting-environment", "active"].includes(operation?.stage)) return true;
-    }
     return false;
   } catch {
     return true;

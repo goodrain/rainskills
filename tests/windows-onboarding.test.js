@@ -416,20 +416,11 @@ test("native Windows checkpoint is protected and accepted by platform resume", (
     operationId,
     now: () => "2026-08-03T00:00:00.000Z",
     stateStore,
-    intent: {
-      type: "template-install",
-      template_id: "wordpress",
-      install_scope: "new-app",
-    },
   });
 
   assert.equal(checkpoint.state.control_mode, "windows-native");
   assert.equal(checkpoint.state.control_distro, null);
-  assert.deepEqual(checkpoint.state.intent, {
-    type: "template-install",
-    template_id: "wordpress",
-    install_scope: "new-app",
-  });
+  assert.equal(Object.hasOwn(checkpoint.state, "intent"), false);
   assert.equal(checkpoint.state.platform_state_path, path.join(
     home,
     ".rainbond",
@@ -461,24 +452,6 @@ test("native Windows checkpoint is protected and accepted by platform resume", (
   });
   assert.throws(() => createNextAction(operationId, "cluster"), /location|位置/i);
 
-  assert.throws(() => createOnboardingCheckpoint({
-    home,
-    target: "codex",
-    packageVersion: "0.1.0-test",
-    control: {
-      mode: "windows-native",
-      hostPlatform: "win32",
-      controlPlatform: "win32",
-    },
-    operationId,
-    stateStore,
-    intent: {
-      type: "template-install",
-      template_id: "wordpress",
-      install_scope: "existing-app",
-      app_id: "app-1",
-    },
-  }), /existing|已有|现有/i);
 });
 
 test("native main installs only Skills without selecting or configuring a runtime", async () => {
@@ -537,7 +510,7 @@ test("native Windows installation publishes the protected local CLI bundle", asy
 
   assert.equal(fs.existsSync(path.join(home, ".rainbond", "bin", "rainskills-tools.js")), true);
   assert.equal(fs.existsSync(path.join(home, ".rainbond", "bin", "rainskills-skill-manifest.json")), true);
-  assert.equal(fs.existsSync(path.join(home, ".rainbond", "lib", "rainbond-platform-installer", "scripts", "runtime-operations.js")), true);
+  assert.equal(fs.existsSync(path.join(home, ".rainbond", "lib", "rainbond-platform-installer", "scripts", "single-runtime.js")), true);
   assert.equal(fs.existsSync(path.join(home, ".codex", "config.toml")), false);
   assert.equal(fs.existsSync(path.join(home, ".claude.json")), false);
 });
@@ -807,11 +780,8 @@ test("Windows browser opener uses a fixed PowerShell file and treats URL as data
   assert.doesNotMatch(helperSource, /Start-Process -FilePath \$uri\.AbsoluteUri/);
 });
 
-test("Windows CLI validation and credential persistence keep JWT out of argv", async () => {
-  const {
-    persistWindowsEnvironment,
-    validateMcp,
-  } = require(path.join(
+test("Windows CLI validation keeps JWT in the authorization header", async () => {
+  const { validateMcp } = require(path.join(
     repoRoot,
     "rainbond-platform-installer",
     "scripts",
@@ -837,21 +807,6 @@ test("Windows CLI validation and credential persistence keep JWT out of argv", a
   assert.equal(request.options.headers.Authorization, `GRJWT ${token}`);
   assert.equal(JSON.parse(request.options.body).method, "initialize");
   assert.equal(validation.token, "renewed.payload.signature");
-
-  const calls = [];
-  function spawnImpl(command, args, options) {
-    calls.push({ command, args, options });
-    return { status: 0, stdout: "", stderr: "" };
-  }
-  persistWindowsEnvironment({
-    token,
-    baseUrl: "https://rainbond.example.com",
-    spawnImpl,
-    helperPath: "C:\\Program Files\\Rainskills\\windows-client-config.ps1",
-  });
-  assert.equal(calls.some((call) => call.args.some((argument) => argument.includes(token))), false);
-  assert.equal(calls.some((call) => ["codex", "claude", "npx"].includes(call.command)), false);
-  assert.equal(calls[0].options.env.RAINSKILLS_RAINBOND_JWT, token);
 });
 
 test("Windows MCP validation pins the selected endpoint and rejects redirect drift", async () => {

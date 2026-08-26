@@ -17,8 +17,6 @@ const PROTOCOL_VERSION = "2025-03-26";
 const ENDPOINT_PATH = "/console/mcp/rainskills/api/query";
 const CLI_VERSION = "2.1.0";
 const CONFIG_DIRECTORY = ".rainbond";
-const CREDENTIALS_FILENAME = "credentials.env";
-const LEGACY_CREDENTIALS_FILENAME = "mcp.env";
 const CATALOG_FILENAME = "capabilities.json";
 const OPERATIONS_DIRECTORY = "operations";
 const SKILL_MANIFEST_FILENAME = "rainskills-skill-manifest.json";
@@ -76,62 +74,6 @@ class BridgeError extends Error {
   }
 }
 
-function parseShellValue(value) {
-  let offset = 0;
-  let result = "";
-  while (offset < value.length) {
-    const quote = value[offset];
-    if (quote === "'") {
-      const end = value.indexOf("'", offset + 1);
-      if (end === -1) return null;
-      result += value.slice(offset + 1, end);
-      offset = end + 1;
-      continue;
-    }
-    if (quote === '"') {
-      const end = value.indexOf('"', offset + 1);
-      if (end === -1) return null;
-      result += value.slice(offset + 1, end).replace(/\\([\\"$`])/g, "$1");
-      offset = end + 1;
-      continue;
-    }
-    const match = value.slice(offset).match(/^[^\s'"#]+/);
-    if (!match) return null;
-    result += match[0];
-    offset += match[0].length;
-  }
-  return result;
-}
-
-function parseEnvFile(contents) {
-  const values = {};
-  for (const line of contents.split(/\r?\n/)) {
-    const match = line.match(/^\s*(?:export\s+)?(RAINBOND_URL|RAINBOND_JWT|RAINBOND_ALLOW_INSECURE_HTTP)\s*=\s*(.*?)\s*$/);
-    if (!match) continue;
-    const parsed = parseShellValue(match[2]);
-    if (parsed !== null) values[match[1]] = parsed;
-  }
-  return values;
-}
-
-function readPrivateEnvFile(configPath) {
-  let stat;
-  try {
-    stat = fs.lstatSync(configPath);
-  } catch (error) {
-    if (error.code === "ENOENT") return {};
-    throw new BridgeError("unable to inspect Rainbond configuration", EXIT.CONFIG);
-  }
-  if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o077) !== 0) {
-    throw new BridgeError("Rainbond configuration must be a private regular file", EXIT.CONFIG);
-  }
-  try {
-    return parseEnvFile(fs.readFileSync(configPath, "utf8"));
-  } catch (_error) {
-    throw new BridgeError("unable to read Rainbond configuration", EXIT.CONFIG);
-  }
-}
-
 function requireRuntimeModule(filename) {
   const candidates = [
     path.resolve(__dirname, "..", "rainbond-platform-installer", "scripts", filename),
@@ -166,69 +108,25 @@ function requireRuntimeFile(...segments) {
   throw new BridgeError("installed Rainskills package upload helper is incomplete", EXIT.CONFIG);
 }
 
-function loadOperationConfig({ homeDir, operationId, includeRuntime }) {
-  let operationStore;
-  const { createEnvironmentRegistry } = requireRuntimeModule("environment-registry.js");
-  const { createEnvironmentCredentialStore } = requireRuntimeModule("environment-credentials.js");
-  const { createRuntimeOperationStore } = requireRuntimeModule("runtime-operations.js");
-  const registry = createEnvironmentRegistry({
-    home: homeDir,
-    activeOperationIds: (environmentId) => operationStore?.activeOperationIds(environmentId) || [],
-  });
-  operationStore = createRuntimeOperationStore({ home: homeDir, registry });
-  const operation = operationStore.read(operationId);
-  if (!operation || !["active", "interrupted"].includes(operation.stage)) {
-    throw new BridgeError("protected runtime operation is missing or inactive", EXIT.CONFIG);
-  }
-  const environment = registry.get(operation.environment_id);
-  if (!environment || environment.connection_state !== "connected") {
-    throw new BridgeError("the operation environment is unavailable", EXIT.CONFIG);
-  }
-  const credential = createEnvironmentCredentialStore({ home: homeDir }).read({
-    environmentId: environment.id,
-    expectedOrigin: environment.console_origin,
-  });
-  const parsed = new URL(environment.console_origin);
-  const { INTENT_DEFINITIONS } = requireRuntimeModule("runtime-intents.js");
-  const requiredSkillId = INTENT_DEFINITIONS[operation.intent.type]?.skillId;
-  if (!requiredSkillId) {
-    throw new BridgeError("the protected runtime intent has no Skill binding", EXIT.CONFIG);
-  }
-  return {
-    baseUrl: environment.console_origin,
-    jwt: credential.token,
-    operationId: operation.operation_id,
-    environmentId: environment.id,
-    intent: operation.intent,
-    requiredSkillId,
-    operationStore,
-    ...(includeRuntime ? {
-      homeDir,
-      allowInsecureHttp: parsed.protocol === "http:",
-      isInsecureHttp: parsed.protocol === "http:",
-    } : {}),
-  };
-}
-
 function loadConfig({
   env = process.env,
   homeDir = os.homedir(),
   includeRuntime = false,
-  operationId,
 } = {}) {
-  if (operationId) return loadOperationConfig({ homeDir, operationId, includeRuntime });
-  const configDirectory = path.join(homeDir, CONFIG_DIRECTORY);
-  const credentialsPath = path.join(configDirectory, CREDENTIALS_FILENAME);
-  const legacyCredentialsPath = path.join(configDirectory, LEGACY_CREDENTIALS_FILENAME);
-  const fileValues = readPrivateEnvFile(credentialsPath);
-  const legacyValues = Object.keys(fileValues).length === 0
-    ? readPrivateEnvFile(legacyCredentialsPath)
-    : {};
-
-  const baseUrl = env.RAINBOND_URL || fileValues.RAINBOND_URL || legacyValues.RAINBOND_URL;
-  const jwt = env.RAINBOND_JWT || fileValues.RAINBOND_JWT || legacyValues.RAINBOND_JWT;
+  const hasEnvironmentOverride = env.RAINSKILLS_CREDENTIAL_SOURCE === "environment";
+  if (hasEnvironmentOverride && !(env.RAINBOND_URL && env.RAINBOND_JWT)) {
+    throw new BridgeError(
+      "RAINBOND_URL and RAINBOND_JWT must be provided together",
+      EXIT.CONFIG
+    );
+  }
+  const stored = hasEnvironmentOverride
+    ? null
+    : requireRuntimeModule("single-runtime.js").createSingleRuntimeStore({ home: homeDir }).read();
+  const baseUrl = hasEnvironmentOverride ? env.RAINBOND_URL : stored?.console_origin;
+  const jwt = hasEnvironmentOverride ? env.RAINBOND_JWT : stored?.token;
   if (!baseUrl || !jwt) {
-    throw new BridgeError("RAINBOND_URL and RAINBOND_JWT are required", EXIT.CONFIG);
+    throw new BridgeError("no Rainbond runtime is configured", EXIT.CONFIG);
   }
 
   let parsed;
@@ -241,9 +139,9 @@ function loadConfig({
     parsed.password || parsed.search || parsed.hash) {
     throw new BridgeError("RAINBOND_URL must be a safe HTTP(S) URL", EXIT.CONFIG);
   }
-  const allowInsecureHttp = (env.RAINBOND_ALLOW_INSECURE_HTTP ||
-    fileValues.RAINBOND_ALLOW_INSECURE_HTTP ||
-    legacyValues.RAINBOND_ALLOW_INSECURE_HTTP) === "true";
+  const allowInsecureHttp = hasEnvironmentOverride
+    ? env.RAINBOND_ALLOW_INSECURE_HTTP === "true"
+    : stored.allow_insecure_http;
   if (parsed.protocol === "http:" && !allowInsecureHttp) {
     throw new BridgeError(
       "RAINBOND_URL must use HTTPS; explicitly authorize insecure HTTP during installation",
@@ -262,101 +160,31 @@ function loadConfig({
   return config;
 }
 
-function loadEnvironmentConfig({
-  homeDir = os.homedir(),
-  environmentId,
-} = {}) {
-  const { createEnvironmentRegistry } = requireRuntimeModule("environment-registry.js");
-  const { createEnvironmentCredentialStore } = requireRuntimeModule("environment-credentials.js");
-  const registry = createEnvironmentRegistry({ home: homeDir });
-  const snapshot = registry.read();
-  const selectedId = environmentId || snapshot.default_environment_id;
-  if (!selectedId) {
-    throw new BridgeError("no default Rainbond environment is configured", EXIT.CONFIG);
-  }
-  const environment = snapshot.environments.find((entry) => entry.id === selectedId);
-  if (!environment || environment.connection_state !== "connected") {
-    throw new BridgeError("the selected Rainbond environment is unavailable", EXIT.CONFIG);
-  }
-  let credential;
-  try {
-    credential = createEnvironmentCredentialStore({ home: homeDir }).read({
-      environmentId: environment.id,
-      expectedOrigin: environment.console_origin,
-    });
-  } catch (_error) {
-    throw new BridgeError("the selected Rainbond environment credential is unavailable", EXIT.CONFIG);
-  }
-  const parsed = new URL(environment.console_origin);
-  return {
-    baseUrl: environment.console_origin,
-    jwt: credential.token,
-    environmentId: environment.id,
-    homeDir,
-    allowInsecureHttp: parsed.protocol === "http:",
-    isInsecureHttp: parsed.protocol === "http:",
-  };
-}
-
 function parseCommand(args) {
-  if (args[0] === "query") {
-    const toolName = args[1];
-    if (!Object.hasOwn(PLATFORM_QUERY_TO_RESOURCE, toolName || "")) {
-      throw new BridgeError("platform query tool is not allowed", EXIT.USAGE);
-    }
-    let environmentId;
-    let input;
-    for (let index = 2; index < args.length; index += 2) {
-      const option = args[index];
-      const value = args[index + 1];
-      if (!value || value.startsWith("--")) {
-        throw new BridgeError("platform query option requires a value", EXIT.USAGE);
-      }
-      if (option === "--environment-id" && !environmentId && OPERATION_ID_PATTERN.test(value)) {
-        environmentId = value;
-      } else if (option === "--input" && input === undefined && value === "-") {
-        input = value;
-      } else {
-        throw new BridgeError("invalid platform query command", EXIT.USAGE);
-      }
-    }
-    if (input !== "-") throw new BridgeError("platform query requires --input -", EXIT.USAGE);
-    return { command: "query", toolName, input, environmentId };
+  if (args.includes("--operation-id") || args.includes("--environment-id")) {
+    throw new BridgeError("--operation-id and --environment-id are no longer supported", EXIT.USAGE);
   }
-  const operationIndex = args.indexOf("--operation-id");
-  if (
-    operationIndex < 0
-    || !OPERATION_ID_PATTERN.test(args[operationIndex + 1] || "")
-    || args.indexOf("--operation-id", operationIndex + 1) !== -1
-  ) {
-    throw new BridgeError("every tools command requires --operation-id <uuid>", EXIT.USAGE);
-  }
-  const operationId = args[operationIndex + 1];
-  const operationArgs = [
-    ...args.slice(0, operationIndex),
-    ...args.slice(operationIndex + 2),
-  ];
-  const skillIndex = operationArgs.indexOf("--skill-id");
+  const skillIndex = args.indexOf("--skill-id");
   if (
     skillIndex < 0
-    || !SKILL_ID_PATTERN.test(operationArgs[skillIndex + 1] || "")
-    || operationArgs.indexOf("--skill-id", skillIndex + 1) !== -1
+    || !SKILL_ID_PATTERN.test(args[skillIndex + 1] || "")
+    || args.indexOf("--skill-id", skillIndex + 1) !== -1
   ) {
     throw new BridgeError(
       "every tools command requires --skill-id <active-skill-id>",
       EXIT.USAGE
     );
   }
-  const skillId = operationArgs[skillIndex + 1];
+  const skillId = args[skillIndex + 1];
   const remaining = [
-    ...operationArgs.slice(0, skillIndex),
-    ...operationArgs.slice(skillIndex + 2),
+    ...args.slice(0, skillIndex),
+    ...args.slice(skillIndex + 2),
   ];
   const command = remaining[0];
-  const context = { operationId, skillId };
+  const context = { skillId };
   if (
     command === "context"
-    && ["resolve", "select"].includes(remaining[1])
+    && remaining[1] === "resolve"
     && remaining.length === 4
     && remaining[2] === "--input"
     && remaining[3] === "-"
@@ -367,6 +195,18 @@ function parseCommand(args) {
       input: remaining[3],
       ...context,
     };
+  }
+  if (
+    command === "query"
+    && Object.hasOwn(PLATFORM_QUERY_TO_RESOURCE, remaining[1] || "")
+    && remaining.length === 4
+    && remaining[2] === "--input"
+    && remaining[3] === "-"
+  ) {
+    return { command, toolName: remaining[1], input: remaining[3], ...context };
+  }
+  if (command === "query") {
+    throw new BridgeError("platform query tool is not allowed", EXIT.USAGE);
   }
   if (command === "status" && remaining.length === 1) return { command, ...context };
   if (command === "list") {
@@ -434,11 +274,7 @@ function platformQueryIntent(toolName, argumentsValue) {
     }
     intent.app_id = String(value);
   }
-  try {
-    return requireRuntimeModule("runtime-intents.js").validateIntent(intent);
-  } catch (_error) {
-    throw new BridgeError("platform query intent is invalid", EXIT.USAGE);
-  }
+  return intent;
 }
 
 async function resolvePlatformQueryArguments(toolName, argumentsValue, config) {
@@ -602,9 +438,6 @@ function skillManifestPath(config) {
 }
 
 function loadSkillBinding(config, skillId, rootSkillId) {
-  if (skillId !== config.requiredSkillId) {
-    throw new BridgeError("Skill does not match the protected runtime operation intent", EXIT.CONFIG);
-  }
   const target = skillManifestPath(config);
   let manifest;
   try {
@@ -725,7 +558,6 @@ function prepareOperation(config, toolName, operationClass, argumentsValue, skil
     tool_name: toolName,
     operation_class: operationClass,
     arguments_digest: argumentsDigest(argumentsValue),
-    runtime_operation_id: config.operationId,
     skill_id: skillBinding.skillId,
     root_skill_id: skillBinding.rootSkillId,
     skill_package_version: skillBinding.packageVersion,
@@ -752,7 +584,6 @@ function confirmOperation(
   if (!record || record.status !== "awaiting_confirmation" || record.tool_name !== toolName ||
     record.operation_class !== operationClass ||
     record.arguments_digest !== argumentsDigest(argumentsValue) ||
-    record.runtime_operation_id !== config.operationId ||
     record.skill_id !== skillBinding.skillId ||
     record.root_skill_id !== skillBinding.rootSkillId ||
     record.skill_package_version !== skillBinding.packageVersion ||
@@ -1182,28 +1013,82 @@ async function validateToolArguments(config, toolName, argumentsValue) {
   if (validationError) throw new BridgeError(validationError, EXIT.USAGE);
 }
 
+function boundedContextString(value) {
+  return typeof value === "string"
+    && value.length > 0
+    && value.length <= 128
+    && !/[\u0000-\u001f\u007f-\u009f]/u.test(value)
+    ? value
+    : null;
+}
+
+async function resolveStatelessContext(input, config) {
+  const required = input?.required;
+  if (!Array.isArray(required)
+    || required.some((item) => !["enterprise", "workspace"].includes(item))) {
+    throw new BridgeError("context required dimensions are invalid", EXIT.USAGE);
+  }
+  const identity = await execute({
+    command: "read",
+    toolName: "rainbond_get_current_user",
+    argumentsValue: {},
+  }, config);
+  const enterpriseId = boundedContextString(identity?.enterprise_id);
+  if (required.includes("enterprise") && !enterpriseId) {
+    return { state: "blocked", reason: "no-current-enterprise" };
+  }
+  if (!required.includes("workspace")) {
+    return { state: "resolved", context: { enterprise_id: enterpriseId } };
+  }
+  const teams = await execute({
+    command: "read",
+    toolName: "rainbond_query_teams",
+    argumentsValue: enterpriseId ? { enterprise_id: enterpriseId } : {},
+  }, config);
+  const options = [];
+  for (const item of Array.isArray(teams?.items) ? teams.items : []) {
+    const teamId = boundedContextString(item?.team_id || item?.tenant_id);
+    const teamName = boundedContextString(item?.team_name || item?.tenant_name);
+    const teamAlias = boundedContextString(item?.team_alias || item?.tenant_alias);
+    if (!teamId || !teamName || !Array.isArray(item.region_list)) continue;
+    for (const region of item.region_list) {
+      const regionName = boundedContextString(region?.region_name);
+      if (!regionName) continue;
+      const regionLabel = boundedContextString(region.region_alias) || regionName;
+      const workspaceLabel = teamAlias && teamAlias !== teamName
+        ? `${teamAlias}（${teamName}）`
+        : teamName;
+      options.push({
+        id: `${teamId}:${regionName}`,
+        label: `${workspaceLabel} / ${regionLabel}`,
+        team_id: teamId,
+        team_name: teamName,
+        region_name: regionName,
+      });
+      if (options.length > 256) {
+        throw new BridgeError("workspace candidate set is too large", EXIT.TOOL);
+      }
+    }
+  }
+  if (options.length === 0) return { state: "blocked", reason: "no-accessible-workspace" };
+  if (options.length === 1) {
+    const option = options[0];
+    return {
+      state: "resolved",
+      context: {
+        enterprise_id: enterpriseId,
+        team_id: option.team_id,
+        team_name: option.team_name,
+        region_name: option.region_name,
+      },
+    };
+  }
+  return { state: "needs-selection", dimension: "workspace-region", options };
+}
+
 async function execute(command, config) {
   if (command.command === "context") {
-    const { createRuntimeContextResolver } = requireRuntimeModule("runtime-context-resolver.js");
-    const resolver = createRuntimeContextResolver({
-      operationStore: config.operationStore,
-      queryTool: async (toolName, argumentsValue) => execute({
-        command: "read",
-        toolName,
-        argumentsValue,
-      }, config),
-    });
-    if (command.action === "resolve") {
-      return resolver.resolve({
-        operationId: config.operationId,
-        required: command.argumentsValue.required,
-      });
-    }
-    return resolver.select({
-      operationId: config.operationId,
-      selectionId: command.argumentsValue.selection_id,
-      optionId: command.argumentsValue.option_id,
-    });
+    return resolveStatelessContext(command.argumentsValue, config);
   }
   if (command.command === "package-upload") {
     return executePackageUpload(command, config);
@@ -1214,8 +1099,6 @@ async function execute(command, config) {
     return {
       status: "ok",
       cli_version: CLI_VERSION,
-      operation_id: config.operationId,
-      environment_id: config.environmentId,
       tool_count: tools.length,
       catalog_age_ms: cached ? Math.max(0, Math.round(cached.age)) : 0,
     };
@@ -1327,7 +1210,7 @@ async function main(args = process.argv.slice(2)) {
       argumentRedactions = collectArgumentRedactions(argumentsValue);
     }
     if (command.command === "query") {
-      config = loadEnvironmentConfig({ environmentId: command.environmentId });
+      config = loadConfig({ includeRuntime: true });
       command.argumentsValue = await resolvePlatformQueryArguments(
         command.toolName,
         command.argumentsValue,
@@ -1348,14 +1231,7 @@ async function main(args = process.argv.slice(2)) {
     }
     config = loadConfig({
       includeRuntime: true,
-      operationId: command.operationId,
     });
-    if (command.skillId !== config.requiredSkillId) {
-      throw new BridgeError(
-        "Skill does not match the protected runtime operation intent",
-        EXIT.CONFIG
-      );
-    }
     if (config.isInsecureHttp) {
       process.stderr.write('{"warning":"using insecure HTTP transport"}\n');
     }
@@ -1382,10 +1258,8 @@ module.exports = {
   loadConfig,
   executePackageUpload,
   packageUploadEnvironment,
-  parseEnvFile,
   parseCommand,
   platformQueryIntent,
-  loadEnvironmentConfig,
   rpcRequest,
   validateSchemaValue,
   validateToolArguments,

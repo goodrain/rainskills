@@ -8,9 +8,6 @@ const test = require("node:test");
 
 const repoRoot = path.resolve(__dirname, "..");
 const bridgePath = path.join(repoRoot, "bin", "rainskills-tools.js");
-const ENVIRONMENT_ID = "11111111-1111-4111-8111-111111111111";
-const RUNTIME_OPERATION_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
-
 function prepareProtectedRuntime(home, env) {
   if (!env.RAINBOND_URL || !env.RAINBOND_JWT) return;
   let origin;
@@ -21,29 +18,13 @@ function prepareProtectedRuntime(home, env) {
   } catch {
     return;
   }
-  const { createEnvironmentRegistry } = require("../rainbond-platform-installer/scripts/environment-registry.js");
-  const { createEnvironmentCredentialStore } = require("../rainbond-platform-installer/scripts/environment-credentials.js");
-  const { createRuntimeOperationStore } = require("../rainbond-platform-installer/scripts/runtime-operations.js");
-  const registry = createEnvironmentRegistry({ home, randomUUID: () => ENVIRONMENT_ID });
-  const environment = registry.add({
-    name: "API bridge test",
+  const { createSingleRuntimeStore } = require("../rainbond-platform-installer/scripts/single-runtime.js");
+  createSingleRuntimeStore({ home }).write({
     kind: "private",
     consoleOrigin: origin,
-    connectionState: "connected",
-  }).environment;
-  createEnvironmentCredentialStore({ home }).write({
-    environmentId: environment.id,
-    origin,
     token: env.RAINBOND_JWT,
+    allowInsecureHttp: origin.startsWith("http://"),
   });
-  const operations = createRuntimeOperationStore({ home, registry });
-  if (!operations.read(RUNTIME_OPERATION_ID)) {
-    operations.begin({
-      operationId: RUNTIME_OPERATION_ID,
-      environmentId: environment.id,
-      intent: { type: "deploy", project_root: "/workspace/demo" },
-    });
-  }
   const manifestDirectory = path.join(home, ".rainbond", "bin");
   const content = "---\nname: rainbond-app-assistant\n---\n# App assistant\n";
   const digest = require("node:crypto").createHash("sha256").update(content).digest("hex");
@@ -67,21 +48,15 @@ function prepareProtectedRuntime(home, env) {
 }
 
 function prepareConnectedEnvironment(home, origin, token) {
-  const { createEnvironmentRegistry } = require("../rainbond-platform-installer/scripts/environment-registry.js");
-  const { createEnvironmentCredentialStore } = require("../rainbond-platform-installer/scripts/environment-credentials.js");
-  const registry = createEnvironmentRegistry({ home, randomUUID: () => ENVIRONMENT_ID });
-  const environment = registry.add({
-    name: "One-shot query environment",
+  const { createSingleRuntimeStore } = require("../rainbond-platform-installer/scripts/single-runtime.js");
+  const runtime = createSingleRuntimeStore({ home });
+  runtime.write({
     kind: "private",
     consoleOrigin: origin,
-    connectionState: "connected",
-  }).environment;
-  createEnvironmentCredentialStore({ home }).write({
-    environmentId: environment.id,
-    origin,
     token,
+    allowInsecureHttp: origin.startsWith("http://"),
   });
-  return { environment, registry };
+  return { runtime };
 }
 
 function runRawBridge(args, { home, input = "" } = {}) {
@@ -114,7 +89,7 @@ function runBridge(args, {
   return new Promise((resolve, reject) => {
     const actualHome = home || fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-bridge-home-"));
     prepareProtectedRuntime(actualHome, env);
-    const commandArgs = [...args, "--operation-id", RUNTIME_OPERATION_ID];
+    const commandArgs = [...args];
     if (includeSkillBinding) {
       commandArgs.push("--skill-id", skillId);
       if (args[0] === "call") {
@@ -273,7 +248,7 @@ function measureContextBytes({ tools, structuredResult }) {
   };
 }
 
-test("configuration safely parses mcp.env and lets environment values win", () => {
+test("configuration requires paired environment overrides", () => {
   const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-bridge-config-"));
   const configDir = path.join(tempHome, ".rainbond");
   const marker = path.join(tempHome, "must-not-exist");
@@ -291,20 +266,28 @@ test("configuration safely parses mcp.env and lets environment values win", () =
   );
 
   const { loadConfig, REQUEST_TIMEOUT_MS } = require(bridgePath);
-  const config = loadConfig({
-    env: { RAINBOND_URL: "https://from-env.example/root" },
+  assert.throws(() => loadConfig({
+    env: {
+      RAINSKILLS_CREDENTIAL_SOURCE: "environment",
+      RAINBOND_URL: "https://from-env.example/root",
+    },
     homeDir: tempHome,
-  });
+  }), /provided together/);
+  const config = loadConfig({ env: {
+    RAINSKILLS_CREDENTIAL_SOURCE: "environment",
+    RAINBOND_URL: "https://from-env.example/root",
+    RAINBOND_JWT: "override.payload.signature",
+  }, homeDir: tempHome });
 
   assert.deepEqual(config, {
     baseUrl: "https://from-env.example/root",
-    jwt: "file-token'suffix",
+    jwt: "override.payload.signature",
   });
   assert.equal(REQUEST_TIMEOUT_MS, 180_000);
   assert.equal(fs.existsSync(marker), false);
 });
 
-test("protected commands parse the Skill binding as global operation context", () => {
+test("protected commands parse a Skill binding without runtime operation context", () => {
   const { parseCommand } = require(bridgePath);
 
   const cases = [
@@ -333,17 +316,15 @@ test("protected commands parse the Skill binding as global operation context", (
   for (const [commandArgs, expected] of cases) {
     assert.deepEqual(parseCommand([
       ...commandArgs,
-      "--operation-id", RUNTIME_OPERATION_ID,
       "--skill-id", "rainbond-app-assistant",
     ]), {
       ...expected,
-      operationId: RUNTIME_OPERATION_ID,
       skillId: "rainbond-app-assistant",
     });
   }
 
   assert.throws(
-    () => parseCommand(["list", "--operation-id", RUNTIME_OPERATION_ID]),
+    () => parseCommand(["list"]),
     /every tools command requires --skill-id <active-skill-id>/
   );
 });
@@ -354,14 +335,12 @@ test("call parsing keeps valid base syntax separate from mutable-call authorizat
   assert.deepEqual(
     parseCommand([
       "call", "rainbond_create_app", "--input", "-",
-      "--operation-id", RUNTIME_OPERATION_ID,
       "--skill-id", "rainbond-app-assistant",
     ]),
     {
       command: "call",
       toolName: "rainbond_create_app",
       input: "-",
-      operationId: RUNTIME_OPERATION_ID,
       skillId: "rainbond-app-assistant",
     }
   );
@@ -371,24 +350,21 @@ test("call parsing keeps valid base syntax separate from mutable-call authorizat
       "call", "rainbond_create_app", "--input", "-",
       "--skill-id", "rainbond-app-assistant",
       "--root-skill-id", "rainbond-app-assistant",
-      "--confirm", RUNTIME_OPERATION_ID,
-      "--operation-id", RUNTIME_OPERATION_ID,
+      "--confirm", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
     ]),
     {
       command: "call",
       toolName: "rainbond_create_app",
       input: "-",
-      operationId: RUNTIME_OPERATION_ID,
       skillId: "rainbond-app-assistant",
       rootSkillId: "rainbond-app-assistant",
-      confirmation: RUNTIME_OPERATION_ID,
+      confirmation: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
     }
   );
 
   assert.throws(
     () => parseCommand([
       "call", "rainbond_create_app", "--input", "-", "--unknown", "value",
-      "--operation-id", RUNTIME_OPERATION_ID,
       "--skill-id", "rainbond-app-assistant",
     ]),
     /unsupported call option: --unknown/
@@ -397,7 +373,6 @@ test("call parsing keeps valid base syntax separate from mutable-call authorizat
   assert.throws(
     () => parseCommand([
       "call", "rainbond_create_app", "--input", "-", "--skill-id",
-      "--operation-id", RUNTIME_OPERATION_ID,
     ]),
     /every tools command requires --skill-id <active-skill-id>/
   );
@@ -407,7 +382,6 @@ test("call parsing keeps valid base syntax separate from mutable-call authorizat
       "call", "rainbond_create_app", "--input", "-",
       "--skill-id", "rainbond-app-assistant",
       "--skill-id", "rainbond-app-assistant",
-      "--operation-id", RUNTIME_OPERATION_ID,
     ]),
     /every tools command requires --skill-id <active-skill-id>/
   );
@@ -523,7 +497,7 @@ test("schema validation covers Console enums, arrays, alternatives, and map valu
   assert.match(validateSchemaValue({ operation: "add", app_id: 12, unexpected: true }, schema, "$input"), /unsupported field/);
 });
 
-test("protected catalog commands reject a Skill that does not match the operation intent", async () => {
+test("catalog commands no longer depend on a runtime intent binding", async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-bridge-wrong-skill-"));
   const result = await runBridge(["list"], {
     env: {
@@ -534,8 +508,8 @@ test("protected catalog commands reject a Skill that does not match the operatio
     skillId: "rainbond-template-installer",
   });
 
-  assert.equal(result.code, 3);
-  assert.match(result.stderr, /Skill does not match the protected runtime operation intent/);
+  assert.notEqual(result.code, 3);
+  assert.doesNotMatch(result.stderr, /runtime operation intent/);
 });
 
 test("status, compact list, describe, and call use the dedicated JSON-RPC endpoint", async () => {
@@ -725,7 +699,7 @@ test("read executes only read-classified tools and rejects writes before network
   });
 });
 
-test("platform query uses the saved default environment without creating a runtime operation", async () => {
+test("platform query uses the single runtime without creating a runtime operation", async () => {
   await withRpcServer((record, response) => {
     assert.equal(record.body.method, "tools/call");
     assert.deepEqual(record.body.params, {
@@ -739,7 +713,7 @@ test("platform query uses the saved default environment without creating a runti
   }, async (baseUrl, requests) => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-one-shot-query-"));
     const token = "bridge-jwt.payload.signature";
-    const { registry } = prepareConnectedEnvironment(
+    prepareConnectedEnvironment(
       home,
       new URL(baseUrl).origin,
       token
@@ -748,6 +722,7 @@ test("platform query uses the saved default environment without creating a runti
     const result = await runRawBridge([
       "query", "rainbond_query_components",
       "--input", "-",
+      "--skill-id", "rainbond-platform-query",
     ], {
       home,
       input: JSON.stringify({ enterprise_id: "enterprise-1", app_id: 1 }),
@@ -756,9 +731,7 @@ test("platform query uses the saved default environment without creating a runti
     assert.equal(result.code, 0, result.stderr);
     assert.deepEqual(JSON.parse(result.stdout), { items: [{ service_cname: "web" }] });
     assert.equal(requests.length, 1);
-    const { createRuntimeOperationStore } = require("../rainbond-platform-installer/scripts/runtime-operations.js");
-    const operations = createRuntimeOperationStore({ home, registry }).list();
-    assert.deepEqual(operations, []);
+    assert.equal(fs.existsSync(path.join(home, ".rainbond", "rainskills", "operations")), false);
   });
 });
 
@@ -801,6 +774,7 @@ test("one-shot team query resolves the current enterprise inside the CLI", async
 
     const result = await runRawBridge([
       "query", "rainbond_query_teams", "--input", "-",
+      "--skill-id", "rainbond-platform-query",
     ], { home, input: "{}" });
 
     assert.equal(result.code, 0, result.stderr);
@@ -913,20 +887,20 @@ test("one-shot platform query rejects unbound tools before state or network acce
     response.end();
   }, async (baseUrl, requests) => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-one-shot-query-reject-"));
-    const { registry } = prepareConnectedEnvironment(
+    prepareConnectedEnvironment(
       home,
       new URL(baseUrl).origin,
       "bridge-jwt.payload.signature"
     );
     const result = await runRawBridge([
       "query", "rainbond_create_app", "--input", "-",
+      "--skill-id", "rainbond-platform-query",
     ], { home, input: "{}" });
 
     assert.equal(result.code, 2);
     assert.match(result.stderr, /platform query tool is not allowed/i);
     assert.equal(requests.length, 0);
-    const { createRuntimeOperationStore } = require("../rainbond-platform-installer/scripts/runtime-operations.js");
-    assert.deepEqual(createRuntimeOperationStore({ home, registry }).list(), []);
+    assert.equal(fs.existsSync(path.join(home, ".rainbond", "rainskills", "operations")), false);
   });
 });
 
@@ -996,7 +970,7 @@ test("call preserves only the explicit unauthenticated package upload mode", asy
   });
 });
 
-test("package-upload resolves the Console origin from the protected operation", async () => {
+test("package-upload resolves the Console origin from the single runtime", async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-package-upload-home-"));
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-package-upload-workspace-"));
   const archive = path.join(workspace, "web release.zip");

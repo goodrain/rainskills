@@ -64,7 +64,7 @@
     "test:runtime-version": "node --test tests/runtime-version-sync.test.js",
     "test:runtime-contracts": "node scripts/sync-runtime-contracts.mjs --check",
     "test:auto-update": "node --test tests/auto-update.test.js",
-    "test:launcher": "node --test tests/console-origin.test.js tests/environment-credentials.test.js tests/environment-registry.test.js tests/local-runtime-cli.test.js tests/local-cli-installer.test.js tests/npx-launcher.test.js tests/runtime-credentials.test.js tests/runtime-intents.test.js tests/runtime-operations.test.js tests/runtime-state.test.js tests/cli-only-transport.test.js tests/skill-manifest-builder.test.js",
+    "test:launcher": "node --test tests/console-origin.test.js tests/local-cli-installer.test.js tests/npx-launcher.test.js tests/runtime-state.test.js tests/single-runtime.test.js tests/single-runtime-cli.test.js tests/single-runtime-launcher.test.js tests/skill-manifest-builder.test.js",
     "test:api-bridge": "node --test tests/api-bridge.test.js",
     "test:console-contract": "python3 tests/console_tool_contract_test.py",
     "test:skill-profile": "node --test tests/skill-profile-builder.test.js tests/markdown-link-integrity.test.js",

@@ -6,95 +6,124 @@ description: "Use only when the user explicitly asks to initialize or link a loc
 # Rainbond Project Init
 
 <!-- rainskills-runtime-gate:start -->
-## 运行环境门禁（最高优先级）
+## 单运行环境 CLI 门禁（最高优先级）
 
-### CLI 调用格式（强制）
+本机只允许连接一个 Rainbond 运行环境。当前 Skill 在本会话第一次调用 Rainbond 前，执行固定 launcher 的 `runtime status --json`。返回 `connected` 且 `usable=true` 后，所有查询和变更直接通过本地 `~/.rainbond/bin/rainskills-tools.js` 执行。不得配置或直接调用客户端 MCP，不得执行环境枚举或业务 operation 生命周期命令，也不得生成或传递运行环境 ID、业务 operation ID 或 intent JSON。
 
-所有可变 `call` 都必须使用完整 argv：`call <tool> --input - --operation-id <uuid> --skill-id rainbond-project-init`。CLI 返回确认 ID 后，只能在同一 argv 末尾加入 `--confirm <confirmation-id>`；不得省略 `--skill-id`、猜测参数，或根据泛化错误反复重试。
+没有运行环境时，让用户选择 Rainbond Cloud 或一个已有/新建的私有 Rainbond，并执行对应的 `runtime connect`。连接和重新授权必须进入浏览器 Device Flow，不复用 Shell 中缓存的 JWT；新凭据通过 live probe 后才覆盖唯一运行环境。CLI 返回 401 时，只读调用可在 `runtime reconnect` 成功后重试一次；写调用不得自动重放，必须先查询平台真实状态。403 直接停止，不重新授权。
 
-### 多运行环境操作契约
+`context resolve` 是无状态调用：单一工作空间直接返回上下文，多个候选返回组合选项；用户选择后由当前任务直接携带 team/region 参数，不执行 `context select`，不写本地 operation。所有可变 `call` 仍需先取得 confirmation ID，再以完全相同的输入追加 `--confirm` 执行一次。
 
-  Node.js 前置检查通过后，每次请求先执行本地 launcher + `["environment", "list", "--json"]`，按用户明确指定的运行环境选择不可变环境 ID；未指定时只用全局默认环境，默认不可用时停止且不回退。生成 UUID 后执行本地 launcher + `["operation", "begin", "--operation-id", "<uuid>", "--environment-id", "<id>", "--intent-json", "<intent-json>"]`，并在之后每个 Rainbond MCP 调用中加入 `rainskills_operation_id`。环境、团队和应用只属于本次操作，禁止保存项目绑定；同一项目可以部署到多个环境。明确“团队”表示环境内团队；明确“运行环境/平台”表示环境；裸名称同时匹配环境和团队时必须询问。
-
-第一步检查 Node.js 是否存在且主版本不低于 18。Node.js 缺失或低于 18 时，只说明“Rainskills 执行组件需要 Node.js 18 或更高版本”并停止：不选择运行环境，不调用 MCP，不猜测替代命令。只有用户或 agent 明确同意后才安装或升级 Node.js，再从同一原始 intent 继续。
-
-固定 launcher 是 `["node", "<home>/.rainbond/lib/rainskills/bin/rainskills.js"]`；运行包版本标记为 `rainskills@0.1.18`，且必须与本技能包 `package.json` 一致。把 launcher 与参数拼成 argv 数组直接执行，禁止 `rainskills@latest` 或执行 shell 字符串。
-
-本地 launcher 必须从当前 Skill 所在目录的同级目录定位 `rainbond-platform-installer/scripts/local-runtime.js`，解析为绝对路径后使用 `["node", "<绝对路径>"]` 执行。`environment list`、`operation begin`、`operation complete` 和 `runtime message` 只能使用本地 launcher；本地 launcher 只读取已安装文件和本机受保护状态，不得访问 npm 或其它网络。只有用户选定连接或安装运行环境后，才使用上面的固定本地 launcher。
-
-所有 Rainbond 查询和变更必须通过本地 `~/.rainbond/bin/rainskills-tools.js` 执行，并绑定本次 operation ID。禁止 Agent 直接调用 Rainbond MCP，也不得启动本地 Rainskills MCP 服务；只允许执行 CLI 返回的结构化结果与确认续接 argv。
-
-业务操作开始后，必须使用 runtime contract 的 `input_commands.context-resolve` 完整 argv 和配套 stdin。返回 `resolved` 时只使用该 operation 已保存的企业、工作空间和集群上下文；返回 `needs-selection` 时，把 CLI 返回的“工作空间 + 集群”组合选项一次性列给用户，不得逐项询问，也不得让用户提供 enterprise_id。用户选择后必须使用 `input_commands.context-select` 的完整 argv 和配套 stdin；选择成功后继续原操作，同一 operation 不再重复查询上下文。
-
-只有 CLI 返回并通过校验的 `rainskills.next-action.v1` argv 才能执行续接。普通失败一律禁止自动重试：不得再次执行原命令，不得执行 `--help`、`sleep`、`rg`、`grep`，不得搜索 Rainskills 源码；同一 `operation complete` 最多执行一次。
-
-<!-- rainskills-runtime-contract:start -->
 ```json
 {
-  "schema": "rainskills.skill-runtime-contract.v1",
+  "schema": "rainskills.single-runtime-contract.v1",
   "package_version": "rainskills@0.1.18",
-  "launcher": ["node", "<home>/.rainbond/lib/rainskills/bin/rainskills.js"],
-  "local_launcher": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js"],
-  "local_argv": {
-    "environment-list": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js", "environment", "list", "--json"],
-    "operation-begin-default": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js", "operation", "begin", "--operation-id", "<uuid>", "--intent-json", "<intent-json>"],
-    "operation-begin-selected": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js", "operation", "begin", "--operation-id", "<uuid>", "--environment-id", "<environment-id>", "--intent-json", "<intent-json>"],
-    "operation-complete": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js", "operation", "complete", "--operation-id", "<uuid>"],
-    "runtime-message": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js", "runtime", "message", "--id", "<message-id>"]
-  },
-  "intents": {
-    "project-init": {
-      "type": "project-init",
-      "required": ["type", "project_root"],
-      "optional": ["source_kind", "source_url", "image_ref"],
-      "enums": {
-        "source_kind": ["local", "git", "image", "package"]
-      },
-      "example": {
-        "type": "project-init",
-        "project_root": "/workspace/app",
-        "source_kind": "local"
-      }
-    }
-  },
-  "routes": {
-    "new": ["saas", "private-existing", "install-private"]
-  },
-  "connect_argv": {
-    "saas": ["node", "<home>/.rainbond/lib/rainskills/bin/rainskills.js", "runtime", "connect", "<target>", "--saas", "--intent-json", "<intent-json>"],
-    "private-existing": ["node", "<home>/.rainbond/lib/rainskills/bin/rainskills.js", "runtime", "connect", "<target>", "--rainbond-url", "<rainbond-url>", "--intent-json", "<intent-json>"],
-    "install-private": ["node", "<home>/.rainbond/lib/rainskills/bin/rainskills.js", "runtime", "connect", "<target>", "--install-private", "--location", "<private-location>", "--intent-json", "<intent-json>"]
+  "runtime_status": [
+    "node",
+    "<home>/.rainbond/lib/rainskills/bin/rainskills.js",
+    "runtime",
+    "status",
+    "--json"
+  ],
+  "runtime_connect": {
+    "saas": [
+      "node",
+      "<home>/.rainbond/lib/rainskills/bin/rainskills.js",
+      "runtime",
+      "connect",
+      "<target>",
+      "--saas"
+    ],
+    "private_existing": [
+      "node",
+      "<home>/.rainbond/lib/rainskills/bin/rainskills.js",
+      "runtime",
+      "connect",
+      "<target>",
+      "--rainbond-url",
+      "<console-origin>"
+    ],
+    "install_private": [
+      "node",
+      "<home>/.rainbond/lib/rainskills/bin/rainskills.js",
+      "runtime",
+      "connect",
+      "<target>",
+      "--install-private",
+      "--location",
+      "<local-or-server>"
+    ],
+    "reconnect": [
+      "node",
+      "<home>/.rainbond/lib/rainskills/bin/rainskills.js",
+      "runtime",
+      "reconnect",
+      "<target>"
+    ]
   },
   "input_commands": {
-    "context-resolve": {
-      "argv": ["node", "<home>/.rainbond/bin/rainskills-tools.js", "context", "resolve", "--input", "-", "--operation-id", "<uuid>", "--skill-id", "rainbond-project-init"],
+    "context_resolve": {
+      "argv": [
+        "node",
+        "<home>/.rainbond/bin/rainskills-tools.js",
+        "context",
+        "resolve",
+        "--input",
+        "-",
+        "--skill-id",
+        "rainbond-project-init"
+      ],
       "stdin": {
-        "required": ["enterprise", "workspace"]
-      }
-    },
-    "context-select": {
-      "argv": ["node", "<home>/.rainbond/bin/rainskills-tools.js", "context", "select", "--input", "-", "--operation-id", "<uuid>", "--skill-id", "rainbond-project-init"],
-      "stdin": {
-        "selection_id": "<selection-id>",
-        "option_id": "<option-id>"
+        "required": [
+          "enterprise",
+          "workspace"
+        ]
       }
     },
     "read": {
-      "argv": ["node", "<home>/.rainbond/bin/rainskills-tools.js", "read", "<tool>", "--input", "-", "--operation-id", "<uuid>", "--skill-id", "rainbond-project-init"],
+      "argv": [
+        "node",
+        "<home>/.rainbond/bin/rainskills-tools.js",
+        "read",
+        "<tool>",
+        "--input",
+        "-",
+        "--skill-id",
+        "rainbond-project-init"
+      ],
       "stdin_schema_source": "tool-catalog"
     },
     "call": {
-      "argv": ["node", "<home>/.rainbond/bin/rainskills-tools.js", "call", "<tool>", "--input", "-", "--operation-id", "<uuid>", "--skill-id", "rainbond-project-init"],
+      "argv": [
+        "node",
+        "<home>/.rainbond/bin/rainskills-tools.js",
+        "call",
+        "<tool>",
+        "--input",
+        "-",
+        "--skill-id",
+        "rainbond-project-init"
+      ],
       "stdin_schema_source": "tool-catalog"
+    },
+    "call_confirm": {
+      "argv": [
+        "node",
+        "<home>/.rainbond/bin/rainskills-tools.js",
+        "call",
+        "<tool>",
+        "--input",
+        "-",
+        "--skill-id",
+        "rainbond-project-init",
+        "--confirm",
+        "<confirmation-id>"
+      ],
+      "stdin_schema_source": "same-confirmed-input"
     }
   }
 }
 ```
-<!-- rainskills-runtime-contract:end -->
-
-target 只允许 `codex`、`claude`、`pi`、`all`。校验 intent 后只执行 new scope 的完整 argv；只消费 schema 为 `rainskills.next-action.v1` 且校验后的 `argv` 数组。
-
-连接完成后用固定 `onboarding-id` 执行 launcher + `["intent", "resume", "--onboarding-id", "<同一 onboarding-id>"]`，恢复原始 intent 和 `resume_step`。401 先执行 launcher + `["runtime", "record-failure", "--onboarding-id", "<同一 onboarding-id>", "--step", "<当前固定步骤>", "--reason", "credential-expired"]`，再仅一次执行 launcher + `["runtime", "reconnect", "--onboarding-id", "<同一 onboarding-id>"]` 后 resume，只重试该步骤；第二次 401 停止。403 执行 launcher + `["runtime", "record-failure", "--onboarding-id", "<同一 onboarding-id>", "--step", "<当前固定步骤>", "--reason", "permission-denied"]` 后停止，不得 reconnect、重新授权或自动重试。
 <!-- rainskills-runtime-gate:end -->
 
 受限沙箱（包括 Codex）执行本地状态命令时，必须申请用户级受保护目录访问权限；在 Codex 中使用 `require_escalated`。不得修改 `~/.rainbond` 权限、复制受保护状态到工作区，或因沙箱权限错误建议重装。

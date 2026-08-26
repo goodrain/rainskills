@@ -11,7 +11,6 @@ const readline = require("node:readline/promises");
 const { spawn, spawnSync } = require("node:child_process");
 const { createSecureStateStore } = require("./secure-state.js");
 const { writeUserMessage } = require("./user-message.js");
-const { assertIntentCanInstallNewPlatform, validateIntent } = require("./runtime-intents.js");
 const {
   selectPlatformRoute,
   validatePersistedRouteTuple,
@@ -256,6 +255,9 @@ function readOnboardingState(filePath, expectedOperationId, stateStore = secureS
   if (state.deployment_mode !== "self-hosted") {
     throw new Error("状态文件不是私有化部署流程");
   }
+  if (Object.hasOwn(state, "intent")) {
+    throw new Error("平台 onboarding 状态不能包含业务 intent");
+  }
   if (state.control_mode !== undefined) {
     if (!["windows-native", "wsl", "posix"].includes(state.control_mode)) {
       throw new Error("状态文件中的 control_mode 无效");
@@ -268,9 +270,6 @@ function readOnboardingState(filePath, expectedOperationId, stateStore = secureS
     } else if (distro !== null && distro !== undefined) {
       throw new Error("非 WSL 状态不能包含 control_distro");
     }
-  }
-  if (state.intent !== undefined && state.intent !== null) {
-    state.intent = validateIntent(state.intent);
   }
   return state;
 }
@@ -2305,7 +2304,6 @@ async function installWindowsRainbond({ adapter, onboarding, options, paths, sta
 
 function resumeInvocationForOnboarding(onboarding, execPath = process.execPath) {
   assertOperationId(onboarding.operation_id);
-  const intent = validateIntent(onboarding.intent);
   const args = [
     path.resolve(__dirname, "..", "..", "bin", "rainskills.js"),
     "runtime",
@@ -2315,29 +2313,9 @@ function resumeInvocationForOnboarding(onboarding, execPath = process.execPath) 
     onboarding.console_url,
   ];
   if (onboarding.console_url.startsWith("http://")) args.push("--allow-insecure-http");
-  args.push(
-    "--onboarding-id",
-    onboarding.operation_id,
-    "--intent-json",
-    JSON.stringify(intent)
-  );
   return {
     executable: execPath,
     args,
-  };
-}
-
-function intentResumeInvocationForOnboarding(onboarding, execPath = process.execPath) {
-  assertOperationId(onboarding.operation_id);
-  return {
-    executable: execPath,
-    args: [
-      path.resolve(__dirname, "..", "..", "bin", "rainskills.js"),
-      "intent",
-      "resume",
-      "--onboarding-id",
-      onboarding.operation_id,
-    ],
   };
 }
 
@@ -2433,10 +2411,7 @@ async function runResume(onboardingId, {
   consoleReadiness = waitForWindowsConsole,
   onboardingUpdater = updateOnboarding,
   invocationBuilder = resumeInvocationForOnboarding,
-  intentInvocationBuilder = intentResumeInvocationForOnboarding,
-  credentialReader = null,
   environment = process.env,
-  credentialHome = environment.USERPROFILE || environment.HOME || os.homedir(),
   attachedRunner = spawnAttached,
   write = (value) => process.stdout.write(value),
   abortState = null,
@@ -2535,63 +2510,6 @@ async function runResume(onboardingId, {
     if (result.code !== 0) {
       write(`\nRainbond 已部署，授权尚未完成。稍后继续：\n  npx rainskills@${packageManifest.version} resume --onboarding-id ${onboardingId}\n`);
       throw new Error(`RainSkills 授权流程退出码为 ${result.code}`);
-    }
-    let latestCredential;
-    try {
-      assertHostOperationActive(abortState);
-      if (credentialReader) {
-        latestCredential = await credentialReader({
-          expectedOrigin: onboarding.console_url,
-          home: credentialHome,
-          platform: onboarding.control_mode === "windows-native" ? "win32" : process.platform,
-        });
-      } else {
-        const credentialPlatform = onboarding.control_mode === "windows-native" ? "win32" : process.platform;
-        const { createEnvironmentRegistry } = require("./environment-registry.js");
-        const { createEnvironmentCredentialStore } = require("./environment-credentials.js");
-        const { createRuntimeOperationStore } = require("./runtime-operations.js");
-        const registry = createEnvironmentRegistry({
-          platform: credentialPlatform,
-          home: credentialHome,
-        });
-        const operations = createRuntimeOperationStore({
-          platform: credentialPlatform,
-          home: credentialHome,
-          registry,
-        });
-        const operation = operations.read(onboardingId);
-        if (!operation?.environment_id) throw new Error("运行环境操作尚未绑定环境");
-        latestCredential = createEnvironmentCredentialStore({
-          platform: credentialPlatform,
-          home: credentialHome,
-        }).read({
-          environmentId: operation.environment_id,
-          expectedOrigin: onboarding.console_url,
-        });
-      }
-      assertHostOperationActive(abortState);
-    } catch {
-      write(`\n运行环境已连接，但无法安全读取最新凭据。稍后继续：\n  npx rainskills@${packageManifest.version} resume --onboarding-id ${onboardingId}\n`);
-      throw new Error("无法安全读取与当前 Rainbond origin 匹配的最新运行凭据");
-    }
-    const intentEnvironment = {
-      ...resumeEnvironment,
-      RAINBOND_JWT: latestCredential.token,
-      RAINBOND_URL: latestCredential.origin,
-    };
-    const intentInvocation = intentInvocationBuilder(onboarding);
-    assertHostOperationActive(abortState);
-    const intentResult = await attachedRunner(
-      intentInvocation.executable,
-      intentInvocation.args,
-      { env: intentEnvironment },
-      null
-    );
-    assertHostOperationActive(abortState);
-    if (intentResult.signal || intentResult.code !== 0) {
-      write(`\n运行环境已连接，原始操作尚未恢复。稍后继续：\n  npx rainskills@${packageManifest.version} resume --onboarding-id ${onboardingId}\n`);
-      if (intentResult.signal) throw new Error(`原始 intent 恢复流程被信号 ${intentResult.signal} 中断`);
-      throw new Error(`原始 intent 恢复流程退出码为 ${intentResult.code}`);
     }
     if (windowsContext) {
       const adapter = windowsAdapterFactory(onboarding);
@@ -2794,9 +2712,6 @@ async function runInstallOperation(options, {
   let onboarding = onboardingReader(onboardingPath, options.onboardingId);
   if (!["awaiting-platform", "platform-ready", "authorizing"].includes(onboarding.stage)) {
     throw new Error(`当前 onboarding 阶段不能安装平台：${onboarding.stage}`);
-  }
-  if (onboarding.stage === "awaiting-platform" && onboarding.intent) {
-    onboarding = { ...onboarding, intent: assertIntentCanInstallNewPlatform(onboarding.intent) };
   }
   if (onboarding.stage === "platform-ready" || onboarding.stage === "authorizing") {
     if (!options.noResume) await runResume(options.onboardingId);
@@ -3377,7 +3292,6 @@ module.exports = {
   evaluatePreflight,
   extractConsoleUrl,
   inspectRemoteSystem,
-  intentResumeInvocationForOnboarding,
   normalizeConsoleHost,
   normalizeRainbondImage,
   normalizeRemoteTarget,

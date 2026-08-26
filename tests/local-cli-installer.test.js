@@ -68,7 +68,7 @@ test("local CLI installer publishes a protected stable bridge and removes only l
     "lib",
     "rainbond-platform-installer",
     "scripts",
-    "runtime-operations.js"
+    "single-runtime.js"
   );
   assert.equal(fs.existsSync(bridge), true);
   assert.equal(fs.existsSync(manifest), true);

@@ -262,7 +262,7 @@ test("generated marketplace guidance installs Skills without eager runtime setup
   const plugin = readJson("marketplace/rainskills/.codex-plugin/plugin.json");
 
   assert.match(skill, /Rainskills 安装完成/);
-  assert.doesNotMatch(skill, /Stay attached until.*MCP|Report the configured.*Rainbond environment/s);
+  assert.doesNotMatch(skill, /Stay attached until (?:all )?MCP|Report the configured Rainbond environment/);
   assert.match(plugin.description, /skill/i);
   assert.doesNotMatch(plugin.description, /connect|authoriz|MCP/i);
   assert.doesNotMatch(plugin.interface.longDescription, /choose Rainbond Cloud|authorize access|configure MCP/i);

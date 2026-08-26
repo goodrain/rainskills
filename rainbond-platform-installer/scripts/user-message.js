@@ -18,15 +18,6 @@ const USER_MESSAGES = Object.freeze({
       "2) 私有环境（去对接）",
     ].join("\n"),
   },
-  "add-environment-location": {
-    messageId: "runtime.add-environment-location",
-    message: [
-      "请选择要添加的运行环境：",
-      "",
-      "1) 云端环境（免费体验）",
-      "2) 私有环境（去对接）",
-    ].join("\n"),
-  },
   "private-console-origin": {
     messageId: "runtime.private-console-origin",
     message: [
@@ -78,48 +69,9 @@ function renderCatalogUserMessage(id, { controlPlatform = process.platform } = {
   return renderUserMessage(entry.messageId, entry.message);
 }
 
-function renderEnvironmentConnectedList({
-  environments,
-  defaultEnvironmentId,
-  addedEnvironmentId,
-}) {
-  if (!Array.isArray(environments) || environments.length === 0) {
-    throw new Error("运行环境列表无效");
-  }
-  const defaultEnvironment = environments.find((entry) => entry.id === defaultEnvironmentId);
-  const addedEnvironment = environments.find((entry) => entry.id === addedEnvironmentId);
-  if (!defaultEnvironment || !addedEnvironment) {
-    throw new Error("运行环境列表缺少默认环境或新增环境");
-  }
-  const kindLabel = (kind) => kind === "saas" ? "在线环境" : "私有环境";
-  const stateLabel = (state) => ({
-    connected: "已连接",
-    "needs-reconnect": "需要重新授权",
-    unavailable: "不可用",
-  })[state] || "状态未知";
-  const lines = environments.map((environment) => {
-    const labels = [kindLabel(environment.kind), stateLabel(environment.connection_state)];
-    if (environment.id === defaultEnvironmentId) labels.push("默认");
-    if (environment.id === addedEnvironmentId) labels.push("刚新增");
-    return `- ${environment.name}（${labels.join("，")}）`;
-  });
-  return renderUserMessage("runtime.environment-connected-list", [
-    "新环境已对接成功。",
-    "",
-    "当前运行环境：",
-    "",
-    ...lines,
-    "",
-    defaultEnvironmentId === addedEnvironmentId
-      ? `全局默认环境是：${defaultEnvironment.name}`
-      : `全局默认环境仍是：${defaultEnvironment.name}`,
-  ].join("\n"));
-}
-
 module.exports = {
   privateDeploymentLocationMessage,
   renderUserMessage,
   renderCatalogUserMessage,
-  renderEnvironmentConnectedList,
   writeUserMessage,
 };

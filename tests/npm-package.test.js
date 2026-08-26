@@ -151,15 +151,9 @@ test("packed artifact contains the installer and all skills but no development f
     "windows-auth.js",
     "windows-browser.ps1",
     "windows-client-config.js",
-    "windows-read-user-environment.ps1",
     "windows-platform.js",
     "windows-platform.ps1",
-    "runtime-credentials.js",
-    "environment-credentials.js",
-    "environment-registry.js",
-    "runtime-operations.js",
-    "local-runtime-commands.js",
-    "local-runtime.js",
+    "single-runtime.js",
     "auto-update-worker.js",
     "installed-version.js",
     "ssh-key-setup.js",
@@ -310,10 +304,10 @@ test("the packed default installer installs only Skills and prints the approved 
   assert.equal(fs.existsSync(path.join(home, ".codex", "skills", "rainbond-app-assistant", "SKILL.md")), true);
   const installedRootSkill = path.join(home, ".codex", "skills", "rainskills", "SKILL.md");
   assert.equal(fs.existsSync(installedRootSkill), true);
-  assert.match(fs.readFileSync(installedRootSkill, "utf8"), /"type":"environment-add"/);
+  assert.match(fs.readFileSync(installedRootSkill, "utf8"), /只保存一个全局运行环境/);
   assert.equal(fs.existsSync(path.join(home, ".rainbond", "bin", "rainskills-tools.js")), true);
   assert.equal(fs.existsSync(path.join(home, ".rainbond", "bin", "rainskills-skill-manifest.json")), true);
-  assert.equal(fs.existsSync(path.join(home, ".rainbond", "lib", "rainbond-platform-installer", "scripts", "runtime-operations.js")), true);
+  assert.equal(fs.existsSync(path.join(home, ".rainbond", "lib", "rainbond-platform-installer", "scripts", "single-runtime.js")), true);
   const installedRuntimeRoot = path.join(home, ".rainbond", "lib", "rainskills");
   assert.equal(fs.existsSync(path.join(installedRuntimeRoot, "bin", "rainskills.js")), true);
   assert.equal(fs.existsSync(path.join(installedRuntimeRoot, "install.sh")), true);

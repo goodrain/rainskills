@@ -38,8 +38,7 @@ const EMBEDDED_RUNTIME_CONTRACT = {
 };
 const FORBIDDEN_EMBEDDED_MARKERS = [
   "rainskills-tools.js",
-  "credentials.env",
-  "mcp.env",
+  "single-runtime-v1.json",
   "--api-only",
   "/console/mcp/rainskills/api/query",
 ];
@@ -112,7 +111,7 @@ function markdownFiles(root) {
 
 function transformEmbeddedNarrative(content) {
   return content.replace(
-    "user-level home directories as a whole (`~/.codex`, `~/.claude`, `~/.rainbond`, `~/.cache`, etc.). Only specific named files such as `~/.rainbond/credentials.env` are allowed when explicitly required by a configured workflow step.",
+    "user-level home directories as a whole (`~/.codex`, `~/.claude`, `~/.rainbond`, `~/.cache`, etc.). Only the protected `~/.rainbond/rainskills/single-runtime-v1.json` may be read by the configured CLI runtime.",
     "user-level home directories (`~/.codex`, `~/.claude`, `~/.rainbond`, `~/.cache`, etc.) and all named files under them. The embedded runtime never reads client credential files."
   ).replace(/\[([^\]]+)\]\((?:scripts|evals)\/[^)]*\)/g, "$1");
 }

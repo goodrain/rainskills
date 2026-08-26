@@ -74,7 +74,7 @@ required_markers:
     - "1、部署到本机"
     - "2、部署到独立服务器"
     - "3、部署到已有 Rainbond"
-    - "rainskills_operation_id"
+    - "本机只允许连接一个 Rainbond 运行环境"
   rainbond-fullstack-bootstrap:
     - "Do not use for a generic current-project deployment request"
     - "route that to `rainbond-app-assistant`"
