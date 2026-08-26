@@ -99,7 +99,7 @@ description: "Use whenever a user asks to deploy, run, deliver, publish, inspect
 ```json
 {
   "schema": "rainskills.single-runtime-contract.v1",
-  "package_version": "rainskills@0.1.18",
+  "package_version": "rainskills@0.1.20",
   "runtime_status": [
     "node",
     "<home>/.rainbond/lib/rainskills/bin/rainskills.js",

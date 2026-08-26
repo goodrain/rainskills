@@ -17,7 +17,7 @@ description: "Use only when the user explicitly asks to create the Rainbond app 
 ```json
 {
   "schema": "rainskills.single-runtime-contract.v1",
-  "package_version": "rainskills@0.1.18",
+  "package_version": "rainskills@0.1.20",
   "runtime_status": [
     "node",
     "<home>/.rainbond/lib/rainskills/bin/rainskills.js",
