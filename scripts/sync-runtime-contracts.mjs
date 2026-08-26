@@ -37,6 +37,14 @@ function runtimeGate(source, skillId) {
   return match[1];
 }
 
+function runtimeGateSource(skillId) {
+  const referencePath = path.join(root, skillId, "references", "runtime-gate.md");
+  const sourcePath = fs.existsSync(referencePath)
+    ? referencePath
+    : path.join(root, skillId, "SKILL.md");
+  return fs.readFileSync(sourcePath, "utf8");
+}
+
 function runtimeContract(gate, skillId) {
   const match = gate.match(/```json\n([\s\S]*?)\n```/);
   if (!match) throw new Error(`${skillId} 缺少单运行环境 JSON contract`);
@@ -57,7 +65,7 @@ function runtimeContract(gate, skillId) {
 }
 
 for (const skillId of skillIds) {
-  const source = fs.readFileSync(path.join(root, skillId, "SKILL.md"), "utf8");
+  const source = runtimeGateSource(skillId);
   const gate = runtimeGate(source, skillId);
   for (const value of forbidden) {
     if (gate.includes(value)) throw new Error(`${skillId} 仍包含已删除契约：${value}`);

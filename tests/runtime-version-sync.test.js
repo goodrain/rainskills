@@ -88,6 +88,26 @@ test("sync mode updates every canonical launcher and preserves floating and hist
   assert.equal(checkResult.status, 0, checkResult.stderr || checkResult.stdout);
 });
 
+test("sync mode uses a progressive runtime-gate reference as the canonical skill launcher", () => {
+  const root = createFixture();
+  const skillRoot = path.join(root, "rainbond-example");
+  const referenceRoot = path.join(skillRoot, "references");
+  const skillPath = path.join(skillRoot, "SKILL.md");
+  const gatePath = path.join(referenceRoot, "runtime-gate.md");
+  fs.mkdirSync(referenceRoot);
+  fs.writeFileSync(skillPath, "progressive root without an embedded launcher\n");
+  fs.writeFileSync(gatePath, "launcher: rainskills@0.1.7\n");
+
+  const result = runSync(root);
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.equal(
+    fs.readFileSync(skillPath, "utf8"),
+    "progressive root without an embedded launcher\n",
+  );
+  assert.match(fs.readFileSync(gatePath, "utf8"), /rainskills@2\.3\.4-rc\.1/);
+});
+
 test("the repository release documents match package.json", () => {
   const result = runSync(repoRoot, "--check");
   assert.equal(result.status, 0, result.stderr || result.stdout);

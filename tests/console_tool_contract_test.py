@@ -55,9 +55,13 @@ class RainskillsToolContractTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls.app_assistant = (
-            RAINSKILLS_ROOT / "rainbond-app-assistant/SKILL.md"
-        ).read_text(encoding="utf-8")
+        cls.app_assistant = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in (
+                RAINSKILLS_ROOT / "rainbond-app-assistant/SKILL.md",
+                RAINSKILLS_ROOT / "rainbond-app-assistant/references/workflow-rules.md",
+            )
+        )
         cls.bootstrap_creation = (
             RAINSKILLS_ROOT / "rainbond-fullstack-bootstrap/modules/30-creation-rules.md"
         ).read_text(encoding="utf-8")

@@ -229,7 +229,7 @@ test("npm artifact includes the marketplace entry without a Pi adapter", () => {
   assert.match(manifest.scripts.test, /npm run test:marketplace/);
   assert.equal(
     manifest.scripts["test:runtime-routing"],
-    "node --test tests/runtime-onboarding-routing.test.js && python3 tests/run_skill_routing_evals.py"
+    "node --test tests/runtime-onboarding-routing.test.js && python3 rainbond-app-assistant/scripts/validate_progressive_loading.py && python3 rainbond-app-assistant/scripts/validate_cross_skill_routing.py && python3 tests/run_skill_routing_evals.py"
   );
   assert.match(manifest.scripts.test, /npm run test:runtime-routing/);
   assert.equal(

@@ -23,8 +23,16 @@ const skillIds = [
   "rainbond-template-installer",
 ];
 
+function runtimeGateSource(skillId) {
+  const referencePath = path.join(root, skillId, "references", "runtime-gate.md");
+  const sourcePath = fs.existsSync(referencePath)
+    ? referencePath
+    : path.join(root, skillId, "SKILL.md");
+  return fs.readFileSync(sourcePath, "utf8");
+}
+
 function gate(skillId) {
-  const source = fs.readFileSync(path.join(root, skillId, "SKILL.md"), "utf8");
+  const source = runtimeGateSource(skillId);
   const match = source.match(
     /<!-- rainskills-runtime-gate:start -->([\s\S]*?)<!-- rainskills-runtime-gate:end -->/
   );
@@ -101,7 +109,7 @@ test("new-application Skills expose the four runtime choices without a private-e
     "rainbond-template-installer",
   ];
   for (const skillId of newApplicationSkillIds) {
-    const source = fs.readFileSync(path.join(root, skillId, "SKILL.md"), "utf8");
+    const source = runtimeGateSource(skillId);
     assert.match(
       source,
       /1\) 云端环境（免费体验）\s+2\) 本机环境\s+3\) 独立服务器\s+4\) 已有 Rainbond/,

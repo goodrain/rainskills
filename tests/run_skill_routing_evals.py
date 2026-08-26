@@ -39,6 +39,17 @@ def parse_frontmatter(skill_path: Path) -> dict[str, str]:
     return metadata
 
 
+def skill_contract_text(skill_path: Path) -> str:
+    texts = [skill_path.read_text(encoding="utf-8")]
+    references = skill_path.parent / "references"
+    if references.is_dir():
+        texts.extend(
+            path.read_text(encoding="utf-8")
+            for path in sorted(references.glob("*.md"))
+        )
+    return "\n".join(texts)
+
+
 def normalize(value: str) -> str:
     return "".join(character.lower() for character in value if character.isalnum())
 
@@ -135,7 +146,7 @@ def main() -> int:
     failures = 0
     for skill_name, markers in required_markers.items():
         skill_path = SKILL_FILES[skill_name]
-        text = skill_path.read_text(encoding="utf-8")
+        text = skill_contract_text(skill_path)
         for marker in markers:
             if marker not in text:
                 print(f"FAIL marker {skill_name}")

@@ -69,7 +69,7 @@
     "test:console-contract": "python3 tests/console_tool_contract_test.py",
     "test:skill-profile": "node --test tests/skill-profile-builder.test.js tests/markdown-link-integrity.test.js",
     "test:marketplace": "node --test tests/marketplace-entry.test.js",
-    "test:runtime-routing": "node --test tests/runtime-onboarding-routing.test.js && python3 tests/run_skill_routing_evals.py",
+    "test:runtime-routing": "node --test tests/runtime-onboarding-routing.test.js && python3 rainbond-app-assistant/scripts/validate_progressive_loading.py && python3 rainbond-app-assistant/scripts/validate_cross_skill_routing.py && python3 tests/run_skill_routing_evals.py",
     "test:telemetry": "node --test tests/telemetry.test.js",
     "test:platform": "node --test tests/platform-installer.test.js tests/host-cluster-installer.test.js tests/existing-kubernetes-installer.test.js tests/ssh-key-setup.test.js",
     "test:windows": "node --test tests/windows-onboarding.test.js tests/windows-platform.test.js",

@@ -183,7 +183,7 @@ function embeddedRuntimeContractSection() {
   return [
     "## Embedded Runtime Contract（最高优先级）",
     "",
-    "本 Skill 仅运行在 rainbond-agent 的 embedded runtime 中。本节覆盖本文件及其 modules/references 内与此冲突的客户端假设。",
+    "本 Skill 仅运行在 rainbond-agent 的 embedded profile/runtime 中。本节覆盖本文件及其 modules/references 内与此冲突的客户端假设。",
     "",
     "- 平台操作只通过当前会话的 `rainbond_*` Tool 执行；服务端负责身份委托、审批、审计、超时与轮询保护。",
     "- 不读取本机项目目录或 `.rainbond/` 文件，不读取用户主目录、凭据或环境变量，也不运行 shell、Node、curl 或本机 CLI。",
@@ -214,7 +214,10 @@ function replaceClientRuntimeBlocks(content, replacement, skillName) {
 
 function transformSkill(skillName, content) {
   let transformed = content;
-  if (skillName === "rainbond-app-assistant") {
+  const hasClientRuntimeBlocks = transformed.includes(
+    "<!-- rainskills-runtime-gate:start -->"
+  );
+  if (skillName === "rainbond-app-assistant" && hasClientRuntimeBlocks) {
     transformed = replaceClientRuntimeBlocks(
       transformed,
       `${embeddedTopLevelPreflight()}\n${embeddedRuntimeSection()}`,
@@ -228,7 +231,7 @@ function transformSkill(skillName, content) {
       "主要服务 CLI / Codex 端使用者",
       "主要服务本机 profile 使用者"
     );
-  } else {
+  } else if (hasClientRuntimeBlocks) {
     transformed = replaceClientRuntimeBlocks(
       transformed,
       embeddedTransportSection(),
@@ -281,6 +284,18 @@ function buildEmbeddedProfile({ source_root: sourceRoot, output, revision }) {
       const original = fs.readFileSync(markdownFile, "utf8");
       const sanitized = transformEmbeddedNarrative(original);
       if (sanitized !== original) fs.writeFileSync(markdownFile, sanitized, "utf8");
+    }
+    const runtimeGate = path.join(destination, "references", "runtime-gate.md");
+    if (fs.existsSync(runtimeGate)) {
+      const replacement = skillName === "rainbond-app-assistant"
+        ? `${embeddedTopLevelPreflight()}\n${embeddedRuntimeSection()}`
+        : embeddedTransportSection();
+      const transformedGate = replaceClientRuntimeBlocks(
+        fs.readFileSync(runtimeGate, "utf8"),
+        replacement,
+        `${skillName} runtime gate reference`
+      );
+      fs.writeFileSync(runtimeGate, transformedGate, { encoding: "utf8", mode: 0o600 });
     }
     const skillFile = path.join(destination, "SKILL.md");
     const transformed = transformSkill(skillName, fs.readFileSync(skillFile, "utf8"));

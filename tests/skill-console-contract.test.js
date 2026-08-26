@@ -12,6 +12,15 @@ function read(relativePath) {
   return fs.readFileSync(path.join(root, relativePath), "utf8");
 }
 
+function appAssistantContract() {
+  return [
+    "rainbond-app-assistant/SKILL.md",
+    "rainbond-app-assistant/references/workflow-rules.md",
+    "rainbond-app-assistant/references/operational-reference.md",
+    "rainbond-app-assistant/references/output-contract.md",
+  ].map(read).join("\n");
+}
+
 function markdownFiles(directory) {
   return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const entryPath = path.join(directory, entry.name);
@@ -71,7 +80,9 @@ test("Console failure reasons have one stable user-facing mapping and app IDs ar
     "rainbond-app-assistant/SKILL.md",
     "rainbond-env-sync/SKILL.md",
   ]) {
-    const content = read(file);
+    const content = file === "rainbond-app-assistant/SKILL.md"
+      ? appAssistantContract()
+      : read(file);
     assert.match(content, /(?:Tool|MCP|工具).*[`]?app_id[`]?.*(?:positive integer|正整数)|[`]?app_id[`]?.*(?:positive integer|正整数).*(?:Tool|MCP|工具)/is, file);
   }
 
@@ -156,7 +167,7 @@ test("browser and device authorization always use an attached interactive termin
 });
 
 test("failure context stays secret-safe and canonical blocker vocabularies agree", () => {
-  const appAssistant = read("rainbond-app-assistant/SKILL.md");
+  const appAssistant = appAssistantContract();
   const troubleshooter = read("rainbond-fullstack-troubleshooter/SKILL.md");
   const model = read("rainbond-app-assistant/references/product-object-model.md");
   const schema = read("rainbond-fullstack-troubleshooter/schemas/troubleshoot-result.schema.yaml");
@@ -186,7 +197,7 @@ test("large skills link to substantive on-demand references", () => {
 test("aggregate fast paths and recovery rules stay bounded", () => {
   const delivery = read("rainbond-delivery-verifier/SKILL.md");
   const envSync = read("rainbond-env-sync/SKILL.md");
-  const appAssistant = read("rainbond-app-assistant/SKILL.md");
+  const appAssistant = appAssistantContract();
   const bootstrap = read("rainbond-fullstack-bootstrap/modules/40-source-and-package-rules.md");
   const troubleshooter = read("rainbond-fullstack-troubleshooter/SKILL.md");
 
@@ -200,7 +211,7 @@ test("aggregate fast paths and recovery rules stay bounded", () => {
 
 test("CNB recovery is state-dependent and destructive recovery stays explicitly confirmed", () => {
   const bootstrap = read("rainbond-fullstack-bootstrap/modules/40-source-and-package-rules.md");
-  const appAssistant = read("rainbond-app-assistant/SKILL.md");
+  const appAssistant = appAssistantContract();
 
   for (const content of [bootstrap, appAssistant]) {
     assert.match(content, /create_status.*complete[\s\S]*explicit user confirmation/i);

@@ -75,3 +75,30 @@ Load this reference only when checking a proposed route or reviewing a completed
   6. if strict delivered and promotion was requested, snapshot and create testing app
   7. verify the testing app once
   8. report one next step
+
+  ## Canonical Model Reference
+
+  Use `docs/product-object-model.md` as the repository-level source of truth for:
+
+  - `Project` and `Environment` context boundaries
+  - `RuntimeState` distinctions such as topology missing, topology building, and runtime unhealthy
+  - `DeliveryState` outcomes such as delivered, delivered-but-needs-manual-validation, partially-delivered, and blocked
+  - version-flow handoff boundaries into snapshot, release, and rollback operations
+
+  This skill should orchestrate transitions across those shared objects and states. It should not redefine their canonical boundaries independently.
+
+  ## Contract Surface
+
+  This skill now has a live orchestration-level contract surface under:
+
+  - `schemas/app-assistant-result.schema.yaml`
+  - `scripts/validate_app_assistant_output.py`
+  - `scripts/run_app_assistant_evals.py`
+  - `evals/*.response.md`
+
+  Scope note:
+
+  - `AppAssistantResult` is the top-level orchestration contract for this skill
+  - `delivery_state` is a consumed summary of `rainbond-delivery-verifier` output, not a redefinition of delivery-verifier rules
+  - `promotion_result` is only a gated summary of the version/promotion flow after explicit dev-to-test intent and source-app `delivered`
+  - bootstrap / troubleshooter / delivery-verifier contract details remain owned by their own schema + validator + eval surfaces
