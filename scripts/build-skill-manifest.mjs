@@ -127,11 +127,21 @@ export function buildSkillManifest({ source_root: sourceRoot, output, revision }
   ) {
     throw new Error("source package.json is not a versioned RainSkills package");
   }
-  const skillDirectories = fs.readdirSync(resolvedSource, { withFileTypes: true })
+  const businessSkillDirectories = fs.readdirSync(resolvedSource, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && /^rainbond-[a-z0-9-]+$/.test(entry.name))
     .map((entry) => path.join(resolvedSource, entry.name))
-    .filter((directory) => fs.existsSync(path.join(directory, "SKILL.md")))
-    .sort((left, right) => path.basename(left).localeCompare(path.basename(right)));
+    .filter((directory) => fs.existsSync(path.join(directory, "SKILL.md")));
+  const rootSkillDirectory = path.join(
+    resolvedSource,
+    "marketplace",
+    "rainskills",
+    "skills",
+    "rainskills"
+  );
+  const skillDirectories = [
+    ...businessSkillDirectories,
+    ...(fs.existsSync(path.join(rootSkillDirectory, "SKILL.md")) ? [rootSkillDirectory] : []),
+  ].sort((left, right) => path.basename(left).localeCompare(path.basename(right)));
   if (skillDirectories.length === 0) throw new Error("no RainSkills Skill directories were found");
   for (const directory of skillDirectories) assertRegularDirectory(directory, "Skill directory");
   assertOutputOutsideSkills(output, skillDirectories);

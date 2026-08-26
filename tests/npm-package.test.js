@@ -304,6 +304,9 @@ test("the packed default installer installs only Skills and prints the approved 
     assert.equal(output.includes(forbidden), false, `default install output contains ${forbidden}`);
   }
   assert.equal(fs.existsSync(path.join(home, ".codex", "skills", "rainbond-app-assistant", "SKILL.md")), true);
+  const installedRootSkill = path.join(home, ".codex", "skills", "rainskills", "SKILL.md");
+  assert.equal(fs.existsSync(installedRootSkill), true);
+  assert.match(fs.readFileSync(installedRootSkill, "utf8"), /"type":"environment-add"/);
   assert.equal(fs.existsSync(path.join(home, ".rainbond", "bin", "rainskills-tools.js")), true);
   assert.equal(fs.existsSync(path.join(home, ".rainbond", "bin", "rainskills-skill-manifest.json")), true);
   assert.equal(fs.existsSync(path.join(home, ".rainbond", "lib", "rainbond-platform-installer", "scripts", "runtime-operations.js")), true);

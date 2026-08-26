@@ -124,6 +124,16 @@ function writeSkill(root, name, body = "initial\n") {
   return directory;
 }
 
+function writeMarketplaceRootSkill(root, body = "root\n") {
+  const directory = path.join(root, "marketplace", "rainskills", "skills", "rainskills");
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(
+    path.join(directory, "SKILL.md"),
+    `---\nname: rainskills\ndescription: Manage Rainskills environments\n---\n\n${body}`
+  );
+  return directory;
+}
+
 function authorizationParams(url) {
   const parsed = new URL(url);
   const queryIndex = parsed.hash.indexOf("?");
@@ -338,6 +348,15 @@ test("Windows skill copying installs, skips, updates, and force-overwrites atomi
     () => copySkills({ skills, destinations: [unsafeDestination] }),
     /符号链接|reparse point/i
   );
+});
+
+test("Windows discovery includes the existing root environment-management Skill", () => {
+  const { discoverSkills } = require(windowsOnboardingPath);
+  const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-package-root-"));
+  const businessSkill = writeSkill(packageRoot, "rainbond-test");
+  const rootSkill = writeMarketplaceRootSkill(packageRoot);
+
+  assert.deepEqual(discoverSkills(packageRoot), [businessSkill, rootSkill]);
 });
 
 test("native main honors a custom Skills destination without runtime setup", async () => {
