@@ -7,37 +7,13 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+import unicodedata
 from pathlib import Path
+
+import yaml
 
 
 DEFAULT_REPO_ROOT = Path(__file__).resolve().parents[2]
-APP_DESCRIPTION_OWNER = (
-    "Use whenever a user asks to deploy, run, deliver, publish, inspect, repair, or "
-    "troubleshoot source code, the current project, a source directory/package, a bare "
-    "Git repository URL without a supplied Compose/Helm/image-set descriptor, or a named "
-    "application without a descriptor."
-)
-APP_DESCRIPTION_DESCRIPTOR_EXCLUSION = (
-    "Not for supplied third-party Compose, Helm, or image-set descriptors; use "
-    "rainbond-opensource-app-deploy."
-)
-APP_DESCRIPTION_MARKET_EXCLUSION = (
-    "Not for a confirmed market template; use rainbond-template-installer."
-)
-OPEN_DESCRIPTION_OWNER = (
-    "Use only when the user actually supplies a third-party Docker Compose file/content, "
-    "Helm chart/values, or container image-set descriptor."
-)
-OPEN_DESCRIPTION_EXCLUSIONS = (
-    "Never use for a bare Git URL, source project/directory/package, named application "
-    "without a descriptor, private-image project, or confirmed market template; route "
-    "source and named-only requests to rainbond-app-assistant and market templates to "
-    "rainbond-template-installer."
-)
-OPEN_DESCRIPTOR_GUARD = (
-    "未确认描述符时不得读取 references/runtime-gate.md；也不得加载任何 reference、"
-    "查询/连接环境、安装平台、调用 Rainbond、克隆或浏览 Git、读取外部文档或做任何变更。"
-)
 OPEN_STAGE_ROWS = (
     "| Phase 0：描述符未确认 | 不加载 reference；只做上述静态资格判断 |",
     "| 描述符已确认，首次需要连接或调用 Rainbond | 只读取自己的 "
@@ -47,6 +23,8 @@ OPEN_STAGE_ROWS = (
     "| 新鲜证据命中已知部署故障模式 | 再读取 "
     "[failure-mode playbook](references/failure-mode-playbook.md) |",
 )
+NEGATIONS = ("不得", "禁止", "不加载", "never", "must not", "do not", "cannot")
+ROUTE_MARKERS = ("route", "use", "转到", "改走", "应转", "留在", "remain", "stay")
 
 
 def require(condition: bool, message: str, failures: list[str]) -> None:
@@ -54,9 +32,248 @@ def require(condition: bool, message: str, failures: list[str]) -> None:
         failures.append(message)
 
 
-def description(source: str) -> str:
-    match = re.search(r'^description:\s*["\']?(.*?)["\']?\s*$', source, re.MULTILINE)
-    return match.group(1) if match else ""
+def normalize(value: str) -> str:
+    value = unicodedata.normalize("NFKC", value).casefold()
+    value = re.sub(r"[-_/]", " ", value)
+    value = re.sub(r"[^\w\u3400-\u9fff]+", " ", value)
+    return " ".join(value.split())
+
+
+def contains(value: str, phrase: str) -> bool:
+    return normalize(phrase) in normalize(value)
+
+
+def statements(value: str) -> list[str]:
+    return [
+        normalize(part)
+        for part in re.split(r"[!?。！？\n]+|\.(?=\s|$)", value)
+        if normalize(part)
+    ]
+
+
+def parse_description(source: str) -> str:
+    match = re.match(r"\A---\s*\n(.*?)\n---\s*\n", source, re.DOTALL)
+    if not match:
+        return ""
+    metadata = yaml.safe_load(match.group(1))
+    if not isinstance(metadata, dict) or not isinstance(metadata.get("description"), str):
+        return ""
+    return metadata["description"]
+
+
+def bounded_section(source: str, start_heading: str, end_heading: str) -> str:
+    start = source.find(start_heading)
+    end = source.find(end_heading, start + len(start_heading)) if start >= 0 else -1
+    if start < 0 or end < 0 or start >= end:
+        return ""
+    return source[start:end]
+
+
+def has_route_marker(statement: str) -> bool:
+    return any(marker in statement for marker in ROUTE_MARKERS)
+
+
+def has_negation(statement: str) -> bool:
+    return any(normalize(marker) in statement for marker in NEGATIONS)
+
+
+def validate_description_boundaries(
+    app_description: str,
+    open_description: str,
+    failures: list[str],
+) -> None:
+    app_statements = statements(app_description)
+    open_statements = statements(open_description)
+    app_normalized = normalize(app_description)
+    open_normalized = normalize(open_description)
+
+    app_owner = any(
+        statement.startswith("use when")
+        and all(
+            contains(statement, phrase)
+            for phrase in (
+                "source code",
+                "current project",
+                "source directory package",
+                "bare git repository url",
+                "named application without a descriptor",
+            )
+        )
+        for statement in app_statements
+    )
+    app_actions = all(
+        action in app_normalized
+        for action in ("deploy", "run", "deliver", "inspect", "repair", "troubleshoot")
+    )
+    require(
+        app_owner and app_actions,
+        "App description must positively own source and descriptor-less requests",
+        failures,
+    )
+    require(
+        any(
+            contains(statement, "not for supplied third party compose helm or image set descriptors")
+            and contains(statement, "rainbond opensource app deploy")
+            for statement in app_statements
+        ),
+        "App description must exclude supplied descriptors to Open-source Deploy",
+        failures,
+    )
+    require(
+        any(
+            contains(statement, "not for a confirmed market template")
+            and contains(statement, "rainbond template installer")
+            for statement in app_statements
+        ),
+        "App description must exclude confirmed market templates",
+        failures,
+    )
+
+    open_owner = any(
+        statement.startswith("use only when")
+        and contains(statement, "actually supplies")
+        and contains(statement, "third party docker compose")
+        and contains(statement, "helm chart values")
+        and contains(statement, "container image set descriptor")
+        for statement in open_statements
+    )
+    require(
+        open_owner,
+        "Open-source description must positively own only supplied descriptors",
+        failures,
+    )
+    open_exclusion = any(
+        contains(statement, "never use for a bare git url")
+        and contains(statement, "source project directory package")
+        and contains(statement, "named application without a descriptor")
+        and contains(statement, "private image project")
+        and contains(statement, "confirmed market template")
+        and contains(statement, "rainbond app assistant")
+        and contains(statement, "rainbond template installer")
+        for statement in open_statements
+    )
+    require(
+        open_exclusion,
+        "Open-source description must exclude source, named-only, and market routes",
+        failures,
+    )
+
+
+def validate_routing_conflicts(
+    app_root: str,
+    app_description: str,
+    open_root: str,
+    open_description: str,
+    failures: list[str],
+) -> None:
+    phase_zero = bounded_section(open_root, "## Phase 0：静态资格判断", "## 渐进加载")
+    staged_loading = bounded_section(open_root, "## 渐进加载", "## Runtime 与安全边界")
+    require(bool(phase_zero), "Open-source Phase 0 section bounds are invalid", failures)
+    require(bool(staged_loading), "Open-source staged-loading section bounds are invalid", failures)
+
+    routing_statements = statements(open_description) + statements(phase_zero) + statements(staged_loading)
+    all_root_statements = (
+        statements(app_description)
+        + statements(open_description)
+        + statements(app_root)
+        + statements(open_root)
+    )
+
+    source_categories = ("bare git", "source project", "named only", "named application")
+    source_to_open = any(
+        any(category in statement for category in source_categories)
+        and contains(statement, "rainbond opensource app deploy")
+        and has_route_marker(statement)
+        for statement in all_root_statements
+    )
+    require(not source_to_open, "source ownership boundary conflict", failures)
+
+    descriptor_to_app = any(
+        ("actual" in statement or "supplied" in statement)
+        and any(kind in statement for kind in ("compose", "helm", "image set"))
+        and contains(statement, "rainbond app assistant")
+        and has_route_marker(statement)
+        for statement in all_root_statements
+    )
+    require(not descriptor_to_app, "descriptor ownership boundary conflict", failures)
+
+    market_conflict = any(
+        contains(statement, "market template")
+        and (
+            re.search(r"(?:not route|do not route|不转)\s+rainbond template installer", statement)
+            or (
+                contains(statement, "rainbond opensource app deploy")
+                and any(marker in statement for marker in ("留在", "remain", "stay"))
+            )
+        )
+        for statement in all_root_statements
+    )
+    require(not market_conflict, "market template routing boundary conflict", failures)
+
+    def unconfirmed(statement: str) -> bool:
+        return any(
+            marker in statement
+            for marker in (
+                "未确认描述符",
+                "描述符未确认",
+                "描述符确认前",
+                "未确认 descriptor",
+                "descriptor 未确认",
+                "before descriptor confirmation",
+                "before confirming descriptor",
+            )
+        )
+
+    def pre_descriptor_action(statement: str) -> bool:
+        actions = (
+            "读取 runtime gate",
+            "加载 runtime gate",
+            "查询",
+            "连接 rainbond",
+            "clone",
+            "browse git",
+            "克隆",
+            "浏览 git",
+        )
+        positive_markers = ("允许", "先", "可以", "may", "can", "should", "must load", "must read")
+        has_action = any(action in statement for action in actions)
+        explicitly_positive = any(marker in statement for marker in positive_markers)
+        return (
+            unconfirmed(statement)
+            and has_action
+            and (explicitly_positive or not has_negation(statement))
+        )
+
+    require(
+        not any(pre_descriptor_action(statement) for statement in routing_statements),
+        "pre-descriptor action boundary conflict",
+        failures,
+    )
+
+    stage_conflict = any(pre_descriptor_action(statement) for statement in statements(staged_loading)) or any(
+        contains(statement, "deployment workflow")
+        and contains(statement, "operation context")
+        and ("前" in statement or "before" in statement)
+        and not has_negation(statement)
+        for statement in statements(staged_loading)
+    )
+    require(not stage_conflict, "Open-source stage ordering conflict", failures)
+
+    guard_statement = next(
+        (
+            statement
+            for statement in statements(phase_zero)
+            if unconfirmed(statement)
+            and contains(statement, "runtime gate")
+            and "rainbond" in statement
+            and ("克隆" in statement or "clone" in statement)
+            and ("浏览 git" in statement or "browse git" in statement)
+            and has_negation(statement)
+            and not pre_descriptor_action(statement)
+        ),
+        None,
+    )
+    require(guard_statement is not None, "Open-source descriptor guard is missing or reversed", failures)
 
 
 def validate_cross_skill_routing(repo_root: Path) -> list[str]:
@@ -65,20 +282,10 @@ def validate_cross_skill_routing(repo_root: Path) -> list[str]:
     open_dir = repo_root / "rainbond-opensource-app-deploy"
     app_root = (app_dir / "SKILL.md").read_text(encoding="utf-8")
     open_root = (open_dir / "SKILL.md").read_text(encoding="utf-8")
-    app_description = description(app_root)
-    open_description = description(open_root)
+    app_description = parse_description(app_root)
+    open_description = parse_description(open_root)
 
-    for required, message in (
-        (APP_DESCRIPTION_OWNER, "App description must positively own source and descriptor-less requests"),
-        (APP_DESCRIPTION_DESCRIPTOR_EXCLUSION, "App description must exclude supplied descriptors"),
-        (APP_DESCRIPTION_MARKET_EXCLUSION, "App description must exclude confirmed market templates"),
-    ):
-        require(required in app_description, message, failures)
-    for required, message in (
-        (OPEN_DESCRIPTION_OWNER, "Open-source description must positively own only supplied descriptors"),
-        (OPEN_DESCRIPTION_EXCLUSIONS, "Open-source description must exclude source, named-only, and market routes"),
-    ):
-        require(required in open_description, message, failures)
+    validate_description_boundaries(app_description, open_description, failures)
 
     open_bytes = len(open_root.encode("utf-8"))
     open_lines = len(open_root.splitlines())
@@ -95,15 +302,25 @@ def validate_cross_skill_routing(repo_root: Path) -> list[str]:
         ):
             require(forbidden not in root, f"{label} root embeds runtime content: {forbidden}", failures)
 
-    require(
-        "核心顺序是：先验证描述符，再加载 Runtime Gate；不得为了确认资格而接触 Rainbond 或外部源码。"
-        in open_root,
-        "Open-source root must state descriptor-before-gate ordering",
+    order_statement = next(
+        (
+            statement
+            for statement in statements(open_root)
+            if contains(statement, "先验证描述符")
+            and contains(statement, "再加载 runtime gate")
+        ),
+        None,
+    )
+    require(order_statement is not None, "Open-source root must state descriptor-before-gate ordering", failures)
+    validate_routing_conflicts(
+        app_root,
+        app_description,
+        open_root,
+        open_description,
         failures,
     )
-    require(OPEN_DESCRIPTOR_GUARD in open_root, "Open-source descriptor guard is missing or reversed", failures)
+
     for forbidden in (
-        "未确认描述符时允许读取 references/runtime-gate.md",
         "## 0. Derive the official topology",
         "## 6. Pass the delivery gate",
         "## Progress checklist",

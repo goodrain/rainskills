@@ -157,6 +157,98 @@ class ProgressiveLoadingValidatorTests(unittest.TestCase):
         self.assertIn("App description must positively own", result.stdout)
         self.assertIn("Open-source description must positively own", result.stdout)
 
+    def test_equivalent_discovery_description_rewrites_pass(self) -> None:
+        self.mutate(
+            f"{APP_NAME}/SKILL.md",
+            "Use whenever a user asks",
+            "Use when  a user asks",
+        )
+        self.mutate(
+            f"{APP_NAME}/SKILL.md",
+            "bare Git repository URL",
+            "bare git repository URL",
+        )
+        self.mutate(
+            f"{OPEN_NAME}/SKILL.md",
+            "Use only when the user actually supplies a third-party Docker Compose",
+            "use only when the user actually supplies a third party docker   compose",
+        )
+        self.mutate(
+            f"{OPEN_NAME}/SKILL.md",
+            "Helm chart/values, or container image-set descriptor",
+            "HELM chart / values, or container image set descriptor",
+        )
+
+        result = self.run_cross()
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_appended_routing_conflicts_are_rejected(self) -> None:
+        open_path = self.root / OPEN_NAME / "SKILL.md"
+        original = open_path.read_text(encoding="utf-8")
+        conflicts = (
+            (
+                "补充规则：Bare Git、source project、named-only request 应改走 rainbond-opensource-app-deploy。",
+                "source ownership boundary conflict",
+            ),
+            (
+                "补充规则：Actual Compose、Helm、image-set descriptor 应改走 rainbond-app-assistant。",
+                "descriptor ownership boundary conflict",
+            ),
+            (
+                "补充规则：描述符确认前先加载 runtime-gate，查询并连接 Rainbond，再 clone / browse Git。",
+                "pre-descriptor action boundary conflict",
+            ),
+            (
+                "补充规则：confirmed market template 不转 rainbond-template-installer，继续留在 rainbond-opensource-app-deploy。",
+                "market template routing boundary conflict",
+            ),
+        )
+        for conflict, expected_error in conflicts:
+            with self.subTest(conflict=expected_error):
+                open_path.write_text(
+                    original.replace("\n## 渐进加载", f"\n{conflict}\n\n## 渐进加载", 1),
+                    encoding="utf-8",
+                )
+                result = self.run_cross()
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn(expected_error, result.stdout)
+        open_path.write_text(original, encoding="utf-8")
+
+    def test_appended_app_description_conflict_is_rejected(self) -> None:
+        path = self.root / APP_NAME / "SKILL.md"
+        source = path.read_text(encoding="utf-8")
+        source = re.sub(
+            r'^(description: ".*)"$',
+            r'\1 Bare Git, source project, and named-only requests route to rainbond-opensource-app-deploy."',
+            source,
+            count=1,
+            flags=re.MULTILINE,
+        )
+        path.write_text(source, encoding="utf-8")
+
+        result = self.run_cross()
+
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("source ownership boundary conflict", result.stdout)
+
+    def test_appended_stage_order_conflict_is_rejected(self) -> None:
+        path = self.root / OPEN_NAME / "SKILL.md"
+        source = path.read_text(encoding="utf-8")
+        conflict = (
+            "阶段补充：Phase 0 描述符未确认时先读取 runtime-gate；"
+            "deployment-workflow 可以在 operation/context 建立前加载。"
+        )
+        path.write_text(
+            source.replace("\n## Runtime 与安全边界", f"\n{conflict}\n\n## Runtime 与安全边界", 1),
+            encoding="utf-8",
+        )
+
+        result = self.run_cross()
+
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Open-source stage ordering conflict", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
