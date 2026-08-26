@@ -206,7 +206,7 @@ function insertEmbeddedRuntimeContract(content, skillName) {
 function replaceClientRuntimeBlocks(content, replacement, skillName) {
   return replaceRequired(
     content,
-    /\s*<!-- rainskills-runtime-gate:start -->[\s\S]*?<!-- rainskills-runtime-gate:end -->\s*(?:<!-- rainskills-runtime-routing:start -->[\s\S]*?<!-- rainskills-runtime-routing:end -->)?/,
+    /\s*<!-- rainskills-runtime-gate:start -->[\s\S]*?<!-- rainskills-runtime-routing:end -->/,
     `\n\n${replacement.trimEnd()}\n`,
     `${skillName} client runtime blocks`
   );

@@ -120,6 +120,33 @@ test("embedded profile is explicit, transport-safe, and contains only Agent-comp
     );
   }
 
+  for (const skill of [
+    "rainbond-app-assistant",
+    "rainbond-opensource-app-deploy",
+  ]) {
+    const runtimeGate = fs.readFileSync(
+      path.join(output, skill, "references", "runtime-gate.md"),
+      "utf8",
+    );
+    assert.match(runtimeGate, /embedded profile|会话.*Rainbond Tool/i, skill);
+    assert.doesNotMatch(
+      runtimeGate,
+      /require_escalated|runtime connect|rainskills\.js|npm root -g|附加交互终端（TTY）|new-application-environment/,
+      `${skill} must not retain client runtime routing in embedded profile`,
+    );
+  }
+
+  const fallbackRoot = fs.readFileSync(
+    path.join(output, "rainbond-delivery-verifier", "SKILL.md"),
+    "utf8",
+  );
+  assert.match(fallbackRoot, /## Rainbond 传输/);
+  assert.doesNotMatch(
+    fallbackRoot,
+    /require_escalated|runtime connect|rainskills\.js|npm root -g|附加交互终端（TTY）/,
+    "unmigrated root fallback must remove the complete client runtime interval",
+  );
+
   assert.equal(fs.existsSync(path.join(output, "rainbond-project-init")), false);
   assert.equal(fs.existsSync(path.join(output, "rainbond-env-sync")), false);
   assert.equal(fs.existsSync(path.join(output, "rainbond-platform-installer")), false);
