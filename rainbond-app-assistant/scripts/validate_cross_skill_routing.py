@@ -113,8 +113,19 @@ def category_is_locally_negated(statement: str, category: str) -> bool:
     category_at = statement.find(category)
     if category_at < 0:
         return False
-    prefix_tokens = statement[:category_at].split()[-4:]
-    return has_local_negation(" ".join(prefix_tokens))
+    prefix = statement[:category_at]
+    boundaries = ("but", "while", "whereas", "although", "however", "instead", "而是", "但是", "但", "不过")
+    boundary_at = -1
+    for boundary in boundaries:
+        normalized_boundary = normalize(boundary)
+        if re.fullmatch(r"[a-z]+", normalized_boundary):
+            matches = list(re.finditer(rf"\b{re.escape(normalized_boundary)}\b", prefix))
+            candidate = matches[-1].start() if matches else -1
+        else:
+            candidate = prefix.rfind(normalized_boundary)
+        boundary_at = max(boundary_at, candidate)
+    clause_prefix = prefix[boundary_at:] if boundary_at >= 0 else prefix
+    return has_local_negation(clause_prefix)
 
 
 def relation_has_positive_cue(relation: str, cues: tuple[str, ...]) -> bool:
@@ -133,7 +144,7 @@ def target_relation_after_contrast(
     target_phrases: tuple[str, ...],
 ) -> bool:
     statement = normalize(statement)
-    contrast = ("while", "but", "whereas", "although", "however", "instead")
+    contrast = ("instead", "rather", "而是", "改为")
     cues = ("route", "use", "to", "with", "delegate", "handled", "goes", "stay")
     for marker in contrast:
         marker_at = statement.rfind(marker)

@@ -460,6 +460,34 @@ class ProgressiveLoadingValidatorTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("App description must positively own", result.stdout)
 
+    def test_clause_scoped_negation_rejects_current_project_ownership(self) -> None:
+        path = self.root / APP_NAME / "SKILL.md"
+        source = path.read_text(encoding="utf-8")
+        self.assertIn("the current project", source)
+        source = source.replace(
+            "the current project",
+            "but does not include the user's current project",
+            1,
+        )
+        path.write_text(source, encoding="utf-8")
+
+        result = self.run_cross()
+
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("App description must positively own", result.stdout)
+
+    def test_generic_while_with_unrelated_subject_is_not_a_source_route(self) -> None:
+        path = self.root / APP_NAME / "SKILL.md"
+        source = path.read_text(encoding="utf-8")
+        source += (
+            "\nCurrent projects stay with App Assistant, while unrelated docs use Open-source.\n"
+        )
+        path.write_text(source, encoding="utf-8")
+
+        result = self.run_cross()
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()
