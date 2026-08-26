@@ -368,6 +368,86 @@ class ProgressiveLoadingValidatorTests(unittest.TestCase):
         self.assertNotEqual(open_result.returncode, 0, open_result.stdout + open_result.stderr)
         self.assertIn("pre-descriptor action boundary conflict", open_result.stdout)
 
+    def test_description_categories_must_bind_to_their_target_skill(self) -> None:
+        app_path = self.root / APP_NAME / "SKILL.md"
+        original_app = app_path.read_text(encoding="utf-8")
+        with self.subTest(boundary="descriptor-to-open-source"):
+            app = original_app.replace(
+                "Not for supplied third-party Compose, Helm, or image-set descriptors; use rainbond-opensource-app-deploy.",
+                "Not for supplied third-party Compose, Helm, or image-set descriptors; use rainbond-template-installer.",
+                1,
+            )
+            app = re.sub(
+                r'^(description: ".*)"$',
+                r'\1 rainbond-opensource-app-deploy remains available for unrelated cases."',
+                app,
+                count=1,
+                flags=re.MULTILINE,
+            )
+            app_path.write_text(app, encoding="utf-8")
+            app_result = self.run_cross()
+            self.assertNotEqual(app_result.returncode, 0, app_result.stdout + app_result.stderr)
+            self.assertIn("App description must exclude supplied descriptors", app_result.stdout)
+        app_path.write_text(original_app, encoding="utf-8")
+
+        open_path = self.root / OPEN_NAME / "SKILL.md"
+        original_open = open_path.read_text(encoding="utf-8")
+        with self.subTest(boundary="source-to-app-assistant"):
+            open_source = original_open.replace(
+                "route source and named-only requests to rainbond-app-assistant and market templates to rainbond-template-installer.",
+                "route source and named-only requests to rainbond-template-installer and market templates to rainbond-template-installer.",
+                1,
+            )
+            open_source = re.sub(
+                r'^(description: ".*)"$',
+                r'\1 rainbond-app-assistant remains mentioned for unrelated context."',
+                open_source,
+                count=1,
+                flags=re.MULTILINE,
+            )
+            open_path.write_text(open_source, encoding="utf-8")
+            open_result = self.run_cross()
+            self.assertNotEqual(open_result.returncode, 0, open_result.stdout + open_result.stderr)
+            self.assertIn("Open-source description must exclude source", open_result.stdout)
+
+    def test_reasonably_grouped_description_rewrite_is_allowed(self) -> None:
+        app_path = self.root / APP_NAME / "SKILL.md"
+        app = app_path.read_text(encoding="utf-8")
+        app = re.sub(
+            r'^description:.*$',
+            'description: "Use when deploying, running, delivering, publishing, inspecting, repairing, or troubleshooting source code, the current project, or a source directory/package. Bare Git repository URLs and named applications without a descriptor stay with rainbond-app-assistant. Supplied third-party Compose, Helm, or image-set descriptors route to rainbond-opensource-app-deploy. Confirmed market templates route to rainbond-template-installer."',
+            app,
+            count=1,
+            flags=re.MULTILINE,
+        )
+        app_path.write_text(app, encoding="utf-8")
+
+        open_path = self.root / OPEN_NAME / "SKILL.md"
+        open_source = open_path.read_text(encoding="utf-8")
+        open_source = re.sub(
+            r'^description:.*$',
+            'description: "Use this Skill only when the user actually supplies Docker Compose content, a Helm chart/values, or a container image-set descriptor. Bare Git URLs, source project/directory/package requests, named apps without descriptors, and private-image projects route to rainbond-app-assistant. Confirmed market templates route to rainbond-template-installer."',
+            open_source,
+            count=1,
+            flags=re.MULTILINE,
+        )
+        open_path.write_text(open_source, encoding="utf-8")
+
+        result = self.run_cross()
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_pre_descriptor_connect_environment_is_rejected(self) -> None:
+        path = self.root / OPEN_NAME / "SKILL.md"
+        source = path.read_text(encoding="utf-8")
+        source += "\n描述符确认前先连接环境。\n"
+        path.write_text(source, encoding="utf-8")
+
+        result = self.run_cross()
+
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("pre-descriptor action boundary conflict", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

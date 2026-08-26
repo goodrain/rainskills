@@ -62,6 +62,14 @@ def statements(value: str) -> list[str]:
     ]
 
 
+def description_statements(value: str) -> list[str]:
+    return [
+        normalize(part)
+        for part in re.split(r"[!?。！？\n]+|\.(?=\s|$)", value)
+        if normalize(part)
+    ]
+
+
 def parse_description(source: str) -> str:
     match = re.match(r"\A---\s*\n(.*?)\n---\s*\n", source, re.DOTALL)
     if not match:
@@ -97,24 +105,41 @@ def validate_description_boundaries(
     open_description: str,
     failures: list[str],
 ) -> None:
-    app_statements = statements(app_description)
-    open_statements = statements(open_description)
+    app_statements = description_statements(app_description)
+    open_statements = description_statements(open_description)
     app_normalized = normalize(app_description)
-    open_normalized = normalize(open_description)
 
-    app_owner = any(
-        statement.startswith("use when")
-        and all(
-            contains(statement, phrase)
-            for phrase in (
-                "source code",
-                "current project",
-                "source directory package",
-                "bare git repository url",
-                "named application without a descriptor",
-            )
+    def app_target(statement: str) -> bool:
+        return contains(statement, "rainbond app assistant")
+
+    def open_target(statement: str) -> bool:
+        return contains(statement, "rainbond opensource app deploy") or "open source" in statement
+
+    def template_target(statement: str) -> bool:
+        return contains(statement, "rainbond template installer")
+
+    def app_owned(statement: str) -> bool:
+        return statement.startswith("use when") or (
+            app_target(statement) and has_route_marker(statement) and not has_negation(statement)
         )
-        for statement in app_statements
+
+    def open_owned(statement: str) -> bool:
+        return (
+            statement.startswith("use only when")
+            or statement.startswith("use this skill only when")
+            or (open_target(statement) and has_route_marker(statement) and not has_negation(statement))
+        )
+
+    app_owned_statements = [statement for statement in app_statements if app_owned(statement)]
+    app_owner = all(
+        any(predicate(statement) for statement in app_owned_statements)
+        for predicate in (
+            lambda statement: "source code" in statement,
+            lambda statement: "current project" in statement,
+            lambda statement: "source directory" in statement and "package" in statement,
+            lambda statement: "bare git" in statement,
+            lambda statement: "named application" in statement and "without a descriptor" in statement,
+        )
     )
     app_actions = all(
         action in app_normalized
@@ -126,24 +151,31 @@ def validate_description_boundaries(
         failures,
     )
     require(
-        contains(app_normalized, "not for supplied third party compose helm or image set descriptors")
-        and contains(app_normalized, "rainbond opensource app deploy"),
+        any(
+            "supplied" in statement
+            and all(kind in statement for kind in ("compose", "helm", "image set", "descriptor"))
+            and open_target(statement)
+            and (has_route_marker(statement) or has_negation(statement))
+            for statement in app_statements
+        ),
         "App description must exclude supplied descriptors to Open-source Deploy",
         failures,
     )
     require(
-        contains(app_normalized, "not for a confirmed market template")
-        and contains(app_normalized, "rainbond template installer"),
+        any(
+            "market template" in statement
+            and template_target(statement)
+            and (has_route_marker(statement) or has_negation(statement))
+            for statement in app_statements
+        ),
         "App description must exclude confirmed market templates",
         failures,
     )
 
     open_owner = any(
-        statement.startswith("use only when")
-        and contains(statement, "actually supplies")
-        and contains(statement, "third party docker compose")
-        and contains(statement, "helm chart values")
-        and contains(statement, "container image set descriptor")
+        open_owned(statement)
+        and ("actual" in statement or "supplied" in statement)
+        and all(kind in statement for kind in ("compose", "helm", "image set", "descriptor"))
         for statement in open_statements
     )
     require(
@@ -151,17 +183,22 @@ def validate_description_boundaries(
         "Open-source description must positively own only supplied descriptors",
         failures,
     )
-    open_exclusion = all(
-        contains(open_normalized, phrase)
-        for phrase in (
-            "never use for a bare git url",
-            "source project directory package",
-            "named application without a descriptor",
-            "private image project",
-            "confirmed market template",
-            "rainbond app assistant",
-            "rainbond template installer",
-        )
+    open_exclusion = any(
+        "bare git" in statement
+        and "source project" in statement
+        and "directory" in statement
+        and "package" in statement
+        and "named app" in statement
+        and ("without a descriptor" in statement or "without descriptor" in statement)
+        and "private image project" in statement
+        and app_target(statement)
+        and (has_route_marker(statement) or has_negation(statement))
+        for statement in open_statements
+    ) and any(
+        "market template" in statement
+        and template_target(statement)
+        and (has_route_marker(statement) or has_negation(statement))
+        for statement in open_statements
     )
     require(
         open_exclusion,
@@ -266,7 +303,11 @@ def validate_routing_conflicts(
     def pre_descriptor_action(statement: str) -> bool:
         non_gate_actions = (
             "查询",
+            "连接环境",
             "连接 rainbond",
+            "连接 runtime",
+            "connect environment",
+            "connect runtime",
             "clone",
             "browse git",
             "克隆",
