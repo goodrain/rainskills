@@ -53,6 +53,12 @@ cases:
   - id: explicit_template_install
     prompt: 从模板安装 WordPress 应用
     expected_skill: rainbond-template-installer
+  - id: open_source_descriptor_deploy
+    prompt: 按这个 docker-compose 部署 Harbor 到 Rainbond
+    expected_skill: rainbond-opensource-app-deploy
+  - id: open_source_name_only_uses_generic_entrypoint
+    prompt: 帮我部署一个开源 Harbor
+    expected_skill: rainbond-app-assistant
 
 required_markers:
   rainbond-app-assistant:

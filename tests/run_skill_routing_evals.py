@@ -22,6 +22,7 @@ SKILL_FILES = {
     "rainbond-env-sync": ROOT / "rainbond-env-sync" / "SKILL.md",
     "rainbond-project-init": ROOT / "rainbond-project-init" / "SKILL.md",
     "rainbond-template-installer": ROOT / "rainbond-template-installer" / "SKILL.md",
+    "rainbond-opensource-app-deploy": ROOT / "rainbond-opensource-app-deploy" / "SKILL.md",
 }
 
 
@@ -83,6 +84,22 @@ def classify_prompt(prompt: str, metadata_by_skill: dict[str, dict[str, str]]) -
     ]
     if any(needle in text for needle in platform_query_needles):
         return "rainbond-platform-query"
+
+    open_source_descriptor_needles = [
+        "docker-compose",
+        "docker compose",
+        "compose 文件",
+        "compose file",
+        "helm chart",
+        "helm 图表",
+        "镜像清单",
+        "image set",
+    ]
+    if any(needle in text for needle in open_source_descriptor_needles):
+        return "rainbond-opensource-app-deploy"
+
+    if "harbor" in text:
+        return "rainbond-app-assistant"
 
     scores = sorted(
         (

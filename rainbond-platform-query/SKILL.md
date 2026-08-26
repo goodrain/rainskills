@@ -22,7 +22,7 @@ Node.js 前置检查通过后，平台只读查询只执行一次本地 `rainski
 
 第一步检查 Node.js 是否存在且主版本不低于 18。Node.js 缺失或低于 18 时，只说明“Rainskills 执行组件需要 Node.js 18 或更高版本”并停止：不选择运行环境，不调用 MCP，不猜测替代命令。只有用户或 agent 明确同意后才安装或升级 Node.js，再从同一原始 intent 继续。
 
-固定 launcher 是 `["node", "<home>/.rainbond/lib/rainskills/bin/rainskills.js"]`；运行包版本标记为 `rainskills@0.1.17`，且必须与本技能包 `package.json` 一致。把 launcher 与参数拼成 argv 数组直接执行，禁止 `rainskills@latest` 或执行 shell 字符串。
+固定 launcher 是 `["node", "<home>/.rainbond/lib/rainskills/bin/rainskills.js"]`；运行包版本标记为 `rainskills@0.1.18`，且必须与本技能包 `package.json` 一致。把 launcher 与参数拼成 argv 数组直接执行，禁止 `rainskills@latest` 或执行 shell 字符串。
 
 本地 launcher 必须从当前 Skill 所在目录的同级目录定位 `rainbond-platform-installer/scripts/local-runtime.js`，解析为绝对路径后使用 `["node", "<绝对路径>"]` 执行。仅在用户明确指定环境时使用 `environment list`；`runtime message` 仍使用本地 launcher。本地 launcher 只读取已安装文件和本机受保护状态，不得访问 npm 或其它网络。
 
@@ -34,7 +34,7 @@ Node.js 前置检查通过后，平台只读查询只执行一次本地 `rainski
 ```json
 {
   "schema": "rainskills.skill-runtime-contract.v1",
-  "package_version": "rainskills@0.1.17",
+  "package_version": "rainskills@0.1.18",
   "launcher": ["node", "<home>/.rainbond/lib/rainskills/bin/rainskills.js"],
   "local_launcher": ["node", "<installed-skills-root>/rainbond-platform-installer/scripts/local-runtime.js"],
   "local_argv": {
