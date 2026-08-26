@@ -102,7 +102,11 @@ test("package metadata defines a public npx command with pinned runtime dependen
   );
   assert.equal(
     manifest.scripts.test,
-    "npm run test:runtime-version && npm run test:auto-update && npm run test:launcher && npm run test:api-bridge && npm run test:skill-profile && npm run test:marketplace && npm run test:runtime-routing && npm run test:telemetry && npm run test:platform && npm run test:windows && npm run test:package-upload && npm run test:package && npm run test:installer && npm run test:signal && npm run test:npx-pty"
+    "npm run test:runtime-version && npm run test:auto-update && npm run test:launcher && npm run test:api-bridge && npm run test:console-contract && npm run test:skill-profile && npm run test:marketplace && npm run test:runtime-routing && npm run test:telemetry && npm run test:platform && npm run test:windows && npm run test:package-upload && npm run test:package && npm run test:installer && npm run test:signal && npm run test:npx-pty"
+  );
+  assert.equal(
+    manifest.scripts["test:console-contract"],
+    "python3 tests/console_tool_contract_test.py"
   );
   assert.equal(
     manifest.scripts["test:runtime-version"],

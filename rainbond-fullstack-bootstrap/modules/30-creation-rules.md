@@ -27,7 +27,13 @@ Create only what is needed to establish the topology:
 
 Do not try to solve every runtime problem inside this skill.
 
-## 2a. Deployment-plan readiness for multi-component image topologies
+## 2a. Configure image components before their first deployment
+
+Call `rainbond_create_component_from_image` with `is_deploy=false`. Reuse the returned `service_id`, configure the component's required ports, envs, dependencies, storage, config files, and probes, then trigger exactly one deployment with `rainbond_operate_app(action=deploy, service_ids=[<service_id>])`.
+
+Do not accept the Console default `is_deploy=true` and then deploy the same component again after configuration. If an existing component was already deployed successfully, port and outer-access changes synchronize through the Console/Region APIs; do not rebuild it merely to apply those changes.
+
+## 2b. Deployment-plan readiness for multi-component image topologies
 
 Before any mutating Rainbond Tool call for a multi-component image deployment, build a short `DeploymentPlanReadiness` mentally and stop if it is not ready.
 

@@ -164,7 +164,16 @@ test("mutable calls are bound to the protected intent Skill and send audited met
       requests.push(rpc);
       response.writeHead(200, { "Content-Type": "application/json" });
       if (rpc.method === "tools/list") {
-        response.end(JSON.stringify({ jsonrpc: "2.0", id: 1, result: { tools: [] } }));
+        response.end(JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          result: {
+            tools: [{
+              name: "rainbond_create_app",
+              inputSchema: { type: "object", properties: { app_name: { type: "string" } } },
+            }],
+          },
+        }));
         return;
       }
       response.end(JSON.stringify({
@@ -197,7 +206,8 @@ test("mutable calls are bound to the protected intent Skill and send audited met
       `${confirmationId}.json`
     ), "utf8"));
     assert.equal(localOperation.runtime_operation_id, OPERATION_ID);
-    assert.equal(requests.length, 0);
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].method, "tools/list");
 
     const executed = await runCli([
       "call", "rainbond_create_app", "--input", "-",
@@ -206,8 +216,8 @@ test("mutable calls are bound to the protected intent Skill and send audited met
       "--confirm", confirmationId,
     ], { home, input });
     assert.equal(executed.code, 0, executed.stderr);
-    assert.equal(requests.length, 1);
-    const metadata = requests[0].params._meta["com.rainbond/rainskills"];
+    assert.equal(requests.length, 2);
+    const metadata = requests[1].params._meta["com.rainbond/rainskills"];
     assert.equal(metadata.schema, "rainskills.operation-meta.v1");
     assert.equal(metadata.operation_id, confirmationId);
     assert.equal(Object.hasOwn(metadata, "runtime_operation_id"), false);
@@ -221,7 +231,7 @@ test("mutable calls are bound to the protected intent Skill and send audited met
     ], { home, input });
     assert.equal(wrong.code, 3);
     assert.match(wrong.stderr, /Skill.*operation|intent|不匹配/i);
-    assert.equal(requests.length, 1);
+    assert.equal(requests.length, 2);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

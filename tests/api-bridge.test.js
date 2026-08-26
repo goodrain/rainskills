@@ -345,6 +345,96 @@ test("mutable base calls report the missing Skill binding instead of invalid com
   assert.doesNotMatch(result.stderr, /invalid command/);
 });
 
+test("mutable calls validate Console tool schemas before issuing confirmation", async () => {
+  await withRpcServer((record, response) => {
+    assert.equal(record.body.method, "tools/list");
+    rpcResult(response, record.body.id, {
+      tools: [{
+        name: "rainbond_create_component_from_image",
+        description: "Create a component from an image.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            team_name: { type: "string" },
+            region_name: { type: "string" },
+            app_id: { type: "integer", minimum: 1 },
+            service_cname: { type: "string" },
+            image: { type: "string" },
+            is_deploy: { type: "boolean" },
+          },
+          required: ["team_name", "region_name", "app_id", "service_cname", "image"],
+        },
+      }],
+    });
+  }, async (baseUrl, requests) => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-bridge-schema-validation-"));
+    const result = await runBridge(
+      ["call", "rainbond_create_component_from_image", "--input", "-"],
+      {
+        env: {
+          RAINBOND_URL: new URL(baseUrl).origin,
+          RAINBOND_JWT: "bridge-jwt.payload.signature",
+        },
+        home,
+        input: JSON.stringify({
+          team_name: "demo-team",
+          region_name: "rainbond",
+          app_id: 12,
+          service_cname: "nginx",
+          image_address: "nginx:latest",
+        }),
+      }
+    );
+
+    assert.equal(result.code, 2);
+    assert.match(result.stderr, /missing required field: image/i);
+    assert.deepEqual(requests.map((request) => request.body.method), ["tools/list"]);
+    assert.equal(fs.existsSync(path.join(home, ".rainbond", "operations")), false);
+  });
+});
+
+test("schema validation covers Console enums, arrays, alternatives, and map values", () => {
+  const { validateSchemaValue } = require(bridgePath);
+  const schema = {
+    type: "object",
+    properties: {
+      operation: { type: "string", enum: ["add", "enable_outer"] },
+      app_id: { type: "integer", minimum: 1 },
+      ports: {
+        type: "array",
+        minItems: 1,
+        items: {
+          oneOf: [
+            { type: "integer", minimum: 1 },
+            {
+              type: "object",
+              properties: { port: { type: "integer", minimum: 1 } },
+              required: ["port"],
+            },
+          ],
+        },
+      },
+      selector: { anyOf: [{ type: "string", minLength: 1 }, { type: "null" }] },
+      envs: { type: "object", additionalProperties: { type: "string" } },
+    },
+    required: ["operation", "app_id"],
+    additionalProperties: false,
+  };
+
+  assert.equal(validateSchemaValue({
+    operation: "add",
+    app_id: 12,
+    ports: [80, { port: 443 }],
+    selector: null,
+    envs: { MODE: "prod" },
+  }, schema, "$input"), null);
+  assert.match(validateSchemaValue({ operation: "delete", app_id: 12 }, schema, "$input"), /unsupported value/);
+  assert.match(validateSchemaValue({ operation: "add", app_id: 0 }, schema, "$input"), /below.*minimum/);
+  assert.match(validateSchemaValue({ operation: "add", app_id: 12, ports: [] }, schema, "$input"), /too few items/);
+  assert.match(validateSchemaValue({ operation: "add", app_id: 12, envs: { MODE: 1 } }, schema, "$input"), /must be string/);
+  assert.match(validateSchemaValue({ operation: "add", app_id: 12, unexpected: true }, schema, "$input"), /unsupported field/);
+});
+
 test("status, compact list, describe, and call use the dedicated JSON-RPC endpoint", async () => {
   const tools = [
     {
@@ -442,6 +532,15 @@ test("status, compact list, describe, and call use the dedicated JSON-RPC endpoi
 
 test("write confirmation can be claimed by only one concurrent process", async () => {
   await withRpcServer((record, response) => {
+    if (record.body.method === "tools/list") {
+      rpcResult(response, record.body.id, {
+        tools: [{
+          name: "rainbond_create_app",
+          inputSchema: { type: "object", properties: { app_name: { type: "string" } } },
+        }],
+      });
+      return;
+    }
     assert.equal(record.body.method, "tools/call");
     setTimeout(() => {
       rpcResult(response, record.body.id, {
@@ -472,7 +571,11 @@ test("write confirmation can be claimed by only one concurrent process", async (
     ]);
 
     assert.deepEqual(results.map((result) => result.code).sort(), [0, 2]);
-    assert.equal(requests.length, 1, "the confirmed write must execute at most once");
+    assert.deepEqual(
+      requests.map((request) => request.body.method),
+      ["tools/list", "tools/call"],
+      "schema discovery runs once and the confirmed write executes at most once"
+    );
   });
 });
 
@@ -727,6 +830,15 @@ test("usage, input, configuration, transport, and tool errors have stable exit c
   });
 
   await withRpcServer((record, response) => {
+    if (record.body.method === "tools/list") {
+      rpcResult(response, record.body.id, {
+        tools: [{
+          name: "rainbond_create_app",
+          inputSchema: { type: "object", properties: { password: { type: "string" } } },
+        }],
+      });
+      return;
+    }
     rpcResult(response, record.body.id, {
       isError: true,
       structuredContent: {

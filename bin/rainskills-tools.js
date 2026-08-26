@@ -931,6 +931,105 @@ async function listTools(config) {
   return result.tools;
 }
 
+function schemaTypeMatches(value, type) {
+  if (type === "null") return value === null;
+  if (type === "array") return Array.isArray(value);
+  if (type === "object") return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+  if (type === "integer") return Number.isInteger(value);
+  if (type === "number") return typeof value === "number" && Number.isFinite(value);
+  return typeof value === type;
+}
+
+function validateSchemaValue(value, schema, fieldPath) {
+  if (!schema || typeof schema !== "object") return null;
+  if (Array.isArray(schema.oneOf)) {
+    const matches = schema.oneOf.filter((candidate) => !validateSchemaValue(value, candidate, fieldPath));
+    return matches.length === 1 ? null : `field ${fieldPath} must match exactly one allowed schema`;
+  }
+  if (Array.isArray(schema.anyOf)) {
+    const matches = schema.anyOf.some((candidate) => !validateSchemaValue(value, candidate, fieldPath));
+    return matches ? null : `field ${fieldPath} does not match an allowed schema`;
+  }
+  if (Array.isArray(schema.enum) && !schema.enum.some((candidate) => candidate === value)) {
+    return `field ${fieldPath} has an unsupported value`;
+  }
+  if (schema.type) {
+    const allowedTypes = Array.isArray(schema.type) ? schema.type : [schema.type];
+    if (!allowedTypes.some((type) => schemaTypeMatches(value, type))) {
+      return `field ${fieldPath} must be ${allowedTypes.join(" or ")}`;
+    }
+  }
+  if (typeof value === "string") {
+    if (Number.isInteger(schema.minLength) && value.length < schema.minLength) {
+      return `field ${fieldPath} is shorter than the allowed minimum`;
+    }
+    if (Number.isInteger(schema.maxLength) && value.length > schema.maxLength) {
+      return `field ${fieldPath} exceeds the allowed maximum`;
+    }
+    if (typeof schema.pattern === "string") {
+      try {
+        if (!new RegExp(schema.pattern).test(value)) return `field ${fieldPath} has an invalid format`;
+      } catch (_error) {
+        throw new BridgeError("Rainbond tool schema contains an invalid pattern", EXIT.TRANSPORT);
+      }
+    }
+  }
+  if (typeof value === "number") {
+    if (typeof schema.minimum === "number" && value < schema.minimum) {
+      return `field ${fieldPath} is below the allowed minimum`;
+    }
+    if (typeof schema.maximum === "number" && value > schema.maximum) {
+      return `field ${fieldPath} exceeds the allowed maximum`;
+    }
+  }
+  if (Array.isArray(value)) {
+    if (Number.isInteger(schema.minItems) && value.length < schema.minItems) {
+      return `field ${fieldPath} has too few items`;
+    }
+    if (Number.isInteger(schema.maxItems) && value.length > schema.maxItems) {
+      return `field ${fieldPath} has too many items`;
+    }
+    if (schema.items) {
+      for (let index = 0; index < value.length; index += 1) {
+        const error = validateSchemaValue(value[index], schema.items, `${fieldPath}[${index}]`);
+        if (error) return error;
+      }
+    }
+  }
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const required = Array.isArray(schema.required) ? schema.required : [];
+    for (const field of required) {
+      if (!Object.prototype.hasOwnProperty.call(value, field)) return `missing required field: ${field}`;
+    }
+    const properties = schema.properties && typeof schema.properties === "object"
+      ? schema.properties
+      : {};
+    for (const [field, item] of Object.entries(value)) {
+      if (Object.prototype.hasOwnProperty.call(properties, field)) {
+        const error = validateSchemaValue(item, properties[field], `${fieldPath}.${field}`);
+        if (error) return error;
+      } else if (schema.additionalProperties === false) {
+        return `unsupported field: ${field}`;
+      } else if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
+        const error = validateSchemaValue(item, schema.additionalProperties, `${fieldPath}.${field}`);
+        if (error) return error;
+      }
+    }
+  }
+  return null;
+}
+
+async function validateToolArguments(config, toolName, argumentsValue) {
+  const tools = await listTools(config);
+  const tool = tools.find((candidate) => candidate && candidate.name === toolName);
+  if (!tool) throw new BridgeError("Rainbond tool was not found", EXIT.TOOL);
+  if (!tool.inputSchema || typeof tool.inputSchema !== "object") {
+    throw new BridgeError("Rainbond tool schema is invalid", EXIT.TRANSPORT);
+  }
+  const validationError = validateSchemaValue(argumentsValue, tool.inputSchema, "$input");
+  if (validationError) throw new BridgeError(validationError, EXIT.USAGE);
+}
+
 async function execute(command, config) {
   if (command.command === "package-upload") {
     return executePackageUpload(command, config);
@@ -980,6 +1079,7 @@ async function execute(command, config) {
     }
     skillBinding = loadSkillBinding(config, command.skillId, command.rootSkillId);
     if (!command.confirmation) {
+      await validateToolArguments(config, command.toolName, argumentsValue);
       operation = prepareOperation(
         config,
         command.toolName,
@@ -1085,6 +1185,8 @@ module.exports = {
   parseEnvFile,
   parseCommand,
   rpcRequest,
+  validateSchemaValue,
+  validateToolArguments,
   validatePackageUploadRequest,
 };
 

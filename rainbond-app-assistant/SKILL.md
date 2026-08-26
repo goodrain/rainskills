@@ -288,7 +288,7 @@ description: "Use whenever a user asks to deploy, run, deliver, publish, inspect
     - 可以用 `rainbond_query_region_rbd_components` 查询并展示它们的状态
     - 不能通过 MCP 对它们执行重启、部署、修改等写操作；当前 MCP 工具集不支持此类操作
      - 如果用户要求操作这些组件，明确告知：需要通过 Kubernetes 命令（如 `kubectl rollout restart deployment/<name> -n rbd-system`）或 Rainbond 集群管理控制台进行，超出本技能的操作范围，不要假装可以执行
-28a. 写操作失败或结果异常时，先调用 `rainbond_get_operation_failure_context`，按其 `classified_reason` 决定停下、只读核实或低风险修复；`unknown` 回退既有证据链，禁止盲目重放写操作。
+28a. 已知 `service_id` 的组件在构建、部署或运行操作后失败或立即异常时，调用 `rainbond_get_operation_failure_context({team_name, region_name, app_id, service_id, event_id?})`，按其 `classified_reason` 决定停下、只读核实或低风险修复；`unknown` 回退既有证据链，禁止盲目重放写操作。CLI 在确认令牌生成前报告的 missing/invalid field 属于参数校验失败，尚未进入组件操作：按 Console Tool schema 修正参数一次，不调用 failure context，也不查询组件残留。
     `event_log_tail` 只作为敏感诊断证据使用，绝不能复制、引用或向用户展示其原文；输出只能使用 `classified_reason`、非敏感摘要和已脱敏字段。
 28b. 运行态或交付健康检查先调用 `rainbond_get_app_health_overview`；仅 `abnormal` 或 `unknown` 组件再读取 component summary、日志、事件或存储明细。
 29. **仅给 bare Git URL 时默认 root + 空 `subdirectories`**：当用户给的只是一个 Git URL（无本地 manifest、无明确子目录提示），默认 `subdirectories=""`（仓库根）进入 source 检测，让后端判断这个仓库结构。**不要**先问用户"根目录还是子目录"。
@@ -368,7 +368,7 @@ description: "Use whenever a user asks to deploy, run, deliver, publish, inspect
     - 从对话历史里随手抓一个看起来像 UUID 的字符串（可能是 `check_event_id` / `check_uuid` / `event_id` / 历史 service_id）
     - 凭"我记得是这个"或"上次也是这个 ID"做猜测
     - 用户消息里粘的、但本会话没验证过的 ID
-    强制流程：动手前如果不能 100% 确定 `service_id` 出处，**第一动作**必须是 `rainbond_query_components(team_name, region_name, app_id)`，按 `service_cname` 或 `k8s_component_name` 匹配出真实 `service_id`，再调写工具。
+    强制流程：动手前如果不能 100% 确定 `service_id` 出处，**第一动作**必须是 `rainbond_query_components({enterprise_id, app_id})`，必要时携带 `query=<service_cname 或 service_id>`，按 `service_cname` 或 `k8s_component_name` 匹配出真实 `service_id`，再调写工具。
     反例（**禁止**）：日志里出现"修改组件 `7059eb62cccc3a16f22c9415c905bbcc` 的构建源" — 这个 ID 在本会话所有 query 结果里都没出现过，是模型从某处幻觉出来的。正确做法：调 update 之前先 `rainbond_query_components` 拿到真实 `service_id`，再 update。
     与 Iron Law 31 配套：31 管"写工具前必须 select skill"，34 管"写工具的 service_id 必须有明确出处"。两条共同把"模型自由发挥参数"这条路堵死。
 
@@ -416,7 +416,7 @@ description: "Use whenever a user asks to deploy, run, deliver, publish, inspect
     反例（**禁止**）：上一轮已经 `select_skill_rainbond-fullstack-bootstrap` 过了，本轮 user 简短回复 "java/jar"，你又调一次 `select_skill_rainbond-fullstack-bootstrap` 并叙述"先加载 bootstrap"。正确做法：priorTurnMessages 已有 ack → 直接 `rainbond_update_component_build_source(...)` 继续。
     正例：上一轮 `select_skill_rainbond-fullstack-bootstrap`，本轮用户说"组件起不来帮我排查下" → 现在阶段从部署切到排障 → 调一次 `select_skill_rainbond-fullstack-troubleshooter`（新 skill，允许）→ 沉默地进入诊断流程，不复述"troubleshooter 已加载"。
 36. **用户给出的字面值（URL / 镜像地址 / 分支名 / 凭证）必须 verbatim 传给工具，禁止 LLM 凭训练知识"补全"、"修正"、"猜测"**。
-    适用字段：`git_url` / `image_address` / `code_version`（分支/tag/commit）/ `username` / `password` / `token` / `subdirectories` 等任何用户在消息里给出的字面值。
+    适用字段：`git_url` / `image`（用户所说的镜像地址映射到 Console Tool 的 `image` 字段）/ `code_version`（分支/tag/commit）/ `username` / `password` / `token` / `subdirectories` 等任何用户在消息里给出的字面值。
     **禁止行为**：
     - 看到 `service_cname=java-maven-demo` 就自创 `git_url=https://gitee.com/mirrors_123/java-maven-demo.git`（按训练数据里"常见仓库地址"补全）
     - 用户给的 URL 没 `.git` 后缀就自动加上
@@ -482,9 +482,9 @@ description: "Use whenever a user asks to deploy, run, deliver, publish, inspect
     - **复用创建返回的 `service_id` / `service_alias`**：`rainbond_create_component_*` 成功后会返回 `service_id` 和 `service_alias`（k8s component name），**记住并在本轮后续 mutating 操作里直接复用**。**禁止**在每次 `rainbond_manage_component_*` / `rainbond_operate_app` 之前都先 `rainbond_query_components` 重查一遍 alias —— 创建时已经返回过，重查只是浪费轮次（仅当 `service_id` 出处不明、按 Iron Law 34 必须重新建立 provenance 时才查）。
     - **不重复调 `rainbond_get_current_user`**：身份（user_id / username / enterprise_id / team_name / region_name）在一次会话内不变，已在 system prompt 的 session-context 段提供，需要时直接读（见 Iron Law 35 第 2 类）。
     - **同一 mutating 调用成功后禁止原样重复**：一个写工具用相同入参成功返回后，不要在同一轮再发一次相同调用"确认一下"——成功就是成功，要确认状态用读工具（`rainbond_get_component_summary` 等），不要重发写调用。
-40. **对外访问地址必须引用工具返回的真实值，禁止按格式拼装。** 组件的对外访问地址是**事实信息**，唯一权威来源是 `rainbond_get_component_summary` 返回的 `access_infos` 字段（来自网关真实绑定）。
-    - 本轮已调用该工具拿到真实地址 → 报告里引用 `access_infos` 的真实值。
-    - 本轮**未**调用该工具、或该工具未返回可用地址 → 最终报告必须写"请在控制台该组件的端口页查看对外访问地址"，**禁止**按记忆或文档示例的 URL 格式（`<name>.<ip>.nip.io`、`<service>-<port>-<team>.<ip>.nip.io` 等）拼装一个地址当成真的。
+40. **对外访问地址必须引用工具返回的真实值，禁止按格式拼装。** 组件的对外访问地址是**事实信息**，权威来源是 `rainbond_get_component_detail` 或 `rainbond_get_component_summary` 返回的 `access_infos` 字段（都来自网关真实绑定）。只需状态和访问地址时优先调用轻量的 detail；只有异常组件确实需要端口、env、存储或事件证据时才调用 summary。
+    - 本轮已通过上述任一工具拿到真实地址 → 报告里引用 `access_infos` 的真实值。
+    - 本轮**未**通过上述工具拿到可用地址 → 最终报告必须写"请在控制台该组件的端口页查看对外访问地址"，**禁止**按记忆或文档示例的 URL 格式（`<name>.<ip>.nip.io`、`<service>-<port>-<team>.<ip>.nip.io` 等）拼装一个地址当成真的。
     - **禁止**把任何拼装/猜测出来的访问地址写进任何组件 env（如 `APP_WEB_URL` / `*_BASE_URL` / `*_PUBLIC_URL` 等）。需要把对外地址回填给某个组件时，同样只能用 `access_infos` 的真实值；拿不到真实值就停下来让用户在控制台确认后提供，不要先拼一个填进去。
     - 真实事故：模型在没有任何工具返回访问地址的情况下，照文档示例格式拼出 `http://dify.<ip>.nip.io`，既写进最终报告又配进了组件 `APP_WEB_URL`，全是编造的。这是 Iron Law 违反。
 41. **部署位置和访问地址必须分开。** `project.deployment_location_url` 是 Rainbond 控制台应用概览地址；仅在可信 Console base（`RAINBOND_URL` 或等价 session context）、`team_name`、`region_name` 和 `app_id` 全部已知时生成：
