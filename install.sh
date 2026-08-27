@@ -932,13 +932,14 @@ assert_internal_connect_entry() {
         console_origin="$2"
         shift 2
         ;;
-      --allow-insecure-http)
+      --allow-insecure-http|--no-cached-token)
         shift
         ;;
       --non-interactive)
         shift
         ;;
       *)
+        printf '错误：runtime connect 内部门禁包含不支持的参数。\n' >&2
         return 1
         ;;
     esac
