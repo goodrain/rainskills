@@ -19,7 +19,7 @@ OPEN_STAGE_ROWS = (
     "[source acquisition](references/source-acquisition.md) |",
     "| 官方部署清单已验证，首次需要连接或调用 Rainbond | 只读取自己的 "
     "[runtime gate](references/runtime-gate.md) |",
-    "| operation/context 已建立，需要建模、部署、排障或交付 | 读取 "
+    "| workspace context 已解析，需要建模、部署、排障或交付 app/component | 读取 "
     "[deployment workflow](references/deployment-workflow.md) |",
     "| 新鲜证据命中已知部署故障模式 | 再读取 "
     "[failure-mode playbook](references/failure-mode-playbook.md) |",
@@ -520,7 +520,7 @@ def validate_routing_conflicts(
 
     stage_conflict = any(pre_inventory_rainbond_action(statement) for statement in statements(staged_loading)) or any(
         contains(statement, "deployment workflow")
-        and contains(statement, "operation context")
+        and contains(statement, "workspace context")
         and ("前" in statement or "before" in statement)
         and not has_negation(statement)
         for statement in statements(staged_loading)

@@ -27,10 +27,10 @@ description: "Use when the user supplies a third-party Docker Compose file/conte
 |---|---|
 | Phase 0：归属已确认、部署清单尚未验证 | 只读取 [source acquisition](references/source-acquisition.md) |
 | 官方部署清单已验证，首次需要连接或调用 Rainbond | 只读取自己的 [runtime gate](references/runtime-gate.md) |
-| operation/context 已建立，需要建模、部署、排障或交付 | 读取 [deployment workflow](references/deployment-workflow.md) |
+| workspace context 已解析，需要建模、部署、排障或交付 app/component | 读取 [deployment workflow](references/deployment-workflow.md) |
 | 新鲜证据命中已知部署故障模式 | 再读取 [failure-mode playbook](references/failure-mode-playbook.md) |
 
-正确顺序是：先验证官方部署清单，再加载 Runtime Gate。这里只允许加载本 Skill 的 Gate；operation/context 是当前任务内的 team/region/app 上下文，不得生成 CLI 业务 operation ID、运行环境 ID 或 intent JSON。
+正确顺序是：先验证官方部署清单，再加载 Runtime Gate。这里只允许加载本 Skill 的 Gate。workspace context 包含 `enterprise_id`、`team_id`、`team_name` 和 `region_name`；app/component 标识只来自用户明确输入或本次实时查询/创建结果。它们都由当前任务携带，不得生成 CLI 业务 operation ID、运行环境 ID 或 intent JSON。
 
 ## Runtime 与安全边界
 
@@ -43,7 +43,7 @@ description: "Use when the user supplies a third-party Docker Compose file/conte
 
 ## 执行边界
 
-建立 operation/context 后，按 [deployment workflow](references/deployment-workflow.md) 执行 **per-component image modeling**：Compose、Helm 和 installer-generated topology 都是证据来源，不是必须走的平台黑盒导入路径。配置组件、显式依赖、配置文件与存储后再部署，等待终态，有限修复，并通过真实入口和 UI/core smoke。
+解析 workspace context 后，按 [deployment workflow](references/deployment-workflow.md) 执行 **per-component image modeling**：Compose、Helm 和 installer-generated topology 都是证据来源，不是必须走的平台黑盒导入路径。配置组件、显式依赖、配置文件与存储后再部署，等待终态，有限修复，并通过真实入口和 UI/core smoke。只有证据匹配已知故障时才读取 [failure-mode playbook](references/failure-mode-playbook.md)。
 
 Helm is evidence, not a deployment path。不得因 Rainbond Helm 解析失败就停止，也不得在没有确认上传全链路时承诺“改用 Compose”；先判断能否根据官方证据逐组件建模。配置、初始化任务、特权能力或存储语义无法完整映射时，在创建裸组件之前停止。
 

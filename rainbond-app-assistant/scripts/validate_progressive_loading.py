@@ -15,8 +15,8 @@ APP_INITIAL_STAGE = (
     "[own runtime gate](references/runtime-gate.md)、"
     "[routing](references/routing.md) | 其余全部 |"
 )
-APP_OPERATION_STAGE = (
-    "| operation/context 已建立，需要编排或执行 | "
+APP_CONTEXT_STAGE = (
+    "| workspace context 已解析，需要编排或执行 app/component | "
     "[workflow rules](references/workflow-rules.md)；仅在核对路线或复盘时读取 "
     "[operational reference](references/operational-reference.md) | 输出与对象细节 |"
 )
@@ -68,10 +68,10 @@ def validate_progressive_loading(skill_dir: Path) -> list[str]:
         require((skill_dir / relative_path).is_file(), f"missing {relative_path}", failures)
 
     require(APP_INITIAL_STAGE in root, "App initial stage mapping is invalid", failures)
-    require(APP_OPERATION_STAGE in root, "App operation/context stage mapping is invalid", failures)
-    if APP_INITIAL_STAGE in root and APP_OPERATION_STAGE in root:
+    require(APP_CONTEXT_STAGE in root, "App stateless context stage mapping is invalid", failures)
+    if APP_INITIAL_STAGE in root and APP_CONTEXT_STAGE in root:
         require(
-            root.index(APP_INITIAL_STAGE) < root.index(APP_OPERATION_STAGE),
+            root.index(APP_INITIAL_STAGE) < root.index(APP_CONTEXT_STAGE),
             "App stage mapping must load the runtime gate before workflow rules",
             failures,
         )

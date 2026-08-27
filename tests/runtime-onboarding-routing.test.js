@@ -70,6 +70,17 @@ test("every business Skill uses the single-runtime CLI contract", () => {
       assert.equal(parsed.skillId, skillId);
       assert.equal(Object.hasOwn(parsed, "operationId"), false);
     }
+    assert.deepEqual(current.input_commands.context_resolve.stdin, {
+      default: { required: ["enterprise", "workspace"] },
+      with_hints: {
+        required: ["enterprise", "workspace"],
+        hints: { team_name: "<team-name>" },
+      },
+      with_selection: {
+        required: ["enterprise", "workspace"],
+        selection: { option_id: "<option-id>" },
+      },
+    });
   }
 });
 
@@ -89,6 +100,43 @@ test("runtime gates contain no multi-environment or runtime-operation protocol",
     assert.match(current, /本机只允许连接一个 Rainbond 运行环境/);
     assert.match(current, /写调用不得自动重放/);
     assert.match(current, /403 直接停止/);
+  }
+});
+
+test("business Skills do not restore removed runtime registries outside the generated gate", () => {
+  const forbidden = [
+    /刷新(?:一次)?环境列表/,
+    /全局默认环境/,
+    /复用已绑定的环境 ID/,
+    /不重复枚举环境/,
+  ];
+  for (const skillId of skillIds) {
+    const source = runtimeGateSource(skillId);
+    for (const pattern of forbidden) assert.doesNotMatch(source, pattern);
+  }
+});
+
+test("app assistant loads specialist guidance without legacy select-skill tools or operation state", () => {
+  const source = fs.readFileSync(
+    path.join(root, "rainbond-app-assistant", "references", "workflow-rules.md"),
+    "utf8",
+  );
+  assert.doesNotMatch(source, /select_skill_/);
+  assert.doesNotMatch(source, /绑定到本次 operation/);
+  assert.doesNotMatch(source, /context resolve` 已保存/);
+  assert.match(source, /完整读取[^。\n]*专项 Skill[^。\n]*SKILL\.md/);
+  assert.match(source, /enterprise_id[^。\n]*team_id[^。\n]*team_name[^。\n]*region_name/);
+});
+
+test("progressive-loading stages use workspace context and live app-component facts", () => {
+  for (const relativePath of [
+    path.join("rainbond-app-assistant", "SKILL.md"),
+    path.join("rainbond-opensource-app-deploy", "SKILL.md"),
+  ]) {
+    const source = fs.readFileSync(path.join(root, relativePath), "utf8");
+    assert.doesNotMatch(source, /operation\/context/);
+    assert.match(source, /workspace context/);
+    assert.match(source, /app\/component/);
   }
 });
 

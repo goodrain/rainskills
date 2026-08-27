@@ -28,6 +28,13 @@ const forbidden = [
   "rainskills_operation_id",
   "intent resume",
 ];
+const forbiddenFullGuidance = [
+  "刷新一次环境列表",
+  "刷新环境列表",
+  "全局默认环境",
+  "复用已绑定的环境 ID",
+  "不重复枚举环境",
+];
 
 function runtimeGate(source, skillId) {
   const match = source.match(
@@ -61,6 +68,20 @@ function runtimeContract(gate, skillId) {
       throw new Error(`${skillId} ${name} CLI contract 无效`);
     }
   }
+  const contextInput = contract.input_commands.context_resolve.stdin;
+  if (JSON.stringify(contextInput) !== JSON.stringify({
+    default: { required: ["enterprise", "workspace"] },
+    with_hints: {
+      required: ["enterprise", "workspace"],
+      hints: { team_name: "<team-name>" },
+    },
+    with_selection: {
+      required: ["enterprise", "workspace"],
+      selection: { option_id: "<option-id>" },
+    },
+  })) {
+    throw new Error(`${skillId} context resolve stdin contract 无效`);
+  }
   return contract;
 }
 
@@ -69,6 +90,9 @@ for (const skillId of skillIds) {
   const gate = runtimeGate(source, skillId);
   for (const value of forbidden) {
     if (gate.includes(value)) throw new Error(`${skillId} 仍包含已删除契约：${value}`);
+  }
+  for (const value of forbiddenFullGuidance) {
+    if (source.includes(value)) throw new Error(`${skillId} 仍包含已删除的多运行环境说明：${value}`);
   }
   runtimeContract(gate, skillId);
 }
