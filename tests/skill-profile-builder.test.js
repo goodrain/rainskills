@@ -132,7 +132,7 @@ test("embedded profile is explicit, transport-safe, and contains only Agent-comp
     );
     assert.match(localGate, /固定 launcher/, skill);
     assert.match(localGate, /Device Flow/, skill);
-    assert.match(localGate, /附加交互终端（TTY）[\s\S]*tty:\s*true/, skill);
+    assert.match(localGate, /Device Flow[^\n]*不依赖[^\n]*TTY[\s\S]*保持进程附着/, skill);
     assert.match(localGate, /npm root -g/, skill);
     assert.match(localGate, /~\/\.rainbond/, skill);
   }

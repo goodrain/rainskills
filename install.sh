@@ -2396,10 +2396,6 @@ obtain_rainbond_token() {
     return 0
   fi
 
-  if [[ "$NON_INTERACTIVE" -eq 1 || ! -t 0 ]]; then
-    die "非交互模式下浏览器登录不可用，请改用 --token <jwt> 或设置 RAINBOND_JWT。"
-  fi
-
   local device_flow_status
   if device_flow_login_to_rainbond "$base_url"; then
     return 0
@@ -2408,6 +2404,9 @@ obtain_rainbond_token() {
   fi
   if [[ "$device_flow_status" -eq 2 ]]; then
     printf '当前 Rainbond Console 暂不支持设备授权，改用兼容授权流程。\n' >&2
+    if ! can_open_browser && [[ ! -t 0 ]]; then
+      die "当前 Rainbond Console 仅支持旧版浏览器回调；此模式需要本机浏览器或交互终端。请升级 Rainbond Console 后重试。"
+    fi
     browser_login_to_rainbond "$base_url"
     return 0
   fi

@@ -72,6 +72,39 @@ test("runtime connector child never inherits a cached credential", () => {
   assert.equal(rejected.RAINBOND_JWT, undefined);
 });
 
+test("runtime connector preserves only the browser routing environment needed by Device Flow", () => {
+  const forwarded = runtimeChildEnvironment({
+    HOME: "/tmp/home",
+    PATH: "/usr/bin",
+    DISPLAY: ":0",
+    WAYLAND_DISPLAY: "wayland-0",
+    XDG_RUNTIME_DIR: "/run/user/1000",
+    DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/1000/bus",
+    WSL_INTEROP: "/run/WSL/1_interop",
+    WSL_DISTRO_NAME: "Ubuntu",
+    SSH_CONNECTION: "client 123 server 22",
+    SSH_CLIENT: "client 123 22",
+    SSH_TTY: "/dev/pts/1",
+    container: "podman",
+    UNRELATED_SECRET: "must-not-pass",
+  });
+
+  assert.deepEqual(forwarded, {
+    HOME: "/tmp/home",
+    PATH: "/usr/bin",
+    DISPLAY: ":0",
+    WAYLAND_DISPLAY: "wayland-0",
+    XDG_RUNTIME_DIR: "/run/user/1000",
+    DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/1000/bus",
+    WSL_INTEROP: "/run/WSL/1_interop",
+    WSL_DISTRO_NAME: "Ubuntu",
+    SSH_CONNECTION: "client 123 server 22",
+    SSH_CLIENT: "client 123 22",
+    SSH_TTY: "/dev/pts/1",
+    container: "podman",
+  });
+});
+
 test("POSIX runtime connection uses fixed installer argv", () => {
   const invocation = runtimeConnectionInvocation({
     targetClient: "codex",
@@ -122,4 +155,35 @@ test("runtime status remains an in-process command", async () => {
     write: (value) => output.push(value),
   }), true);
   assert.equal(JSON.parse(output.join("")).usable, true);
+});
+
+test("failed runtime authorization clears only its own connecting state", async () => {
+  const output = [];
+  const started = [];
+  const aborted = [];
+  const manager = {
+    startConnecting(value) { started.push(value); },
+    abortConnecting(value) { aborted.push(value); return true; },
+  };
+
+  await assert.rejects(() => runBuiltin([
+    "runtime", "connect", "codex", "--saas",
+  ], {
+    runtimeStateManager: manager,
+    singleRuntimeStore: { read: () => null },
+    originInspector: async () => ({
+      origin: "https://run.rainbond.com",
+      httpConfirmationRequired: false,
+      pendingRedirectOrigin: null,
+    }),
+    connectionRunner: async () => {
+      throw new Error("authorization failed");
+    },
+    write: (value) => output.push(value),
+  }), /authorization failed/);
+
+  assert.equal(started.length, 1);
+  assert.equal(aborted.length, 1);
+  assert.deepEqual(aborted[0], started[0]);
+  assert.equal(JSON.parse(output.join("")).action, "retry-runtime-connect");
 });

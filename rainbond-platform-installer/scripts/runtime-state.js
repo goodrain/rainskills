@@ -291,6 +291,25 @@ function createRuntimeStateManager({
     });
   }
 
+  function abortConnecting(input) {
+    return withRuntimeStateLock(() => {
+      const current = read();
+      if (current.state !== "connecting") return false;
+      const fields = connectionFields(input);
+      if (
+        current.operation_id !== fields.operation_id
+        || current.target_client !== fields.target_client
+        || current.environment_kind !== fields.environment_kind
+        || current.console_origin !== fields.console_origin
+      ) {
+        return false;
+      }
+      stateStore.assertProtectedRegularFile(statePath);
+      fs.unlinkSync(statePath);
+      return true;
+    });
+  }
+
   async function markConnected(input) {
     const prior = read();
     const fields = connectionFields(input);
@@ -395,6 +414,7 @@ function createRuntimeStateManager({
   }
 
   return {
+    abortConnecting,
     markConnected,
     path: statePath,
     read,

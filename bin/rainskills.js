@@ -19,6 +19,9 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3
 const RUNTIME_CHILD_ENVIRONMENT_KEYS = Object.freeze([
   "HOME", "PATH", "SHELL", "TMPDIR", "TEMP", "TMP", "USER", "LOGNAME", "LANG", "LC_ALL",
   "TERM", "COLORTERM", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME",
+  "DISPLAY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS",
+  "WSL_INTEROP", "WSL_DISTRO_NAME",
+  "SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY", "container",
   "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
   "SSL_CERT_FILE", "SSL_CERT_DIR", "CURL_CA_BUNDLE", "NODE_EXTRA_CA_CERTS",
   "RAINBOND_LOGIN_TIMEOUT", "RAINSKILLS_NO_BROWSER",
@@ -454,6 +457,9 @@ async function runBuiltin(args, {
         await manager.markConnected(connection);
       }
     } catch (error) {
+      if (typeof manager.abortConnecting === "function") {
+        manager.abortConnecting(connection);
+      }
       write(`${JSON.stringify(runtimeConnectRetryAction(options, inspection.origin))}\n`);
       throw error;
     }

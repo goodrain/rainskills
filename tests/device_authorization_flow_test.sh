@@ -108,6 +108,27 @@ assert_contains \
   "$TEST_ROOT/output.log" \
   "[RAINSKILLS_USER_MESSAGE_END:runtime.device-authorization]"
 
+non_tty_result="$TEST_ROOT/non-tty-token"
+non_tty_error="$TEST_ROOT/non-tty-error"
+set +e
+(
+  NON_INTERACTIVE=0
+  RAINBOND_TOKEN_INPUT=""
+  RAINBOND_USERNAME_INPUT=""
+  RAINBOND_PASSWORD_INPUT=""
+  device_flow_login_to_rainbond() {
+    [[ ! -t 0 ]] || exit 91
+    OBTAINED_RAINBOND_TOKEN="non.tty.token"
+    return 0
+  }
+  obtain_rainbond_token "https://console.example.com" "saas"
+  printf '%s' "$OBTAINED_RAINBOND_TOKEN" > "$non_tty_result"
+) </dev/null 2>"$non_tty_error"
+non_tty_status=$?
+set -e
+[[ "$non_tty_status" -eq 0 ]] || fail "Device Flow was blocked without a terminal TTY"
+assert_equal "non-TTY Device Flow token" "non.tty.token" "$(cat "$non_tty_result")"
+
 scoped_token="$(python3 - <<'PY'
 import base64
 import json
