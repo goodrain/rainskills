@@ -49,7 +49,7 @@ description: "Use only when the user explicitly asks for final delivery or acces
 ```json
 {
   "schema": "rainskills.single-runtime-contract.v1",
-  "package_version": "rainskills@0.1.24",
+  "package_version": "rainskills@0.1.25",
   "runtime_status": [
     "node",
     "<home>/.rainbond/lib/rainskills/bin/rainskills.js",
