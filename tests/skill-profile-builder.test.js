@@ -76,6 +76,19 @@ function assertManifestContract(manifest, { fileName, profile, transport, tarbal
   assert.equal((manifest.match(/"tarball_url":/g) || []).length, 1, fileName);
 }
 
+test("known single dependency edges use one bounded preflight without redundant discovery", () => {
+  const bootstrap = fs.readFileSync(
+    path.join(repoRoot, "rainbond-fullstack-bootstrap", "SKILL.md"),
+    "utf8"
+  );
+
+  assert.match(bootstrap, /known single dependency edge/i);
+  assert.match(bootstrap, /do not call `describe`/i);
+  assert.match(bootstrap, /query `operation=summary` exactly once before the write/i);
+  assert.match(bootstrap, /do not re-query `operation=summary` after a successful `add`/i);
+  assert.match(bootstrap, /returned `dependency` object as the completion evidence/i);
+});
+
 test("embedded profile is explicit, transport-safe, and contains only Agent-compatible skills", () => {
   const output = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-embedded-"));
   const result = buildEmbeddedProfile(output);

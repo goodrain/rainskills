@@ -13,7 +13,7 @@ Load this reference only when reviewing routing mistakes or a completed initiali
 - starting local Docker/OrbStack or pushing temporary images as an implicit fallback
 - silently generating v2-only source structures when the user asked for an immediately executable manifest
 - omitting the execution summary, leaving users unable to tell which components can actually run now
-- omitting the required `### Structured Output` section
+- omitting `### Structured Output` after explicit structured mode was selected
 - emitting bare YAML instead of fenced `yaml` under `### Structured Output`
 - omitting either the opening ````yaml` fence or the final closing fence
 - generating `binding_source: manifest` when the manifest itself was newly generated from repo inference in the current run

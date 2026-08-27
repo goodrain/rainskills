@@ -67,6 +67,8 @@ Readiness decision:
 
 Do not downgrade this gate to a warning for production-like deployments. Inference-only service lists, dependencies, required env, or storage paths are blockers because an apparently successful multi-component creation can encode the wrong product topology.
 
+This gate also applies when adding one image-backed component to an existing app if the result is multi-component. Existing runtime proves which components exist, but it does not prove that the only existing component consumes the new provider. A generic request to “create related dependencies” does not establish an edge. Accept the consumer/provider relation only from manifest or Compose topology, env/config references, project documentation, runtime evidence, or explicit user confirmation. If no source identifies the consumer, ask once and perform no mutating call before the answer.
+
 ### Complex suite examples
 
 Harbor is a complex suite, not a simple `harbor:latest` single-image component. If the user says "deploy Harbor" and no Rainbond template, `rainbond.app.json`, compose profile, official descriptor, or explicit user-confirmed plan is available, stop and ask for one. Do not create `core`, `portal`, `registry`, `jobservice`, `database`, `redis`, `proxy`, scanner, or similar components from model knowledge alone.
@@ -86,7 +88,7 @@ Preferred source for sensitive values:
 - user explicit input for the current run
 - otherwise `.rainbond/secrets.<environment>.json`
 
-When the scenario is clearly a demo bootstrap and the user did not provide secrets, safe demo defaults are still acceptable. Do not guess beyond that boundary.
+Only when the user explicitly identifies the target as demo, disposable, or ephemeral may bootstrap generate a high-entropy temporary secret. Fixed or reused demo passwords are forbidden. In every other scenario, a missing required secret source is a hard stop; ask for explicit input or `.rainbond/secrets.<environment>.json` before any mutating call that needs the secret.
 
 Do not require secrets to exist in `rainbond.app.json`, and do not print secret values in plaintext.
 
@@ -103,6 +105,7 @@ Rules:
 - when a relationship is already reachable by Kubernetes/Rainbond DNS but is not visible in Rainbond dependencies, still add the explicit dependency edge so the console topology and connection-env injection are correct
 - do not put provider connection values such as `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASS`, `REDIS_PASSWORD`, `KAFKA_BROKERS`, or similar values directly on each consumer when the same value belongs to the provider contract
 - do not use `rainbond_manage_component_envs(scope=outer)` for connection information; that path belongs to `rainbond_manage_component_connection_envs`
+- keep database root/admin credentials private to provider initialization; never publish them through provider connection envs. When a consumer needs database credentials, use a separate least-privilege application account supplied by the explicit secret source.
 - **compose case:** a compose service name (`db_postgres`, `redis`, `sandbox`, …) is NOT a hostname after the topology lands in Rainbond — it does not resolve, and names with underscores are not even valid DNS labels. Never copy a compose service name into a consumer `*_HOST` / `*_URL` / `*_ADDR` env. Add the dependency edge, then render the host from dependency injection — consume the provider's auto-generated `{ALIAS}_HOST` (its k8s service internal domain), not a hard-coded `127.0.0.1` (that holds only under built-in-mesh governance). Full rule with the dify ❌→✅ examples: [40-source-and-package-rules.md § Compose service names are NOT hostnames](40-source-and-package-rules.md).
 
 Typical examples:

@@ -57,6 +57,7 @@ workspace context 包含 `enterprise_id`、`team_id`、`team_name` 和 `region_n
 
 - 成功：说明项目、运行环境、工作空间、应用、真实 Rainbond 页面/访问地址及本轮实际完成操作；无法确认的字段省略，禁止猜测。
 - 未完成：输出“部署失败。”、一句直接原因；仅在确有安全可执行方案时增加“解决办法”。
+- 默认不得展示内部对象、状态枚举、Skill/工具名、YAML、JSON 或英文编排标题。
 - 用户明确要求结构化结果或自动化契约时，读取 [output contract](references/output-contract.md)，不得自行发明字段、枚举或状态。
 
 ## 停止条件

@@ -5,6 +5,15 @@ description: "Use only when the user explicitly asks to initialize or link a loc
 
 # Rainbond Project Init
 
+## 用户可见结果协议（最高优先级）
+
+普通用户回复默认使用简洁中文，只说明初始化是否完成、应用和环境、创建或更新的项目文件、仍需确认的问题，以及唯一下一步。内部 `ProjectInitResult` 仍可用于校验和下游衔接，但不直接展示。
+
+- 成功时说明 `rainbond.app.json` 和 `.rainbond/local.json` 的实际处理结果。
+- 未完成时说明直接原因，并只提出当前真正需要用户处理的一项。
+- 默认不得展示内部对象、状态枚举、team/region/app ID、Skill/工具名、YAML、JSON 或英文编排标题。
+- 只有用户明确要求 YAML、JSON、调试详情，或自动化/评测明确要求结构化契约时，才读取并使用 [output contract](references/output-contract.md)。
+
 <!-- rainskills-runtime-gate:start -->
 ## 单运行环境 CLI 门禁（最高优先级）
 
@@ -800,7 +809,7 @@ Those belong to downstream skills.
 
 ## Output Format
 
-Structured output contract:
+Structured output contract（仅在用户或自动化/评测明确要求结构化结果时使用）：
 
 - this skill must emit `ProjectInitResult`
 - minimum target fields:
@@ -810,15 +819,15 @@ Structured output contract:
   - `init_status`
   - `next_action`
 - the human-readable sections below are the narrative view over that object
-- the reply must end with a final `### Structured Output` section
+- in explicit structured contract mode, the reply ends with a final `### Structured Output` section
 - the `### Structured Output` section must render `ProjectInitResult` in fenced `yaml`
 - the literal shape of the final section must be:
   - line 1: `### Structured Output`
   - line 2: ````yaml`
   - middle: `ProjectInitResult: ...`
   - final line: ````
-- omitting the final structured block, changing its object name, or placing later prose after it is a contract failure
-- this contract still applies when the result is `pending_verification` or `blocked`
+- when structured mode is explicitly selected, omitting the final structured block, changing its object name, or placing later prose after it is a contract failure
+- structured mode uses the same object shape when the result is `pending_verification` or `blocked`; those states do not enable structured mode by themselves
 - do not create sidecar result artifacts such as `.rainbond/init.result.json` as a substitute for the final reply contract; current-run status must be expressed in the prose sections and `ProjectInitResult`
 
 Proposed schema:
@@ -989,7 +998,7 @@ ProjectInitResult:
 ```
 ````
 
-Always respond using exactly these sections:
+Only in explicit structured contract mode, respond using exactly these sections:
 
 ### Init Result
 - state whether the project was initialized successfully
@@ -1050,7 +1059,7 @@ Always respond using exactly these sections:
 - keep enum values and field names aligned with the schema above
 - do not place any prose after this section
 - do not duplicate secrets or invent missing values
-- when MCP is unavailable or identity is blocked, still use the same required section headings and final `ProjectInitResult`; only field values change
+- when structured mode was explicitly requested and MCP is unavailable or identity is blocked, use the same required section headings and final `ProjectInitResult`; only field values change
 - bare YAML under `### Structured Output` is a contract failure; the object must appear inside fenced markdown code block with `yaml`
 - the opening fence must be exactly ````yaml` immediately after the heading
 - the closing fence must be the last non-whitespace line of the whole reply
@@ -1077,7 +1086,7 @@ Always respond using exactly these sections:
 - starting local Docker/OrbStack or pushing temporary images as an implicit fallback
 - silently generating v2-only source structures when the user asked for an immediately executable manifest
 - omitting the execution summary, leaving users unable to tell which components can actually run now
-- omitting the required `### Structured Output` section
+- omitting `### Structured Output` after explicit structured mode was selected
 - emitting bare YAML instead of fenced `yaml` under `### Structured Output`
 - omitting either the opening ````yaml` fence or the final closing fence
 - generating `binding_source: manifest` when the manifest itself was newly generated from repo inference in the current run

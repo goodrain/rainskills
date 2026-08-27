@@ -699,6 +699,62 @@ test("read executes only read-classified tools and rejects writes before network
   });
 });
 
+test("dependency summary is read-only while dependency mutations stay protected", async () => {
+  await withRpcServer((record, response) => {
+    assert.equal(record.body.method, "tools/call");
+    assert.deepEqual(record.body.params, {
+      name: "rainbond_manage_component_dependency",
+      arguments: {
+        team_name: "demo-team",
+        region_name: "rainbond",
+        app_id: 12,
+        service_id: "svc-1",
+        operation: "summary",
+      },
+    });
+    rpcResult(response, record.body.id, {
+      isError: false,
+      structuredContent: {
+        service_id: "svc-1",
+        dependencies: { items: [], total: 0 },
+      },
+    });
+  }, async (baseUrl, requests) => {
+    const env = {
+      RAINBOND_URL: new URL(baseUrl).origin,
+      RAINBOND_JWT: "bridge-jwt.payload.signature",
+    };
+    const summaryInput = {
+      team_name: "demo-team",
+      region_name: "rainbond",
+      app_id: 12,
+      service_id: "svc-1",
+      operation: "summary",
+    };
+
+    const summary = await runBridge(
+      ["read", "rainbond_manage_component_dependency", "--input", "-"],
+      { env, input: JSON.stringify(summaryInput) }
+    );
+    assert.equal(summary.code, 0, summary.stderr);
+    assert.deepEqual(JSON.parse(summary.stdout), {
+      service_id: "svc-1",
+      dependencies: { items: [], total: 0 },
+    });
+    assert.equal(requests.length, 1);
+
+    for (const operation of ["add", "add_reverse", "delete"]) {
+      const mutation = await runBridge(
+        ["read", "rainbond_manage_component_dependency", "--input", "-"],
+        { env, input: JSON.stringify({ ...summaryInput, operation }) }
+      );
+      assert.equal(mutation.code, 2, `${operation}: ${mutation.stderr}`);
+      assert.match(mutation.stderr, /read-only/i);
+    }
+    assert.equal(requests.length, 1, "dependency mutations must not execute through read");
+  });
+});
+
 test("platform query uses the single runtime without creating a runtime operation", async () => {
   await withRpcServer((record, response) => {
     assert.equal(record.body.method, "tools/call");
@@ -1148,6 +1204,51 @@ test("call removes sensitive fields from successful tool results before stdout",
       nested: { health_status: "ok" },
     });
     assert.doesNotMatch(result.stdout, /region-token|private-key-material|certificate-material|nested-password/);
+  });
+});
+
+test("call redacts successful env results using their semantic env names", async () => {
+  const rootPassword = "ROOT-PASSWORD-MUST-NOT-LEAK";
+  const databasePassword = "DATABASE-PASSWORD-MUST-NOT-LEAK";
+
+  await withRpcServer((record, response) => {
+    assert.equal(record.body.method, "tools/call");
+    rpcResult(response, record.body.id, {
+      isError: false,
+      structuredContent: {
+        envs: [
+          { name: "MYSQL_ROOT_PASSWORD", value: rootPassword },
+          { attr_name: "DB_PASS", attr_value: databasePassword },
+          { name: "MYSQL_DATABASE", value: "xpi" },
+        ],
+        summary: `configured ${rootPassword}`,
+      },
+    });
+  }, async (baseUrl) => {
+    const result = await runBridge(
+      ["call", "rainbond_query_regions", "--input", "-"],
+      {
+        env: { RAINBOND_URL: baseUrl, RAINBOND_JWT: "jwt.payload.signature" },
+        input: JSON.stringify({
+          envs: [
+            { attr_name: "MYSQL_ROOT_PASSWORD", attr_value: rootPassword },
+            { attr_name: "DB_PASS", attr_value: databasePassword },
+            { attr_name: "MYSQL_DATABASE", attr_value: "xpi" },
+          ],
+        }),
+      }
+    );
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), {
+      envs: [
+        { name: "MYSQL_ROOT_PASSWORD", value: "[REDACTED]" },
+        { attr_name: "DB_PASS", attr_value: "[REDACTED]" },
+        { name: "MYSQL_DATABASE", value: "xpi" },
+      ],
+      summary: "configured [REDACTED]",
+    });
+    assert.doesNotMatch(result.stdout, /ROOT-PASSWORD-MUST-NOT-LEAK|DATABASE-PASSWORD-MUST-NOT-LEAK/);
   });
 });
 

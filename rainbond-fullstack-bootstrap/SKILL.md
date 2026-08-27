@@ -5,6 +5,15 @@ description: "Use only when the user explicitly asks to create the Rainbond app 
 
 # Rainbond Fullstack Bootstrap
 
+## 用户可见结果协议（最高优先级）
+
+普通用户回复默认使用简洁中文，只说明应用和组件的创建/复用结果、当前运行状态、依赖或存储等重要变更，以及唯一下一步。内部 `BootstrapResult` 仍可用于阶段衔接和校验，但不直接展示。
+
+- 成功时说明实际创建或复用的组件、是否运行正常，以及需要用户注意的配置。
+- 未完成时说明直接阻塞原因；只有确有安全可执行方案时才补充解决办法。
+- 默认不得展示内部对象、状态枚举、team/region/app ID、关系 ID、Skill/工具名、YAML、JSON 或英文编排标题。
+- 只有用户明确要求 YAML、JSON、调试详情，或自动化/评测明确要求结构化契约时，才读取并使用 [output contract](modules/70-output-contract.md)。
+
 <!-- rainskills-runtime-gate:start -->
 ## 单运行环境 CLI 门禁（最高优先级）
 
@@ -81,6 +90,27 @@ description: "Use only when the user explicitly asks to create the Rainbond app 
         "with_selection": {"required": ["enterprise", "workspace"], "selection": {"option_id": "<option-id>"}}
       }
     },
+    "list": {
+      "argv": [
+        "node",
+        "<home>/.rainbond/bin/rainskills-tools.js",
+        "list",
+        "--prefix",
+        "<tool-prefix>",
+        "--skill-id",
+        "rainbond-fullstack-bootstrap"
+      ]
+    },
+    "describe": {
+      "argv": [
+        "node",
+        "<home>/.rainbond/bin/rainskills-tools.js",
+        "describe",
+        "<tool-name>",
+        "--skill-id",
+        "rainbond-fullstack-bootstrap"
+      ]
+    },
     "read": {
       "argv": [
         "node",
@@ -132,6 +162,8 @@ description: "Use only when the user explicitly asks to create the Rainbond app 
 `runtime connect` 的 Device Flow 不依赖 stdin TTY；Agent 必须执行固定 argv 并保持进程附着直到授权完成。能打开本机浏览器时由连接器自动跳转，SSH、容器等无浏览器场景原样展示授权地址并继续轮询。只有 Rainbond 不支持 Device Flow 且进入旧版 loopback 手动粘贴时才需要交互终端；不得要求用户在聊天中粘贴 JWT。
 
 执行优化：同一会话内只检查一次 Node.js 和运行环境状态；仅在 Node.js、Rainskills、PATH 或唯一运行环境发生变化后失效。固定 launcher 和 argv 已在本 Skill 中，禁止读取、搜索或探测 `rainskills.js`，也禁止执行 `npm root -g`。
+
+工具名已知但字段不确定时，只调用一次 `describe <tool-name>`；工具名确实未知时，才调用一次带窄前缀的 `list --prefix <tool-prefix>`。禁止通过缺少字段的可变 `call` 逐项探测 schema，也禁止直接读取内部 `capabilities.json`。`list` / `describe` 只用于发现契约，不替代正式的读写调用。
 
 <!-- rainskills-runtime-routing:start -->
 ## 缺少运行环境时
@@ -271,11 +303,12 @@ These rules are always in force. If any module, example, or lower-priority note 
    When a build failure points to something not controllable by any documented key (specific tool version mismatches, lockfile incompatibility, framework version pinning beyond what `CNB_NODE_VERSION` exposes, etc.), that's evidence the fix is **code-side**, not a missing build env. Route to `code_or_build_handoff_needed` rather than guessing env names.
 10. Component connection information must be configured on the provider component with `rainbond_manage_component_connection_envs`; do not use `rainbond_manage_component_envs(scope=outer)` for that path. Consumers receive those values through explicit dependencies.
 11. Explicit component dependencies are a required topology artifact, not just a runtime networking convenience. Use `rainbond_manage_component_dependency` for every declared `depends_on` edge and every inferred provider/consumer edge that bootstrap accepts into the topology. Do not claim MCP lacks a component dependency API; if the tool call fails, report the actual MCP/control-plane failure.
+   **Known single dependency edge fast path.** When the user asks only to establish one dependency and both the consumer `service_id` and provider `dep_service_id` are already known, do not call `describe` or read component detail merely to rediscover those identifiers. Query `operation=summary` exactly once before the write. If the edge already exists, stop without a write; otherwise call `operation=add`. When `add` returns `created=true`, use the returned `dependency` object as the completion evidence and do not re-query `operation=summary` after a successful `add`. This bounded fast path does not replace the full dependency completeness gate for a multi-component topology bootstrap.
 12. Before bootstrap can hand off as structurally complete, run a dependency completeness gate for every multi-component topology, including manual component creation or fallback paths: list accepted provider/consumer edges, query current dependency evidence, add missing edges with `rainbond_manage_component_dependency`, then verify the dependency evidence again. If an accepted edge cannot be created yet, record it as a deferred dependency or blocker instead of treating runtime reachability as sufficient.
 13. Bootstrap has a retry budget: the same error signature may be retried at most once, and the same component-creation path may be attempted at most twice. After that, stop and report the blocker.
 14. If runtime has already converged enough and the remaining question is access URL or delivery acceptance, hand off to `rainbond-delivery-verifier` instead of stretching bootstrap or defaulting to troubleshooter.
 15. Local Docker daemon actions are not an implicit bootstrap fallback. Do not run local Docker builds, start Docker Desktop/OrbStack, push temporary images, or switch to local package upload unless the user explicitly changes the delivery strategy.
-16. The final reply must end with `### Structured Output`, render `BootstrapResult` in fenced `yaml`, and never leak secret plaintext.
+16. Keep `BootstrapResult` internal by default. Only in explicit structured contract mode may the final reply end with `### Structured Output` and render `BootstrapResult` in fenced `yaml`; secret plaintext must never appear in either mode.
 17. **Component creation method inference (image vs source vs complex suite).** When the user requests a component, infer the creation method from the strongest signal in their message instead of pausing to ask. Mention the inference in the final report so the user can override. First distinguish a simple single-image infrastructure service from a complex off-the-shelf app suite; the latter must not be hand-built from model memory alone.
    - User mentioned Git URL / branch / commit / `subdirectories` → **source mode**
    - User mentioned an image tag or registry path (`<name>:<tag>`, `docker.io/...`, `harbor.../...`) → **image mode**
@@ -308,6 +341,8 @@ These rules are always in force. If any module, example, or lower-priority note 
    Full data-directory list per service and `volume_type` ↔ component-type compatibility matrix live in `modules/30-creation-rules.md § 5`. Deploying a stateful service via image mode without persistence is a real data-loss regression — do not skip this step because "I'm not sure if X is stateful." If unsure, ask the user; do not default to no-persistence image deployment for anything that might store data.
 
 18. **Deployment-plan readiness gate for multi-component image deployments.** Before any mutating MCP call for a multi-component image topology, establish provenance for the service list, dependency edges, required env/secrets, ports, storage paths, external URL/TLS assumptions, and image tags. Accepted provenance is: Rainbond template, `rainbond.app.json`, `docker-compose` / compose profile, official deployment descriptor supplied by user/tool, existing Rainbond runtime state, or explicit user-confirmed plan. Inference-only critical fields are blockers, not TODOs.
+
+   Adding one component to an existing app counts as a multi-component topology once the resulting app has more than one component. A generic request such as “创建相关依赖” expresses desired wiring but does not identify a consumer or accept a specific edge. Existing-component count, including “only one existing component”, is not dependency evidence. Accept an edge only when it comes from a manifest/Compose definition, env or config reference, project documentation, runtime evidence, or the user's explicit confirmation. If the consumer remains unknown, ask once before generating any confirmation ID or issuing any mutating call.
 
    **Explicit user source intent overrides template installs.** When the user gave a Git URL (or said "deploy this repo's source"), the deploy path is locked to the source / compose-profile path; an app-market template is a suggestion to mention, never the default to install before the user explicitly picks it. Do not install a market template and then abandon it to hand-build image components — that strands a half-installed app. If you must switch strategy, first clean up the abandoned half-built app or tell the user it exists and ask. (Enforced at the routing layer by `rainbond-app-assistant` Iron Law 38.)
 
@@ -379,9 +414,9 @@ These are intentionally low-frequency references. Do not load them by default un
 
 The schema is intentionally minimal in this pilot. It defines the current structured output contract; it does **not** replace the execution rules in `modules/`.
 
-## Final Reply Contract
+## Explicit Structured Reply Contract
 
-Every final reply must use exactly these sections, in this order:
+Only when the user, automation, or evaluation explicitly requests structured output, use exactly these sections in this order:
 
 1. `### Creation Result`
 2. `### Actions Taken`

@@ -5,6 +5,15 @@ description: "Use when a user explicitly asks to sync non-sensitive preview or p
 
 # Rainbond Env Sync
 
+## 用户可见结果协议（最高优先级）
+
+普通用户回复默认使用简洁中文，只说明同步的环境、更新的本地文件、保留或跳过的配置类别，以及唯一下一步。内部同步结果对象仍可用于校验，但不直接展示。
+
+- 成功时说明哪个环境文件已更新，以及哪些非敏感配置发生了变化。
+- 未完成时说明直接原因；不得为了完整报告而回显运行时元数据或敏感值。
+- 默认不得展示内部对象、状态枚举、team/region/app ID、Skill/工具名、YAML、JSON 或英文编排标题。
+- 只有用户明确要求 YAML、JSON、调试详情，或自动化/评测明确要求结构化契约时，才使用后文的结构化输出格式。
+
 <!-- rainskills-runtime-gate:start -->
 ## 单运行环境 CLI 门禁（最高优先级）
 
@@ -412,7 +421,7 @@ A sync is **not** required to:
 
 ## Output Format
 
-Target structured output:
+Target structured output（仅在用户或自动化/评测明确要求结构化结果时使用）：
 
 - this skill should eventually be able to emit an `Environment`-centered sync result
 - minimum target fields:
@@ -422,7 +431,7 @@ Target structured output:
   - `skip_reasons`
   - `next_action`
 - the human-readable sections below should be treated as the narrative view over that target object
-- once implemented, append a final `### Structured Output` section after the human-readable report and render the sync result object in fenced `yaml`
+- in explicit structured contract mode, append a final `### Structured Output` section after the human-readable report and render the sync result object in fenced `yaml`
 
 Proposed schema:
 
@@ -549,7 +558,7 @@ EnvironmentSyncResult:
 ```
 ````
 
-Always respond using exactly these sections:
+Only in explicit structured contract mode, respond using exactly these sections:
 
 ### Sync Result
 - state whether the sync succeeded

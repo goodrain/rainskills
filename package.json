@@ -40,6 +40,7 @@
     "rainbond-template-installer/",
     "scripts/build-skill-manifest.mjs",
     "scripts/install-local-cli.mjs",
+    "scripts/validate_customer_output.py",
     "!**/__pycache__/",
     "!**/*.pyc"
   ],
@@ -67,7 +68,7 @@
     "test:launcher": "node --test tests/console-origin.test.js tests/local-cli-installer.test.js tests/npx-launcher.test.js tests/runtime-state.test.js tests/single-runtime.test.js tests/single-runtime-cli.test.js tests/single-runtime-launcher.test.js tests/skill-manifest-builder.test.js",
     "test:api-bridge": "node --test tests/api-bridge.test.js",
     "test:console-contract": "python3 tests/console_tool_contract_test.py",
-    "test:skill-profile": "node --test tests/skill-profile-builder.test.js tests/markdown-link-integrity.test.js",
+    "test:skill-profile": "node --test tests/skill-profile-builder.test.js tests/markdown-link-integrity.test.js tests/user-facing-output-contract.test.js",
     "test:marketplace": "node --test tests/marketplace-entry.test.js",
     "test:runtime-routing": "node --test tests/runtime-onboarding-routing.test.js && python3 rainbond-app-assistant/scripts/validate_progressive_loading.py && python3 rainbond-app-assistant/scripts/validate_cross_skill_routing.py && python3 tests/progressive-loading-validators.test.py && python3 tests/run_skill_routing_evals.py",
     "test:telemetry": "node --test tests/telemetry.test.js",

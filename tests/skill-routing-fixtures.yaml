@@ -85,7 +85,7 @@ required_markers:
   rainbond-app-assistant:
     - "default top-level owner for generic current-project"
     - "the request should start here"
-    - "Concise delivery report mode"
+    - "Customer report mode"
     - "do not expose the fenced YAML block"
     - "部署新应用还是管理已有应用"
     - "确认前不连接运行环境"

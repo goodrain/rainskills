@@ -1,5 +1,5 @@
 case: delivered-stop-without-promotion
-presentation_mode: concise
+presentation_mode: customer
 assert:
   prose_contains:
     - 部署成功

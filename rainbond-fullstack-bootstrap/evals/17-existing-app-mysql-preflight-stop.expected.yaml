@@ -1,0 +1,29 @@
+case: existing-app-mysql-preflight-stop
+presentation_mode: structured
+in_scope_components:
+  - nginx
+  - mysql
+assert:
+  equal:
+    BootstrapResult.deployment_plan.workflow.created: []
+    BootstrapResult.deployment_plan.workflow.reused:
+      - nginx
+    BootstrapResult.deployment_plan.workflow.skipped:
+      - mysql
+    BootstrapResult.deployment_plan.workflow.deferred_dependencies: []
+    BootstrapResult.runtime_state.overall: topology_missing
+    BootstrapResult.runtime_state.blocking_bucket: dependency missing
+    BootstrapResult.next_handoff: none
+  contains:
+    BootstrapResult.deployment_plan.workflow.skipped_reasons:
+      mysql: consumer edge and required secret source unresolved; stopped before mutation
+    BootstrapResult.runtime_state.component_status:
+      nginx: running
+      mysql: waiting
+  prose_contains:
+    - only existing component was not treated as evidence
+    - No confirmation ID was generated
+    - no mutating Rainbond call was made
+    - no database credential was generated
+    - which component should consume MySQL
+    - explicit secret source

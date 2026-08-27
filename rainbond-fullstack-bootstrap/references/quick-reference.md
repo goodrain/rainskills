@@ -12,7 +12,7 @@ Use this file for low-frequency reminders. Do not treat it as the source of trut
 - treating Kubernetes/Rainbond DNS reachability, Nginx upstream config, or hard-coded service hostnames as a substitute for Rainbond console-visible dependency edges
 - adding speculative compatibility envs during creation
 - declaring success just because the app and components were created
-- omitting the required `### Structured Output` section
+- omitting `### Structured Output` after explicit structured mode was selected
 - inventing top-level `created_components`, `reused_components`, `skipped_components`, or `deferred_dependencies` instead of using `deployment_plan.workflow.*`
 - echoing raw platform states such as `undeploy` instead of normalizing them into the canonical runtime vocabulary
 - re-triggering `rainbond_build_component` because `status = undeploy` was misread as "build never started" instead of treating `undeploy` as a runtime label and verifying the prior build `event_id` first
@@ -101,5 +101,5 @@ Use this file for low-frequency reminders. Do not treat it as the source of trut
 ## Output Reminder
 
 - never print passwords, tokens, certificates, private keys, or other secrets in plaintext
-- always end with `### Structured Output`
+- only in explicit structured mode, end with `### Structured Output`
 - keep `next_handoff` aligned with the prose recommendation
