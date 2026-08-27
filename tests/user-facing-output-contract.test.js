@@ -71,6 +71,15 @@ test("ordinary user replies default to concise Chinese without internal contract
   }
 });
 
+test("deployment progress identifies workspaces by name instead of team ID", () => {
+  const entrypoint = read("rainbond-app-assistant/SKILL.md");
+  const workflow = read("rainbond-app-assistant/references/workflow-rules.md");
+
+  assert.match(entrypoint, /过程消息[^\n]*team_name[^\n]*展示/);
+  assert.match(entrypoint, /不展示 `team_id`/);
+  assert.match(workflow, /team_id[^。\n]*不得[^。\n]*过程消息[^。\n]*最终报告/);
+});
+
 test("supporting output contracts do not make structured data the default final reply", () => {
   const forbiddenUnconditionalContracts = [
     /Every final reply must/i,

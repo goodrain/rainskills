@@ -27,7 +27,7 @@ description: "Use whenever a user asks to deploy, run, deliver, publish, inspect
 | 需要对象边界或跨阶段状态语义 | [product object model](references/product-object-model.md) | 不相关工作流 |
 | 需要生成最终结果或自动化契约 | [output contract](references/output-contract.md) | 不需要结果协议时不得读取 |
 
-workspace context 包含 `enterprise_id`、`team_id`、`team_name` 和 `region_name`；app/component 标识只来自用户明确输入或本次实时查询/创建结果。它们都由当前任务携带，不写入 Runtime，也不得生成或传递 CLI 业务 operation ID、运行环境 ID 或 intent JSON。
+workspace context 包含 `enterprise_id`、`team_id`、`team_name` 和 `region_name`；`team_id` 可作为内部调用参数继续使用，但不得复制到用户可见的过程消息或最终结果中。app/component 标识只来自用户明确输入或本次实时查询/创建结果。它们都由当前任务携带，不写入 Runtime，也不得生成或传递 CLI 业务 operation ID、运行环境 ID 或 intent JSON。
 
 ## Runtime Gate
 
@@ -58,6 +58,7 @@ workspace context 包含 `enterprise_id`、`team_id`、`team_name` 和 `region_n
 - 成功：说明项目、运行环境、工作空间、应用、真实 Rainbond 页面/访问地址及本轮实际完成操作；无法确认的字段省略，禁止猜测。
 - 未完成：输出“部署失败。”、一句直接原因；仅在确有安全可执行方案时增加“解决办法”。
 - 默认不得展示内部对象、状态枚举、Skill/工具名、YAML、JSON 或英文编排标题。
+- 过程消息和最终结果中的工作空间一律用 `team_name` 展示，可连同 `region_name` 写成“工作空间 / 集群”；除非用户明确要求调试原始数据，不展示 `team_id`。
 - 用户明确要求结构化结果或自动化契约时，读取 [output contract](references/output-contract.md)，不得自行发明字段、枚举或状态。
 
 ## 停止条件

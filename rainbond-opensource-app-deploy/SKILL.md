@@ -30,7 +30,7 @@ description: "Use when the user supplies a third-party Docker Compose file/conte
 | workspace context 已解析，需要建模、部署、排障或交付 app/component | 读取 [deployment workflow](references/deployment-workflow.md) |
 | 新鲜证据命中已知部署故障模式 | 再读取 [failure-mode playbook](references/failure-mode-playbook.md) |
 
-正确顺序是：先验证官方部署清单，再加载 Runtime Gate。这里只允许加载本 Skill 的 Gate。workspace context 包含 `enterprise_id`、`team_id`、`team_name` 和 `region_name`；app/component 标识只来自用户明确输入或本次实时查询/创建结果。它们都由当前任务携带，不得生成 CLI 业务 operation ID、运行环境 ID 或 intent JSON。
+正确顺序是：先验证官方部署清单，再加载 Runtime Gate。这里只允许加载本 Skill 的 Gate。workspace context 包含 `enterprise_id`、`team_id`、`team_name` 和 `region_name`；`team_id` 可作为内部调用参数继续使用，但不得复制到用户可见的过程消息或最终结果中。app/component 标识只来自用户明确输入或本次实时查询/创建结果。它们都由当前任务携带，不得生成 CLI 业务 operation ID、运行环境 ID 或 intent JSON。
 
 ## Runtime 与安全边界
 

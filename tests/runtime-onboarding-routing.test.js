@@ -136,6 +136,8 @@ test("app assistant loads specialist guidance without legacy select-skill tools 
   assert.doesNotMatch(source, /context resolve` 已保存/);
   assert.match(source, /完整读取[^。\n]*专项 Skill[^。\n]*SKILL\.md/);
   assert.match(source, /enterprise_id[^。\n]*team_id[^。\n]*team_name[^。\n]*region_name/);
+  assert.match(source, /team_id[^。\n]*平台调用/);
+  assert.match(source, /team_id[^。\n]*不得[^。\n]*(?:过程消息|最终报告)/);
 });
 
 test("progressive-loading stages use workspace context and live app-component facts", () => {

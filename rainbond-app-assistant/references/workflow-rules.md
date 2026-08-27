@@ -529,7 +529,7 @@
     反例（来自真实回归 case `cs_1779149681822_3u`，2026-05-19）：模型从 `rainbond_get_component_summary` 响应的 `recent_events` 段看到形如 `{"ID": 17740, "event_id": "...", "opt_type": "build-service"}`，直接把 `17740` 当成 `event_id` 传给 `rainbond_get_component_build_logs`，工具返回 `items: []`（找不到该 UUID 的日志）。正确做法：从同一 `recent_events[i].event_id` 字段取出 UUID 字符串，或调 `rainbond_get_component_events` 重查。
 35. **会话内部叙述纪律 + 内部 preflight 工具不要主动调**。下列四类是"内部会话状态"，对用户**无信息量**，禁止外漏到 assistant 可见消息：
     - **专项 Skill 手册加载过程**：这是当前任务的内部准备。不要说"我先加载 bootstrap 手册"、"手册已加载"或"skill ready"；读完直接进入下一个真实工具调用。
-    - **`rainbond_get_current_user`**：不得由 Agent 单独调用。`enterprise_id`、`team_id`、`team_name` 和 `region_name` 统一由受保护的 `context resolve` 命令无状态解析并由当前任务携带；只有 CLI 明确返回需要选择时才询问用户。
+    - **`rainbond_get_current_user`**：不得由 Agent 单独调用。`enterprise_id`、`team_id`、`team_name` 和 `region_name` 统一由受保护的 `context resolve` 命令无状态解析并由当前任务携带；`team_id` 可继续用于后续平台调用，但不得在过程消息或最终报告中展示。只有 CLI 明确返回需要选择时才询问用户，并且只展示名称标签。
     - **`rainbond_query_components` 同入参重复轮询**：服务端 30s 内的同 args 调用会走缓存；你**不要**在每个新 user turn 开头都"先查一下组件列表"。只有本次调用使用的 `enterprise_id`、`app_id` 和查询条件均未变化，且没有新的平台动作时，才可复用 priorTurnMessages 里的最近结果。
     - **规则推理过程 / Rainbond Tool 内部限制 / 分类决策叙述**：你内部基于哪条 Iron Law / hard rule / 推断信号做的决策、具体 Tool 签名 / 字段限制、对组件 / 服务的分类判断（"ClickHouse 是公认的列式分析数据库"这类），都属于内部状态，对用户**无信息量**。
 
