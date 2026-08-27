@@ -1,4 +1,4 @@
 interface:
   display_name: "Rainbond Open-source App Deploy"
-  short_description: "Only supplied Compose, Helm, or image-set descriptors"
-  default_prompt: "Use $rainbond-opensource-app-deploy to deploy an open-source compose stack on Rainbond and verify its UI."
+  short_description: "Deploy named open-source suites or supplied descriptors"
+  default_prompt: "Use $rainbond-opensource-app-deploy to acquire official deployment evidence for an open-source suite, deploy it on Rainbond, and verify its UI."

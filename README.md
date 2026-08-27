@@ -223,7 +223,7 @@ node ~/.rainbond/lib/rainskills/bin/rainskills.js platform install --onboarding-
 
 Rainskills 会在用户下一次发起业务动作时，由本地运行时立即返回环境查询结果，并另行启动后台任务静默检查更新。更新只跟随 npm `latest` 指向的正式版。当前版本是 RC 或其他预发布版本时不会查询、不会自动升级；npm 上的新 RC 版本也不参与正式版自动升级。
 
-发现更高的正式版后，后台任务只委托到经过校验的精确版本，例如 `rainskills@0.1.21`，不会执行浮动的 `@latest` 业务代码。新版本原子刷新已经安装的 Rainskills Skills；当前业务继续使用启动时已经加载的版本，最迟从下一条新任务开始使用新版。npm 超时、版本检查失败、安装位置不安全或文件迁移失败时会保留旧版本，且不会阻塞或改变当前操作。
+发现更高的正式版后，后台任务只委托到经过校验的精确版本，例如 `rainskills@0.1.25`，不会执行浮动的 `@latest` 业务代码。新版本原子刷新已经安装的 Rainskills Skills；当前业务继续使用启动时已经加载的版本，最迟从下一条新任务开始使用新版。npm 超时、版本检查失败、安装位置不安全或文件迁移失败时会保留旧版本，且不会阻塞或改变当前操作。
 
 升级只更新 Rainskills 自身，不触发 Rainbond 安装、运行环境选择、登录授权或重新对接，也不会新增 Agent MCP 配置。更新内容仅包括 Skills 和本地 CLI。原始业务操作会继续执行；只有该业务操作本身需要运行环境时，才按既有门禁检查当前连接。可用连接直接复用，401 只重新授权一次，403 立即停止，从未连接过运行环境时才进入环境选择。
 
@@ -247,9 +247,11 @@ Rainskills 会在用户下一次发起业务动作时，由本地运行时立即
 
 ## 部署类 skill 怎么选
 
-- 应用市场里有的应用 → `rainbond-template-installer`（一键安装商店模板）
-- 市场里没有的开源软件（有 docker-compose、Helm 或镜像）→ `rainbond-opensource-app-deploy`
-- 部署你自己写的项目（源码或私有镜像）→ `rainbond-app-assistant`
+- 已确认的 Rainbond 市场模板 → `rainbond-template-installer`（一键安装商店模板）
+- 只说“部署 Harbor / Dify / n8n”等第三方开源套件也可以 → `rainbond-opensource-app-deploy` 会自动联网获取官方仓库、文档和 Release 中的部署资料，固定版本并推导组件拓扑；用户已提供 Compose、Helm 或镜像集合时也走这里
+- 部署当前项目、普通 Git 仓库或私有镜像项目 → `rainbond-app-assistant`
+
+Open-source Deploy 将 Compose、Helm 和安装器生成结果作为建模证据，默认创建独立 Rainbond 镜像组件，不依赖 Helm 黑盒导入或用户手工上传 Compose。当前/本地项目线索优先于同名软件，避免把用户自己的 Harbor fork 误判为上游套件。
 
 ## License
 

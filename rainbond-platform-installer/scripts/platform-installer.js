@@ -1094,10 +1094,8 @@ function gibibytes(bytes) {
 
 function evaluatePreflight(facts) {
   const blockers = [];
-  const warnings = [];
   const effects = [];
   const minimums = POLICY.minimums;
-  const recommended = POLICY.recommended;
   if (!POLICY.supported_platforms.includes(facts.platform)) {
     blockers.push(`不支持当前系统 ${facts.platform}，首版仅支持 Linux 和 macOS`);
   }
@@ -1106,18 +1104,12 @@ function evaluatePreflight(facts) {
   }
   if (facts.cpuCores < minimums.cpu_cores) {
     blockers.push(`CPU 最低需要 ${minimums.cpu_cores} 核，当前 ${facts.cpuCores} 核`);
-  } else if (facts.cpuCores < recommended.cpu_cores) {
-    warnings.push(`CPU ${facts.cpuCores} 核低于推荐配置 ${recommended.cpu_cores} 核`);
   }
   if (facts.memoryBytes < minimums.memory_bytes) {
     blockers.push(`内存最低需要 ${gibibytes(minimums.memory_bytes).toFixed(0)} GB，当前 ${gibibytes(facts.memoryBytes).toFixed(1)} GB`);
-  } else if (facts.memoryBytes < recommended.memory_bytes) {
-    warnings.push(`内存 ${gibibytes(facts.memoryBytes).toFixed(1)} GB 低于推荐配置 ${gibibytes(recommended.memory_bytes).toFixed(0)} GB`);
   }
   if (facts.diskBytes < minimums.disk_bytes) {
     blockers.push(`可用磁盘最低需要 ${gibibytes(minimums.disk_bytes).toFixed(0)} GB，当前 ${gibibytes(facts.diskBytes).toFixed(1)} GB`);
-  } else if (facts.diskBytes < recommended.disk_bytes) {
-    warnings.push(`可用磁盘 ${gibibytes(facts.diskBytes).toFixed(1)} GB 低于推荐配置 ${gibibytes(recommended.disk_bytes).toFixed(0)} GB`);
   }
   if (facts.occupiedPorts.length > 0) blockers.push(`端口 ${facts.occupiedPorts.join("、")} 已被占用`);
   if (facts.platform === "linux" && !facts.hasPrivilege) blockers.push("Linux 安装需要 root 或已配置可用的 sudo -n 权限");
@@ -1135,7 +1127,7 @@ function evaluatePreflight(facts) {
   }
   effects.push("启动 privileged rainbond 容器并写入持久化数据");
 
-  return { ok: blockers.length === 0, blockers, warnings, effects };
+  return { ok: blockers.length === 0, blockers, effects };
 }
 
 function extractConsoleUrl(output) {
@@ -1720,7 +1712,6 @@ function preflightMessage(facts, assessment, target) {
     "",
     `${facts.cpuCores} 核 CPU / ${gibibytes(facts.memoryBytes).toFixed(1)} GB 内存 / ${gibibytes(facts.diskBytes).toFixed(1)} GB 可用磁盘`,
   ];
-  if (facts.platform === "darwin") lines.push("macOS 安装依赖 OrbStack，首次准备时间通常比 Linux 更长。");
   if (!assessment.ok) {
     lines.push("", "需要先处理：", ...assessment.blockers.map((blocker) => `- ${blocker}`));
     return lines.join("\n");

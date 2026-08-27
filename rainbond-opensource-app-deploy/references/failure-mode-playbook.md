@@ -11,6 +11,7 @@ Use this playbook only after matching fresh Rainbond and application evidence. I
 - Self-provisioning dependencies
 - Slow or failed image pulls
 - Secure-cookie last mile
+- Installer-generated Compose and Helm parser fallback
 - Duplicate internal domains
 
 ## Missing required configuration
@@ -68,6 +69,16 @@ After a confirmed terminal pull failure, try at most one approved registry/proxy
 **Action:** compare the real external entry with the application's official public-URL, trusted-proxy, forwarded-header, and secure-cookie settings. Preserve HTTPS at the user-facing entry and ensure the proxy forwards the original scheme and host. When the public URL could not exist before the first deployment, use a two-phase flow: obtain the real entry from `access_infos`, set only the evidence-backed public URL or cookie mode, redeploy once, then repeat the authenticated smoke.
 
 Verify in a browser by completing login and one authenticated navigation or write. A root-path response cannot validate cookies.
+
+## Installer-generated Compose and Helm parser fallback
+
+**Evidence:** an official Helm chart was found but the Rainbond Helm parser rejected it, or the upstream installer generates `docker-compose.yml` plus env/config/key directories and the agent cannot upload that complete generated artifact.
+
+**Action:** do not classify the parser or Compose-upload limitation as the application blocker. Return to the pinned official inventory, render/read the chart or installer templates as evidence, and use per-component image modeling when every required workload, config, dependency, storage path, init behavior, and gateway route is representable. Stop before writes when any of those semantics cannot be reproduced safely.
+
+For Harbor-like installers, `prepare` output is a config bundle, not just a Compose file. Do not deploy bare Registry/Core/Portal/Jobservice images without their effective env files, mounted config, persistent data, generated-key contract, and single external routing entry.
+
+If the public hostname is not known until Rainbond creates a gateway entry, create and configure the entry without claiming delivery, read the real `access_infos`, then apply the official public-URL settings and redeploy once. When the user accepts the generated entry, do not ask them to supply a separate domain.
 
 ## Duplicate internal domains
 

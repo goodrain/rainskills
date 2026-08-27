@@ -13,7 +13,7 @@ assert:
     AppAssistantResult.actions_performed:
       - skill: inspection-only
         status: stopped
-        details: Harbor is a multi-component suite and no Rainbond template, rainbond.app.json, compose profile, or official deployment descriptor was provided, so no component, dependency, env, storage, or port was created.
+        details: The current local Harbor project is a multi-component suite and no project-local rainbond.app.json, compose profile, or repository descriptor was found, so no component, dependency, env, storage, or port was created.
   prose_contains:
     - linked-and-complex-suite-needs-descriptor
     - multi-component suite

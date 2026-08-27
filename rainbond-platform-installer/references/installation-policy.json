@@ -1,14 +1,9 @@
 {
   "schema": "rainskills.platform-installation-policy.v2",
-  "recommended": {
-    "cpu_cores": 4,
-    "memory_bytes": 8589934592,
-    "disk_bytes": 53687091200
-  },
   "minimums": {
     "cpu_cores": 2,
     "memory_bytes": 4294967296,
-    "disk_bytes": 32212254720
+    "disk_bytes": 10737418240
   },
   "required_ports": [80, 443, 7070],
   "supported_control_platforms": ["linux", "darwin", "win32"],

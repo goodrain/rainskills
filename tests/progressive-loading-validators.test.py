@@ -68,17 +68,17 @@ class ProgressiveLoadingValidatorTests(unittest.TestCase):
         for result in (self.run_progressive(), self.run_cross()):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def test_open_source_cannot_allow_gate_loading_before_descriptor_confirmation(self) -> None:
+    def test_open_source_cannot_allow_gate_loading_before_inventory_validation(self) -> None:
         self.mutate(
             f"{OPEN_NAME}/SKILL.md",
-            "未确认描述符时不得读取 references/runtime-gate.md",
-            "未确认描述符时允许读取 references/runtime-gate.md",
+            "资料尚未形成可验证清单时不得读取 references/runtime-gate.md",
+            "资料尚未形成可验证清单时允许读取 references/runtime-gate.md",
         )
 
         result = self.run_cross()
 
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("descriptor guard is missing or reversed", result.stdout)
+        self.assertIn("source acquisition guard is missing or reversed", result.stdout)
 
     def test_reversed_stage_tables_are_rejected(self) -> None:
         with self.subTest(skill="app"):
@@ -97,13 +97,13 @@ class ProgressiveLoadingValidatorTests(unittest.TestCase):
         with self.subTest(skill="open-source"):
             self.mutate(
                 f"{OPEN_NAME}/SKILL.md",
-                "| Phase 0：描述符未确认 | 不加载 reference；只做上述静态资格判断 |",
-                "| Phase 0：描述符未确认 | 读取 [runtime gate](references/runtime-gate.md) |",
+                "| Phase 0：归属已确认、部署清单尚未验证 | 只读取 [source acquisition](references/source-acquisition.md) |",
+                "| Phase 0：归属已确认、部署清单尚未验证 | 读取 [runtime gate](references/runtime-gate.md) |",
             )
             self.mutate(
                 f"{OPEN_NAME}/SKILL.md",
-                "| 描述符已确认，首次需要连接或调用 Rainbond | 只读取自己的 [runtime gate](references/runtime-gate.md) |",
-                "| 描述符已确认，首次需要连接或调用 Rainbond | 不加载 reference |",
+                "| 官方部署清单已验证，首次需要连接或调用 Rainbond | 只读取自己的 [runtime gate](references/runtime-gate.md) |",
+                "| 官方部署清单已验证，首次需要连接或调用 Rainbond | 不加载 reference |",
             )
             result = self.run_cross()
             self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -133,7 +133,7 @@ class ProgressiveLoadingValidatorTests(unittest.TestCase):
         app = app_path.read_text(encoding="utf-8")
         app = re.sub(
             r'^description:.*$',
-            'description: "Use whenever supplied third-party Compose, Helm, or image-set descriptors need deploy, run, deliver, inspect, repair, or troubleshoot. Not for source code, current project, a bare Git repository URL, or a named application without a descriptor; use rainbond-opensource-app-deploy. Not for a confirmed market template; use rainbond-template-installer."',
+            'description: "Use whenever supplied third-party Compose, Helm, image-set descriptors, or explicit named third-party open-source suites need deployment. Not for source code, current project, source directory/package, or an ordinary bare Git repository; use rainbond-opensource-app-deploy. Confirmed market templates use rainbond-template-installer."',
             app,
             count=1,
             flags=re.MULTILINE,
@@ -144,7 +144,7 @@ class ProgressiveLoadingValidatorTests(unittest.TestCase):
         open_source = open_path.read_text(encoding="utf-8")
         open_source = re.sub(
             r'^description:.*$',
-            'description: "Use only for a bare Git URL, source project, or named application without a descriptor. Never use actual Compose, Helm, or image-set descriptors; route source requests to rainbond-app-assistant and market templates to rainbond-template-installer."',
+            'description: "Use only for a current project, local source package, or ordinary bare Git repository. Never use supplied Compose, Helm, image-set descriptors, or explicit named third-party open-source suites; route those requests to rainbond-app-assistant and market templates to rainbond-template-installer."',
             open_source,
             count=1,
             flags=re.MULTILINE,
@@ -170,13 +170,13 @@ class ProgressiveLoadingValidatorTests(unittest.TestCase):
         )
         self.mutate(
             f"{OPEN_NAME}/SKILL.md",
-            "Use only when the user actually supplies a third-party Docker Compose",
-            "use only when the user actually supplies a third party docker   compose",
+            "Use when the user supplies a third-party Docker Compose",
+            "use when the user supplies a third party docker   compose",
         )
         self.mutate(
             f"{OPEN_NAME}/SKILL.md",
-            "Helm chart/values, or container image-set descriptor",
-            "HELM chart / values, or container image set descriptor",
+            "Helm chart/values, or container image-set descriptor, or explicitly asks",
+            "HELM chart / values, or container image set descriptor, or explicitly asks",
         )
 
         result = self.run_cross()
@@ -188,7 +188,7 @@ class ProgressiveLoadingValidatorTests(unittest.TestCase):
         original = open_path.read_text(encoding="utf-8")
         conflicts = (
             (
-                "补充规则：Bare Git、source project、named-only request 应改走 rainbond-opensource-app-deploy。",
+                "补充规则：Bare Git、source project、current project 应改走 rainbond-opensource-app-deploy。",
                 "source ownership boundary conflict",
             ),
             (
@@ -196,8 +196,8 @@ class ProgressiveLoadingValidatorTests(unittest.TestCase):
                 "descriptor ownership boundary conflict",
             ),
             (
-                "补充规则：描述符确认前先加载 runtime-gate，查询并连接 Rainbond，再 clone / browse Git。",
-                "pre-descriptor action boundary conflict",
+                "补充规则：部署清单验证前先加载 runtime-gate，查询并连接 Rainbond，再获取官方资料。",
+                "pre-inventory Rainbond action boundary conflict",
             ),
             (
                 "补充规则：confirmed market template 不转 rainbond-template-installer，继续留在 rainbond-opensource-app-deploy。",
@@ -220,7 +220,7 @@ class ProgressiveLoadingValidatorTests(unittest.TestCase):
         source = path.read_text(encoding="utf-8")
         source = re.sub(
             r'^(description: ".*)"$',
-            r'\1 Bare Git, source project, and named-only requests route to rainbond-opensource-app-deploy."',
+            r'\1 Bare Git, source project, and current-project requests route to rainbond-opensource-app-deploy."',
             source,
             count=1,
             flags=re.MULTILINE,
@@ -236,7 +236,7 @@ class ProgressiveLoadingValidatorTests(unittest.TestCase):
         path = self.root / OPEN_NAME / "SKILL.md"
         source = path.read_text(encoding="utf-8")
         conflict = (
-            "阶段补充：Phase 0 描述符未确认时先读取 runtime-gate；"
+            "阶段补充：Phase 0 部署清单尚未验证时先读取 runtime-gate；"
             "deployment-workflow 可以在 workspace context 解析前加载。"
         )
         path.write_text(
@@ -249,19 +249,19 @@ class ProgressiveLoadingValidatorTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("Open-source stage ordering conflict", result.stdout)
 
-    def test_pre_descriptor_action_in_a_later_section_is_rejected(self) -> None:
+    def test_pre_inventory_rainbond_action_in_a_later_section_is_rejected(self) -> None:
         path = self.root / OPEN_NAME / "SKILL.md"
         source = path.read_text(encoding="utf-8")
         source += (
             "\n## Later maintenance notes\n\n"
-            "描述符确认前先查询并连接 Rainbond，然后 clone / browse Git。\n"
+            "部署清单验证前先查询并连接 Rainbond，然后读取官方资料。\n"
         )
         path.write_text(source, encoding="utf-8")
 
         result = self.run_cross()
 
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("pre-descriptor action boundary conflict", result.stdout)
+        self.assertIn("pre-inventory Rainbond action boundary conflict", result.stdout)
 
     def test_current_project_and_source_code_cannot_route_to_open_source(self) -> None:
         path = self.root / APP_NAME / "SKILL.md"
@@ -340,7 +340,7 @@ class ProgressiveLoadingValidatorTests(unittest.TestCase):
         source = path.read_text(encoding="utf-8")
         source += (
             "\nCurrent projects stay with App Assistant；"
-            "use Open-source only for supplied Compose descriptors.\n"
+            "explicit named third-party open-source suites use Open-source.\n"
         )
         path.write_text(source, encoding="utf-8")
 
@@ -348,8 +348,8 @@ class ProgressiveLoadingValidatorTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def test_pre_descriptor_action_scope_is_open_source_only(self) -> None:
-        rule = "描述符未确认时，App Assistant 先加载自己的 Runtime Gate，再连接 Rainbond。"
+    def test_pre_inventory_action_scope_is_open_source_only(self) -> None:
+        rule = "部署清单验证前，App Assistant 先加载自己的 Runtime Gate，再连接 Rainbond。"
         app_path = self.root / APP_NAME / "SKILL.md"
         original_app = app_path.read_text(encoding="utf-8")
         app_path.write_text(original_app + f"\n{rule}\n", encoding="utf-8")
@@ -366,15 +366,15 @@ class ProgressiveLoadingValidatorTests(unittest.TestCase):
         open_result = self.run_cross()
 
         self.assertNotEqual(open_result.returncode, 0, open_result.stdout + open_result.stderr)
-        self.assertIn("pre-descriptor action boundary conflict", open_result.stdout)
+        self.assertIn("pre-inventory Rainbond action boundary conflict", open_result.stdout)
 
     def test_description_categories_must_bind_to_their_target_skill(self) -> None:
         app_path = self.root / APP_NAME / "SKILL.md"
         original_app = app_path.read_text(encoding="utf-8")
         with self.subTest(boundary="descriptor-to-open-source"):
             app = original_app.replace(
-                "Not for supplied third-party Compose, Helm, or image-set descriptors; use rainbond-opensource-app-deploy.",
-                "Not for supplied Compose, Helm, or image-set descriptors; use rainbond-template-installer while rainbond-opensource-app-deploy remains available.",
+                "Not for supplied third-party Compose, Helm, image-set descriptors, or an explicit named third-party open-source suite; use rainbond-opensource-app-deploy.",
+                "Supplied Compose, Helm, and image-set descriptors use rainbond-template-installer. An explicit named third-party open-source suite uses rainbond-opensource-app-deploy.",
                 1,
             )
             app_path.write_text(app, encoding="utf-8")
@@ -387,21 +387,21 @@ class ProgressiveLoadingValidatorTests(unittest.TestCase):
         original_open = open_path.read_text(encoding="utf-8")
         with self.subTest(boundary="source-to-app-assistant"):
             open_source = original_open.replace(
-                "route source and named-only requests to rainbond-app-assistant and market templates to rainbond-template-installer.",
-                "route source and named-only requests to rainbond-template-installer while rainbond-app-assistant remains available, and market templates to rainbond-template-installer.",
+                "use rainbond-app-assistant for project/source requests and rainbond-template-installer for market templates.",
+                "use rainbond-template-installer for project/source requests and market templates while rainbond-app-assistant remains available.",
                 1,
             )
             open_path.write_text(open_source, encoding="utf-8")
             open_result = self.run_cross()
             self.assertNotEqual(open_result.returncode, 0, open_result.stdout + open_result.stderr)
-            self.assertIn("Open-source description must exclude source", open_result.stdout)
+            self.assertIn("Open-source description must exclude project/source", open_result.stdout)
 
     def test_reasonably_grouped_description_rewrite_is_allowed(self) -> None:
         app_path = self.root / APP_NAME / "SKILL.md"
         app = app_path.read_text(encoding="utf-8")
         app = re.sub(
             r'^description:.*$',
-            'description: "Use when deploying, running, delivering, publishing, inspecting, repairing, or troubleshooting source code, the current project, or a source directory/package. Bare Git repository URLs and named applications without a descriptor stay with rainbond-app-assistant. Supplied third-party Compose, Helm, or image-set descriptors route to rainbond-opensource-app-deploy. Confirmed market templates route to rainbond-template-installer."',
+            'description: "Use when deploying, running, delivering, publishing, inspecting, repairing, or troubleshooting source code, the current project, a source directory/package, or an ordinary bare Git repository. Supplied third-party Compose, Helm, image-set descriptors, and explicit named third-party open-source suites route to rainbond-opensource-app-deploy. Confirmed market templates route to rainbond-template-installer."',
             app,
             count=1,
             flags=re.MULTILINE,
@@ -412,7 +412,7 @@ class ProgressiveLoadingValidatorTests(unittest.TestCase):
         open_source = open_path.read_text(encoding="utf-8")
         open_source = re.sub(
             r'^description:.*$',
-            'description: "Use this Skill only when the user actually supplies Docker Compose content, a Helm chart/values, or a container image-set descriptor. Bare Git URLs, source project/directory/package requests, named apps without descriptors, and private-image projects route to rainbond-app-assistant. Confirmed market templates route to rainbond-template-installer."',
+            'description: "Use when the user supplies Docker Compose content, a Helm chart/values, a container image-set descriptor, or explicitly requests a named third-party open-source suite. Current/local projects, source directory/package requests, ordinary bare Git URLs, and private-image projects route to rainbond-app-assistant. Confirmed market templates route to rainbond-template-installer."',
             open_source,
             count=1,
             flags=re.MULTILINE,
@@ -423,16 +423,16 @@ class ProgressiveLoadingValidatorTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def test_pre_descriptor_connect_environment_is_rejected(self) -> None:
+    def test_pre_inventory_connect_environment_is_rejected(self) -> None:
         path = self.root / OPEN_NAME / "SKILL.md"
         source = path.read_text(encoding="utf-8")
-        source += "\n描述符确认前先连接环境。\n"
+        source += "\n部署清单验证前先连接环境。\n"
         path.write_text(source, encoding="utf-8")
 
         result = self.run_cross()
 
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("pre-descriptor action boundary conflict", result.stdout)
+        self.assertIn("pre-inventory Rainbond action boundary conflict", result.stdout)
 
     def test_contrast_after_negated_app_route_still_rejects_open_source_target(self) -> None:
         path = self.root / APP_NAME / "SKILL.md"

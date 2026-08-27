@@ -2,7 +2,7 @@
 
 ## Overview
 
-Turn an upstream application's official deployment material into a working Rainbond application. Derive the topology from evidence, create and connect every component, preserve state, then iterate until runtime health, the real external entry, and the application's UI or core flow all pass.
+Turn an upstream application's official deployment material into a working Rainbond application. The pre-runtime [source acquisition](source-acquisition.md) produces the pinned inventory; this workflow maps it into Rainbond, preserves state, and iterates until runtime health, the real external entry, and the application's UI or core flow all pass.
 
 **Core principle:** importing images is not completion. Completion means the topology is evidence-backed and the deployed application works through its real user-facing entry.
 
@@ -25,7 +25,7 @@ Open-source deployment:
 
 ## 0. Derive the official topology
 
-Before any Rainbond write, obtain the upstream project's official `docker-compose.yml`, Compose fragments, Helm chart values/templates, image documentation, and installation guide. Prefer a pinned release or image tag over an unbounded moving tag.
+Before any Rainbond write, verify the inventory produced by [source-acquisition.md](source-acquisition.md). For a supplied descriptor, validate it against the pinned upstream release. For a named suite, the inventory must come from the ordered official-source chain, including installer templates and image documentation when no static Compose exists.
 
 Build one deployment inventory from those sources:
 
@@ -37,11 +37,11 @@ Build one deployment inventory from those sources:
 - health checks, initialization jobs, profiles, anchors, `env_file` inputs, and config files
 - reverse-proxy routes and same-origin browser requirements
 
-Do not reconstruct a complex suite from model memory when the official descriptor is unavailable. Ask for the descriptor or permission to use a clearly named official alternative before writing runtime state.
+Do not reconstruct a complex suite from model memory. Do not ask for a descriptor until the official source-acquisition chain is exhausted, and do not touch Rainbond while the inventory remains incomplete.
 
 If the application is actually available in the Rainbond market, stop and route to `rainbond-template-installer`.
 
-For Helm input, pin the chart version and merge the user's values before deriving the inventory. Render with the upstream-supported `helm template` path when available. Map the rendered intent as follows:
+For Helm evidence, pin the chart version and merge the user's values before deriving the inventory. Render with the upstream-supported `helm template` path when available. Never make Rainbond Helm parsing or chart installation the required deployment path for a named suite; map the rendered intent as follows:
 
 - Deployment or StatefulSet workloads → long-running Rainbond components backed by their declared images
 - Service ports → Rainbond inner/outer ports; Ingress routes → the single external entry and proxy routing
@@ -51,6 +51,15 @@ For Helm input, pin the chart version and merge the user's values before derivin
 - init containers, Jobs, hooks, privileged host integration, operators, and custom resources → explicit compatibility decisions, not silent omission
 
 If a chart relies on Kubernetes behavior that cannot be represented safely by current Rainbond component capabilities, stop with a semantic-compatibility blocker. Do not claim that reading a chart is equivalent to installing it unchanged.
+
+### Deployment capability gate
+
+Choose and verify one complete path before promising it:
+
+- **Named suite:** use per-component image modeling. Compose, chart output, image lists, and installer templates are topology/config evidence.
+- **Supplied descriptor:** component modeling remains the safe default. Use a platform import path only when the live tool catalog and the complete artifact-transfer chain support that exact input and preserve all required config, storage, dependency, and gateway semantics.
+
+A failed Helm parser is not a terminal blocker when the official evidence can still be component-modeled. An unavailable Compose upload is not a reason to ask the user to upload `docker-compose.yml`; do not promise that fallback before verifying the full generated directory can be transferred and consumed. Never switch paths after a partial write without first querying what was created and reporting the residue.
 
 ## 1. Import components and model the deployment
 
@@ -63,6 +72,8 @@ Create or reuse the target Rainbond application, then model the inventory in dep
 5. Attach persistent storage to every stateful data directory before deployment. For image-created stateless components, use `rainbond_manage_component_storage` with an explicit `volume_name`, `volume_type=share-file`, and the official `volume_path`. When multiple components must see the same files, mount the same shared writable volume on each required component. Never invent a storage class, host path, or retention guarantee. If the upstream requires local, block, or single-writer stateful semantics that the available component cannot preserve, stop and report the mismatch instead of silently weakening it.
 6. Mount required proxy or application config as `config-file` storage before deploying the component that consumes it.
 7. Preserve health probes through `rainbond_manage_component_probe`. Run one-shot initialization only through an evidence-backed supported path; do not create a long-running component that is expected to exit successfully and then misclassify its restart loop as health.
+
+For installer-generated applications, account for every generated env file, config file, certificate, key reference, and mounted directory. A generated Compose file alone is insufficient when it points at a generated config tree. If the exact effective configuration cannot be generated or mapped, stop before deploying naked images.
 
 If any required MCP capability above is unavailable, stop with a capability blocker and name the missing operation. Do not silently emulate it with an unsafe delivery-mode or storage-semantic change.
 
@@ -137,7 +148,7 @@ Completion requires all of the following:
 
 1. `rainbond_get_app_health_overview` shows every required component green.
 2. Read the real external entry from Rainbond `access_infos`; never fabricate or infer a URL.
-3. If official documentation requires a public base URL, callback URL, trusted proxy, or secure-cookie setting, use that real entry to complete the two-phase public-URL configuration, redeploy once, and read `access_infos` again.
+3. If official documentation requires a public base URL, callback URL, trusted proxy, or secure-cookie setting, use the **Rainbond-generated entry** to complete the two-phase public-URL configuration, redeploy once, and read `access_infos` again. When the user accepts the generated entry, **do not ask the user for a domain**.
 4. Verify that real entry is reachable through the intended proxy or application component.
 5. Perform an application-specific **UI smoke** or core-flow smoke through the real entry, not only a root-path status check. Examples include loading the setup/login UI, signing in with user-provided test credentials, creating a minimal object, or completing the application's primary read/write flow.
 6. Recheck stateful storage and the explicit dependency set after the smoke test.
@@ -166,3 +177,6 @@ Report concisely:
 - Declaring a slow image pull failed before its event reaches a terminal state.
 - Testing a browser protocol with an incompatible plain HTTP request and misdiagnosing the result.
 - Reporting a guessed URL instead of Rainbond `access_infos`.
+- Treating a Rainbond Helm parser failure as proof that the platform must be repaired before component modeling can continue.
+- Promising Compose fallback before verifying upload of the complete generated config tree.
+- Asking for a domain after the user accepted the Rainbond-generated entry.

@@ -249,6 +249,14 @@ test("README distinguishes marketplace and direct installer Node requirements", 
   assert.match(readme, /直接运行.*最低支持 Node\.js 18/s);
 });
 
+test("README routes named open-source suites to official-source acquisition", () => {
+  const readme = read("README.md");
+
+  assert.match(readme, /只说.*Harbor.*自动联网获取官方.*部署资料/s);
+  assert.match(readme, /当前项目.*rainbond-app-assistant/s);
+  assert.match(readme, /Rainbond.*市场模板.*rainbond-template-installer/s);
+});
+
 test("README documents one-product installation and adapter-neutral stable auto-updates", () => {
   const readme = read("README.md");
 

@@ -1,6 +1,6 @@
 ---
 name: rainbond-app-assistant
-description: "Use whenever a user asks to deploy, run, deliver, publish, inspect, repair, or troubleshoot source code, the current project, a source directory/package, a bare Git repository URL without a supplied Compose/Helm/image-set descriptor, a named application without a descriptor, or a new app/component built from one container image. Trigger phrases: 帮我把当前项目部署到 Rainbond 上 / 帮我把这个项目跑起来 / 帮我看看当前项目卡在哪 / 如果还没初始化就先初始化，然后自动继续到应该停止的位置 / 帮我处理一下这个应用 / 在团队下新建应用并使用镜像创建组件. Not for supplied third-party Compose, Helm, or image-set descriptors; use rainbond-opensource-app-deploy. Not for a confirmed market template; use rainbond-template-installer."
+description: "Use whenever a user asks to deploy, run, deliver, publish, inspect, repair, or troubleshoot source code, the current project or local project, a source directory/package, an ordinary bare Git repository URL, a private-image project, a named application that is not identified as a third-party open-source suite, or a new app/component built from one container image. Trigger phrases: 帮我部署当前项目 / 帮我把这个项目跑起来 / 帮我看看当前项目卡在哪 / 如果还没初始化就先初始化，然后自动继续到应该停止的位置 / 帮我处理一下这个应用 / 在团队下新建应用并使用镜像创建组件. Not for supplied third-party Compose, Helm, image-set descriptors, or an explicit named third-party open-source suite; use rainbond-opensource-app-deploy. Confirmed market templates use rainbond-template-installer."
 ---
 
 # Rainbond App Assistant
@@ -10,8 +10,8 @@ description: "Use whenever a user asks to deploy, run, deliver, publish, inspect
 ## 路由所有权
 
 - 当前项目或用户明确给出的源码 Git URL：由本 Skill 接管。
-- 源码目录、源码包、私有镜像项目、裸 Git URL，以及仅给应用名称且没有描述符：由本 Skill 接管。
-- 用户实际提供第三方 Docker Compose、Helm 或镜像集合描述符：转到 rainbond-opensource-app-deploy。
+- 源码目录、源码包、私有镜像项目、普通裸 Git URL，以及未被明确识别为第三方开源套件的应用名称：由本 Skill 接管。
+- 用户实际提供第三方 Docker Compose、Helm、镜像集合描述符，或明确要求部署 Harbor、Dify、n8n 等第三方开源套件：转到 rainbond-opensource-app-deploy。
 - 已确认是 Rainbond 本地/云端市场模板：转到 rainbond-template-installer。
 
 开始前读取 [routing](references/routing.md) 做静态归属判断。初始路由阶段只加载最终所属入口 Skill 的 Runtime Gate，不得提前读取专项 Skill 的 Gate。

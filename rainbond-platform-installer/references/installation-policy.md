@@ -6,9 +6,9 @@
 
 - 控制端支持 Linux、macOS 和 Windows；Rainbond 目标支持 Linux、macOS，以及 Windows 本地预览路径中的专用 WSL2 环境。
 - Linux `x64` / `arm64`：选择“部署到本机”时安装到当前设备；选择“部署到独立服务器”时通过 SSH 安装到其他 Linux 服务器。不提供回车默认项。
-- macOS `x64` / `arm64`：优先推荐远程 Linux，也可安装到当前 Mac；本机安装依赖 OrbStack，准备时间通常更长。
+- macOS `x64` / `arm64`：可安装到当前 Mac，也可选择独立 Linux 服务器。
 - Windows：与其他控制端使用同一份“部署到本机 / 部署到独立服务器 / 部署到已有 Rainbond”选择；本机路径目前为 preview，只支持 Windows 10 build 19041+ / Windows 11 x64 工作站。
-- 推荐资源：4 核 CPU、8 GB 内存、50 GB 可用磁盘；预检最低门槛为 2 核 CPU、4 GB 内存、30 GB 可用磁盘。低于推荐值时会提示风险但继续安装，最终以 Rainbond 实际部署验证为准。
+- 预检最低门槛为 2 核 CPU、4 GB 内存、10 GB 可用磁盘。达到最低门槛时继续安装，最终以 Rainbond 实际部署验证为准。
 - 安装前端口 `80`、`443`、`7070` 必须空闲。
 
 远程单机只接受 `user@host` 或 `~/.ssh/config` 主机别名；ROI 主机集群逐节点使用配置中的 root 地址和端口。两种方式都先用 `BatchMode=yes` 检查现有免密连接。远程单机检查失败时固定输出一条版本锁定的 `ssh prepare`；主机集群先检查全部节点，再一次列出所有未就绪节点并输出一条版本锁定的 `ssh prepare-cluster --cluster-config`。用户只在自己电脑的系统终端执行，OpenSSH 读取每台服务器的指纹确认和一次密码；命令只准备公钥连接，不安装 Rainbond。全部完成后只统一回复一次“已完成”。恢复后所有 `ssh` / `scp` 均为免密非交互调用。Rainskills 不接收聊天中的 SSH 密码或私钥，也不支持离线安装或自动清理冲突环境。
