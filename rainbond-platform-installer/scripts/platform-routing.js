@@ -9,6 +9,7 @@ const LOCATIONS = new Set(["local", "server"]);
 const SERVER_MODES = new Set(["single-node", "host-cluster", "existing-kubernetes"]);
 const LEGACY_TARGETS = new Set(["local-linux", "local-macos", "local-windows", "remote-linux"]);
 const LOCAL_TARGETS = new Set(["local-linux", "local-macos", "local-windows"]);
+const SSH_TARGET_PROMPT = "Linux SSH 地址（例如 root@192.168.1.20 或主机别名）";
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/u;
 const CREDENTIAL_LIKE_VALUE = /^(?:gh[pousr]_|github_pat_|xox[baprs]-|sk-[A-Za-z0-9_-]{16,}|AKIA[A-Z0-9]{12,}|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$)/i;
 
@@ -181,7 +182,7 @@ function writeMissingSsh(write) {
   writeUserMessage(
     write,
     "platform.server-ssh",
-    "请提供单机服务器 SSH 地址后重新执行：--location server --mode single-node --ssh <user@host> [--ssh-port 22]",
+    SSH_TARGET_PROMPT,
   );
 }
 
@@ -291,7 +292,7 @@ async function selectPlatformRoute({
         });
       }
       while (!remoteHost) {
-        remoteHost = (await ask("Linux SSH 地址（例如 root@192.168.1.20 或主机别名）: ")).trim();
+        remoteHost = (await ask(`${SSH_TARGET_PROMPT}: `)).trim();
         if (!remoteHost) write("SSH 地址不能为空。\n");
       }
     }

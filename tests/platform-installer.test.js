@@ -101,10 +101,6 @@ test("preflight and non-interactive confirmation are fixed bounded user messages
     {
       ok: true,
       blockers: [],
-      warnings: [
-        "内存 7.6 GB 低于推荐配置 8 GB",
-        "可用磁盘 44.1 GB 低于推荐配置 50 GB",
-      ],
       effects: ["安装并启动 Docker 运行环境", "启动 privileged rainbond 容器并写入持久化数据"],
     },
     { kind: "remote-linux", host: "root@example.com" },
@@ -122,7 +118,7 @@ test("preflight and non-interactive confirmation are fixed bounded user messages
   const windowsOutput = [];
   printWindowsPreflight(
     { cpuCores: 8, memoryBytes: 16 * 1024 ** 3, diskBytes: 100 * 1024 ** 3 },
-    { ok: true, blockers: [], warnings: [], effects: ["启用 WSL 2"] },
+    { ok: true, blockers: [], effects: ["启用 WSL 2"] },
     { write: (value) => windowsOutput.push(value) },
   );
   assert.equal(
@@ -133,6 +129,15 @@ test("preflight and non-interactive confirmation are fixed bounded user messages
       + "- 需要安装运行环境所需要的依赖（预计占用：2 GB 内存 / 10 GB 磁盘）",
   );
   assert.doesNotMatch(windowsOutput.join(""), /推荐配置|低于推荐|预计占用：.*CPU|预估多少资源|等等/);
+
+  const macOutput = [];
+  printPreflight(
+    { platform: "darwin", cpuCores: 8, memoryBytes: 16 * 1024 ** 3, diskBytes: 100 * 1024 ** 3 },
+    { ok: true, blockers: [], effects: ["下载、安装并启动 OrbStack"] },
+    { kind: "local-macos", host: "developer-mac" },
+    { write: (value) => macOutput.push(value) },
+  );
+  assert.doesNotMatch(userMessageBody(macOutput.join(""), "platform.preflight"), /OrbStack|首次准备时间|比 Linux 更长/);
 
   const confirmationOutput = [];
   assert.equal(await confirmInstall(false, {
@@ -1303,7 +1308,7 @@ test("a saved server location without a mode remains unresolved on resume", () =
   });
 });
 
-test("preflight treats below-recommended resources as advisory", () => {
+test("preflight accepts resources at the minimum thresholds without recommendation metadata", () => {
   const { evaluatePreflight } = require(platformInstallerPath);
   const passing = evaluatePreflight({
     platform: "linux",
@@ -1321,15 +1326,15 @@ test("preflight treats below-recommended resources as advisory", () => {
   });
   assert.equal(passing.ok, true);
   assert.deepEqual(passing.blockers, []);
-  assert.deepEqual(passing.warnings, []);
+  assert.equal(Object.hasOwn(passing, "warnings"), false);
   assert.match(passing.effects.join("\n"), /Docker/);
 
-  const advisory = evaluatePreflight({
+  const minimum = evaluatePreflight({
     platform: "linux",
     arch: "x64",
     cpuCores: 2,
     memoryBytes: 4 * 1024 ** 3,
-    diskBytes: 30 * 1024 ** 3,
+    diskBytes: 10 * 1024 ** 3,
     occupiedPorts: [],
     hasPrivilege: true,
     hasDocker: true,
@@ -1338,16 +1343,16 @@ test("preflight treats below-recommended resources as advisory", () => {
     firewall: "active",
     swapEnabled: true,
   });
-  assert.equal(advisory.ok, true);
-  assert.deepEqual(advisory.blockers, []);
-  assert.match(advisory.warnings.join("\n"), /低于推荐配置/);
+  assert.equal(minimum.ok, true);
+  assert.deepEqual(minimum.blockers, []);
+  assert.equal(Object.hasOwn(minimum, "warnings"), false);
 
   const failing = evaluatePreflight({
     platform: "linux",
     arch: "x64",
     cpuCores: 1,
     memoryBytes: 3 * 1024 ** 3,
-    diskBytes: 29 * 1024 ** 3,
+    diskBytes: 9 * 1024 ** 3,
     occupiedPorts: [80, 7070],
     hasPrivilege: false,
     hasDocker: true,
@@ -1359,7 +1364,7 @@ test("preflight treats below-recommended resources as advisory", () => {
   assert.equal(failing.ok, false);
   assert.match(failing.blockers.join("\n"), /最低.*2 核/);
   assert.match(failing.blockers.join("\n"), /最低.*4 GB/);
-  assert.match(failing.blockers.join("\n"), /最低.*30 GB/);
+  assert.match(failing.blockers.join("\n"), /最低.*10 GB/);
   assert.match(failing.blockers.join("\n"), /80.*7070/);
   assert.match(failing.blockers.join("\n"), /root.*sudo -n/);
 });
@@ -1935,8 +1940,9 @@ test("non-interactive SSH selection is a fixed bounded user message", async () =
   assert.equal(result.missing, "ssh");
   assert.equal(
     userMessageBody(output.join(""), "platform.server-ssh"),
-    "请提供单机服务器 SSH 地址后重新执行：--location server --mode single-node --ssh <user@host> [--ssh-port 22]"
+    "Linux SSH 地址（例如 root@192.168.1.20 或主机别名）"
   );
+  assert.doesNotMatch(output.join(""), /--location|--mode|--ssh/);
 });
 
 test("routing rejects invalid combinations and never infers a mode from node count", async () => {
@@ -2991,6 +2997,14 @@ test("skill routes platform setup but excludes application delivery", () => {
     path.join(repoRoot, "rainbond-platform-installer", "SKILL.md"),
     "utf8"
   );
+  const policyGuidance = fs.readFileSync(
+    path.join(repoRoot, "rainbond-platform-installer", "references", "installation-policy.md"),
+    "utf8"
+  );
+  const troubleshootingGuidance = fs.readFileSync(
+    path.join(repoRoot, "rainbond-platform-installer", "references", "troubleshooting.md"),
+    "utf8"
+  );
   assert.match(skill, /name: rainbond-platform-installer/);
   assert.match(skill, /internal Rainskills onboarding capability/i);
   assert.match(skill, /Do not use it to deploy an application/i);
@@ -3010,17 +3024,17 @@ test("skill routes platform setup but excludes application delivery", () => {
   assert.match(skill, /RAINSKILLS_USER_INPUT_REQUIRED:console_address/);
   assert.match(skill, /--console-host/);
   assert.match(skill, /IP or DNS name.*not.*URL/is);
+  assert.doesNotMatch(`${policyGuidance}\n${troubleshootingGuidance}`, /推荐配置|推荐值|4\s*核[^\n]*8\s*GB[^\n]*50\s*GB/);
+  assert.doesNotMatch(policyGuidance, /优先推荐远程 Linux|准备时间通常更长|比 Linux 更长/);
 });
 
 test("official installer policy trusts only the fixed HTTPS origin and bounds mutable content", () => {
   const { POLICY } = require(platformInstallerPath);
   assert.equal(POLICY.schema, "rainskills.platform-installation-policy.v2");
-  assert.equal(POLICY.recommended.cpu_cores, 4);
-  assert.equal(POLICY.recommended.memory_bytes, 8 * 1024 ** 3);
-  assert.equal(POLICY.recommended.disk_bytes, 50 * 1024 ** 3);
+  assert.equal(Object.hasOwn(POLICY, "recommended"), false);
   assert.equal(POLICY.minimums.cpu_cores, 2);
   assert.equal(POLICY.minimums.memory_bytes, 4 * 1024 ** 3);
-  assert.equal(POLICY.minimums.disk_bytes, 30 * 1024 ** 3);
+  assert.equal(POLICY.minimums.disk_bytes, 10 * 1024 ** 3);
   assert.deepEqual(POLICY.required_ports, [80, 443, 7070]);
   assert.equal(POLICY.installer.url, "https://get.rainbond.com/");
   assert.deepEqual(POLICY.installer.allowed_origins, ["https://get.rainbond.com"]);
