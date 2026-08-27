@@ -119,6 +119,27 @@ test("active connecting operation is idempotent only for identical fields and re
   }
 });
 
+test("a failed connector can clear only its matching connecting operation", () => {
+  const { createRuntimeStateManager } = require(runtimeStatePath);
+  const home = temporaryHome();
+  const manager = createRuntimeStateManager({
+    home,
+    stateStore: createPortableSecureStateStore(home),
+    liveProbe: async () => true,
+  });
+  const current = connectedInput();
+  manager.startConnecting(current);
+
+  assert.equal(manager.abortConnecting({
+    ...current,
+    operation_id: "b7c0af4f-5dd7-41ec-9d11-583203a71483",
+  }), false);
+  assert.equal(manager.read().operation_id, current.operation_id);
+  assert.equal(manager.abortConnecting(current), true);
+  assert.deepEqual(manager.read(), { state: "not_started" });
+  assert.equal(manager.abortConnecting(current), false);
+});
+
 test("an active connect rejects a competitor during live probe and completes consistently", async () => {
   const { createRuntimeStateManager } = require(runtimeStatePath);
   const home = temporaryHome();

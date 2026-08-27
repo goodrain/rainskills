@@ -148,7 +148,7 @@ test("runtime prerequisites are session-cached and never rediscover fixed launch
   assert.match(embedded, /禁止读取、搜索或探测 `?rainskills\.js`?/);
 });
 
-test("browser and device authorization always use an attached interactive terminal", () => {
+test("Device Flow stays attached without requiring a terminal TTY", () => {
   const localRuntimeSkills = [
     "SKILL.md",
     ...fs.readdirSync(root, { withFileTypes: true })
@@ -157,13 +157,12 @@ test("browser and device authorization always use an attached interactive termin
       .filter((relativePath) => fs.existsSync(path.join(root, relativePath)))
       .filter((relativePath) => read(relativePath).includes("runtime connect")),
   ];
-  const expectedRule = /附加交互终端（TTY）[\s\S]*tty:\s*true/;
+  const expectedRule = /Device Flow[^\n]*不依赖[^\n]*TTY[\s\S]*保持进程附着/;
 
   for (const relativePath of localRuntimeSkills) {
     assert.match(read(relativePath), expectedRule, relativePath);
   }
-
-  assert.match(embeddedMarkdown(), expectedRule);
+  assert.doesNotMatch(embeddedMarkdown(), /runtime connect|Device Flow/);
 });
 
 test("failure context stays secret-safe and canonical blocker vocabularies agree", () => {

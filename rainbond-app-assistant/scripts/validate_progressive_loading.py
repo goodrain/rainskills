@@ -118,7 +118,7 @@ def validate_progressive_loading(skill_dir: Path) -> list[str]:
             "rainskills-tools.js",
             "固定 launcher",
             "Device Flow",
-            "tty: true",
+            "不依赖 stdin TTY",
             "npm root -g",
             "401",
             "403",
