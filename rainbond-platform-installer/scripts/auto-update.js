@@ -8,6 +8,10 @@ const path = require("node:path");
 const tls = require("node:tls");
 
 const { createSecureStateStore } = require("./secure-state.js");
+const {
+  destinationsForHostTarget,
+  isHostTarget,
+} = require("./host-targets.js");
 
 const OFFICIAL_LATEST_URL = "https://registry.npmjs.org/rainskills/latest";
 const OFFICIAL_REGISTRY = "https://registry.npmjs.org/";
@@ -735,7 +739,7 @@ function buildStableUpdateEnvironment(source, { fromVersion, targetVersion, regi
   };
 }
 
-function resolveInstallDestinations(args, home = os.homedir()) {
+function resolveInstallDestinations(args, home = os.homedir(), env = process.env) {
   if (
     !Array.isArray(args)
     || args.includes("--help")
@@ -745,21 +749,14 @@ function resolveInstallDestinations(args, home = os.homedir()) {
   let target = "all";
   let customDestination = "";
   for (let index = 0; index < args.length; index += 1) {
-    if (["codex", "claude", "pi", "all"].includes(args[index])) target = args[index];
+    if (isHostTarget(args[index])) target = args[index];
     if (args[index] === "--dest" && typeof args[index + 1] === "string") {
       customDestination = path.resolve(args[index + 1]);
       index += 1;
     }
   }
   if (customDestination) return [customDestination];
-  if (target === "codex") return [path.join(home, ".codex", "skills")];
-  if (target === "claude") return [path.join(home, ".claude", "skills")];
-  if (target === "pi") return [path.join(home, ".pi", "agent", "skills")];
-  return [
-    path.join(home, ".claude", "skills"),
-    path.join(home, ".codex", "skills"),
-    path.join(home, ".pi", "agent", "skills"),
-  ];
+  return destinationsForHostTarget(target, home, env);
 }
 
 function recordSkillInstallDestinations(args, {

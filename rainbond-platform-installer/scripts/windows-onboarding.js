@@ -18,6 +18,11 @@ const {
 } = require("./windows-auth.js");
 const { validateMcp } = require("./windows-client-config.js");
 const { createLifecycleTelemetry } = require("./telemetry.js");
+const {
+  destinationsForHostTarget,
+  isHostTarget,
+  telemetryClientForTarget,
+} = require("./host-targets.js");
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CONTROL_MODES = new Set(["windows-native", "wsl", "posix"]);
@@ -82,7 +87,7 @@ function parseWindowsInstallerArgs(argv) {
 
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
-    if (["codex", "claude", "pi", "all"].includes(argument)) {
+    if (isHostTarget(argument)) {
       options.target = argument;
     } else if (argument === "--dest") {
       options.customDest = requireValue(argv, index, argument);
@@ -117,18 +122,8 @@ function parseWindowsInstallerArgs(argv) {
   return options;
 }
 
-function destinationsForTarget(target, home) {
-  if (target === "codex") return [path.join(home, ".codex", "skills")];
-  if (target === "claude") return [path.join(home, ".claude", "skills")];
-  if (target === "pi") return [path.join(home, ".pi", "agent", "skills")];
-  if (target === "all") {
-    return [
-      path.join(home, ".claude", "skills"),
-      path.join(home, ".codex", "skills"),
-      path.join(home, ".pi", "agent", "skills"),
-    ];
-  }
-  throw new Error(`未知安装目标：${target}`);
+function destinationsForTarget(target, home, env = process.env) {
+  return destinationsForHostTarget(target, home, env);
 }
 
 function validateSkillDirectory(directory) {
@@ -294,7 +289,7 @@ function createOnboardingCheckpoint({
   stateStore,
 }) {
   if (!UUID_PATTERN.test(operationId)) throw new Error("operation id 不是有效的 UUID");
-  if (!["codex", "claude", "pi", "all"].includes(target)) throw new Error("安装目标无效");
+  if (!isHostTarget(target)) throw new Error("安装目标无效");
   const controlDistro = validateControl(control);
   const store = stateStore || (
     process.platform === "win32"
@@ -367,7 +362,7 @@ async function authorizeAndConfigure({
       platform: "win32",
       control_mode: process.env.RAINSKILLS_TELEMETRY_CONTROL_MODE || "windows-native",
       target: process.env.RAINSKILLS_TELEMETRY_TARGET || "local-windows",
-      client: target,
+      client: telemetryClientForTarget(target),
       action: "install",
     },
   });
@@ -450,7 +445,7 @@ async function authorizeAndConfigure({
     });
   }
 
-  if (!["codex", "claude", "pi", "all"].includes(target)) throw new Error("安装目标无效");
+  if (!isHostTarget(target)) throw new Error("安装目标无效");
   const cliUrl = `${baseUrl}/console/mcp/rainskills/api/query`;
   telemetry.record({
     lifecycle_phase: "configure_cli",
@@ -511,13 +506,24 @@ async function installLocalCli({ packageRoot, home }) {
 async function promptTarget() {
   const terminal = readline.createInterface({ input: stdin, output: stdout });
   try {
-    stdout.write("请选择要安装和配置的平台：\n  1) Codex\n  2) Claude Code\n  3) 两者都要\n");
+    stdout.write(
+      "请选择要安装和配置的平台：\n"
+      + "  1) Codex\n"
+      + "  2) Claude Code\n"
+      + "  3) Pi Agent\n"
+      + "  4) DeepSeek Harness\n"
+      + "  5) WorkBuddy\n"
+      + "  6) 全部\n"
+    );
     for (;;) {
-      const answer = (await terminal.question("请输入选项 [1-3]: ")).trim();
+      const answer = (await terminal.question("请输入选项 [1-6]: ")).trim();
       if (answer === "1") return "codex";
       if (answer === "2") return "claude";
-      if (answer === "" || answer === "3") return "all";
-      stdout.write("请输入 1、2 或 3。\n");
+      if (answer === "3") return "pi";
+      if (answer === "4") return "dsh";
+      if (answer === "5") return "workbuddy";
+      if (answer === "" || answer === "6") return "all";
+      stdout.write("请输入 1、2、3、4、5 或 6。\n");
     }
   } finally {
     terminal.close();
@@ -590,7 +596,7 @@ async function resolveDeployment(options, {
 }
 
 function usage() {
-  stdout.write("Usage: npx rainskills [codex|claude|pi|all] [options]\n");
+  stdout.write("Usage: npx rainskills [codex|claude|pi|dsh|workbuddy|all] [options]\n");
 }
 
 async function main(argv, dependencies = {}) {
@@ -600,6 +606,7 @@ async function main(argv, dependencies = {}) {
     return { status: "help" };
   }
   const home = dependencies.home || os.homedir();
+  const environment = dependencies.env || process.env;
   const packageRoot = dependencies.packageRoot || path.resolve(__dirname, "..", "..");
   const target = options.target || (
     options.nonInteractive || !stdin.isTTY
@@ -608,7 +615,7 @@ async function main(argv, dependencies = {}) {
   );
   const destinations = options.customDest
     ? [path.resolve(options.customDest)]
-    : destinationsForTarget(target, home);
+    : destinationsForTarget(target, home, environment);
   const skills = discoverSkills(packageRoot);
   const logger = dependencies.logger || ((message) => stdout.write(`${message}\n`));
   const detailLogger = options.verbose ? logger : () => {};

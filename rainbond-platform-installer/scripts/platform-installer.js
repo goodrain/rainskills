@@ -30,6 +30,7 @@ const {
   verifyRecoveryBundle,
 } = require("./windows-platform.js");
 const { createLifecycleTelemetry } = require("./telemetry.js");
+const { isHostTarget } = require("./host-targets.js");
 const { installHostCluster } = require("./host-cluster-installer.js");
 const { installExistingKubernetes } = require("./existing-kubernetes-installer.js");
 
@@ -249,7 +250,7 @@ function readOnboardingState(filePath, expectedOperationId, stateStore = secureS
   if (!UUID_PATTERN.test(state.operation_id || "")) {
     throw new Error("状态文件中的 operation_id 无效");
   }
-  if (!["codex", "claude", "pi", "all"].includes(state.target)) {
+  if (!isHostTarget(state.target)) {
     throw new Error("状态文件中的安装目标无效");
   }
   if (state.deployment_mode !== "self-hosted") {

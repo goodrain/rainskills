@@ -266,7 +266,7 @@ test("runtime writes stay within the JSON allowlist without a revision field", a
 test("default live probe uses only the fixed Rainskills CLI endpoint and process JWT", async () => {
   const { createRuntimeStateManager } = require(runtimeStatePath);
   const token = "current.process.jwt";
-  for (const targetClient of ["codex", "claude", "pi", "all"]) {
+  for (const targetClient of ["codex", "claude", "pi", "dsh", "workbuddy", "all"]) {
     const home = temporaryHome();
     const stateStore = createPortableSecureStateStore(home);
     const input = { ...connectedInput(), target_client: targetClient };

@@ -7,12 +7,13 @@ const { isDeepStrictEqual } = require("node:util");
 
 const { createSecureStateStore } = require("./secure-state.js");
 const { validateMcp } = require("./windows-client-config.js");
+const { HOST_TARGETS } = require("./host-targets.js");
 
 const RUNTIME_SCHEMA = "rainskills.runtime-connection.v1";
 const STATUS_SCHEMA = "rainskills.runtime-status.v1";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const STATES = new Set(["not_started", "connecting", "connected"]);
-const TARGET_CLIENTS = new Set(["codex", "claude", "pi", "all"]);
+const TARGET_CLIENTS = new Set(HOST_TARGETS);
 const ENVIRONMENT_KINDS = new Set(["saas", "private"]);
 const RUNTIME_STATE_LOCK_ID = "cf1c1a85-63e7-45f8-9dd5-20ea1d511c48";
 const STATE_FIELDS = new Set([

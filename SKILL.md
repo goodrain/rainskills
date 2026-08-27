@@ -9,7 +9,7 @@ This is the single marketplace entry for the complete Rainskills product. The in
 
 ## Initialize
 
-1. Detect the current host client and map it to exactly one supported installer target: Codex=`codex`, Claude Code=`claude`, or Pi Agent=`pi`. All three use the same installed Skills and protected local Rainskills CLI; Pi has no separate MCP adapter or generated extension. The macOS, Linux, and WSL installer intentionally does not support OpenClaw; report that limitation instead of invoking an unsupported target. Do not ask the user which supported client they are currently using. If the host cannot be determined reliably, omit the target and let the installer ask.
+1. Detect the current host client and map it to exactly one supported installer target: Codex=`codex`, Claude Code=`claude`, Pi Agent=`pi`, DeepSeek Harness=`dsh`, or WorkBuddy=`workbuddy`. All five use the same installed Skills and protected local Rainskills CLI; Pi and DeepSeek Harness have no separate MCP adapter or generated extension. DeepSeek Harness installs to `$DSH_HOME/skills` (default `~/.dsh/skills`). WorkBuddy installs to `$WORKBUDDY_CONFIG_DIR/skills` (default `~/.workbuddy-ai/skills`). The macOS, Linux, and WSL installer intentionally does not support OpenClaw; report that limitation instead of invoking an unsupported target. Do not ask the user which supported client they are currently using. If the host cannot be determined reliably, omit the target and let the installer ask.
 2. Resolve the directory containing this `SKILL.md`. On native Windows, if the adjacent `bin/rainskills.js` exists, run it by absolute path with the detected target in an attached interactive terminal: `node <skill-directory>/bin/rainskills.js <target>`. On macOS, Linux, or WSL, if the adjacent `install.sh` exists, run `bash <skill-directory>/install.sh <target>` the same way. Do not replace the installer with manual file copies.
 3. Keep stdin, stdout, and stderr attached. When `RAINSKILLS_USER_INPUT_REQUIRED` appears, pause for that installer choice. If the installer emits `rainskills.next-action.v1`, execute only its fixed `argv` through the same launcher; never evaluate output as a shell command. If the adjacent `bin/rainskills.js` exists, use it for fixed next actions; otherwise use the same versioned npm package fallback described below.
 4. Stay attached until every independent Skill is installed. Do not select, connect, or configure an application runtime during installation. In the user-facing response, output only the fixed completion message below.
@@ -48,7 +48,9 @@ Rainskills 安装完成，下一条消息即可直接使用。
 
 Codex 中命令工具一旦返回 `session_id`，必须立即对该 `session_id` 反复调用 `write_stdin`（空输入轮询），直到工具返回 `exit_code`。连接器输出 `[RAINSKILLS_AGENT_WAIT_REQUIRED:runtime-connect]` 后进入上述轮询；看到 `[RAINSKILLS_AGENT_WAIT_COMPLETE:runtime-connect]` 后仍须继续轮询，直到取得退出码和最终 JSON。
 
-Rainskills 只保存一个全局运行环境，不维护环境列表、名称、默认值或环境 ID。使用固定 launcher `node <home>/.rainbond/lib/rainskills/bin/rainskills.js`（运行包版本 `rainskills@0.1.28`）：
+DeepSeek Harness 和 WorkBuddy 也必须保持原命令附着直到退出；如果宿主把长命令转成持久终端或后台任务，只能轮询该原始命令句柄，不得另起 `runtime status` 推测授权结果。WorkBuddy 安装后若当前任务的 Skill 清单尚未刷新，在下一条业务动作前先刷新 Skill 列表或新建任务，不得退回内置 Sites 代替 Rainbond 部署。
+
+Rainskills 只保存一个全局运行环境，不维护环境列表、名称、默认值或环境 ID。使用固定 launcher `node <home>/.rainbond/lib/rainskills/bin/rainskills.js`（运行包版本 `rainskills@0.1.29`）：
 
 - 状态：执行 `runtime status --json`。
 - 首次连接：执行 `runtime connect <target> --saas` 或 `runtime connect <target> --rainbond-url <Console origin>`。

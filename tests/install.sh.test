@@ -507,6 +507,8 @@ run_installer() {
       export RAINBOND_PASSWORD="secret-password"
     fi
     HOME="$workdir/home" \
+    DSH_HOME="${TEST_DSH_HOME:-$workdir/home/.dsh}" \
+    WORKBUDDY_CONFIG_DIR="${TEST_WORKBUDDY_CONFIG_DIR:-$workdir/home/.workbuddy-ai}" \
     SHELL="/bin/zsh" \
     TEST_LOG_DIR="$workdir/logs" \
     PATH="$workdir/bin:$(dirname "$TEST_SUITE_REAL_NODE"):/usr/bin:/bin" \
@@ -818,7 +820,7 @@ test_default_install_is_skills_only() {
 test_skills_only_completion_contract_for_every_posix_target() {
   local target tmpdir output_file custom_destination
 
-  for target in codex claude pi all; do
+  for target in codex claude pi dsh workbuddy all; do
     tmpdir="$(mktemp -d)"
     mkdir -p "$tmpdir/home" "$tmpdir/logs"
     make_fake_commands "$tmpdir/bin"
@@ -829,6 +831,12 @@ test_skills_only_completion_contract_for_every_posix_target() {
     assert_exact_capability_summary "$output_file"
     if [[ "$target" == "pi" || "$target" == "all" ]]; then
       assert_file_exists "$tmpdir/home/.pi/agent/skills/rainbond-app-assistant/SKILL.md"
+    fi
+    if [[ "$target" == "dsh" || "$target" == "all" ]]; then
+      assert_file_exists "$tmpdir/home/.dsh/skills/rainbond-app-assistant/SKILL.md"
+    fi
+    if [[ "$target" == "workbuddy" || "$target" == "all" ]]; then
+      assert_file_exists "$tmpdir/home/.workbuddy-ai/skills/rainbond-app-assistant/SKILL.md"
     fi
     rm -rf "$tmpdir"
   done
@@ -845,6 +853,18 @@ test_skills_only_completion_contract_for_every_posix_target() {
   assert_exact_capability_summary "$output_file"
   assert_file_exists "$custom_destination/rainbond-app-assistant/SKILL.md"
   rm -rf "$tmpdir"
+
+  tmpdir="$(mktemp -d)"
+  mkdir -p "$tmpdir/home" "$tmpdir/logs"
+  make_fake_commands "$tmpdir/bin"
+  output_file="$tmpdir/config-homes.out"
+  TEST_DSH_HOME="$tmpdir/dsh-home" \
+  TEST_WORKBUDDY_CONFIG_DIR="$tmpdir/workbuddy-home" \
+    run_installer "$tmpdir" all --non-interactive --force >"$output_file" 2>&1
+  assert_exact_capability_summary "$output_file"
+  assert_file_exists "$tmpdir/dsh-home/skills/rainbond-app-assistant/SKILL.md"
+  assert_file_exists "$tmpdir/workbuddy-home/skills/rainbond-app-assistant/SKILL.md"
+  rm -rf "$tmpdir"
 }
 
 test_posix_all_target_installs_every_skill_set_and_preserves_force_counts() {
@@ -855,18 +875,22 @@ test_posix_all_target_installs_every_skill_set_and_preserves_force_counts() {
     "$tmpdir/home/.codex/skills/rainbond-app-assistant" \
     "$tmpdir/home/.claude/skills/rainbond-app-assistant" \
     "$tmpdir/home/.pi/agent/skills/rainbond-app-assistant" \
+    "$tmpdir/home/.dsh/skills/rainbond-app-assistant" \
+    "$tmpdir/home/.workbuddy-ai/skills/rainbond-app-assistant" \
     "$tmpdir/logs"
   make_fake_commands "$tmpdir/bin"
   printf 'old codex skill\n' > "$tmpdir/home/.codex/skills/rainbond-app-assistant/SKILL.md"
   printf 'old claude skill\n' > "$tmpdir/home/.claude/skills/rainbond-app-assistant/SKILL.md"
   printf 'old pi skill\n' > "$tmpdir/home/.pi/agent/skills/rainbond-app-assistant/SKILL.md"
+  printf 'old dsh skill\n' > "$tmpdir/home/.dsh/skills/rainbond-app-assistant/SKILL.md"
+  printf 'old workbuddy skill\n' > "$tmpdir/home/.workbuddy-ai/skills/rainbond-app-assistant/SKILL.md"
   source_skill="$REPO_ROOT/rainbond-app-assistant/SKILL.md"
   skill_count="$(find "$REPO_ROOT" -maxdepth 1 -mindepth 1 -type d -name 'rainbond-*' | wc -l | tr -d ' ')"
   if [[ -f "$REPO_ROOT/marketplace/rainskills/skills/rainskills/SKILL.md" ]]; then
     skill_count=$((skill_count + 1))
   fi
-  expected_new=$(( (skill_count - 1) * 3 ))
-  expected_unchanged=$(( skill_count * 3 ))
+  expected_new=$(( (skill_count - 1) * 5 ))
+  expected_unchanged=$(( skill_count * 5 ))
   output_file="$tmpdir/force.out"
   second_output="$tmpdir/unchanged.out"
 
@@ -878,8 +902,12 @@ test_posix_all_target_installs_every_skill_set_and_preserves_force_counts() {
     || fail "Claude pre-existing Skill was not force-overwritten"
   cmp -s "$source_skill" "$tmpdir/home/.pi/agent/skills/rainbond-app-assistant/SKILL.md" \
     || fail "Pi pre-existing Skill was not force-overwritten"
+  cmp -s "$source_skill" "$tmpdir/home/.dsh/skills/rainbond-app-assistant/SKILL.md" \
+    || fail "DeepSeek Harness pre-existing Skill was not force-overwritten"
+  cmp -s "$source_skill" "$tmpdir/home/.workbuddy-ai/skills/rainbond-app-assistant/SKILL.md" \
+    || fail "WorkBuddy pre-existing Skill was not force-overwritten"
   assert_contains "$output_file" \
-    "安装完成。本次：${expected_new} 项新装 / 0 项已更新 / 0 项已是最新 / 3 项强制覆盖"
+    "安装完成。本次：${expected_new} 项新装 / 0 项已更新 / 0 项已是最新 / 5 项强制覆盖"
 
   run_installer "$tmpdir" all --non-interactive --verbose >"$second_output" 2>&1
   assert_contains "$second_output" \

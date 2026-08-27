@@ -13,6 +13,9 @@ const {
 const {
   renderCatalogUserMessage,
 } = require("../rainbond-platform-installer/scripts/user-message.js");
+const {
+  isHostTarget,
+} = require("../rainbond-platform-installer/scripts/host-targets.js");
 
 const AUTO_UPDATE_FALLBACK_EXIT_CODE = 75;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -67,7 +70,7 @@ function parseRuntimeAssertConnectArgs(args) {
     throw new Error("runtime connect 内部门禁参数无效");
   }
   if (!UUID_PATTERN.test(args[3] || "")) throw new Error("runtime connect operation 无效");
-  if (!["codex", "claude", "pi", "all"].includes(args[5])) throw new Error("runtime connect target 无效");
+  if (!isHostTarget(args[5])) throw new Error("runtime connect target 无效");
   if (!["saas", "private"].includes(args[7])) throw new Error("runtime connect environment kind 无效");
   return {
     operationId: args[3],
@@ -95,8 +98,8 @@ function parseRuntimeConnectArgs(args) {
     throw new Error("不是 runtime connect 命令");
   }
   const targetClient = args[2];
-  if (!["codex", "claude", "pi", "all"].includes(targetClient)) {
-    throw new Error("runtime connect 需要固定目标 codex、claude、pi 或 all");
+  if (!isHostTarget(targetClient)) {
+    throw new Error("runtime connect 需要固定的受支持宿主目标");
   }
   let environmentChoice = "";
   let rainbondUrl = "";
@@ -319,7 +322,7 @@ async function runBuiltin(args, {
     return true;
   }
   if (args[0] === "runtime" && args[1] === "reconnect") {
-    if (args.length !== 3 || !["codex", "claude", "pi", "all"].includes(args[2])) {
+    if (args.length !== 3 || !isHostTarget(args[2])) {
       throw new Error("runtime reconnect 参数无效");
     }
     const current = getSingleRuntimeStore().read();

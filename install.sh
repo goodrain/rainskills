@@ -205,6 +205,8 @@ Usage:
   ./install.sh claude
   ./install.sh codex
   ./install.sh pi
+  ./install.sh dsh
+  ./install.sh workbuddy
   ./install.sh all
   ./install.sh --dest <path>
   ./install.sh all --saas
@@ -216,7 +218,9 @@ Options:
   claude                 Install and configure Claude Code
   codex                  Install and configure Codex
   pi                     Install and configure Pi Agent
-  all                    Install and configure Codex, Claude Code, and Pi Agent
+  dsh                    Install and configure DeepSeek Harness
+  workbuddy              Install and configure WorkBuddy
+  all                    Install and configure all supported agents
   refresh                Re-run browser login and refresh the protected CLI credential
   --dest PATH            Install skills to a custom directory only
   --force                Overwrite existing installed skills
@@ -240,6 +244,8 @@ Environment:
   RAINBOND_PASSWORD      Legacy: Rainbond login password for non-interactive runs
   RAINBOND_LOGIN_TIMEOUT Browser login timeout in seconds (default 600)
   RAINSKILLS_NO_BROWSER  Set to 1 to print the authorization URL without opening it
+  DSH_HOME               DeepSeek Harness home (default: ~/.dsh)
+  WORKBUDDY_CONFIG_DIR   WorkBuddy config home (default: ~/.workbuddy-ai)
 EOF
 }
 
@@ -297,6 +303,12 @@ rainskills_install_client_for_target() {
       ;;
     pi)
       printf 'pi\n'
+      ;;
+    dsh)
+      printf 'deepseek_harness\n'
+      ;;
+    workbuddy)
+      printf 'workbuddy\n'
       ;;
     all)
       printf 'all\n'
@@ -461,7 +473,7 @@ event = {
     "platform": platform,
     "control_mode": control_mode,
     "target": target,
-    "client": client if client in {"codex", "claude_code", "pi", "all", "both", "unknown"} else "unknown",
+    "client": client if client in {"codex", "claude_code", "pi", "deepseek_harness", "workbuddy", "all", "both", "unknown"} else "unknown",
     "eid": eid or None,
     "phase": None,
     "lifecycle_phase": phase,
@@ -518,7 +530,7 @@ initialize_rainskills_installation_reporting() {
       connect)
         RAINSKILLS_INSTALL_ACTION="connect"
         ;;
-      codex|claude|pi|all)
+      codex|claude|pi|dsh|workbuddy|all)
         target="$arg"
         ;;
     esac
@@ -816,12 +828,12 @@ parse_args() {
         ACTION="connect"
         shift
         ;;
-      claude|codex|pi|all)
+      claude|codex|pi|dsh|workbuddy|all)
         TARGET="$1"
         shift
         ;;
       openclaw)
-        die "macOS/Linux 安装器不再支持 OpenClaw，请使用 Codex、Claude Code 或 Pi Agent。"
+        die "macOS/Linux 安装器不再支持 OpenClaw，请使用 Codex、Claude Code、Pi Agent、DeepSeek Harness 或 WorkBuddy。"
         ;;
       --dest)
         [[ $# -ge 2 ]] || die "--dest 需要一个路径值"
@@ -909,7 +921,7 @@ assert_internal_connect_entry() {
   local target="" environment_kind="" console_origin="" mode=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      codex|claude|pi|all)
+      codex|claude|pi|dsh|workbuddy|all)
         [[ -z "$target" ]] || return 1
         target="$1"
         shift
@@ -1015,10 +1027,12 @@ resolve_target() {
   log "  1) Codex"
   log "  2) Claude Code"
   log "  3) Pi Agent"
-  log "  4) 全部"
+  log "  4) DeepSeek Harness"
+  log "  5) WorkBuddy"
+  log "  6) 全部"
 
   while true; do
-    printf '请输入选项 [1-4]: '
+    printf '请输入选项 [1-6]: '
     read -r choice
     case "$choice" in
       1)
@@ -1033,12 +1047,20 @@ resolve_target() {
         TARGET="pi"
         return 0
         ;;
-      4|"")
+      4)
+        TARGET="dsh"
+        return 0
+        ;;
+      5)
+        TARGET="workbuddy"
+        return 0
+        ;;
+      6|"")
         TARGET="all"
         return 0
         ;;
       *)
-        log "请输入 1、2、3 或 4。"
+        log "请输入 1、2、3、4、5 或 6。"
         ;;
     esac
   done
@@ -1060,10 +1082,18 @@ collect_destinations() {
       pi)
         destinations+=("$HOME/.pi/agent/skills")
         ;;
+      dsh)
+        destinations+=("${DSH_HOME:-$HOME/.dsh}/skills")
+        ;;
+      workbuddy)
+        destinations+=("${WORKBUDDY_CONFIG_DIR:-$HOME/.workbuddy-ai}/skills")
+        ;;
       all)
         destinations+=("$HOME/.claude/skills")
         destinations+=("$HOME/.codex/skills")
         destinations+=("$HOME/.pi/agent/skills")
+        destinations+=("${DSH_HOME:-$HOME/.dsh}/skills")
+        destinations+=("${WORKBUDDY_CONFIG_DIR:-$HOME/.workbuddy-ai}/skills")
         ;;
       *)
         die "未知安装目标：$TARGET"

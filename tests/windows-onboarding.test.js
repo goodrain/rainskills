@@ -89,7 +89,7 @@ test("native Windows verbose mode keeps technical installation diagnostics opt-i
 test("native main ends every default target with the approved Skills-only completion", async (t) => {
   const { main } = require(windowsOnboardingPath);
 
-  for (const target of ["codex", "claude", "pi", "all"]) {
+  for (const target of ["codex", "claude", "pi", "dsh", "workbuddy", "all"]) {
     await t.test(target, async () => {
       const home = temporaryHome();
       const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), `rainskills-package-${target}-`));
@@ -297,13 +297,21 @@ test("Windows argument parsing rejects unknown input before installation", () =>
   assert.equal(options.deploymentMode, "self-hosted");
   assert.equal(options.rainbondUrl, "https://rainbond.example.com");
   assert.equal(options.noBrowser, true);
-  assert.deepEqual(destinationsForTarget("all", home), [
+  assert.deepEqual(destinationsForTarget("all", home, {}), [
     path.join(home, ".claude", "skills"),
     path.join(home, ".codex", "skills"),
     path.join(home, ".pi", "agent", "skills"),
+    path.join(home, ".dsh", "skills"),
+    path.join(home, ".workbuddy-ai", "skills"),
   ]);
-  assert.deepEqual(destinationsForTarget("pi", home), [
+  assert.deepEqual(destinationsForTarget("pi", home, {}), [
     path.join(home, ".pi", "agent", "skills"),
+  ]);
+  assert.deepEqual(destinationsForTarget("dsh", home, {}), [
+    path.join(home, ".dsh", "skills"),
+  ]);
+  assert.deepEqual(destinationsForTarget("workbuddy", home, {}), [
+    path.join(home, ".workbuddy-ai", "skills"),
   ]);
   assert.throws(() => parseWindowsInstallerArgs(["--unknown"]), /未知参数/);
   assert.throws(() => parseWindowsInstallerArgs(["--dest"]), /--dest/);

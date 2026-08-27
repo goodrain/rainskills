@@ -8,7 +8,9 @@ const path = require("node:path");
 const DEFAULT_REPORT_URL = "https://log.rainbond.com/api/rainskills/lifecycle-events";
 const DEFAULT_LEGACY_REPORT_URL = "https://log.rainbond.com/api/rainskills/installations";
 const SCHEMA = "rainskills.lifecycle-event.v1";
-const CLIENTS = new Set(["codex", "claude_code", "both", "unknown"]);
+const CLIENTS = new Set([
+  "codex", "claude_code", "pi", "deepseek_harness", "workbuddy", "all", "both", "unknown",
+]);
 const PLATFORMS = new Set(["darwin", "linux", "win32"]);
 const CONTROL_MODES = new Set(["posix", "wsl", "windows-native"]);
 const TARGETS = new Set(["local-linux", "local-macos", "local-windows", "remote-linux"]);

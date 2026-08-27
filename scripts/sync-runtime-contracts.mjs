@@ -46,6 +46,8 @@ const requiredAuthorizationGuidance = [
   "exit_code",
   "RAINSKILLS_AGENT_WAIT_REQUIRED:runtime-connect",
   "RAINSKILLS_AGENT_WAIT_COMPLETE:runtime-connect",
+  "DeepSeek Harness=`dsh`",
+  "WorkBuddy=`workbuddy`",
 ];
 
 function runtimeGate(source, skillId) {

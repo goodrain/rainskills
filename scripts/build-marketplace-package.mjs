@@ -22,6 +22,8 @@ const keywords = [
   "rainbond",
   "codex",
   "claude-code",
+  "deepseek-harness",
+  "workbuddy",
   "skills",
   "installer",
 ];

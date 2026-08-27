@@ -49,6 +49,11 @@ test("runtime connect accepts one environment route without a business intent", 
     allowInsecureHttp: false,
     privateLocation: undefined,
   });
+  for (const targetClient of ["dsh", "workbuddy"]) {
+    assert.equal(parseRuntimeConnectArgs([
+      "runtime", "connect", targetClient, "--saas",
+    ]).targetClient, targetClient);
+  }
   assert.throws(() => parseRuntimeConnectArgs([
     "runtime", "connect", "codex", "--saas", "--rainbond-url", "https://other.example.com",
   ]), /互斥/);

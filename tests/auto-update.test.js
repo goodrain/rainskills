@@ -586,11 +586,23 @@ test("protected update state and custom install destinations survive across runs
   assert.deepEqual(resolveInstallDestinations(["pi", "--force"], home), [
     path.join(home, ".pi", "agent", "skills"),
   ]);
+  assert.deepEqual(resolveInstallDestinations(["dsh", "--force"], home), [
+    path.join(home, ".dsh", "skills"),
+  ]);
+  assert.deepEqual(resolveInstallDestinations(["workbuddy", "--force"], home), [
+    path.join(home, ".workbuddy-ai", "skills"),
+  ]);
   assert.deepEqual(resolveInstallDestinations(["all", "--force"], home), [
     path.join(home, ".claude", "skills"),
     path.join(home, ".codex", "skills"),
     path.join(home, ".pi", "agent", "skills"),
+    path.join(home, ".dsh", "skills"),
+    path.join(home, ".workbuddy-ai", "skills"),
   ]);
+  assert.deepEqual(
+    resolveInstallDestinations(["dsh"], home, { DSH_HOME: path.join(home, "dsh-home") }),
+    [path.join(home, "dsh-home", "skills")]
+  );
   assert.deepEqual(resolveInstallDestinations(["--dest", custom, "--force"], home), [custom]);
   assert.deepEqual(resolveInstallDestinations(["--help"], home), []);
   assert.deepEqual(resolveInstallDestinations(["refresh"], home), []);
