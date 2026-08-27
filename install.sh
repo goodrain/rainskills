@@ -1889,6 +1889,7 @@ device_flow_login_to_rainbond() {
     printf '请在任意能够访问该 Rainbond 平台的电脑上打开上面的地址并完成登录授权。\n' >&2
   fi
   printf '[RAINSKILLS_USER_MESSAGE_END:runtime.device-authorization]\n' >&2
+  printf '[RAINSKILLS_AGENT_WAIT_REQUIRED:runtime-connect]\n' >&2
 
   if ! poll_device_authorization "$base_url"; then
     cleanup_device_flow
@@ -2634,6 +2635,7 @@ main() {
     if [[ "${RAINSKILLS_RUNTIME_CONNECT_COMPLETION:-0}" == "1" ]]; then
       node "$SCRIPT_DIR/bin/rainskills.js" runtime complete-connect \
         --onboarding-id "$RAINSKILLS_RUNTIME_OPERATION_ID"
+      printf '[RAINSKILLS_AGENT_WAIT_COMPLETE:runtime-connect]\n' >&2
     fi
     return 0
   fi

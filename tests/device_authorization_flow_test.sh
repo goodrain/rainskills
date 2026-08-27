@@ -142,6 +142,14 @@ assert_contains \
   "fixed authorization message end" \
   "$TEST_ROOT/output.log" \
   "[RAINSKILLS_USER_MESSAGE_END:runtime.device-authorization]"
+assert_contains \
+  "authorization wait marker" \
+  "$TEST_ROOT/output.log" \
+  "[RAINSKILLS_AGENT_WAIT_REQUIRED:runtime-connect]"
+
+connect_completion_source="$(sed -n '/if \[\[ "\$ACTION" == "connect" \]\]/,/return 0/p' "$REPO_ROOT/install.sh")"
+grep -F '[RAINSKILLS_AGENT_WAIT_COMPLETE:runtime-connect]' <<<"$connect_completion_source" >/dev/null \
+  || fail "runtime connect has no completion marker after complete-connect"
 
 prepare_device_flow_temp_dir
 DEVICE_FLOW_DEVICE_CODE="superseded-device-code"

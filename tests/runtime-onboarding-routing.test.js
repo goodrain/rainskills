@@ -105,6 +105,11 @@ test("runtime gates contain no multi-environment or runtime-operation protocol",
     assert.match(current, /退出码为 0/);
     assert.match(current, /rainskills\.runtime-connect-result\.v1/);
     assert.match(current, /state[^。\n]*connected/);
+    assert.match(current, /session_id/);
+    assert.match(current, /write_stdin/);
+    assert.match(current, /exit_code/);
+    assert.match(current, /RAINSKILLS_AGENT_WAIT_REQUIRED:runtime-connect/);
+    assert.match(current, /RAINSKILLS_AGENT_WAIT_COMPLETE:runtime-connect/);
   }
 });
 
@@ -153,6 +158,10 @@ test("root Skill manages one replaceable runtime and never configures client MCP
   assert.match(source, /同一个命令会话/);
   assert.match(source, /禁止[^。\n]*后续业务步骤/);
   assert.match(source, /rainskills\.runtime-connect-result\.v1/);
+  assert.match(source, /session_id/);
+  assert.match(source, /write_stdin/);
+  assert.match(source, /RAINSKILLS_AGENT_WAIT_REQUIRED:runtime-connect/);
+  assert.match(source, /RAINSKILLS_AGENT_WAIT_COMPLETE:runtime-connect/);
   assert.doesNotMatch(source, /environment set-default|environment rename|environment remove/);
 });
 

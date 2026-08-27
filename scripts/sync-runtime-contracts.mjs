@@ -41,6 +41,11 @@ const requiredAuthorizationGuidance = [
   "退出码为 0",
   "rainskills.runtime-connect-result.v1",
   "state=connected",
+  "session_id",
+  "write_stdin",
+  "exit_code",
+  "RAINSKILLS_AGENT_WAIT_REQUIRED:runtime-connect",
+  "RAINSKILLS_AGENT_WAIT_COMPLETE:runtime-connect",
 ];
 
 function runtimeGate(source, skillId) {
