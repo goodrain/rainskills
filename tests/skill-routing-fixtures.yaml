@@ -14,6 +14,9 @@ cases:
   - id: ambiguous_app_action
     prompt: 帮我处理一下这个应用
     expected_skill: rainbond-app-assistant
+  - id: deploy_named_image_app_in_team
+    prompt: 在zqh团队下新建一个x-codex的应用，然后使用镜像构建一个nginx组件
+    expected_skill: rainbond-app-assistant
   - id: explicit_bootstrap_only
     prompt: 只帮我创建应用和组件，不要继续排障
     expected_skill: rainbond-fullstack-bootstrap
@@ -73,6 +76,8 @@ required_markers:
     - "3) 独立服务器"
     - "4) 已有 Rainbond"
     - "本机只允许连接一个 Rainbond 运行环境"
+    - '"hints": {"team_name": "<team-name>"}'
+    - '"selection": {"option_id": "<option-id>"}'
   rainbond-fullstack-bootstrap:
     - "Do not use for a generic current-project deployment request"
     - "route that to `rainbond-app-assistant`"

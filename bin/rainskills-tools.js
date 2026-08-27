@@ -23,6 +23,9 @@ const SKILL_MANIFEST_FILENAME = "rainskills-skill-manifest.json";
 const OPERATION_ID_PATTERN = /^[a-f0-9]{8}-[a-f0-9-]{27,}$/;
 const SKILL_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,127}$/;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
+const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f-\u009f]/u;
+const CONTEXT_RESOLVE_FIELDS = new Set(["required", "hints", "selection"]);
+const CONTEXT_HINT_FIELDS = new Set(["team_id", "team_name", "region_name"]);
 const SKILL_CONTENT_MAX_BYTES = 128 * 1024;
 const SKILL_MANIFEST_MAX_BYTES = 4 * 1024 * 1024;
 const SENSITIVE_RESPONSE_KEY_PATTERN = /(?:authorization|jwt|token|password|secret|credential|private[_-]?key|key[_-]?file|certificate|cert[_-]?file|ssl[_-]?ca[_-]?cert)/i;
@@ -1017,17 +1020,96 @@ function boundedContextString(value) {
   return typeof value === "string"
     && value.length > 0
     && value.length <= 128
-    && !/[\u0000-\u001f\u007f-\u009f]/u.test(value)
+    && !CONTROL_CHARACTER_PATTERN.test(value)
     ? value
     : null;
 }
 
-async function resolveStatelessContext(input, config) {
-  const required = input?.required;
+function contextInputUsageError() {
+  return new BridgeError("context input fields are invalid", EXIT.USAGE, {
+    error: "context input fields are invalid",
+    expected: {
+      required: ["enterprise", "workspace"],
+      hints: { team_name: "<team-name>" },
+    },
+    note: "enterprise is resolved from the current authenticated identity",
+  });
+}
+
+function validateContextHints(value) {
+  if (value === undefined) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new BridgeError("context workspace hints are invalid", EXIT.USAGE);
+  }
+  const entries = Object.entries(value);
+  if (entries.length === 0
+    || entries.some(([field, item]) => !CONTEXT_HINT_FIELDS.has(field) || !boundedContextString(item))) {
+    throw new BridgeError("context workspace hints are invalid", EXIT.USAGE);
+  }
+  return Object.fromEntries(entries);
+}
+
+function validateContextSelection(value) {
+  if (value === undefined) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || Object.keys(value).length !== 1
+    || typeof value.option_id !== "string"
+    || value.option_id.length === 0
+    || value.option_id.length > 300
+    || CONTROL_CHARACTER_PATTERN.test(value.option_id)) {
+    throw new BridgeError("context workspace selection is invalid", EXIT.USAGE);
+  }
+  return { option_id: value.option_id };
+}
+
+function validateContextResolveInput(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw contextInputUsageError();
+  }
+  if (Object.keys(input).some((field) => !CONTEXT_RESOLVE_FIELDS.has(field))) {
+    throw contextInputUsageError();
+  }
+  const required = input.required;
   if (!Array.isArray(required)
     || required.some((item) => !["enterprise", "workspace"].includes(item))) {
     throw new BridgeError("context required dimensions are invalid", EXIT.USAGE);
   }
+
+  const hints = validateContextHints(input.hints);
+  const selection = validateContextSelection(input.selection);
+
+  if ((hints || selection) && !required.includes("workspace")) {
+    throw new BridgeError("context workspace input requires the workspace dimension", EXIT.USAGE);
+  }
+  if (hints && selection) {
+    throw new BridgeError("context hints and selection are mutually exclusive", EXIT.USAGE);
+  }
+  return { required, hints, selection };
+}
+
+function resolvedWorkspaceContext(enterpriseId, option) {
+  return {
+    state: "resolved",
+    context: {
+      enterprise_id: enterpriseId,
+      team_id: option.team_id,
+      team_name: option.team_name,
+      region_name: option.region_name,
+    },
+  };
+}
+
+function workspaceSelectionResult(enterpriseId, options) {
+  return {
+    state: "needs-selection",
+    enterprise_id: enterpriseId,
+    dimension: "workspace-region",
+    options,
+  };
+}
+
+async function resolveStatelessContext(input, config) {
+  const { required, hints, selection } = validateContextResolveInput(input);
   const identity = await execute({
     command: "read",
     toolName: "rainbond_get_current_user",
@@ -1071,19 +1153,22 @@ async function resolveStatelessContext(input, config) {
     }
   }
   if (options.length === 0) return { state: "blocked", reason: "no-accessible-workspace" };
-  if (options.length === 1) {
-    const option = options[0];
-    return {
-      state: "resolved",
-      context: {
-        enterprise_id: enterpriseId,
-        team_id: option.team_id,
-        team_name: option.team_name,
-        region_name: option.region_name,
-      },
-    };
+  if (selection) {
+    const selected = options.find((option) => option.id === selection.option_id);
+    return selected
+      ? resolvedWorkspaceContext(enterpriseId, selected)
+      : { state: "blocked", reason: "workspace-selection-invalid" };
   }
-  return { state: "needs-selection", dimension: "workspace-region", options };
+  const matchingOptions = hints
+    ? options.filter((option) => Object.entries(hints).every(([field, value]) => option[field] === value))
+    : options;
+  if (matchingOptions.length === 0) {
+    return { state: "blocked", reason: "workspace-hint-not-found" };
+  }
+  if (matchingOptions.length === 1) {
+    return resolvedWorkspaceContext(enterpriseId, matchingOptions[0]);
+  }
+  return workspaceSelectionResult(enterpriseId, matchingOptions);
 }
 
 async function execute(command, config) {

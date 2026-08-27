@@ -109,6 +109,14 @@ def classify_prompt(prompt: str, metadata_by_skill: dict[str, dict[str, str]]) -
     if any(needle in text for needle in open_source_descriptor_needles):
         return "rainbond-opensource-app-deploy"
 
+    if (
+        "镜像" in text
+        and "组件" in text
+        and "应用" in text
+        and ("新建" in text or "创建" in text)
+    ):
+        return "rainbond-app-assistant"
+
     if "harbor" in text:
         return "rainbond-app-assistant"
 

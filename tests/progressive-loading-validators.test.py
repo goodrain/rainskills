@@ -237,7 +237,7 @@ class ProgressiveLoadingValidatorTests(unittest.TestCase):
         source = path.read_text(encoding="utf-8")
         conflict = (
             "阶段补充：Phase 0 描述符未确认时先读取 runtime-gate；"
-            "deployment-workflow 可以在 operation/context 建立前加载。"
+            "deployment-workflow 可以在 workspace context 解析前加载。"
         )
         path.write_text(
             source.replace("\n## Runtime 与安全边界", f"\n{conflict}\n\n## Runtime 与安全边界", 1),

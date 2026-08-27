@@ -873,11 +873,229 @@ test("protected context resolve returns one combined workspace selection", async
     assert.equal(result.code, 0, result.stderr);
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.state, "needs-selection");
+    assert.equal(payload.enterprise_id, "enterprise-1");
     assert.equal(payload.dimension, "workspace-region");
     assert.deepEqual(payload.options.map((entry) => entry.label), [
       "开发（dev-id） / 北京",
       "生产（prod-id） / 上海",
     ]);
+  });
+});
+
+test("protected context resolve applies exact workspace hints without model-side matching", async () => {
+  await withRpcServer((record, response) => {
+    const name = record.body.params.name;
+    if (name === "rainbond_get_current_user") {
+      rpcResult(response, record.body.id, {
+        isError: false,
+        structuredContent: { enterprise_id: "enterprise-1" },
+      });
+      return;
+    }
+    rpcResult(response, record.body.id, {
+      isError: false,
+      structuredContent: {
+        items: [
+          { team_id: "d20f25f64cd04775b65b65f45dafc3e3", team_name: "default", region_list: [{ region_name: "rainbond" }] },
+          { team_id: "oyql35juf6bb4fc7a5e7641bba37d922", team_name: "zqh", region_list: [{ region_name: "rainbond" }] },
+        ],
+      },
+    });
+  }, async (baseUrl) => {
+    const result = await runBridge([
+      "context", "resolve", "--input", "-",
+    ], {
+      env: {
+        RAINBOND_URL: new URL(baseUrl).origin,
+        RAINBOND_JWT: "bridge-jwt.payload.signature",
+      },
+      input: JSON.stringify({
+        required: ["enterprise", "workspace"],
+        hints: { team_name: "zqh", region_name: "rainbond" },
+      }),
+    });
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), {
+      state: "resolved",
+      context: {
+        enterprise_id: "enterprise-1",
+        team_id: "oyql35juf6bb4fc7a5e7641bba37d922",
+        team_name: "zqh",
+        region_name: "rainbond",
+      },
+    });
+  });
+});
+
+test("protected context resolve blocks an explicit workspace hint that has no exact match", async () => {
+  await withRpcServer((record, response) => {
+    const name = record.body.params.name;
+    if (name === "rainbond_get_current_user") {
+      rpcResult(response, record.body.id, {
+        isError: false,
+        structuredContent: { enterprise_id: "enterprise-1" },
+      });
+      return;
+    }
+    rpcResult(response, record.body.id, {
+      isError: false,
+      structuredContent: {
+        items: [{ team_id: "d20f25f64cd04775b65b65f45dafc3e3", team_name: "default", region_list: [{ region_name: "rainbond" }] }],
+      },
+    });
+  }, async (baseUrl) => {
+    const result = await runBridge([
+      "context", "resolve", "--input", "-",
+    ], {
+      env: {
+        RAINBOND_URL: new URL(baseUrl).origin,
+        RAINBOND_JWT: "bridge-jwt.payload.signature",
+      },
+      input: JSON.stringify({
+        required: ["enterprise", "workspace"],
+        hints: { team_name: "zqh" },
+      }),
+    });
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), {
+      state: "blocked",
+      reason: "workspace-hint-not-found",
+    });
+  });
+});
+
+test("protected context resolve revalidates a selected workspace without persisting context", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-stateless-context-"));
+  await withRpcServer((record, response) => {
+    const name = record.body.params.name;
+    if (name === "rainbond_get_current_user") {
+      rpcResult(response, record.body.id, {
+        isError: false,
+        structuredContent: { enterprise_id: "enterprise-1" },
+      });
+      return;
+    }
+    rpcResult(response, record.body.id, {
+      isError: false,
+      structuredContent: {
+        items: [
+          { team_id: "02b8b08236174ee399c714f7b9c3ec01", team_name: "dev", region_list: [{ region_name: "r1" }] },
+          { team_id: "oyql35juf6bb4fc7a5e7641bba37d922", team_name: "zqh", region_list: [{ region_name: "rainbond" }] },
+        ],
+      },
+    });
+  }, async (baseUrl, requests) => {
+    const env = {
+      RAINBOND_URL: new URL(baseUrl).origin,
+      RAINBOND_JWT: "bridge-jwt.payload.signature",
+    };
+    const pending = await runBridge([
+      "context", "resolve", "--input", "-",
+    ], {
+      env,
+      home,
+      input: JSON.stringify({ required: ["enterprise", "workspace"] }),
+    });
+    assert.equal(pending.code, 0, pending.stderr);
+    const pendingPayload = JSON.parse(pending.stdout);
+    const option = pendingPayload.options.find((item) => item.team_name === "zqh");
+    assert(option);
+
+    const selected = await runBridge([
+      "context", "resolve", "--input", "-",
+    ], {
+      env,
+      home,
+      input: JSON.stringify({
+        required: ["enterprise", "workspace"],
+        selection: { option_id: option.id },
+      }),
+    });
+
+    assert.equal(selected.code, 0, selected.stderr);
+    assert.deepEqual(JSON.parse(selected.stdout), {
+      state: "resolved",
+      context: {
+        enterprise_id: "enterprise-1",
+        team_id: "oyql35juf6bb4fc7a5e7641bba37d922",
+        team_name: "zqh",
+        region_name: "rainbond",
+      },
+    });
+    assert.deepEqual(requests.map((entry) => entry.body.params.name), [
+      "rainbond_get_current_user",
+      "rainbond_query_teams",
+      "rainbond_get_current_user",
+      "rainbond_query_teams",
+    ]);
+    assert.equal(
+      fs.existsSync(path.join(home, ".rainbond", "rainskills", "target-contexts-v1")),
+      false,
+    );
+  });
+});
+
+test("protected context resolve rejects stale selections and unsupported input before network access", async () => {
+  await withRpcServer((record, response) => {
+    const name = record.body.params.name;
+    if (name === "rainbond_get_current_user") {
+      rpcResult(response, record.body.id, {
+        isError: false,
+        structuredContent: { enterprise_id: "enterprise-1" },
+      });
+      return;
+    }
+    rpcResult(response, record.body.id, {
+      isError: false,
+      structuredContent: {
+        items: [{ team_id: "02b8b08236174ee399c714f7b9c3ec01", team_name: "default", region_list: [{ region_name: "rainbond" }] }],
+      },
+    });
+  }, async (baseUrl, requests) => {
+    const env = {
+      RAINBOND_URL: new URL(baseUrl).origin,
+      RAINBOND_JWT: "bridge-jwt.payload.signature",
+    };
+    const stale = await runBridge([
+      "context", "resolve", "--input", "-",
+    ], {
+      env,
+      input: JSON.stringify({
+        required: ["enterprise", "workspace"],
+        selection: { option_id: "missing-option" },
+      }),
+    });
+    assert.equal(stale.code, 0, stale.stderr);
+    assert.deepEqual(JSON.parse(stale.stdout), {
+      state: "blocked",
+      reason: "workspace-selection-invalid",
+    });
+
+    const beforeUnsupported = requests.length;
+    const unsupported = await runBridge([
+      "context", "resolve", "--input", "-",
+    ], {
+      env,
+      input: JSON.stringify({
+        enterprise: "好雨科技",
+        workspace: "zqh",
+      }),
+    });
+    assert.equal(unsupported.code, 2);
+    const errorPayload = unsupported.stderr.trim().split("\n")
+      .map((line) => JSON.parse(line))
+      .find((payload) => payload.error);
+    assert.deepEqual(errorPayload, {
+      error: "context input fields are invalid",
+      expected: {
+        required: ["enterprise", "workspace"],
+        hints: { team_name: "<team-name>" },
+      },
+      note: "enterprise is resolved from the current authenticated identity",
+    });
+    assert.equal(requests.length, beforeUnsupported);
   });
 });
 

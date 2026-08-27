@@ -14,6 +14,8 @@ description: Use for a user-requested, read-only Rainbond platform query about t
 
 `context resolve` 是无状态调用：单一工作空间直接返回上下文，多个候选返回组合选项；用户选择后由当前任务直接携带 team/region 参数，不执行 `context select`，不写本地 operation。所有可变 `call` 仍需先取得 confirmation ID，再以完全相同的输入追加 `--confirm` 执行一次。
 
+`required` 只声明要解析的维度，企业 ID 始终来自当前登录身份。用户明确给出的 team/region 必须放进 `hints` 做精确匹配；不得把企业名、team 名或选择对象作为顶层 `enterprise` / `workspace` 字段传入。多候选时只展示 CLI 返回的 label；用户选择后再次执行同一个无状态 `context resolve`，通过 `selection.option_id` 让 CLI 重新查询并验证当前候选，不写本地 context 状态。
+
 ```json
 {
   "schema": "rainskills.single-runtime-contract.v1",
@@ -74,10 +76,9 @@ description: Use for a user-requested, read-only Rainbond platform query about t
         "rainbond-platform-query"
       ],
       "stdin": {
-        "required": [
-          "enterprise",
-          "workspace"
-        ]
+        "default": {"required": ["enterprise", "workspace"]},
+        "with_hints": {"required": ["enterprise", "workspace"], "hints": {"team_name": "<team-name>"}},
+        "with_selection": {"required": ["enterprise", "workspace"], "selection": {"option_id": "<option-id>"}}
       }
     },
     "read": {
@@ -130,7 +131,7 @@ description: Use for a user-requested, read-only Rainbond platform query about t
 
 `runtime connect` 的 Device Flow 不依赖 stdin TTY；Agent 必须执行固定 argv 并保持进程附着直到授权完成。能打开本机浏览器时由连接器自动跳转，SSH、容器等无浏览器场景原样展示授权地址并继续轮询。只有 Rainbond 不支持 Device Flow 且进入旧版 loopback 手动粘贴时才需要交互终端；不得要求用户在聊天中粘贴 JWT。
 
-执行优化：同一会话内只检查一次 Node.js（首次使用本地 CLI 前）；仅在 Node.js 或 Rainskills 安装、升级，或 PATH 变更后失效。固定 launcher 和 argv 已在本 Skill 中，禁止读取、搜索或探测 `rainskills.js`，也禁止执行 `npm root -g`。每个新的业务操作仍按其契约刷新环境列表；平台只读查询未指定环境时由 CLI 使用全局默认环境，不枚举环境。带已有 `operation_id` 或 `onboarding-id` 的续接复用已绑定的环境 ID，不重复枚举环境。
+执行优化：同一会话内只检查一次 Node.js 和运行环境状态；仅在 Node.js、Rainskills、PATH 或唯一运行环境发生变化后失效。固定 launcher 和 argv 已在本 Skill 中，禁止读取、搜索或探测 `rainskills.js`，也禁止执行 `npm root -g`。
 
 <!-- rainskills-runtime-routing:start -->
 ## 缺少运行环境时
