@@ -18,6 +18,36 @@ fail() {
   exit 1
 }
 
+(
+  RAINSKILLS_RUNTIME_CONNECT_COMPLETION=1
+  RAINSKILLS_RUNTIME_OPERATION_ID="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+  node() { return 0; }
+  assert_internal_connect_entry \
+    connect codex \
+    --self-hosted \
+    --rainbond-url http://10.0.0.8:7070 \
+    --allow-insecure-http \
+    --no-cached-token
+) || fail "internal runtime connect gate rejected the launcher's fixed --no-cached-token argument"
+
+set +e
+unknown_gate_output="$(
+  (
+    RAINSKILLS_RUNTIME_CONNECT_COMPLETION=1
+    RAINSKILLS_RUNTIME_OPERATION_ID="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    node() { return 0; }
+    assert_internal_connect_entry connect codex --saas --unsupported-sensitive-value
+  ) 2>&1
+)"
+unknown_gate_status=$?
+set -e
+[[ "$unknown_gate_status" -ne 0 ]] || fail "internal runtime connect gate accepted an unknown argument"
+grep -F "内部门禁包含不支持的参数" <<<"$unknown_gate_output" >/dev/null \
+  || fail "internal runtime connect gate did not explain an unknown argument"
+if grep -F -- "--unsupported-sensitive-value" <<<"$unknown_gate_output" >/dev/null; then
+  fail "internal runtime connect gate reflected an unknown argument"
+fi
+
 assert_equal() {
   local name="$1" expected="$2" actual="$3"
   [[ "$actual" == "$expected" ]] || fail "$name: expected '$expected', got '$actual'"
