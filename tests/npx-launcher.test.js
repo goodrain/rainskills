@@ -1,6 +1,7 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const { EventEmitter } = require("node:events");
 const path = require("node:path");
 const test = require("node:test");
 
@@ -11,6 +12,7 @@ const {
   resolveInvocation,
   runtimeChildEnvironment,
   runtimeConnectionInvocation,
+  runAttached,
   runBuiltin,
 } = require(launcherPath);
 
@@ -121,6 +123,34 @@ test("POSIX runtime connection uses fixed installer argv", () => {
   });
 });
 
+test("attached runtime connector receives task interruption signals and releases listeners", async () => {
+  const signals = new EventEmitter();
+  const child = new EventEmitter();
+  const killed = [];
+  child.kill = (signal) => {
+    killed.push(signal);
+    return true;
+  };
+
+  const pending = runAttached("bash", ["install.sh", "connect"], {
+    signalSource: signals,
+    spawnImpl(executable, args, options) {
+      assert.equal(executable, "bash");
+      assert.deepEqual(args, ["install.sh", "connect"]);
+      assert.equal(options.stdio, "inherit");
+      return child;
+    },
+  });
+
+  signals.emit("SIGTERM");
+  assert.deepEqual(killed, ["SIGTERM"]);
+  child.emit("close", 143, null);
+
+  assert.deepEqual(await pending, { code: 143, signal: null });
+  assert.equal(signals.listenerCount("SIGINT"), 0);
+  assert.equal(signals.listenerCount("SIGTERM"), 0);
+});
+
 test("private platform installation returns one bounded next action", async () => {
   const output = [];
   const next = {
@@ -160,9 +190,10 @@ test("runtime status remains an in-process command", async () => {
 test("failed runtime authorization clears only its own connecting state", async () => {
   const output = [];
   const started = [];
+  const startOptions = [];
   const aborted = [];
   const manager = {
-    startConnecting(value) { started.push(value); },
+    startConnecting(value, options) { started.push(value); startOptions.push(options); },
     abortConnecting(value) { aborted.push(value); return true; },
   };
 
@@ -183,6 +214,7 @@ test("failed runtime authorization clears only its own connecting state", async 
   }), /authorization failed/);
 
   assert.equal(started.length, 1);
+  assert.deepEqual(startOptions, [{ replaceExisting: true }]);
   assert.equal(aborted.length, 1);
   assert.deepEqual(aborted[0], started[0]);
   assert.equal(JSON.parse(output.join("")).action, "retry-runtime-connect");

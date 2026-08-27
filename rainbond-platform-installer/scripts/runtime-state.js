@@ -266,7 +266,7 @@ function createRuntimeStateManager({
       && left.console_origin === right.console_origin;
   }
 
-  function startConnecting(input) {
+  function startConnecting(input, { replaceExisting = false } = {}) {
     return withRuntimeStateLock(() => {
       const prior = read();
       const fields = connectionFields(input);
@@ -276,7 +276,9 @@ function createRuntimeStateManager({
           && prior.environment_kind === fields.environment_kind
           && prior.console_origin === fields.console_origin;
         if (identical) return prior;
-        throw new Error("另一个 runtime connecting operation 正在进行中");
+        if (!replaceExisting) {
+          throw new Error("另一个 runtime connecting operation 正在进行中");
+        }
       }
       const timestamp = now();
       return writeStateUnlocked({

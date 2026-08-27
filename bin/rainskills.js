@@ -167,11 +167,29 @@ function runtimeConnectRetryAction(options, origin) {
   };
 }
 
-function runAttached(executable, args, { env = process.env } = {}) {
+function runAttached(executable, args, {
+  env = process.env,
+  signalSource = process,
+  spawnImpl = spawn,
+} = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(executable, args, { env, stdio: "inherit" });
-    child.once("error", () => reject(new Error("无法启动 RainSkills 运行环境连接器")));
-    child.once("close", (code, signal) => resolve({ code, signal }));
+    const child = spawnImpl(executable, args, { env, stdio: "inherit" });
+    const forwardSigint = () => child.kill("SIGINT");
+    const forwardSigterm = () => child.kill("SIGTERM");
+    const removeSignalListeners = () => {
+      signalSource.removeListener("SIGINT", forwardSigint);
+      signalSource.removeListener("SIGTERM", forwardSigterm);
+    };
+    signalSource.on("SIGINT", forwardSigint);
+    signalSource.on("SIGTERM", forwardSigterm);
+    child.once("error", () => {
+      removeSignalListeners();
+      reject(new Error("无法启动 RainSkills 运行环境连接器"));
+    });
+    child.once("close", (code, signal) => {
+      removeSignalListeners();
+      resolve({ code, signal });
+    });
   });
 }
 
@@ -416,7 +434,7 @@ async function runBuiltin(args, {
       intent: null,
       operation_id: operationId,
     };
-    manager.startConnecting(connection);
+    manager.startConnecting(connection, { replaceExisting: true });
     try {
       const invocation = runtimeConnectionInvocation(options, inspection.origin);
       let completedWithCredential = false;
@@ -774,6 +792,7 @@ module.exports = {
   classifyNodeMajor,
   parseRuntimeConnectArgs,
   resolveInvocation,
+  runAttached,
   runAutoUpdatePhase,
   runBuiltin,
   runtimeChildEnvironment,

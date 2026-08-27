@@ -119,6 +119,30 @@ test("active connecting operation is idempotent only for identical fields and re
   }
 });
 
+test("an explicit retry replaces an unfinished connecting operation", async () => {
+  const { createRuntimeStateManager } = require(runtimeStatePath);
+  const home = temporaryHome();
+  const manager = createRuntimeStateManager({
+    home,
+    stateStore: createPortableSecureStateStore(home),
+    liveProbe: async () => true,
+  });
+  const first = connectedInput();
+  const retry = {
+    ...first,
+    operation_id: "b7c0af4f-5dd7-41ec-9d11-583203a71483",
+  };
+
+  manager.startConnecting(first);
+  const replacement = manager.startConnecting(retry, { replaceExisting: true });
+
+  assert.equal(replacement.state, "connecting");
+  assert.equal(replacement.operation_id, retry.operation_id);
+  assert.equal(manager.abortConnecting(first), false);
+  await assert.rejects(() => manager.markConnected(first), /operation|连接/i);
+  assert.equal(manager.read().operation_id, retry.operation_id);
+});
+
 test("a failed connector can clear only its matching connecting operation", () => {
   const { createRuntimeStateManager } = require(runtimeStatePath);
   const home = temporaryHome();

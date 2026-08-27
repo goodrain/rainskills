@@ -138,6 +138,38 @@ assert_contains \
   "$TEST_ROOT/output.log" \
   "[RAINSKILLS_USER_MESSAGE_END:runtime.device-authorization]"
 
+prepare_device_flow_temp_dir
+DEVICE_FLOW_DEVICE_CODE="superseded-device-code"
+DEVICE_FLOW_INTERVAL=5
+DEVICE_FLOW_EXPIRES_IN=600
+RAINSKILLS_RUNTIME_CONNECT_COMPLETION=1
+RAINSKILLS_RUNTIME_OPERATION_ID="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+TARGET=codex
+DEPLOYMENT_MODE_INPUT=saas
+node() {
+  printf '%s\n' "$*" > "$TEST_ROOT/superseded-assert.log"
+  return 1
+}
+device_flow_sleep() { :; }
+device_flow_http_post() {
+  fail "superseded authorization polled the token endpoint"
+}
+
+if poll_device_authorization "https://console.example.com"; then
+  fail "superseded authorization continued polling"
+fi
+assert_equal \
+  "superseded authorization error" \
+  "本次设备授权已被新的授权尝试替换。" \
+  "$DEVICE_FLOW_ERROR"
+assert_contains \
+  "superseded operation assertion" \
+  "$TEST_ROOT/superseded-assert.log" \
+  "runtime assert-connect --onboarding-id aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa --target codex --environment-kind saas --console-origin https://console.example.com"
+cleanup_device_flow
+unset RAINSKILLS_RUNTIME_CONNECT_COMPLETION RAINSKILLS_RUNTIME_OPERATION_ID
+unset -f node
+
 non_tty_result="$TEST_ROOT/non-tty-token"
 non_tty_error="$TEST_ROOT/non-tty-error"
 set +e

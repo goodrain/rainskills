@@ -1772,6 +1772,20 @@ write_device_token_request_body() {
   chmod 600 "$body_file"
 }
 
+assert_device_authorization_operation_current() {
+  local base_url="$1"
+  [[ "${RAINSKILLS_RUNTIME_CONNECT_COMPLETION:-0}" == "1" ]] || return 0
+  valid_runtime_operation_id "${RAINSKILLS_RUNTIME_OPERATION_ID:-}" || return 1
+
+  local environment_kind="private"
+  [[ "$DEPLOYMENT_MODE_INPUT" == "saas" ]] && environment_kind="saas"
+  node "$SCRIPT_DIR/bin/rainskills.js" runtime assert-connect \
+    --onboarding-id "$RAINSKILLS_RUNTIME_OPERATION_ID" \
+    --target "$TARGET" \
+    --environment-kind "$environment_kind" \
+    --console-origin "$base_url" >/dev/null 2>&1
+}
+
 poll_device_authorization() {
   local base_url="$1"
   local interval="$DEVICE_FLOW_INTERVAL"
@@ -1790,6 +1804,10 @@ poll_device_authorization() {
 
   while true; do
     device_flow_sleep "$interval"
+    if ! assert_device_authorization_operation_current "$base_url"; then
+      DEVICE_FLOW_ERROR="本次设备授权已被新的授权尝试替换。"
+      return 1
+    fi
     now="$(device_flow_now)"
     if [[ "$now" -ge "$deadline" ]]; then
       DEVICE_FLOW_ERROR="Rainbond 设备授权超时，请重新运行安装。"
