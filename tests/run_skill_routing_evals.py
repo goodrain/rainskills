@@ -96,6 +96,26 @@ def classify_prompt(prompt: str, metadata_by_skill: dict[str, dict[str, str]]) -
     if any(needle in text for needle in platform_query_needles):
         return "rainbond-platform-query"
 
+    if "模板" in text or "market template" in text:
+        return "rainbond-template-installer"
+
+    if "只初始化" in text or "rainbond.app.json" in text:
+        return "rainbond-project-init"
+
+    project_source_needles = [
+        "当前项目",
+        "当前目录",
+        "本地项目",
+        "本地目录",
+        "这个 git 仓库",
+        "this git repository",
+        "github.com/",
+        "gitlab.com/",
+        "gitee.com/",
+    ]
+    if any(needle in text for needle in project_source_needles):
+        return "rainbond-app-assistant"
+
     open_source_descriptor_needles = [
         "docker-compose",
         "docker compose",
@@ -109,8 +129,9 @@ def classify_prompt(prompt: str, metadata_by_skill: dict[str, dict[str, str]]) -
     if any(needle in text for needle in open_source_descriptor_needles):
         return "rainbond-opensource-app-deploy"
 
-    if "harbor" in text:
-        return "rainbond-app-assistant"
+    named_open_source_suites = ("harbor", "dify", "n8n")
+    if any(name in text for name in named_open_source_suites):
+        return "rainbond-opensource-app-deploy"
 
     scores = sorted(
         (

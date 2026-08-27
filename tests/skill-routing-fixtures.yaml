@@ -56,9 +56,27 @@ cases:
   - id: open_source_descriptor_deploy
     prompt: 按这个 docker-compose 部署 Harbor 到 Rainbond
     expected_skill: rainbond-opensource-app-deploy
-  - id: open_source_name_only_uses_generic_entrypoint
+  - id: named_open_source_harbor
     prompt: 帮我部署一个开源 Harbor
+    expected_skill: rainbond-opensource-app-deploy
+  - id: named_harbor_suite
+    prompt: 帮我部署 Harbor
+    expected_skill: rainbond-opensource-app-deploy
+  - id: named_open_source_dify
+    prompt: 帮我部署开源应用 Dify
+    expected_skill: rainbond-opensource-app-deploy
+  - id: named_open_source_n8n
+    prompt: 在 Rainbond 上运行开源套件 n8n
+    expected_skill: rainbond-opensource-app-deploy
+  - id: local_project_named_harbor
+    prompt: 帮我部署当前目录里的 Harbor 项目
     expected_skill: rainbond-app-assistant
+  - id: bare_git_harbor_fork
+    prompt: 帮我部署这个 Git 仓库 https://github.com/example/harbor-fork
+    expected_skill: rainbond-app-assistant
+  - id: harbor_market_template
+    prompt: 从 Rainbond 市场模板安装 Harbor
+    expected_skill: rainbond-template-installer
 
 required_markers:
   rainbond-app-assistant:
@@ -109,3 +127,11 @@ required_markers:
     - "2) 本机环境"
     - "3) 独立服务器"
     - "4) 已有 Rainbond"
+  rainbond-opensource-app-deploy:
+    - "explicit named third-party open-source suite"
+    - "active upstream fetch"
+    - "installer-generated topology"
+    - "per-component image modeling"
+    - "Helm is evidence, not a deployment path"
+    - "Rainbond-generated entry"
+    - "do not ask the user for a domain"

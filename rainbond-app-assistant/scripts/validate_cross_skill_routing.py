@@ -15,8 +15,9 @@ import yaml
 
 DEFAULT_REPO_ROOT = Path(__file__).resolve().parents[2]
 OPEN_STAGE_ROWS = (
-    "| Phase 0：描述符未确认 | 不加载 reference；只做上述静态资格判断 |",
-    "| 描述符已确认，首次需要连接或调用 Rainbond | 只读取自己的 "
+    "| Phase 0：归属已确认、部署清单尚未验证 | 只读取 "
+    "[source acquisition](references/source-acquisition.md) |",
+    "| 官方部署清单已验证，首次需要连接或调用 Rainbond | 只读取自己的 "
     "[runtime gate](references/runtime-gate.md) |",
     "| operation/context 已建立，需要建模、部署、排障或交付 | 读取 "
     "[deployment workflow](references/deployment-workflow.md) |",
@@ -258,10 +259,6 @@ def validate_description_boundaries(
                 ("source directory", "source package"),
             ),
             (lambda statement: "bare git" in statement, ("bare git",)),
-            (
-                lambda statement: "named application" in statement and "without a descriptor" in statement,
-                ("named application", "named app"),
-            ),
         )
     )
     app_actions = all(
@@ -270,7 +267,7 @@ def validate_description_boundaries(
     )
     require(
         app_owner and app_actions,
-        "App description must positively own source and descriptor-less requests",
+        "App description must positively own project/source requests",
         failures,
     )
     require(
@@ -290,6 +287,20 @@ def validate_description_boundaries(
     )
     require(
         any(
+            "named third party open source suite" in statement
+            and directed_relation(
+                statement,
+                ("named third party open source suite", "open source suite"),
+                open_targets,
+                allow_negated_category=True,
+            )
+            for statement in app_statements
+        ),
+        "App description must exclude explicit named open-source suites",
+        failures,
+    )
+    require(
+        any(
             "market template" in statement
             and directed_relation(
                 statement,
@@ -303,32 +314,34 @@ def validate_description_boundaries(
         failures,
     )
 
-    open_owner = any(
+    open_descriptor_owner = any(
         (
-            statement.startswith("use only when")
-            or statement.startswith("use this skill only when")
+            statement.startswith("use when")
             or directed_relation(
                 statement,
                 ("descriptor", "compose", "helm", "image set"),
                 open_targets,
             )
         )
-        and ("actual" in statement or "supplied" in statement)
+        and "supplies" in statement
         and all(kind in statement for kind in ("compose", "helm", "image set", "descriptor"))
         for statement in open_statements
     )
+    open_named_suite_owner = any(
+        statement.startswith("use when")
+        and "named third party open source suite" in statement
+        and not category_is_locally_negated(statement, "named third party open source suite")
+        for statement in open_statements
+    )
     require(
-        open_owner,
-        "Open-source description must positively own only supplied descriptors",
+        open_descriptor_owner and open_named_suite_owner,
+        "Open-source description must positively own supplied descriptors and explicit named suites",
         failures,
     )
     open_exclusion = any(
         "bare git" in statement
-        and "source project" in statement
         and "directory" in statement
         and "package" in statement
-        and "named app" in statement
-        and ("without a descriptor" in statement or "without descriptor" in statement)
         and "private image project" in statement
         and all(
             directed_relation(
@@ -339,8 +352,7 @@ def validate_description_boundaries(
             )
             for categories in (
                 ("bare git",),
-                ("source project", "source directory", "source package"),
-                ("named application", "named app"),
+                ("source directory", "source package", "project source"),
             )
         )
         for statement in open_statements
@@ -356,7 +368,7 @@ def validate_description_boundaries(
     )
     require(
         open_exclusion,
-        "Open-source description must exclude source, named-only, and market routes",
+        "Open-source description must exclude project/source and market routes",
         failures,
     )
 
@@ -368,7 +380,7 @@ def validate_routing_conflicts(
     open_description: str,
     failures: list[str],
 ) -> None:
-    phase_zero = bounded_section(open_root, "## Phase 0：静态资格判断", "## 渐进加载")
+    phase_zero = bounded_section(open_root, "## Phase 0：静态归属与资料取证", "## 渐进加载")
     staged_loading = bounded_section(open_root, "## 渐进加载", "## Runtime 与安全边界")
     require(bool(phase_zero), "Open-source Phase 0 section bounds are invalid", failures)
     require(bool(staged_loading), "Open-source staged-loading section bounds are invalid", failures)
@@ -389,8 +401,6 @@ def validate_routing_conflicts(
         "source directory",
         "source package",
         "current project",
-        "named only",
-        "named application",
     )
 
     def open_source_target(statement: str) -> bool:
@@ -409,6 +419,17 @@ def validate_routing_conflicts(
         for statement in all_root_statements
     )
     require(not source_to_open, "source ownership boundary conflict", failures)
+
+    named_suite_to_app = any(
+        "named third party open source suite" in statement
+        and directed_relation(
+            statement,
+            ("named third party open source suite", "open source suite"),
+            ("rainbond app assistant", "app assistant"),
+        )
+        for statement in all_root_statements
+    )
+    require(not named_suite_to_app, "named open-source suite ownership boundary conflict", failures)
 
     descriptor_to_app = any(
         any(kind in statement for kind in ("compose", "helm", "image set"))
@@ -454,21 +475,20 @@ def validate_routing_conflicts(
             break
     require(not market_conflict, "market template routing boundary conflict", failures)
 
-    def unconfirmed(statement: str) -> bool:
+    def inventory_unverified(statement: str) -> bool:
         return any(
             marker in statement
             for marker in (
-                "未确认描述符",
-                "描述符未确认",
-                "描述符确认前",
-                "未确认 descriptor",
-                "descriptor 未确认",
-                "before descriptor confirmation",
-                "before confirming descriptor",
+                "部署清单尚未验证",
+                "部署清单验证前",
+                "资料尚未形成可验证清单",
+                "官方部署清单验证前",
+                "inventory unverified",
+                "before inventory validation",
             )
         )
 
-    def pre_descriptor_action(statement: str) -> bool:
+    def pre_inventory_rainbond_action(statement: str) -> bool:
         non_gate_actions = (
             "查询",
             "连接环境",
@@ -476,10 +496,9 @@ def validate_routing_conflicts(
             "连接 runtime",
             "connect environment",
             "connect runtime",
-            "clone",
-            "browse git",
-            "克隆",
-            "浏览 git",
+            "安装平台",
+            "rainbond 写",
+            "rainbond write",
         )
         positive_markers = ("允许", "先", "可以", "may", "can", "should", "must load", "must read")
         has_gate_action = "runtime gate" in statement and any(
@@ -488,18 +507,18 @@ def validate_routing_conflicts(
         has_action = has_gate_action or any(action in statement for action in non_gate_actions)
         explicitly_positive = any(marker in statement for marker in positive_markers)
         return (
-            unconfirmed(statement)
+            inventory_unverified(statement)
             and has_action
             and (explicitly_positive or not has_negation(statement))
         )
 
     require(
-        not any(pre_descriptor_action(statement) for statement in open_body_statements),
-        "pre-descriptor action boundary conflict",
+        not any(pre_inventory_rainbond_action(statement) for statement in open_body_statements),
+        "pre-inventory Rainbond action boundary conflict",
         failures,
     )
 
-    stage_conflict = any(pre_descriptor_action(statement) for statement in statements(staged_loading)) or any(
+    stage_conflict = any(pre_inventory_rainbond_action(statement) for statement in statements(staged_loading)) or any(
         contains(statement, "deployment workflow")
         and contains(statement, "operation context")
         and ("前" in statement or "before" in statement)
@@ -510,15 +529,14 @@ def validate_routing_conflicts(
 
     guard_scope = normalize(phase_zero)
     guard_complete = (
-        unconfirmed(guard_scope)
+        inventory_unverified(guard_scope)
         and contains(guard_scope, "runtime gate")
         and "rainbond" in guard_scope
-        and ("克隆" in guard_scope or "clone" in guard_scope)
-        and ("浏览 git" in guard_scope or "browse git" in guard_scope)
+        and contains(guard_scope, "source acquisition")
         and has_negation(guard_scope)
-        and not any(pre_descriptor_action(statement) for statement in statements(phase_zero))
+        and not any(pre_inventory_rainbond_action(statement) for statement in statements(phase_zero))
     )
-    require(guard_complete, "Open-source descriptor guard is missing or reversed", failures)
+    require(guard_complete, "Open-source source acquisition guard is missing or reversed", failures)
 
 
 def validate_cross_skill_routing(repo_root: Path) -> list[str]:
@@ -551,12 +569,12 @@ def validate_cross_skill_routing(repo_root: Path) -> list[str]:
         (
             statement
             for statement in statements(open_root)
-            if contains(statement, "先验证描述符")
+            if contains(statement, "先验证官方部署清单")
             and contains(statement, "再加载 runtime gate")
         ),
         None,
     )
-    require(order_statement is not None, "Open-source root must state descriptor-before-gate ordering", failures)
+    require(order_statement is not None, "Open-source root must state inventory-before-gate ordering", failures)
     validate_routing_conflicts(
         app_root,
         app_description,
@@ -600,8 +618,19 @@ def validate_cross_skill_routing(repo_root: Path) -> list[str]:
 
     deployment_workflow = open_dir / "references" / "deployment-workflow.md"
     failure_playbook = open_dir / "references" / "failure-mode-playbook.md"
+    source_acquisition = open_dir / "references" / "source-acquisition.md"
     require(deployment_workflow.is_file(), "missing deployment-workflow.md", failures)
     require(failure_playbook.is_file(), "missing failure-mode-playbook.md", failures)
+    require(source_acquisition.is_file(), "missing source-acquisition.md", failures)
+    if source_acquisition.is_file():
+        acquisition = source_acquisition.read_text(encoding="utf-8")
+        for marker in (
+            "active upstream fetch",
+            "installer-generated topology",
+            "per-component image modeling",
+            "Helm is evidence, not a deployment path",
+        ):
+            require(marker in acquisition, f"source acquisition lacks marker: {marker}", failures)
     if deployment_workflow.is_file():
         workflow = deployment_workflow.read_text(encoding="utf-8")
         require("## 0. Derive the official topology" in workflow, "deployment workflow lacks phase 0", failures)
@@ -609,7 +638,7 @@ def validate_cross_skill_routing(repo_root: Path) -> list[str]:
 
     openai_yaml = (open_dir / "agents" / "openai.yaml").read_text(encoding="utf-8")
     require(
-        'short_description: "Only supplied Compose, Helm, or image-set descriptors"' in openai_yaml,
+        'short_description: "Deploy named open-source suites or supplied descriptors"' in openai_yaml,
         "Open-source short_description is not the required value",
         failures,
     )

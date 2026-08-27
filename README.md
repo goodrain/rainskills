@@ -247,9 +247,11 @@ Rainskills 会在用户下一次发起业务动作时，由本地运行时立即
 
 ## 部署类 skill 怎么选
 
-- 应用市场里有的应用 → `rainbond-template-installer`（一键安装商店模板）
-- 市场里没有的开源软件（有 docker-compose、Helm 或镜像）→ `rainbond-opensource-app-deploy`
-- 部署你自己写的项目（源码或私有镜像）→ `rainbond-app-assistant`
+- 已确认的 Rainbond 市场模板 → `rainbond-template-installer`（一键安装商店模板）
+- 只说“部署 Harbor / Dify / n8n”等第三方开源套件也可以 → `rainbond-opensource-app-deploy` 会自动联网获取官方仓库、文档和 Release 中的部署资料，固定版本并推导组件拓扑；用户已提供 Compose、Helm 或镜像集合时也走这里
+- 部署当前项目、普通 Git 仓库或私有镜像项目 → `rainbond-app-assistant`
+
+Open-source Deploy 将 Compose、Helm 和安装器生成结果作为建模证据，默认创建独立 Rainbond 镜像组件，不依赖 Helm 黑盒导入或用户手工上传 Compose。当前/本地项目线索优先于同名软件，避免把用户自己的 Harbor fork 误判为上游套件。
 
 ## License
 
