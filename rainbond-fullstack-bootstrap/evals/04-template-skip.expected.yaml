@@ -1,4 +1,5 @@
 case: template-skip
+presentation_mode: structured
 in_scope_components:
   - api
   - web

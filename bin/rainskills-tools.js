@@ -29,6 +29,9 @@ const CONTEXT_HINT_FIELDS = new Set(["team_id", "team_name", "region_name"]);
 const SKILL_CONTENT_MAX_BYTES = 128 * 1024;
 const SKILL_MANIFEST_MAX_BYTES = 4 * 1024 * 1024;
 const SENSITIVE_RESPONSE_KEY_PATTERN = /(?:authorization|jwt|token|password|secret|credential|private[_-]?key|key[_-]?file|certificate|cert[_-]?file|ssl[_-]?ca[_-]?cert)/i;
+const SENSITIVE_ENV_NAME_PATTERN = /(?:^|_)(?:PASSWORD|PASSWD|PASS|SECRET|TOKEN|API_?KEY|PRIVATE_?KEY|CREDENTIALS?|AUTH(?:ORIZATION)?|COOKIE|CERT(?:IFICATE)?)(?:_|$)/i;
+const ENV_NAME_FIELDS = Object.freeze(["attr_name", "name", "note", "env_name"]);
+const ENV_VALUE_FIELDS = new Set(["attr_value", "value"]);
 const RISK_POLICY = Object.freeze({
   version: "1",
   readPrefixes: [
@@ -36,6 +39,12 @@ const RISK_POLICY = Object.freeze({
     "rainbond_describe_", "rainbond_validate_", "rainbond_verify_", "rainbond_search_",
   ],
   destructiveFragments: ["delete", "remove", "purge", "destroy"],
+});
+const MIXED_TOOL_OPERATION_POLICY = Object.freeze({
+  rainbond_manage_component_dependency: Object.freeze({
+    readOperations: Object.freeze(["summary"]),
+    destructiveOperations: Object.freeze(["delete"]),
+  }),
 });
 const CALL_OPTION_DEFINITIONS = Object.freeze({
   "--confirm": Object.freeze({ property: "confirmation", pattern: OPERATION_ID_PATTERN }),
@@ -489,8 +498,16 @@ function loadSkillBinding(config, skillId, rootSkillId) {
   };
 }
 
-function classifyTool(toolName) {
+function classifyTool(toolName, argumentsValue = {}) {
   const normalized = String(toolName || "").toLowerCase();
+  const operation = typeof argumentsValue.operation === "string"
+    ? argumentsValue.operation.trim().toLowerCase()
+    : "";
+  const mixedPolicy = MIXED_TOOL_OPERATION_POLICY[normalized];
+  if (mixedPolicy) {
+    if (mixedPolicy.destructiveOperations.includes(operation)) return "destructive";
+    if (mixedPolicy.readOperations.includes(operation)) return "read";
+  }
   if (RISK_POLICY.destructiveFragments.some((fragment) => normalized.includes(fragment))) {
     return "destructive";
   }
@@ -679,12 +696,47 @@ function fitOutput(value) {
   };
 }
 
-function sanitizeToolResult(value, pathParts = []) {
-  if (Array.isArray(value)) {
-    return value.map((item) => sanitizeToolResult(item, pathParts));
+function redactString(value, secrets) {
+  let safe = value;
+  for (const secret of secrets) {
+    if (secret) safe = safe.split(secret).join("[REDACTED]");
   }
+  return safe;
+}
+
+function hasSensitiveEnvName(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  return ENV_NAME_FIELDS.some((field) => (
+    typeof value[field] === "string" && SENSITIVE_ENV_NAME_PATTERN.test(value[field])
+  ));
+}
+
+function collectSensitiveArgumentRedactions(value, output = []) {
+  if (Array.isArray(value)) {
+    for (const item of value) collectSensitiveArgumentRedactions(item, output);
+    return output;
+  }
+  if (!value || typeof value !== "object") return output;
+
+  const sensitiveEnv = hasSensitiveEnvName(value);
+  for (const [key, item] of Object.entries(value)) {
+    const sensitiveField = SENSITIVE_RESPONSE_KEY_PATTERN.test(key)
+      || SENSITIVE_ENV_NAME_PATTERN.test(key)
+      || (sensitiveEnv && ENV_VALUE_FIELDS.has(key));
+    if (sensitiveField && typeof item === "string" && item.length >= 4) output.push(item);
+    collectSensitiveArgumentRedactions(item, output);
+  }
+  return output;
+}
+
+function sanitizeToolResult(value, pathParts = [], sensitiveArguments = []) {
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeToolResult(item, pathParts, sensitiveArguments));
+  }
+  if (typeof value === "string") return redactString(value, sensitiveArguments);
   if (!value || typeof value !== "object") return value;
   const safe = {};
+  const sensitiveEnv = hasSensitiveEnvName(value);
   for (const [key, item] of Object.entries(value)) {
     // Console destructive operations may return this one-time control value.
     // It is not a credential and must remain available for the confirmation flow.
@@ -695,7 +747,11 @@ function sanitizeToolResult(value, pathParts = []) {
     if (key !== "confirmation_token"
       && !isPackageUploadAuthMode
       && SENSITIVE_RESPONSE_KEY_PATTERN.test(key)) continue;
-    safe[key] = sanitizeToolResult(item, [...pathParts, key]);
+    if (sensitiveEnv && ENV_VALUE_FIELDS.has(key)) {
+      safe[key] = "[REDACTED]";
+      continue;
+    }
+    safe[key] = sanitizeToolResult(item, [...pathParts, key], sensitiveArguments);
   }
   return safe;
 }
@@ -1205,14 +1261,14 @@ async function execute(command, config) {
     };
   }
 
-  const operationClass = classifyTool(command.toolName);
+  const argumentsValue = command.argumentsValue || readArguments(command.input);
+  const operationClass = classifyTool(command.toolName, argumentsValue);
   if (command.command === "read" && operationClass !== "read") {
     throw new BridgeError(
       "read is read-only and rejects tools classified as write or destructive",
       EXIT.USAGE
     );
   }
-  const argumentsValue = command.argumentsValue || readArguments(command.input);
   let operation = null;
   let skillBinding = null;
   if (operationClass !== "read") {
@@ -1274,7 +1330,11 @@ async function execute(command, config) {
       throw new BridgeError("Rainbond tool response lacks structuredContent", EXIT.TRANSPORT);
     }
     if (operation) updateOperation(config, operation, "succeeded");
-    return fitOutput(sanitizeToolResult(result.structuredContent));
+    return fitOutput(sanitizeToolResult(
+      result.structuredContent,
+      [],
+      collectSensitiveArgumentRedactions(argumentsValue)
+    ));
   } catch (error) {
     if (operation) {
       updateOperation(config, operation, error.exitCode === EXIT.TRANSPORT ? "unknown" : "failed");

@@ -30,22 +30,11 @@
     - concise delivery report mode
     - structured contract mode
 
-  ### Concise delivery report mode
+  ### Customer report mode
 
-  Use this mode by default when all of the following are true:
-  - `request_intent = source_app_delivery`
-  - `runtime_state.phase = runtime_healthy`
-  - `delivery_state.status` is `delivered` or `delivered-but-needs-manual-validation`
-  - `delivery_state.verification_mode` is `verified`, `inferred`, or `manual_validation_needed` consistently with that status
-  - `next_action` is `stop` or `stop and validate URL manually`
-  - `promotion_result = null`
-  - there is no unresolved `runtime_state.blocker` or `delivery_state.blocker`
-  - `project.deployment_location_url` is non-null
-  - `delivery_state.preferred_access_url` is non-null
-  - the user did not explicitly request structured output, YAML, JSON, debug output, or machine-readable output
-  - no eval/automation consumer explicitly requires structured contract mode
+  Use this mode by default for successful, incomplete, blocked, ambiguous, and handoff results. Switch away from it only when the user explicitly requests structured output, YAML, JSON, debug details, or machine-readable output, or when an automation/evaluation consumer explicitly declares the structured contract requirement.
 
-  In concise delivery report mode:
+  In customer report mode:
   - do not append `### Structured Output`
   - do not expose the fenced YAML block
   - keep the report short and directly useful to the user
@@ -93,17 +82,13 @@
   Use this mode when any of the following is true:
   - the user asks for structured output, YAML, JSON, debug details, or machine-readable output
   - an eval, wrapper, or automation flow explicitly needs deterministic structured schema validation
-  - any concise delivery report condition above is not met
-  - the app is building, unhealthy, blocked, identity-ambiguous, or requires handoff
-  - `promotion_result` is non-null or the user requested dev-to-test promotion
-  - there is any unresolved blocker or handoff
   - another skill or wrapper will consume the result as input
 
-  Building, unhealthy, blocked, ambiguous, handoff, and incomplete promotion states should keep the detailed human-readable sections and evidence below. Do not make non-success output terse merely because successful output is concise.
+  Building, unhealthy, blocked, ambiguous, handoff, and incomplete promotion states do not enable structured mode by themselves. In customer mode, explain the direct result and one actionable next step in concise Chinese without exposing internal enums or action ledgers.
 
   In structured contract mode:
   - the human-readable sections below are the narrative view over `AppAssistantResult`
-  - the reply must end with a final `### Structured Output` section
+  - the explicitly structured reply ends with a final `### Structured Output` section
   - the `### Structured Output` section must render `AppAssistantResult` in fenced `yaml`
   - the literal section order must be:
     - `### Project State`
@@ -394,7 +379,7 @@
   ```
   ````
 
-  In structured contract mode, always respond using exactly these sections:
+  Only in explicit structured contract mode, respond using exactly these sections:
 
   ### Project State
   - state the current classification

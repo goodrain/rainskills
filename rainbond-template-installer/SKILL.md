@@ -5,6 +5,15 @@ description: "Use when the user explicitly asks to install a local or cloud Rain
 
 # Rainbond Template Installer
 
+## 用户可见结果协议（最高优先级）
+
+普通用户回复默认使用简洁中文，只说明模板名称和版本、目标应用、安装结果、已安装服务及唯一下一步。内部 `TemplateInstallResult` 仍可用于校验，但不直接展示。
+
+- 成功时说明模板是否安装完成，以及用户接下来可以访问或检查什么。
+- 未完成时说明直接原因；只有确有安全可执行方案时才补充解决办法。
+- 默认不得展示内部对象、状态枚举、team/region/app ID、模板内部 ID、Skill/工具名、YAML、JSON 或英文编排标题。
+- 只有用户明确要求 YAML、JSON、调试详情，或自动化/评测明确要求结构化契约时，才使用后文的结构化输出格式。
+
 <!-- rainskills-runtime-gate:start -->
 ## 单运行环境 CLI 门禁（最高优先级）
 
@@ -383,7 +392,7 @@ Before concluding the template is unavailable, verify:
 
 ## Output Format
 
-Target structured output:
+Target structured output（仅在用户或自动化/评测明确要求结构化结果时使用）：
 
 - this skill should eventually be able to emit `TemplateInstallResult`
 - minimum target fields:
@@ -392,7 +401,7 @@ Target structured output:
   - `services_summary`
   - `next_action`
 - the human-readable sections below should be treated as the narrative view over that target object
-- once implemented, append a final `### Structured Output` section after the human-readable report and render `TemplateInstallResult` in fenced `yaml`
+- in explicit structured contract mode, append a final `### Structured Output` section after the human-readable report and render `TemplateInstallResult` in fenced `yaml`
 
 Proposed schema:
 
@@ -478,7 +487,7 @@ TemplateInstallResult:
 ```
 ````
 
-Always respond using exactly these sections:
+Only in explicit structured contract mode, respond using exactly these sections:
 
 ### Template Source
 - state whether installation is from `local` or `cloud`

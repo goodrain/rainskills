@@ -5,9 +5,9 @@
 - Depends on: [../SKILL.md](../SKILL.md), [60-verification-and-handoffs.md](60-verification-and-handoffs.md), [../schemas/bootstrap-result.schema.yaml](../schemas/bootstrap-result.schema.yaml).
 - Produces: the required human-readable section order, `BootstrapResult` assembly rules, and cross-field consistency requirements.
 
-## Required Reply Shape
+## Explicit Structured Reply Shape
 
-Every final reply must contain these sections, in exactly this order:
+Only when the user, automation, or evaluation explicitly requests structured output, include these sections in exactly this order:
 
 1. `### Creation Result`
 2. `### Actions Taken`

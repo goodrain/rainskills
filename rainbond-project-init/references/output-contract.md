@@ -9,7 +9,7 @@
 
 ## Output Format
 
-Structured output contract:
+Structured output contract（仅在用户或自动化/评测明确要求结构化结果时使用）：
 
 - this skill must emit `ProjectInitResult`
 - minimum target fields:
@@ -19,15 +19,15 @@ Structured output contract:
   - `init_status`
   - `next_action`
 - the human-readable sections below are the narrative view over that object
-- the reply must end with a final `### Structured Output` section
+- in explicit structured contract mode, the reply ends with a final `### Structured Output` section
 - the `### Structured Output` section must render `ProjectInitResult` in fenced `yaml`
 - the literal shape of the final section must be:
   - line 1: `### Structured Output`
   - line 2: ````yaml`
   - middle: `ProjectInitResult: ...`
   - final line: ````
-- omitting the final structured block, changing its object name, or placing later prose after it is a contract failure
-- this contract still applies when the result is `pending_verification` or `blocked`
+- when structured mode is explicitly selected, omitting the final structured block, changing its object name, or placing later prose after it is a contract failure
+- structured mode uses the same object shape when the result is `pending_verification` or `blocked`; those states do not enable structured mode by themselves
 - do not create sidecar result artifacts such as `.rainbond/init.result.json` as a substitute for the final reply contract; current-run status must be expressed in the prose sections and `ProjectInitResult`
 
 Proposed schema:
@@ -198,7 +198,7 @@ ProjectInitResult:
 ```
 ````
 
-Always respond using exactly these sections:
+Only in explicit structured contract mode, respond using exactly these sections:
 
 ### Init Result
 - state whether the project was initialized successfully
@@ -259,7 +259,7 @@ Always respond using exactly these sections:
 - keep enum values and field names aligned with the schema above
 - do not place any prose after this section
 - do not duplicate secrets or invent missing values
-- when the locked Rainbond transport is unavailable or identity is blocked, still use the same required section headings and final `ProjectInitResult`; only field values change
+- when structured mode was explicitly requested and the locked Rainbond transport is unavailable or identity is blocked, use the same required section headings and final `ProjectInitResult`; only field values change
 - bare YAML under `### Structured Output` is a contract failure; the object must appear inside fenced markdown code block with `yaml`
 - the opening fence must be exactly ````yaml` immediately after the heading
 - the closing fence must be the last non-whitespace line of the whole reply

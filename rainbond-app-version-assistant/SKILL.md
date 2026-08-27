@@ -5,6 +5,15 @@ description: "Use when a user explicitly asks for an existing Rainbond app versi
 
 # Rainbond App Version Assistant
 
+## 用户可见结果协议（最高优先级）
+
+普通用户回复默认使用简洁中文，只说明应用、版本操作、实际结果、重要风险和唯一下一步。快照、发布或回滚的内部状态对象仍可用于校验和续接，但不直接展示。
+
+- 成功时说明实际创建、发布或回滚的版本，以及用户接下来能做什么。
+- 未完成时说明直接原因；只有确有安全可执行方案时才补充解决办法。
+- 默认不得展示内部对象、状态枚举、team/region/app ID、发布记录 ID、Skill/工具名、YAML、JSON 或英文编排标题。
+- 只有用户明确要求 YAML、JSON、调试详情，或自动化/评测明确要求结构化契约时，才使用后文的结构化输出格式。
+
 <!-- rainskills-runtime-gate:start -->
 ## 单运行环境 CLI 门禁（最高优先级）
 
@@ -412,7 +421,7 @@ That one belongs to the `/upgrade` market-app upgrade flow.
 
 ## Output Format
 
-Target structured output:
+Target structured output（仅在用户或自动化/评测明确要求结构化结果时使用）：
 
 - this skill should eventually be able to emit `VersionCenterSession`
 - minimum target fields:
@@ -424,7 +433,7 @@ Target structured output:
   - `action_plan`
   - `next_step`
 - the human-readable sections below should be treated as the narrative view over that target object
-- once implemented, append a final `### Structured Output` section after the human-readable report and render `VersionCenterSession` in fenced `yaml`
+- in explicit structured contract mode, append a final `### Structured Output` section after the human-readable report and render `VersionCenterSession` in fenced `yaml`
 
 Proposed schema:
 
@@ -518,7 +527,7 @@ VersionCenterSession:
 ```
 ````
 
-Always respond using exactly these sections:
+Only in explicit structured contract mode, respond using exactly these sections:
 
 ### Context
 - state `app_name` (from `.rainbond/local.json`) and flow type

@@ -31,11 +31,11 @@ If the system is already `runtime_healthy`, stop and say so. Do not continue mak
 
 ## Output Format
 
-Structured output contract:
+Structured output contract（仅在用户或自动化/评测明确要求结构化结果时使用）：
 
 - this skill must emit `TroubleshootResult`
 - keep the human-readable sections below exactly as the narrative surface contract
-- append one final `### Structured Output` section and render `TroubleshootResult` in fenced `yaml`
+- in explicit structured contract mode, append one final `### Structured Output` section and render `TroubleshootResult` in fenced `yaml`
 - do not place any prose after the final structured block
 
 Canonical required top-level fields:
@@ -221,7 +221,7 @@ TroubleshootResult:
 ```
 ````
 
-Always respond using exactly these sections:
+Only in explicit structured contract mode, respond using exactly these sections:
 
 ### Problem Judgment
 - state the root cause clearly

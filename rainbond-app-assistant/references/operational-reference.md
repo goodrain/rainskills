@@ -13,7 +13,7 @@ Load this reference only when checking a proposed route or reviewing a completed
   - reporting team/region/app identity as a substitute for the clickable Rainbond deployment location
   - using the public service URL as the Rainbond deployment location, or constructing the public service URL from naming conventions
   - stripping useful diagnostic evidence from building, blocked, unhealthy, ambiguous, handoff, or incomplete promotion states
-  - omitting the required `### Structured Output` section in structured contract mode
+  - omitting `### Structured Output` after explicit structured contract mode was selected
   - replacing the required five human-readable sections with freeform narrative in structured contract mode
   - treating a project as unlinked only because `.rainbond/local.json.metadata.status` is stale even though the platform confirms the same app in the current run
   - omitting `Actions Performed` detail when the run only did inspection/classification and intentionally skipped downstream skills

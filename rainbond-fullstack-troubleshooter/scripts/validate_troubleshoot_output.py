@@ -13,6 +13,10 @@ from typing import Any
 
 import yaml
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+from validate_customer_output import validate_customer_output  # noqa: E402
+
 
 REQUIRED_SECTIONS = [
     "### Problem Judgment",
@@ -134,6 +138,14 @@ def validate_response_file(
     expected = load_yaml(expected_path) if expected_path else None
 
     errors: list[str] = []
+
+    presentation_mode = (expected or {}).get("presentation_mode", "customer")
+    if presentation_mode == "customer":
+        return validate_customer_output(response_text, expected or {})
+    if presentation_mode == "structured":
+        pass
+    else:
+        return [f"unsupported presentation_mode: {presentation_mode!r}"]
 
     try:
         sections = parse_required_sections(response_text)
