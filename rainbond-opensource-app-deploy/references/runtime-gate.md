@@ -20,7 +20,7 @@ Codex 中命令工具一旦返回 `session_id`，必须立即对该 `session_id`
 ```json
 {
   "schema": "rainskills.single-runtime-contract.v1",
-  "package_version": "rainskills@0.1.27",
+  "package_version": "rainskills@0.1.28",
   "runtime_status": [
     "node",
     "<home>/.rainbond/lib/rainskills/bin/rainskills.js",
