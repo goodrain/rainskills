@@ -1,6 +1,6 @@
 {
   "name": "rainskills",
-  "version": "0.1.21",
+  "version": "0.1.23",
   "description": "Interactive Rainbond skill installer for Codex, Claude Code, and Pi Agent",
   "license": "Apache-2.0",
   "homepage": "https://github.com/goodrain/rainskills#readme",
