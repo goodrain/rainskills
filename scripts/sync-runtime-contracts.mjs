@@ -35,6 +35,13 @@ const forbiddenFullGuidance = [
   "复用已绑定的环境 ID",
   "不重复枚举环境",
 ];
+const requiredAuthorizationGuidance = [
+  "同一个命令会话",
+  "后续业务步骤",
+  "退出码为 0",
+  "rainskills.runtime-connect-result.v1",
+  "state=connected",
+];
 
 function runtimeGate(source, skillId) {
   const match = source.match(
@@ -93,6 +100,9 @@ for (const skillId of skillIds) {
   }
   for (const value of forbiddenFullGuidance) {
     if (source.includes(value)) throw new Error(`${skillId} 仍包含已删除的多运行环境说明：${value}`);
+  }
+  for (const value of requiredAuthorizationGuidance) {
+    if (!gate.includes(value)) throw new Error(`${skillId} 缺少授权同步门禁：${value}`);
   }
   runtimeContract(gate, skillId);
 }

@@ -100,6 +100,11 @@ test("runtime gates contain no multi-environment or runtime-operation protocol",
     assert.match(current, /本机只允许连接一个 Rainbond 运行环境/);
     assert.match(current, /写调用不得自动重放/);
     assert.match(current, /403 直接停止/);
+    assert.match(current, /同一个命令会话/);
+    assert.match(current, /禁止[^。\n]*后续业务步骤/);
+    assert.match(current, /退出码为 0/);
+    assert.match(current, /rainskills\.runtime-connect-result\.v1/);
+    assert.match(current, /state[^。\n]*connected/);
   }
 });
 
@@ -145,6 +150,9 @@ test("root Skill manages one replaceable runtime and never configures client MCP
   assert.match(source, /只保存一个全局运行环境/);
   assert.match(source, /runtime reconnect <target>/);
   assert.match(source, /不得配置客户端 MCP/);
+  assert.match(source, /同一个命令会话/);
+  assert.match(source, /禁止[^。\n]*后续业务步骤/);
+  assert.match(source, /rainskills\.runtime-connect-result\.v1/);
   assert.doesNotMatch(source, /environment set-default|environment rename|environment remove/);
 });
 

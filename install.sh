@@ -2119,6 +2119,8 @@ validate_mcp_connectivity() {
     curl \
       --silent \
       --show-error \
+      --connect-timeout 10 \
+      --max-time 30 \
       --output "$response_file" \
       --dump-header "$header_file" \
       --write-out '%{http_code}' \
@@ -2417,6 +2419,7 @@ obtain_rainbond_token() {
 
   local device_flow_status
   if device_flow_login_to_rainbond "$base_url"; then
+    printf '浏览器授权已完成，正在验证 Rainbond 连接…\n' >&2
     return 0
   else
     device_flow_status=$?
@@ -2427,6 +2430,7 @@ obtain_rainbond_token() {
       die "当前 Rainbond Console 仅支持旧版浏览器回调；此模式需要本机浏览器或交互终端。请升级 Rainbond Console 后重试。"
     fi
     browser_login_to_rainbond "$base_url"
+    printf '浏览器授权已完成，正在验证 Rainbond 连接…\n' >&2
     return 0
   fi
   die "${DEVICE_FLOW_ERROR:-Rainbond 设备授权失败。}"

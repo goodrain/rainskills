@@ -128,6 +128,11 @@ if sed -n '/validate_mcp_connectivity()/,/^}/p' "$REPO_ROOT/install.sh" \
     | grep -F -- '-H "Authorization: GRJWT' >/dev/null; then
   fail "MCP JWT leaked into curl arguments"
 fi
+validation_source="$(sed -n '/validate_mcp_connectivity()/,/^}/p' "$REPO_ROOT/install.sh")"
+grep -F -- '--connect-timeout 10' <<<"$validation_source" >/dev/null \
+  || fail "MCP validation has no bounded connect timeout"
+grep -F -- '--max-time 30' <<<"$validation_source" >/dev/null \
+  || fail "MCP validation has no bounded wall-clock timeout"
 assert_contains "terminal code" "$TEST_ROOT/output.log" "BCDF-GHJK"
 assert_contains \
   "fixed authorization message begin" \
@@ -190,6 +195,10 @@ non_tty_status=$?
 set -e
 [[ "$non_tty_status" -eq 0 ]] || fail "Device Flow was blocked without a terminal TTY"
 assert_equal "non-TTY Device Flow token" "non.tty.token" "$(cat "$non_tty_result")"
+assert_contains \
+  "post-authorization progress" \
+  "$non_tty_error" \
+  "浏览器授权已完成，正在验证 Rainbond 连接…"
 
 scoped_token="$(python3 - <<'PY'
 import base64

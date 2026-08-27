@@ -4,6 +4,7 @@ const os = require("node:os");
 const { looksLikeJwt } = require("./windows-auth.js");
 
 const MAX_MISSING_ROUTE_BODY_BYTES = 64 * 1024;
+const MCP_VALIDATION_TIMEOUT_MS = 30_000;
 
 async function readBoundedResponseText(response) {
   const declaredLength = Number(response.headers?.get?.("content-length") || 0);
@@ -57,58 +58,82 @@ async function isVerifiedMissingMcpRoute(response) {
   return false;
 }
 
-async function validateMcp({ url, token, fetchImpl = globalThis.fetch }) {
+async function validateMcp({
+  url,
+  token,
+  fetchImpl = globalThis.fetch,
+  timeoutMs = MCP_VALIDATION_TIMEOUT_MS,
+}) {
   if (!looksLikeJwt(token)) throw new Error("Rainbond JWT 格式无效");
-  const response = await fetchImpl(url, {
-    method: "POST",
-    redirect: "manual",
-    headers: {
-      accept: "application/json",
-      Authorization: `GRJWT ${token}`,
-      "content-type": "application/json",
-      "mcp-protocol-version": "2025-03-26",
-    },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: {},
-    }),
-  });
-  const location = response.headers?.get?.("location");
-  const hasLocation = typeof response.headers?.has === "function"
-    ? response.headers.has("location")
-    : location !== null && location !== undefined;
-  if ((response.status >= 300 && response.status < 400) || hasLocation) {
-    throw new Error("Rainbond MCP endpoint 不允许重定向");
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > MCP_VALIDATION_TIMEOUT_MS) {
+    throw new Error("Rainbond MCP 校验超时参数无效");
   }
-  if (response.url) {
-    let observed;
-    let expected;
-    try {
-      observed = new URL(response.url);
-      expected = new URL(url);
-    } catch {
-      throw new Error("Rainbond MCP endpoint 响应地址无效");
+  const controller = new AbortController();
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  timeout.unref?.();
+  try {
+    const response = await fetchImpl(url, {
+      method: "POST",
+      redirect: "manual",
+      signal: controller.signal,
+      headers: {
+        accept: "application/json",
+        Authorization: `GRJWT ${token}`,
+        "content-type": "application/json",
+        "mcp-protocol-version": "2025-03-26",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {},
+      }),
+    });
+    const location = response.headers?.get?.("location");
+    const hasLocation = typeof response.headers?.has === "function"
+      ? response.headers.has("location")
+      : location !== null && location !== undefined;
+    if ((response.status >= 300 && response.status < 400) || hasLocation) {
+      throw new Error("Rainbond MCP endpoint 不允许重定向");
     }
-    if (observed.href !== expected.href) {
-      throw new Error("Rainbond MCP endpoint 响应地址不匹配");
+    if (response.url) {
+      let observed;
+      let expected;
+      try {
+        observed = new URL(response.url);
+        expected = new URL(url);
+      } catch {
+        throw new Error("Rainbond MCP endpoint 响应地址无效");
+      }
+      if (observed.href !== expected.href) {
+        throw new Error("Rainbond MCP endpoint 响应地址不匹配");
+      }
     }
-  }
-  if (!response.ok) {
-    const error = new Error(`Rainbond MCP 校验失败，HTTP ${response.status}`);
-    if (await isVerifiedMissingMcpRoute(response)) error.code = "MCP_ENDPOINT_UNSUPPORTED";
+    if (!response.ok) {
+      const error = new Error(`Rainbond MCP 校验失败，HTTP ${response.status}`);
+      if (await isVerifiedMissingMcpRoute(response)) error.code = "MCP_ENDPOINT_UNSUPPORTED";
+      throw error;
+    }
+    const payload = await response.json();
+    if (payload?.result?.serverInfo?.name !== "rainbond-console-mcp") {
+      throw new Error("Rainbond MCP 校验返回了无法识别的响应");
+    }
+    const renewed = response.headers.get("x-renewed-token");
+    return { token: looksLikeJwt(renewed) ? renewed : token };
+  } catch (error) {
+    if (timedOut) throw new Error("Rainbond MCP 校验超时，请检查 Console 连接后重试。");
     throw error;
+  } finally {
+    clearTimeout(timeout);
   }
-  const payload = await response.json();
-  if (payload?.result?.serverInfo?.name !== "rainbond-console-mcp") {
-    throw new Error("Rainbond MCP 校验返回了无法识别的响应");
-  }
-  const renewed = response.headers.get("x-renewed-token");
-  return { token: looksLikeJwt(renewed) ? renewed : token };
 }
 
 module.exports = {
+  MCP_VALIDATION_TIMEOUT_MS,
   isVerifiedMissingMcpRoute,
   validateMcp,
 };

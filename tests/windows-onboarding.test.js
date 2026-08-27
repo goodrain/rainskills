@@ -805,6 +805,7 @@ test("Windows CLI validation keeps JWT in the authorization header", async () =>
     },
   });
   assert.equal(request.options.headers.Authorization, `GRJWT ${token}`);
+  assert.equal(request.options.signal instanceof AbortSignal, true);
   assert.equal(JSON.parse(request.options.body).method, "initialize");
   assert.equal(validation.token, "renewed.payload.signature");
 });
@@ -835,6 +836,39 @@ test("Windows MCP validation pins the selected endpoint and rejects redirect dri
     },
   }), /地址|endpoint|重定向/i);
   assert.equal(redirectMode, "manual");
+});
+
+test("MCP validation aborts a stalled live probe after the bounded timeout", async () => {
+  const { validateMcp } = require(path.join(
+    repoRoot,
+    "rainbond-platform-installer",
+    "scripts",
+    "windows-client-config.js"
+  ));
+
+  await assert.rejects(() => validateMcp({
+    url: "https://console.example.com/console/mcp/rainskills/api/query",
+    token: "header.payload.signature",
+    timeoutMs: 5,
+    fetchImpl(_url, options) {
+      return new Promise((resolve, reject) => {
+        options.signal.addEventListener("abort", () => {
+          const error = new Error("aborted");
+          error.name = "AbortError";
+          reject(error);
+        }, { once: true });
+      });
+    },
+  }), /MCP.*超时|超时.*MCP/i);
+
+  await assert.rejects(() => validateMcp({
+    url: "https://console.example.com/console/mcp/rainskills/api/query",
+    token: "header.payload.signature",
+    timeoutMs: 0,
+    fetchImpl() {
+      throw new Error("invalid timeout must fail before fetch");
+    },
+  }), /超时参数无效/);
 });
 
 test("native authorization orchestration falls back from Device Flow and validates the CLI API", async () => {
