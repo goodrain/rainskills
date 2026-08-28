@@ -42,6 +42,19 @@ const CAPABILITY_SUMMARY = `Rainskills 安装完成，下一条消息即可直�
 - 帮我分析当前项目应该如何部署
 
 也可以直接告诉我你想部署什么应用。`;
+const HERMES_CAPABILITY_SUMMARY = `Rainskills 安装完成。
+
+如果安装发生在已经打开的 Hermes 会话中，请执行 /reset，或新建会话后再使用。
+
+下一步可以直接说：
+
+- 帮我部署当前项目
+- 帮我部署一个 Git 仓库
+- 帮我通过镜像或安装包部署应用
+- 帮我安装一个应用模板
+- 帮我分析当前项目应该如何部署
+
+也可以直接告诉我你想部署什么应用。`;
 const AGENT_SUMMARY_REQUIREMENT = "[RAINSKILLS_AGENT_SUMMARY_REQUIRED:include-next-actions]";
 
 function isLocalHttpUrl(value) {
@@ -518,17 +531,19 @@ async function promptTarget() {
       + "  3) Pi Agent\n"
       + "  4) DeepSeek Harness\n"
       + "  5) WorkBuddy\n"
-      + "  6) 全部\n"
+      + "  6) Hermes Agent\n"
+      + "  7) 全部\n"
     );
     for (;;) {
-      const answer = (await terminal.question("请输入选项 [1-6]: ")).trim();
+      const answer = (await terminal.question("请输入选项 [1-7]: ")).trim();
       if (answer === "1") return "codex";
       if (answer === "2") return "claude";
       if (answer === "3") return "pi";
       if (answer === "4") return "dsh";
       if (answer === "5") return "workbuddy";
-      if (answer === "" || answer === "6") return "all";
-      stdout.write("请输入 1、2、3、4、5 或 6。\n");
+      if (answer === "6") return "hermes";
+      if (answer === "" || answer === "7") return "all";
+      stdout.write("请输入 1、2、3、4、5、6 或 7。\n");
     }
   } finally {
     terminal.close();
@@ -601,7 +616,7 @@ async function resolveDeployment(options, {
 }
 
 function usage() {
-  stdout.write("Usage: npx rainskills [codex|claude|pi|dsh|workbuddy|all] [options]\n");
+  stdout.write("Usage: npx rainskills [codex|claude|pi|dsh|workbuddy|hermes|all] [options]\n");
 }
 
 async function main(argv, dependencies = {}) {
@@ -613,7 +628,11 @@ async function main(argv, dependencies = {}) {
   const home = dependencies.home || os.homedir();
   const environment = dependencies.env || process.env;
   const packageRoot = dependencies.packageRoot || path.resolve(__dirname, "..", "..");
-  const target = options.target || (
+  const detectedTarget = environment.AI_AGENT === "hermes-agent"
+    || environment.HERMES_AGENT === "true"
+    ? "hermes"
+    : "";
+  const target = options.target || detectedTarget || (
     options.nonInteractive || !stdin.isTTY
       ? "all"
       : await (dependencies.promptTarget || promptTarget)()
@@ -655,7 +674,7 @@ async function main(argv, dependencies = {}) {
   })();
   const targets = options.customDest
     ? ["unknown"]
-    : (target === "all" ? ["claude", "codex", "pi", "dsh", "workbuddy"] : [target]);
+    : (target === "all" ? ["claude", "codex", "pi", "dsh", "workbuddy", "hermes"] : [target]);
   const deliveries = [];
   try {
     const counts = copySkills({
@@ -700,7 +719,7 @@ async function main(argv, dependencies = {}) {
     detailLogger("");
     detailLogger(`安装完成。本次：${counts.installed} 项新装 / ${counts.updated} 项已更新 / ${counts.unchanged} 项已是最新 / ${counts.forced} 项强制覆盖`);
     detailLogger("");
-    logger(CAPABILITY_SUMMARY);
+    logger(target === "hermes" ? HERMES_CAPABILITY_SUMMARY : CAPABILITY_SUMMARY);
     logger(AGENT_SUMMARY_REQUIREMENT);
     return { status: "skills-installed", counts };
   } catch (error) {

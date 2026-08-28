@@ -1,7 +1,7 @@
 {
   "name": "rainskills",
   "version": "0.1.30",
-  "description": "Interactive Rainbond skill installer for Codex, Claude Code, Pi Agent, DeepSeek Harness, and WorkBuddy",
+  "description": "Interactive Rainbond skill installer for Codex, Claude Code, Pi Agent, DeepSeek Harness, WorkBuddy, and Hermes Agent",
   "license": "Apache-2.0",
   "homepage": "https://github.com/goodrain/rainskills#readme",
   "bugs": {
@@ -17,6 +17,7 @@
     "claude-code",
     "deepseek-harness",
     "workbuddy",
+    "hermes-agent",
     "skills",
     "installer"
   ],

@@ -210,6 +210,7 @@ Usage:
   ./install.sh pi
   ./install.sh dsh
   ./install.sh workbuddy
+  ./install.sh hermes
   ./install.sh all
   ./install.sh --dest <path>
   ./install.sh all --saas
@@ -223,6 +224,7 @@ Options:
   pi                     Install and configure Pi Agent
   dsh                    Install and configure DeepSeek Harness
   workbuddy              Install and configure WorkBuddy
+  hermes                 Install and configure Hermes Agent
   all                    Install and configure all supported agents
   refresh                Re-run browser login and refresh the protected CLI credential
   --dest PATH            Install skills to a custom directory only
@@ -249,6 +251,7 @@ Environment:
   RAINSKILLS_NO_BROWSER  Set to 1 to print the authorization URL without opening it
   DSH_HOME               DeepSeek Harness home (default: ~/.dsh)
   WORKBUDDY_CONFIG_DIR   WorkBuddy config home (default: ~/.workbuddy-ai)
+  HERMES_HOME            Hermes Agent home (default: ~/.hermes)
 EOF
 }
 
@@ -267,6 +270,23 @@ warn() {
 
 print_capability_summary() {
   printf '[RAINSKILLS_USER_MESSAGE_BEGIN:install.completed]\n'
+  if [[ "$TARGET" == "hermes" ]]; then
+    cat <<'EOF'
+Rainskills 安装完成。
+
+如果安装发生在已经打开的 Hermes 会话中，请执行 /reset，或新建会话后再使用。
+
+下一步可以直接说：
+
+- 帮我部署当前项目
+- 帮我部署一个 Git 仓库
+- 帮我通过镜像或安装包部署应用
+- 帮我安装一个应用模板
+- 帮我分析当前项目应该如何部署
+
+也可以直接告诉我你想部署什么应用。
+EOF
+  else
   cat <<'EOF'
 Rainskills 安装完成，下一条消息即可直接使用。
 
@@ -280,6 +300,7 @@ Rainskills 安装完成，下一条消息即可直接使用。
 
 也可以直接告诉我你想部署什么应用。
 EOF
+  fi
   printf '[RAINSKILLS_USER_MESSAGE_END:install.completed]\n'
   printf '[RAINSKILLS_AGENT_SUMMARY_REQUIRED:include-next-actions]\n'
 }
@@ -367,6 +388,7 @@ rainskills_v2_agent() {
     pi) printf 'pi\n' ;;
     dsh|deepseek_harness|deepseek) printf 'deepseek\n' ;;
     workbuddy) printf 'workbuddy\n' ;;
+    hermes|hermes_agent|hermes-agent) printf 'hermes_agent\n' ;;
     other) printf 'other\n' ;;
     *) printf 'unknown\n' ;;
   esac
@@ -582,6 +604,9 @@ rainskills_install_client_for_target() {
     workbuddy)
       printf 'workbuddy\n'
       ;;
+    hermes)
+      printf 'hermes_agent\n'
+      ;;
     all)
       printf 'all\n'
       ;;
@@ -747,7 +772,7 @@ event = {
     "platform": platform,
     "control_mode": control_mode,
     "target": target,
-    "client": client if client in {"codex", "claude_code", "pi", "deepseek_harness", "workbuddy", "all", "both", "unknown"} else "unknown",
+    "client": client if client in {"codex", "claude_code", "pi", "deepseek_harness", "workbuddy", "hermes_agent", "all", "both", "unknown"} else "unknown",
     "eid": eid or None,
     "phase": None,
     "lifecycle_phase": phase,
@@ -804,7 +829,7 @@ initialize_rainskills_installation_reporting() {
       connect)
         RAINSKILLS_INSTALL_ACTION="connect"
         ;;
-      codex|claude|pi|dsh|workbuddy|all)
+      codex|claude|pi|dsh|workbuddy|hermes|all)
         target="$arg"
         ;;
     esac
@@ -1139,12 +1164,12 @@ parse_args() {
         ACTION="connect"
         shift
         ;;
-      claude|codex|pi|dsh|workbuddy|all)
+      claude|codex|pi|dsh|workbuddy|hermes|all)
         TARGET="$1"
         shift
         ;;
       openclaw)
-        die "macOS/Linux 安装器不再支持 OpenClaw，请使用 Codex、Claude Code、Pi Agent、DeepSeek Harness 或 WorkBuddy。"
+        die "macOS/Linux 安装器不再支持 OpenClaw，请使用 Codex、Claude Code、Pi Agent、DeepSeek Harness、WorkBuddy 或 Hermes Agent。"
         ;;
       --dest)
         [[ $# -ge 2 ]] || die "--dest 需要一个路径值"
@@ -1232,7 +1257,7 @@ assert_internal_connect_entry() {
   local target="" environment_kind="" console_origin="" mode=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      codex|claude|pi|dsh|workbuddy|all)
+      codex|claude|pi|dsh|workbuddy|hermes|all)
         [[ -z "$target" ]] || return 1
         target="$1"
         shift
@@ -1329,6 +1354,11 @@ resolve_target() {
     return 0
   fi
 
+  if [[ "${AI_AGENT:-}" == "hermes-agent" || "${HERMES_AGENT:-}" == "true" ]]; then
+    TARGET="hermes"
+    return 0
+  fi
+
   if [[ "$NON_INTERACTIVE" -eq 1 || ! -t 0 ]]; then
     TARGET="$DEFAULT_TARGET"
     return 0
@@ -1340,10 +1370,11 @@ resolve_target() {
   log "  3) Pi Agent"
   log "  4) DeepSeek Harness"
   log "  5) WorkBuddy"
-  log "  6) 全部"
+  log "  6) Hermes Agent"
+  log "  7) 全部"
 
   while true; do
-    printf '请输入选项 [1-6]: '
+    printf '请输入选项 [1-7]: '
     read -r choice
     case "$choice" in
       1)
@@ -1366,12 +1397,16 @@ resolve_target() {
         TARGET="workbuddy"
         return 0
         ;;
-      6|"")
+      6)
+        TARGET="hermes"
+        return 0
+        ;;
+      7|"")
         TARGET="all"
         return 0
         ;;
       *)
-        log "请输入 1、2、3、4、5 或 6。"
+        log "请输入 1、2、3、4、5、6 或 7。"
         ;;
     esac
   done
@@ -1399,12 +1434,16 @@ collect_destinations() {
       workbuddy)
         destinations+=("${WORKBUDDY_CONFIG_DIR:-$HOME/.workbuddy-ai}/skills")
         ;;
+      hermes)
+        destinations+=("${HERMES_HOME:-$HOME/.hermes}/skills")
+        ;;
       all)
         destinations+=("$HOME/.claude/skills")
         destinations+=("$HOME/.codex/skills")
         destinations+=("$HOME/.pi/agent/skills")
         destinations+=("${DSH_HOME:-$HOME/.dsh}/skills")
         destinations+=("${WORKBUDDY_CONFIG_DIR:-$HOME/.workbuddy-ai}/skills")
+        destinations+=("${HERMES_HOME:-$HOME/.hermes}/skills")
         ;;
       *)
         die "未知安装目标：$TARGET"
@@ -1426,8 +1465,9 @@ collect_target_agents() {
     pi) printf 'pi\n' ;;
     dsh) printf 'dsh\n' ;;
     workbuddy) printf 'workbuddy\n' ;;
+    hermes) printf 'hermes\n' ;;
     all)
-      printf '%s\n' claude codex pi dsh workbuddy
+      printf '%s\n' claude codex pi dsh workbuddy hermes
       ;;
     *) printf 'unknown\n' ;;
   esac

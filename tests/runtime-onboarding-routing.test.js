@@ -110,6 +110,9 @@ test("runtime gates contain no multi-environment or runtime-operation protocol",
     assert.match(current, /exit_code/);
     assert.match(current, /RAINSKILLS_AGENT_WAIT_REQUIRED:runtime-connect/);
     assert.match(current, /RAINSKILLS_AGENT_WAIT_COMPLETE:runtime-connect/);
+    assert.match(current, /Hermes Agent=`hermes`/);
+    assert.match(current, /terminal[^\n]*background=true/);
+    assert.match(current, /process[^\n]*action="wait"/);
   }
 });
 
@@ -164,6 +167,8 @@ test("root Skill manages one replaceable runtime and never configures client MCP
   assert.match(source, /write_stdin/);
   assert.match(source, /RAINSKILLS_AGENT_WAIT_REQUIRED:runtime-connect/);
   assert.match(source, /RAINSKILLS_AGENT_WAIT_COMPLETE:runtime-connect/);
+  assert.match(source, /Hermes Agent=`hermes`/);
+  assert.match(source, /process[^\n]*action="wait"/);
   assert.doesNotMatch(source, /environment set-default|environment rename|environment remove/);
 });
 

@@ -8,6 +8,7 @@ const HOST_TARGETS = Object.freeze([
   "pi",
   "dsh",
   "workbuddy",
+  "hermes",
   "all",
 ]);
 const HOST_TARGET_SET = new Set(HOST_TARGETS);
@@ -19,6 +20,7 @@ function isHostTarget(value) {
 function telemetryClientForTarget(target) {
   if (target === "claude") return "claude_code";
   if (target === "dsh") return "deepseek_harness";
+  if (target === "hermes") return "hermes_agent";
   if (isHostTarget(target)) return target;
   return "unknown";
 }
@@ -38,6 +40,13 @@ function workBuddySkillsDirectory(home, env = process.env) {
   return path.join(path.resolve(configHome), "skills");
 }
 
+function hermesSkillsDirectory(home, env = process.env) {
+  const hermesHome = typeof env.HERMES_HOME === "string" && env.HERMES_HOME.trim()
+    ? env.HERMES_HOME.trim()
+    : path.join(home, ".hermes");
+  return path.join(path.resolve(hermesHome), "skills");
+}
+
 function destinationsForHostTarget(target, home, env = process.env) {
   const destinations = {
     claude: path.join(home, ".claude", "skills"),
@@ -45,6 +54,7 @@ function destinationsForHostTarget(target, home, env = process.env) {
     pi: path.join(home, ".pi", "agent", "skills"),
     dsh: dshSkillsDirectory(home, env),
     workbuddy: workBuddySkillsDirectory(home, env),
+    hermes: hermesSkillsDirectory(home, env),
   };
   if (target === "all") return Object.values(destinations);
   if (Object.hasOwn(destinations, target)) return [destinations[target]];
@@ -55,6 +65,7 @@ module.exports = {
   HOST_TARGETS,
   destinationsForHostTarget,
   dshSkillsDirectory,
+  hermesSkillsDirectory,
   isHostTarget,
   telemetryClientForTarget,
   workBuddySkillsDirectory,

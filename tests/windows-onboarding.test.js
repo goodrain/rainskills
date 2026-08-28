@@ -39,6 +39,19 @@ const approvedCapabilitySummary = `Rainskills 安装完成，下一条消息即�
 - 帮我分析当前项目应该如何部署
 
 也可以直接告诉我你想部署什么应用。`;
+const hermesCapabilitySummary = `Rainskills 安装完成。
+
+如果安装发生在已经打开的 Hermes 会话中，请执行 /reset，或新建会话后再使用。
+
+下一步可以直接说：
+
+- 帮我部署当前项目
+- 帮我部署一个 Git 仓库
+- 帮我通过镜像或安装包部署应用
+- 帮我安装一个应用模板
+- 帮我分析当前项目应该如何部署
+
+也可以直接告诉我你想部署什么应用。`;
 const agentSummaryRequirement = "[RAINSKILLS_AGENT_SUMMARY_REQUIRED:include-next-actions]";
 const forbiddenDefaultInstallText = [
   "Rainbond Cloud",
@@ -67,6 +80,13 @@ function assertApprovedCapabilitySummary(output) {
   }
 }
 
+function assertHermesCapabilitySummary(output) {
+  const content = output.join("\n").replace(/\r\n/g, "\n");
+  assert.equal(content.split(hermesCapabilitySummary).length - 1, 1);
+  assert.equal(content.split(agentSummaryRequirement).length - 1, 1);
+  assert.equal(content.trim(), `${hermesCapabilitySummary}\n${agentSummaryRequirement}`);
+}
+
 test("native Windows verbose mode keeps technical installation diagnostics opt-in", async () => {
   const { main } = require(windowsOnboardingPath);
   const home = temporaryHome();
@@ -91,7 +111,7 @@ test("native Windows verbose mode keeps technical installation diagnostics opt-i
 test("native main ends every default target with the approved Skills-only completion", async (t) => {
   const { main } = require(windowsOnboardingPath);
 
-  for (const target of ["codex", "claude", "pi", "dsh", "workbuddy", "all"]) {
+  for (const target of ["codex", "claude", "pi", "dsh", "workbuddy", "hermes", "all"]) {
     await t.test(target, async () => {
       const home = temporaryHome();
       const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), `rainskills-package-${target}-`));
@@ -107,9 +127,32 @@ test("native main ends every default target with the approved Skills-only comple
       });
 
       assert.equal(result.status, "skills-installed");
-      assertApprovedCapabilitySummary(output);
+      if (target === "hermes") assertHermesCapabilitySummary(output);
+      else assertApprovedCapabilitySummary(output);
     });
   }
+});
+
+test("native Windows detects Hermes from its agent environment", async () => {
+  const { main } = require(windowsOnboardingPath);
+  const home = temporaryHome();
+  const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-package-hermes-auto-"));
+  const output = [];
+  writeSkill(packageRoot, "rainbond-test");
+
+  const result = await main(["--force"], {
+    env: { AI_AGENT: "hermes-agent", RAINSKILLS_TELEMETRY_DISABLED: "1" },
+    home,
+    packageRoot,
+    logger(message) {
+      output.push(message);
+    },
+  });
+
+  assert.equal(result.status, "skills-installed");
+  assert.equal(fs.existsSync(path.join(home, ".hermes", "skills", "rainbond-test", "SKILL.md")), true);
+  assert.equal(fs.existsSync(path.join(home, ".codex", "skills")), false);
+  assertHermesCapabilitySummary(output);
 });
 
 function temporaryHome() {
@@ -305,6 +348,7 @@ test("Windows argument parsing rejects unknown input before installation", () =>
     path.join(home, ".pi", "agent", "skills"),
     path.join(home, ".dsh", "skills"),
     path.join(home, ".workbuddy-ai", "skills"),
+    path.join(home, ".hermes", "skills"),
   ]);
   assert.deepEqual(destinationsForTarget("pi", home, {}), [
     path.join(home, ".pi", "agent", "skills"),
@@ -314,6 +358,9 @@ test("Windows argument parsing rejects unknown input before installation", () =>
   ]);
   assert.deepEqual(destinationsForTarget("workbuddy", home, {}), [
     path.join(home, ".workbuddy-ai", "skills"),
+  ]);
+  assert.deepEqual(destinationsForTarget("hermes", home, {}), [
+    path.join(home, ".hermes", "skills"),
   ]);
   assert.throws(() => parseWindowsInstallerArgs(["--unknown"]), /未知参数/);
   assert.throws(() => parseWindowsInstallerArgs(["--dest"]), /--dest/);
@@ -1025,7 +1072,7 @@ test("native Windows installation reports one install result and each configured
   assert.equal(contexts[0].packageVersion, "1.0.0");
   assert.deepEqual(records.filter((event) => event.event_type === "agent_config_result")
     .map((event) => event.agent_type).sort(), [
-    "claude_code", "codex", "deepseek", "pi", "workbuddy",
+    "claude_code", "codex", "deepseek", "hermes_agent", "pi", "workbuddy",
   ]);
   assert.deepEqual(records.find((event) => event.event_type === "install_result"), {
     event_type: "install_result",

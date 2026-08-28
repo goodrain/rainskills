@@ -43,7 +43,7 @@ test("repository exposes one complete Rainskills marketplace entry", () => {
   assert.match(skill, /Do not ask the user to choose only one/i);
   assert.match(
     skill,
-    /Codex=`codex`.*Claude Code=`claude`.*Pi Agent=`pi`.*DeepSeek Harness=`dsh`.*WorkBuddy=`workbuddy`/
+    /Codex=`codex`.*Claude Code=`claude`.*Pi Agent=`pi`.*DeepSeek Harness=`dsh`.*WorkBuddy=`workbuddy`.*Hermes Agent=`hermes`/
   );
   assert.match(skill, /does not support OpenClaw/);
   assert.match(skill, /attached interactive terminal/i);
@@ -274,7 +274,7 @@ test("README documents one-product installation and adapter-neutral stable auto-
   assert.match(readme, /只跟随.*正式版/s);
   assert.match(readme, /RC.*不会.*自动升级/s);
   assert.match(readme, /升级只更新 Rainskills 自身，不触发 Rainbond/s);
-  assert.match(readme, /支持 Codex、Claude Code、Pi Agent、DeepSeek Harness 和 WorkBuddy/);
+  assert.match(readme, /支持 Codex、Claude Code、Pi Agent、DeepSeek Harness、WorkBuddy 和 Hermes Agent/);
   assert.match(readme, /不支持 OpenClaw 安装/);
   assert.doesNotMatch(readme, /npx --yes rainskills openclaw/);
   assert.match(readme, /只会看到一个.*Rainskills/s);
@@ -299,7 +299,7 @@ test("Pi uses the generic Skills and CLI path without restoring its adapter", ()
   const manifest = readJson("package.json");
   assert.match(read("SKILL.md"), /Pi Agent=`pi`/);
   assert.match(read("install.sh"), /\.pi\/agent\/skills/);
-  assert.match(read("README.md"), /Codex、Claude Code、Pi Agent、DeepSeek Harness 和 WorkBuddy/);
+  assert.match(read("README.md"), /Codex、Claude Code、Pi Agent、DeepSeek Harness、WorkBuddy 和 Hermes Agent/);
   assert.equal(manifest.pi, undefined);
   assert(!manifest.files.includes("pi/"));
   assert.equal(manifest.scripts["build:pi"], undefined);
@@ -317,4 +317,16 @@ test("DeepSeek Harness and WorkBuddy are documented as first-class hosts", () =>
   assert.match(skill, /DeepSeek Harness=`dsh`/);
   assert.match(skill, /WorkBuddy=`workbuddy`/);
   assert.match(read("rainbond-app-assistant/SKILL.md"), /priority over the built-in Sites skill/);
+});
+
+test("Hermes Agent uses the shared CLI profile and native skills home", () => {
+  const readme = read("README.md");
+  const skill = read("SKILL.md");
+
+  assert.match(readme, /npx --yes rainskills hermes/);
+  assert.match(readme, /HERMES_HOME.*\.hermes.*skills/s);
+  assert.match(readme, /\/reset/);
+  assert.match(skill, /Hermes Agent=`hermes`/);
+  assert.match(skill, /process[^\n]*action="wait"/);
+  assert.doesNotMatch(readme, /Hermes profile/);
 });

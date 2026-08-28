@@ -9,7 +9,7 @@ This is the single marketplace entry for the complete Rainskills product. The in
 
 ## Initialize
 
-1. Detect the current host client and map it to exactly one supported installer target: Codex=`codex`, Claude Code=`claude`, Pi Agent=`pi`, DeepSeek Harness=`dsh`, or WorkBuddy=`workbuddy`. All five use the same installed Skills and protected local Rainskills CLI; Pi and DeepSeek Harness have no separate MCP adapter or generated extension. DeepSeek Harness installs to `$DSH_HOME/skills` (default `~/.dsh/skills`). WorkBuddy installs to `$WORKBUDDY_CONFIG_DIR/skills` (default `~/.workbuddy-ai/skills`). The macOS, Linux, and WSL installer intentionally does not support OpenClaw; report that limitation instead of invoking an unsupported target. Do not ask the user which supported client they are currently using. If the host cannot be determined reliably, omit the target and let the installer ask.
+1. Detect the current host client and map it to exactly one supported installer target: Codex=`codex`, Claude Code=`claude`, Pi Agent=`pi`, DeepSeek Harness=`dsh`, WorkBuddy=`workbuddy`, or Hermes Agent=`hermes`. All six use the same CLI profile, installed Skills, and protected local Rainskills CLI; none requires a separate client MCP adapter. DeepSeek Harness installs to `$DSH_HOME/skills` (default `~/.dsh/skills`). WorkBuddy installs to `$WORKBUDDY_CONFIG_DIR/skills` (default `~/.workbuddy-ai/skills`). Hermes Agent installs to `$HERMES_HOME/skills` (default `~/.hermes/skills`); `AI_AGENT=hermes-agent` or `HERMES_AGENT=true` is a reliable fallback when the host must be detected from a terminal subprocess. The macOS, Linux, and WSL installer intentionally does not support OpenClaw; report that limitation instead of invoking an unsupported target. Do not ask the user which supported client they are currently using. If the host cannot be determined reliably, omit the target and let the installer ask.
 2. Resolve the directory containing this `SKILL.md`. On native Windows, if the adjacent `bin/rainskills.js` exists, run it by absolute path with the detected target in an attached interactive terminal: `node <skill-directory>/bin/rainskills.js <target>`. On macOS, Linux, or WSL, if the adjacent `install.sh` exists, run `bash <skill-directory>/install.sh <target>` the same way. Do not replace the installer with manual file copies.
 3. Keep stdin, stdout, and stderr attached. When `RAINSKILLS_USER_INPUT_REQUIRED` appears, pause for that installer choice. If the installer emits `rainskills.next-action.v1`, execute only its fixed `argv` through the same launcher; never evaluate output as a shell command. If the adjacent `bin/rainskills.js` exists, use it for fixed next actions; otherwise use the same versioned npm package fallback described below.
 4. Stay attached until every independent Skill is installed. Do not select, connect, or configure an application runtime during installation. In the user-facing response, output only the fixed completion message below.
@@ -23,6 +23,8 @@ Skills-only 安装不需要 Node.js；CDN fallback 只负责安装 Skill 文件�
 ## Completion Message
 
 The installer emits this text inside `RAINSKILLS_USER_MESSAGE_BEGIN:install.completed` and the matching END marker, followed by `RAINSKILLS_AGENT_SUMMARY_REQUIRED:include-next-actions`. Relay only the body exactly and print nothing else; do not expose the markers, summarize, reformat, add a source link, or add verification details. If the host still summarizes instead of relaying, its installation summary must retain at least one example from “下一步可以直接说”.
+
+For `target=hermes`, the emitted body additionally tells an already-open Hermes session to run `/reset` or start a new session so its cached Skill catalog includes every newly installed `rainbond-*` Skill. Relay that emitted Hermes body exactly; do not replace it with the generic example below.
 
 ```text
 Rainskills 安装完成，下一条消息即可直接使用。
@@ -48,6 +50,8 @@ Rainskills 安装完成，下一条消息即可直接使用。
 
 Codex 中命令工具一旦返回 `session_id`，必须立即对该 `session_id` 反复调用 `write_stdin`（空输入轮询），直到工具返回 `exit_code`。连接器输出 `[RAINSKILLS_AGENT_WAIT_REQUIRED:runtime-connect]` 后进入上述轮询；看到 `[RAINSKILLS_AGENT_WAIT_COMPLETE:runtime-connect]` 后仍须继续轮询，直到取得退出码和最终 JSON。
 
+Hermes Agent 中必须使用 `terminal` 以 `background=true` 启动授权命令；取得 `session_id` 后，只对同一会话按需调用 `process(action="poll")` 获取授权地址，再调用 `process(action="wait")` 等待退出。`wait` 超时时只能继续等待同一 `session_id`；不得把后台启动或浏览器成功页面当作授权完成，也不得另起 `runtime status`。
+
 DeepSeek Harness 和 WorkBuddy 也必须保持原命令附着直到退出；如果宿主把长命令转成持久终端或后台任务，只能轮询该原始命令句柄，不得另起 `runtime status` 推测授权结果。WorkBuddy 安装后若当前任务的 Skill 清单尚未刷新，在下一条业务动作前先刷新 Skill 列表或新建任务，不得退回内置 Sites 代替 Rainbond 部署。
 
 Rainskills 只保存一个全局运行环境，不维护环境列表、名称、默认值或环境 ID。使用固定 launcher `node <home>/.rainbond/lib/rainskills/bin/rainskills.js`（运行包版本 `rainskills@0.1.30`）：
@@ -57,6 +61,8 @@ Rainskills 只保存一个全局运行环境，不维护环境列表、名称、
 - 安装私有环境：执行 `runtime connect <target> --install-private --location local|server`。
 - 重新授权：执行 `runtime reconnect <target>`；必须进入浏览器 Device Flow，不复用 Shell 中缓存的 JWT。
 - 更换环境：明确告知用户会替换当前唯一环境；新授权和 live probe 成功后再覆盖凭据。
+
+固定 contract 中的 `<target>` 必须替换为当前宿主：Codex=`codex`、Claude Code=`claude`、Pi Agent=`pi`、DeepSeek Harness=`dsh`、WorkBuddy=`workbuddy`、Hermes Agent=`hermes`。
 
 所有 Rainbond 查询和变更继续通过 `~/.rainbond/bin/rainskills-tools.js`。不得配置客户端 MCP，也不得恢复环境枚举、业务 operation 生命周期、环境 ID 或 intent 恢复协议。
 

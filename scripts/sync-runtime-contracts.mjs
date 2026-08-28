@@ -48,6 +48,10 @@ const requiredAuthorizationGuidance = [
   "RAINSKILLS_AGENT_WAIT_COMPLETE:runtime-connect",
   "DeepSeek Harness=`dsh`",
   "WorkBuddy=`workbuddy`",
+  "Hermes Agent=`hermes`",
+  "background=true",
+  "action=\"wait\"",
+  "单引号 heredoc",
 ];
 
 function runtimeGate(source, skillId) {

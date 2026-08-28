@@ -24,6 +24,7 @@ const keywords = [
   "claude-code",
   "deepseek-harness",
   "workbuddy",
+  "hermes-agent",
   "skills",
   "installer",
 ];
