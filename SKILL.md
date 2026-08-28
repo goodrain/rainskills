@@ -50,7 +50,7 @@ Codex 中命令工具一旦返回 `session_id`，必须立即对该 `session_id`
 
 DeepSeek Harness 和 WorkBuddy 也必须保持原命令附着直到退出；如果宿主把长命令转成持久终端或后台任务，只能轮询该原始命令句柄，不得另起 `runtime status` 推测授权结果。WorkBuddy 安装后若当前任务的 Skill 清单尚未刷新，在下一条业务动作前先刷新 Skill 列表或新建任务，不得退回内置 Sites 代替 Rainbond 部署。
 
-Rainskills 只保存一个全局运行环境，不维护环境列表、名称、默认值或环境 ID。使用固定 launcher `node <home>/.rainbond/lib/rainskills/bin/rainskills.js`（运行包版本 `rainskills@0.1.29`）：
+Rainskills 只保存一个全局运行环境，不维护环境列表、名称、默认值或环境 ID。使用固定 launcher `node <home>/.rainbond/lib/rainskills/bin/rainskills.js`（运行包版本 `rainskills@0.1.30`）：
 
 - 状态：执行 `runtime status --json`。
 - 首次连接：执行 `runtime connect <target> --saas` 或 `runtime connect <target> --rainbond-url <Console origin>`。
