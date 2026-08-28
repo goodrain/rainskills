@@ -5,6 +5,8 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 
+process.env.RAINSKILLS_TELEMETRY_DISABLED = "1";
+
 const { createPortableSecureStateStore } = require("./helpers/portable-secure-state.js");
 
 const repoRoot = path.resolve(__dirname, "..");
@@ -905,6 +907,7 @@ test("native authorization orchestration falls back from Device Flow and validat
     telemetryFactory(context) {
       return createLifecycleTelemetry({
         ...context,
+        enabled: true,
         directory: telemetryDirectory,
         fetchImpl: async () => ({ ok: true, status: 200 }),
       });
@@ -989,6 +992,71 @@ test("native main does not authorize or configure an explicitly supplied SaaS ru
   assert.equal(calls.length, 0);
   assert.equal(fs.existsSync(path.join(home, ".rainbond")), false);
   assertApprovedCapabilitySummary(output);
+});
+
+test("native Windows installation reports one install result and each configured agent", async () => {
+  const { main } = require(windowsOnboardingPath);
+  const home = temporaryHome();
+  const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-package-v2-telemetry-"));
+  writeSkill(packageRoot, "rainbond-test");
+  fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ version: "1.0.0" }));
+  const records = [];
+  const contexts = [];
+
+  const result = await main(["all", "--force"], {
+    env: { RAINSKILLS_TELEMETRY_DISABLED: "0" },
+    home,
+    packageRoot,
+    installLocalCli: async () => ({ status: "installed" }),
+    logger() {},
+    resultTelemetryFactory(context) {
+      contexts.push(context);
+      return {
+        record(event) {
+          records.push(event);
+          return { recorded: true, delivery: Promise.resolve(true) };
+        },
+      };
+    },
+  });
+
+  assert.equal(result.status, "skills-installed");
+  assert.equal(contexts.length, 1);
+  assert.equal(contexts[0].packageVersion, "1.0.0");
+  assert.deepEqual(records.filter((event) => event.event_type === "agent_config_result")
+    .map((event) => event.agent_type).sort(), [
+    "claude_code", "codex", "deepseek", "pi", "workbuddy",
+  ]);
+  assert.deepEqual(records.find((event) => event.event_type === "install_result"), {
+    event_type: "install_result",
+    install_attempt_id: contexts[0].installAttemptId,
+    action: "install",
+    os_type: "windows",
+    os_arch: contexts[0].osArch,
+    execution_environment: "native",
+    status: "success",
+  });
+});
+
+test("native Windows installation remains fail-open when telemetry initialization fails", async () => {
+  const { main } = require(windowsOnboardingPath);
+  const home = temporaryHome();
+  const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-package-v2-fail-open-"));
+  writeSkill(packageRoot, "rainbond-test");
+  fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ version: "1.0.0" }));
+
+  const result = await main(["codex", "--force"], {
+    env: { RAINSKILLS_TELEMETRY_DISABLED: "0" },
+    home,
+    packageRoot,
+    installLocalCli: async () => ({ status: "installed" }),
+    logger() {},
+    resultTelemetryFactory() {
+      throw new Error("telemetry storage unavailable");
+    },
+  });
+
+  assert.equal(result.status, "skills-installed");
 });
 
 test("native deployment selection preserves Cloud, private URL, and no-platform choices", async () => {

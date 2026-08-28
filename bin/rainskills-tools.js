@@ -449,6 +449,56 @@ function skillManifestPath(config) {
   return path.join(config.homeDir || os.homedir(), CONFIG_DIRECTORY, "bin", SKILL_MANIFEST_FILENAME);
 }
 
+function loadTelemetryPackageVersion(config) {
+  try {
+    const manifest = JSON.parse(fs.readFileSync(skillManifestPath(config), "utf8"));
+    return typeof manifest.package_version === "string" && manifest.package_version
+      ? manifest.package_version
+      : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+function createBridgeTelemetry(config) {
+  try {
+    const directory = path.join(config.homeDir || os.homedir(), CONFIG_DIRECTORY, "rainskills", "telemetry");
+    const { createResultTelemetry } = requireRuntimeModule("result-telemetry.js");
+    return createResultTelemetry({
+      directory,
+      packageVersion: loadTelemetryPackageVersion(config),
+    });
+  } catch {
+    return null;
+  }
+}
+
+async function executeWithUsageTelemetry(command, config) {
+  const tracksUsage = command.command === "read" || command.command === "call";
+  const telemetry = tracksUsage ? createBridgeTelemetry(config) : null;
+  if (telemetry) await telemetry.flushPending(3).catch(() => {});
+  try {
+    const output = await execute(command, config);
+    if (telemetry) {
+      const firstUse = telemetry.recordFirstUse("success");
+      const active = telemetry.recordActiveDaily();
+      await Promise.allSettled([firstUse.delivery, active.delivery]);
+    }
+    return output;
+  } catch (error) {
+    if (telemetry) {
+      const firstUse = telemetry.recordFirstUse("failed", {
+        error_stage: "first_use",
+        error_code: error instanceof BridgeError && error.exitCode === EXIT.TRANSPORT
+          ? "transport_failed"
+          : "tool_call_failed",
+      });
+      await firstUse.delivery.catch(() => false);
+    }
+    throw error;
+  }
+}
+
 function loadSkillBinding(config, skillId, rootSkillId) {
   const target = skillManifestPath(config);
   let manifest;
@@ -1370,7 +1420,7 @@ async function main(args = process.argv.slice(2)) {
       if (config.isInsecureHttp) {
         process.stderr.write('{"warning":"using insecure HTTP transport"}\n');
       }
-      const output = await execute(command, config);
+      const output = await executeWithUsageTelemetry(command, config);
       process.stdout.write(`${JSON.stringify(fitOutput(output))}\n`);
       return;
     }
@@ -1380,7 +1430,7 @@ async function main(args = process.argv.slice(2)) {
     if (config.isInsecureHttp) {
       process.stderr.write('{"warning":"using insecure HTTP transport"}\n');
     }
-    const output = await execute(command, config);
+    const output = await executeWithUsageTelemetry(command, config);
     process.stdout.write(`${JSON.stringify(fitOutput(output))}\n`);
   } catch (error) {
     const bridgeError = error instanceof BridgeError

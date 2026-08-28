@@ -74,7 +74,6 @@ async function validateMcp({
     timedOut = true;
     controller.abort();
   }, timeoutMs);
-  timeout.unref?.();
   try {
     const response = await fetchImpl(url, {
       method: "POST",
