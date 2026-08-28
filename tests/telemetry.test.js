@@ -10,6 +10,7 @@ const { createLifecycleTelemetry } = require("../rainbond-platform-installer/scr
 const {
   createResultTelemetry,
   ensureInstallationId,
+  normalizeAgent,
   readConfiguredAgent,
 } = require("../rainbond-platform-installer/scripts/result-telemetry.js");
 
@@ -310,4 +311,10 @@ test("configured agent is only attributed when exactly one target is known", () 
 
   fs.writeFileSync(path.join(directory, "configured-agents.json"), JSON.stringify(["codex", "pi"]), { mode: 0o600 });
   assert.equal(readConfiguredAgent(directory), "unknown");
+});
+
+test("Hermes telemetry uses one stable agent identifier", () => {
+  assert.equal(normalizeAgent("hermes"), "hermes_agent");
+  assert.equal(normalizeAgent("hermes-agent"), "hermes_agent");
+  assert.equal(normalizeAgent("hermes_agent"), "hermes_agent");
 });

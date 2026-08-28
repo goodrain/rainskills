@@ -119,6 +119,16 @@ if actual_bullets != expected_bullets:
 PY
 }
 
+assert_hermes_capability_summary() {
+  local path="$1"
+  assert_contains "$path" "[RAINSKILLS_USER_MESSAGE_BEGIN:install.completed]"
+  assert_contains "$path" "Rainskills 安装完成"
+  assert_contains "$path" "Hermes"
+  assert_contains "$path" "/reset"
+  assert_contains "$path" "[RAINSKILLS_USER_MESSAGE_END:install.completed]"
+  assert_contains "$path" "[RAINSKILLS_AGENT_SUMMARY_REQUIRED:include-next-actions]"
+}
+
 wait_for_file_line_count() {
   local path="$1"
   local expected="$2"
@@ -515,6 +525,7 @@ run_installer() {
     HOME="$workdir/home" \
     DSH_HOME="${TEST_DSH_HOME:-$workdir/home/.dsh}" \
     WORKBUDDY_CONFIG_DIR="${TEST_WORKBUDDY_CONFIG_DIR:-$workdir/home/.workbuddy-ai}" \
+    HERMES_HOME="${TEST_HERMES_HOME:-$workdir/home/.hermes}" \
     SHELL="/bin/zsh" \
     TEST_LOG_DIR="$workdir/logs" \
     PATH="$workdir/bin:$(dirname "$TEST_SUITE_REAL_NODE"):/usr/bin:/bin" \
@@ -829,7 +840,7 @@ test_default_install_is_skills_only() {
 test_skills_only_completion_contract_for_every_posix_target() {
   local target tmpdir output_file custom_destination
 
-  for target in codex claude pi dsh workbuddy all; do
+  for target in codex claude pi dsh workbuddy hermes all; do
     tmpdir="$(mktemp -d)"
     mkdir -p "$tmpdir/home" "$tmpdir/logs"
     make_fake_commands "$tmpdir/bin"
@@ -837,7 +848,11 @@ test_skills_only_completion_contract_for_every_posix_target() {
 
     run_installer "$tmpdir" "$target" --non-interactive --force >"$output_file" 2>&1
 
-    assert_exact_capability_summary "$output_file"
+    if [[ "$target" == "hermes" ]]; then
+      assert_hermes_capability_summary "$output_file"
+    else
+      assert_exact_capability_summary "$output_file"
+    fi
     if [[ "$target" == "pi" || "$target" == "all" ]]; then
       assert_file_exists "$tmpdir/home/.pi/agent/skills/rainbond-app-assistant/SKILL.md"
     fi
@@ -846,6 +861,9 @@ test_skills_only_completion_contract_for_every_posix_target() {
     fi
     if [[ "$target" == "workbuddy" || "$target" == "all" ]]; then
       assert_file_exists "$tmpdir/home/.workbuddy-ai/skills/rainbond-app-assistant/SKILL.md"
+    fi
+    if [[ "$target" == "hermes" || "$target" == "all" ]]; then
+      assert_file_exists "$tmpdir/home/.hermes/skills/rainbond-app-assistant/SKILL.md"
     fi
     rm -rf "$tmpdir"
   done
@@ -869,11 +887,59 @@ test_skills_only_completion_contract_for_every_posix_target() {
   output_file="$tmpdir/config-homes.out"
   TEST_DSH_HOME="$tmpdir/dsh-home" \
   TEST_WORKBUDDY_CONFIG_DIR="$tmpdir/workbuddy-home" \
+  TEST_HERMES_HOME="$tmpdir/hermes-home" \
     run_installer "$tmpdir" all --non-interactive --force >"$output_file" 2>&1
   assert_exact_capability_summary "$output_file"
   assert_file_exists "$tmpdir/dsh-home/skills/rainbond-app-assistant/SKILL.md"
   assert_file_exists "$tmpdir/workbuddy-home/skills/rainbond-app-assistant/SKILL.md"
+  assert_file_exists "$tmpdir/hermes-home/skills/rainbond-app-assistant/SKILL.md"
   rm -rf "$tmpdir"
+}
+
+test_hermes_environment_auto_detection_uses_only_hermes_home() {
+  local tmpdir output_file
+  tmpdir="$(mktemp -d)"
+  trap 'rm -rf "$tmpdir"' RETURN
+  mkdir -p "$tmpdir/home" "$tmpdir/logs"
+  make_fake_commands "$tmpdir/bin"
+  output_file="$tmpdir/hermes-auto.out"
+
+  AI_AGENT=hermes-agent run_installer "$tmpdir" --non-interactive --force >"$output_file" 2>&1
+
+  assert_hermes_capability_summary "$output_file"
+  assert_file_exists "$tmpdir/home/.hermes/skills/rainbond-app-assistant/SKILL.md"
+  assert_file_not_exists "$tmpdir/home/.codex/skills"
+  assert_file_not_exists "$tmpdir/home/.claude/skills"
+}
+
+test_skills_only_install_skips_the_local_cli_on_legacy_node() {
+  local tmpdir output_file node_log
+  tmpdir="$(mktemp -d)"
+  trap 'rm -rf "$tmpdir"' RETURN
+  mkdir -p "$tmpdir/home" "$tmpdir/logs" "$tmpdir/bin"
+  make_fake_commands "$tmpdir/bin"
+  output_file="$tmpdir/legacy-node.out"
+  node_log="$tmpdir/logs/legacy-node.log"
+  cat >"$tmpdir/bin/node" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$TEST_LOG_DIR/legacy-node.log"
+if [[ "${1:-}" == "--version" || "${1:-}" == "-v" ]]; then
+  printf 'v14.21.3\n'
+  exit 0
+fi
+exit 91
+EOF
+  chmod +x "$tmpdir/bin/node"
+
+  run_installer "$tmpdir" hermes --non-interactive --force >"$output_file" 2>&1
+
+  assert_hermes_capability_summary "$output_file"
+  assert_file_exists "$tmpdir/home/.hermes/skills/rainbond-app-assistant/SKILL.md"
+  assert_file_not_exists "$tmpdir/home/.rainbond/lib/rainskills"
+  assert_contains "$node_log" "--version"
+  assert_not_contains "$node_log" "install-local-cli.mjs"
+  assert_not_contains "$output_file" "SyntaxError"
+  assert_not_contains "$output_file" "本地 CLI 安装失败"
 }
 
 test_posix_all_target_installs_every_skill_set_and_preserves_force_counts() {
@@ -886,6 +952,7 @@ test_posix_all_target_installs_every_skill_set_and_preserves_force_counts() {
     "$tmpdir/home/.pi/agent/skills/rainbond-app-assistant" \
     "$tmpdir/home/.dsh/skills/rainbond-app-assistant" \
     "$tmpdir/home/.workbuddy-ai/skills/rainbond-app-assistant" \
+    "$tmpdir/home/.hermes/skills/rainbond-app-assistant" \
     "$tmpdir/logs"
   make_fake_commands "$tmpdir/bin"
   printf 'old codex skill\n' > "$tmpdir/home/.codex/skills/rainbond-app-assistant/SKILL.md"
@@ -893,13 +960,14 @@ test_posix_all_target_installs_every_skill_set_and_preserves_force_counts() {
   printf 'old pi skill\n' > "$tmpdir/home/.pi/agent/skills/rainbond-app-assistant/SKILL.md"
   printf 'old dsh skill\n' > "$tmpdir/home/.dsh/skills/rainbond-app-assistant/SKILL.md"
   printf 'old workbuddy skill\n' > "$tmpdir/home/.workbuddy-ai/skills/rainbond-app-assistant/SKILL.md"
+  printf 'old hermes skill\n' > "$tmpdir/home/.hermes/skills/rainbond-app-assistant/SKILL.md"
   source_skill="$REPO_ROOT/rainbond-app-assistant/SKILL.md"
   skill_count="$(find "$REPO_ROOT" -maxdepth 1 -mindepth 1 -type d -name 'rainbond-*' | wc -l | tr -d ' ')"
   if [[ -f "$REPO_ROOT/marketplace/rainskills/skills/rainskills/SKILL.md" ]]; then
     skill_count=$((skill_count + 1))
   fi
-  expected_new=$(( (skill_count - 1) * 5 ))
-  expected_unchanged=$(( skill_count * 5 ))
+  expected_new=$(( (skill_count - 1) * 6 ))
+  expected_unchanged=$(( skill_count * 6 ))
   output_file="$tmpdir/force.out"
   second_output="$tmpdir/unchanged.out"
 
@@ -915,8 +983,10 @@ test_posix_all_target_installs_every_skill_set_and_preserves_force_counts() {
     || fail "DeepSeek Harness pre-existing Skill was not force-overwritten"
   cmp -s "$source_skill" "$tmpdir/home/.workbuddy-ai/skills/rainbond-app-assistant/SKILL.md" \
     || fail "WorkBuddy pre-existing Skill was not force-overwritten"
+  cmp -s "$source_skill" "$tmpdir/home/.hermes/skills/rainbond-app-assistant/SKILL.md" \
+    || fail "Hermes pre-existing Skill was not force-overwritten"
   assert_contains "$output_file" \
-    "安装完成。本次：${expected_new} 项新装 / 0 项已更新 / 0 项已是最新 / 5 项强制覆盖"
+    "安装完成。本次：${expected_new} 项新装 / 0 项已更新 / 0 项已是最新 / 6 项强制覆盖"
 
   run_installer "$tmpdir" all --non-interactive --verbose >"$second_output" 2>&1
   assert_contains "$second_output" \
@@ -1637,6 +1707,10 @@ printf 'RUN: test_default_install_is_skills_only\n'
 test_default_install_is_skills_only
 printf 'RUN: test_skills_only_completion_contract_for_every_posix_target\n'
 test_skills_only_completion_contract_for_every_posix_target
+printf 'RUN: test_hermes_environment_auto_detection_uses_only_hermes_home\n'
+test_hermes_environment_auto_detection_uses_only_hermes_home
+printf 'RUN: test_skills_only_install_skips_the_local_cli_on_legacy_node\n'
+test_skills_only_install_skips_the_local_cli_on_legacy_node
 printf 'RUN: test_posix_all_target_installs_every_skill_set_and_preserves_force_counts\n'
 test_posix_all_target_installs_every_skill_set_and_preserves_force_counts
 printf 'RUN: test_interactive_prompts_are_visible\n'

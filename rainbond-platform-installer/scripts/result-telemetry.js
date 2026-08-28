@@ -8,7 +8,7 @@ const { randomUUID: defaultRandomUUID } = require("node:crypto");
 const SCHEMA = "rainskills.telemetry-event.v2";
 const DEFAULT_REPORT_URL = "https://log.rainbond.com/api/rainskills/events";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const AGENTS = new Set(["codex", "pi", "claude_code", "deepseek", "workbuddy", "other", "unknown"]);
+const AGENTS = new Set(["codex", "pi", "claude_code", "deepseek", "workbuddy", "hermes_agent", "other", "unknown"]);
 const MAX_PENDING_EVENTS = 100;
 const MAX_PENDING_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -62,6 +62,8 @@ function normalizeAgent(value) {
     claude: "claude_code",
     dsh: "deepseek",
     deepseek_harness: "deepseek",
+    hermes: "hermes_agent",
+    "hermes-agent": "hermes_agent",
   };
   const normalized = aliases[value] || value;
   return AGENTS.has(normalized) ? normalized : "unknown";

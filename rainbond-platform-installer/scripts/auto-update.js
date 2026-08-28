@@ -50,9 +50,10 @@ const DEFAULT_AGENT_ROOTS = Object.freeze([
   [".codex", "skills"],
   [".claude", "skills"],
   [".agents", "skills"],
+  [".hermes", "skills"],
 ]);
 const AUTO_UPDATE_ENVIRONMENT_KEYS = Object.freeze([
-  "HOME", "USERPROFILE", "PATH", "Path", "SystemRoot", "ComSpec",
+  "HOME", "USERPROFILE", "HERMES_HOME", "PATH", "Path", "SystemRoot", "ComSpec",
   "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL",
   "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
 ]);

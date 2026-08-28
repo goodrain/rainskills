@@ -1,6 +1,6 @@
 # Rainskills
 
-Rainskills 是一组面向应用识别、部署、排障和交付的 AI Skills，支持 Codex、Claude Code、Pi Agent、DeepSeek Harness 和 WorkBuddy。用户在市场中只会看到一个 `Rainskills` 产品，安装后 11 个 `rainbond-*` Skill 仍会独立触发。
+Rainskills 是一组面向应用识别、部署、排障和交付的 AI Skills，支持 Codex、Claude Code、Pi Agent、DeepSeek Harness、WorkBuddy 和 Hermes Agent。用户在市场中只会看到一个 `Rainskills` 产品，安装后 11 个 `rainbond-*` Skill 仍会独立触发。
 
 ## 安装
 
@@ -57,7 +57,15 @@ npx --yes rainskills workbuddy
 
 默认安装到 `${WORKBUDDY_CONFIG_DIR:-~/.workbuddy-ai}/skills`。如果安装发生在一个已经打开的 WorkBuddy 任务中，先刷新 Skill 列表或新建任务；部署时明确指定 Rainbond/Rainskills，或让项目保留 `rainbond.app.json`、`.rainbond/local.json` 标记，以避免被内置 Sites 路由抢占。
 
-安装流程支持 Codex、Claude Code、Pi Agent、DeepSeek Harness 和 WorkBuddy；所有 Agent 共用同一组 Skills 和本地 Rainskills CLI，不提供单独的客户端 MCP adapter。macOS、Linux 和 WSL 不支持 OpenClaw 安装。不要手工复制 Skill、拼接凭据或修改 Agent 配置。
+Hermes Agent：
+
+```bash
+npx --yes rainskills hermes
+```
+
+默认安装到 `${HERMES_HOME:-~/.hermes}/skills`，与其他宿主共用同一 CLI profile 和本地 Rainskills CLI，不配置客户端 MCP。如果安装发生在一个已经打开的 Hermes 会话中，执行 `/reset` 或新建会话后再使用新安装的 Skills。
+
+安装流程支持 Codex、Claude Code、Pi Agent、DeepSeek Harness、WorkBuddy 和 Hermes Agent；所有 Agent 共用同一组 Skills、CLI profile 和本地 Rainskills CLI，不提供单独的客户端 MCP adapter。macOS、Linux 和 WSL 不支持 OpenClaw 安装。不要手工复制 Skill、拼接凭据或修改 Agent 配置。
 
 ## 安装完成时用户会看到什么
 

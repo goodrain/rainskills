@@ -331,6 +331,56 @@ test("the packed default installer installs only Skills and prints the approved 
   assert.equal(curlCalls.includes("/console/"), false);
 });
 
+test("the packed installer supports a custom Hermes profile home", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-hermes-install-"));
+  const packDir = path.join(tempDir, "pack");
+  const home = path.join(tempDir, "home");
+  const hermesHome = path.join(tempDir, "hermes-profile");
+  fs.mkdirSync(packDir);
+  fs.mkdirSync(home);
+
+  const packed = packPackage(packDir);
+  const result = spawnSync(
+    npmCommand,
+    [
+      "exec",
+      "--yes",
+      `--package=${packed.tarballPath}`,
+      "--",
+      "rainskills",
+      "hermes",
+      "--force",
+    ],
+    {
+      cwd: tempDir,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        npm_config_offline: "true",
+        npm_config_cache: path.join(os.homedir(), ".npm"),
+        HOME: home,
+        HERMES_HOME: hermesHome,
+        RAINBOND_JWT: "",
+        RAINBOND_PASSWORD: "",
+        RAINBOND_URL: "",
+        RAINBOND_USERNAME: "",
+      },
+    }
+  );
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const output = `${result.stdout}\n${result.stderr}`.replace(/\r\n/g, "\n");
+  assert.match(output, /Hermes[^\n]*\/reset|\/reset[^\n]*Hermes/);
+  assert.equal(fs.existsSync(path.join(hermesHome, "skills", "rainbond-app-assistant", "SKILL.md")), true);
+  assert.equal(fs.existsSync(path.join(hermesHome, "skills", "rainskills", "SKILL.md")), true);
+  assert.equal(fs.existsSync(path.join(home, ".codex", "skills")), false);
+  const updateState = JSON.parse(fs.readFileSync(
+    path.join(home, ".rainbond", "rainskills", "auto-update-v1.json"),
+    "utf8"
+  ));
+  assert.deepEqual(updateState.destinations, [path.join(hermesHome, "skills")]);
+});
+
 test("the packed artifact exposes a real npx command", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-npx-"));
   const packed = packPackage(tempDir);
