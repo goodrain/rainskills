@@ -176,6 +176,7 @@ VALIDATED_TOKEN=""
 OBTAINED_RAINBOND_TOKEN=""
 RAINSKILLS_INSTALL_REPORT_URL="https://log.rainbond.com/api/rainskills/installations"
 RAINSKILLS_LIFECYCLE_REPORT_URL="https://log.rainbond.com/api/rainskills/lifecycle-events"
+RAINSKILLS_TELEMETRY_REPORT_URL="${RAINSKILLS_TELEMETRY_REPORT_URL:-https://log.rainbond.com/api/rainskills/events}"
 RAINSKILLS_INSTALL_ATTEMPT_ID="${RAINSKILLS_INSTALL_ATTEMPT_ID:-}"
 RAINSKILLS_INSTALL_EID=""
 RAINSKILLS_INSTALL_CLIENT="unknown"
@@ -183,6 +184,8 @@ RAINSKILLS_INSTALL_ACTION="install"
 RAINSKILLS_INSTALL_FAILURE_STAGE="bootstrap"
 RAINSKILLS_INSTALL_FAILURE_CATEGORY="invalid_arguments"
 RAINSKILLS_INSTALL_TERMINAL_REPORTED=0
+RAINSKILLS_V2_TERMINAL_REPORTED=0
+RAINSKILLS_V2_CURRENT_AGENT=""
 RAINSKILLS_TELEMETRY_SEQUENCE=0
 RAINSKILLS_BROWSER_LOGIN_SERVER_PID=""
 RAINSKILLS_BROWSER_LOGIN_READER_PID=""
@@ -286,11 +289,280 @@ new_rainskills_install_attempt_id() {
     python3 - <<'PY'
 import uuid
 
-print(uuid.uuid4().hex)
+print(str(uuid.uuid4()))
 PY
     return 0
   fi
   printf '%s-%s-%s\n' "$(date +%s)" "$$" "${RANDOM:-0}"
+}
+
+rainskills_v2_enabled() {
+  [[ "${RAINSKILLS_TELEMETRY_DISABLED:-0}" != "1" ]]
+}
+
+initialize_rainskills_v2_identity() {
+  rainskills_v2_enabled || return 0
+  command -v python3 >/dev/null 2>&1 || return 0
+  local telemetry_dir package_file
+  telemetry_dir="${RAINSKILLS_TELEMETRY_DIR:-${HOME:-/tmp}/.rainbond/rainskills/telemetry}"
+  package_file="$SCRIPT_DIR/package.json"
+  RAINSKILLS_TELEMETRY_INSTALLATION_ID="$({
+    python3 - "$telemetry_dir" "${RAINSKILLS_TELEMETRY_INSTALLATION_ID:-}" <<'PY'
+import os
+import re
+import sys
+import uuid
+
+directory, provided = sys.argv[1:]
+pattern = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", re.I)
+os.makedirs(directory, mode=0o700, exist_ok=True)
+os.chmod(directory, 0o700)
+path = os.path.join(directory, "installation-id")
+value = provided.strip()
+if not pattern.match(value):
+    try:
+        value = open(path, encoding="utf-8").read().strip()
+    except Exception:
+        value = ""
+if not pattern.match(value):
+    value = str(uuid.uuid4())
+    temporary = "{}.{}.tmp".format(path, os.getpid())
+    with open(temporary, "x", encoding="utf-8") as stream:
+        stream.write(value + "\n")
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, path)
+os.chmod(path, 0o600)
+print(value)
+PY
+  } 2>/dev/null || true)"
+  if [[ -z "${RAINSKILLS_PACKAGE_VERSION:-}" && -f "$package_file" ]]; then
+    RAINSKILLS_PACKAGE_VERSION="$({
+      python3 - "$package_file" <<'PY'
+import json
+import sys
+
+try:
+    value = json.load(open(sys.argv[1], encoding="utf-8")).get("version")
+except Exception:
+    value = None
+print(value if isinstance(value, str) and value else "unknown")
+PY
+    } 2>/dev/null || printf 'unknown')"
+  fi
+  export RAINSKILLS_TELEMETRY_INSTALLATION_ID RAINSKILLS_PACKAGE_VERSION
+}
+
+rainskills_v2_action() {
+  case "$RAINSKILLS_INSTALL_ACTION" in
+    install|refresh|upgrade|repair) printf '%s\n' "$RAINSKILLS_INSTALL_ACTION" ;;
+    connect) printf 'repair\n' ;;
+    *) printf 'install\n' ;;
+  esac
+}
+
+rainskills_v2_agent() {
+  case "$1" in
+    codex) printf 'codex\n' ;;
+    claude|claude_code) printf 'claude_code\n' ;;
+    pi) printf 'pi\n' ;;
+    dsh|deepseek_harness|deepseek) printf 'deepseek\n' ;;
+    workbuddy) printf 'workbuddy\n' ;;
+    other) printf 'other\n' ;;
+    *) printf 'unknown\n' ;;
+  esac
+}
+
+rainskills_v2_os_type() {
+  case "$(uname -s 2>/dev/null || true)" in
+    Darwin) printf 'darwin\n' ;;
+    MINGW*|MSYS*|CYGWIN*) printf 'windows\n' ;;
+    *) printf 'linux\n' ;;
+  esac
+}
+
+rainskills_v2_os_arch() {
+  case "$(uname -m 2>/dev/null || true)" in
+    x86_64|amd64) printf 'amd64\n' ;;
+    arm64|aarch64) printf 'arm64\n' ;;
+    "") printf 'unknown\n' ;;
+    *) printf 'other\n' ;;
+  esac
+}
+
+rainskills_v2_execution_environment() {
+  if [[ -n "${WSL_DISTRO_NAME:-}" || -n "${WSL_INTEROP:-}" ]]; then
+    printf 'wsl\n'
+  elif [[ -n "${SSH_CONNECTION:-}" || -n "${SSH_CLIENT:-}" ]]; then
+    printf 'ssh\n'
+  elif [[ -n "${container:-}" ]]; then
+    printf 'container\n'
+  else
+    printf 'native\n'
+  fi
+}
+
+rainskills_v2_error_stage() {
+  case "${RAINSKILLS_INSTALL_FAILURE_STAGE:-install}" in
+    bootstrap) printf 'preflight\n' ;;
+    download) printf 'download\n' ;;
+    skill_installation) printf 'agent_configuration\n' ;;
+    authorization) printf 'authorization\n' ;;
+    verification) printf 'verification\n' ;;
+    configuration) printf 'agent_configuration\n' ;;
+    *) printf 'install\n' ;;
+  esac
+}
+
+rainskills_v2_error_code() {
+  case "${RAINSKILLS_INSTALL_FAILURE_CATEGORY:-unknown}" in
+    invalid_arguments) printf 'invalid_arguments\n' ;;
+    tarball_unavailable|download_failed) printf 'download_failed\n' ;;
+    authorization_failed) printf 'authorization_failed\n' ;;
+    mcp_verification_failed) printf 'verification_failed\n' ;;
+    mcp_configuration_failed|cli_configuration_failed|skill_installation_failed) printf 'agent_config_failed\n' ;;
+    network_unreachable) printf 'network_unreachable\n' ;;
+    *) printf 'unknown\n' ;;
+  esac
+}
+
+report_rainskills_v2_event() {
+  local event_type="$1"
+  local status="${2:-}"
+  local agent="${3:-}"
+  local error_stage="${4:-}"
+  local error_code="${5:-}"
+  rainskills_v2_enabled || return 0
+  [[ -n "${RAINSKILLS_TELEMETRY_INSTALLATION_ID:-}" ]] || return 0
+  command -v curl >/dev/null 2>&1 || return 0
+  command -v python3 >/dev/null 2>&1 || return 0
+
+  local payload telemetry_dir
+  telemetry_dir="${RAINSKILLS_TELEMETRY_DIR:-${HOME:-/tmp}/.rainbond/rainskills/telemetry}"
+  payload="$({
+    python3 - \
+      "$event_type" \
+      "$RAINSKILLS_TELEMETRY_INSTALLATION_ID" \
+      "$RAINSKILLS_INSTALL_ATTEMPT_ID" \
+      "${RAINSKILLS_PACKAGE_VERSION:-unknown}" \
+      "$(rainskills_v2_action)" \
+      "$(rainskills_v2_agent "$agent")" \
+      "$(rainskills_v2_os_type)" \
+      "$(rainskills_v2_os_arch)" \
+      "$(rainskills_v2_execution_environment)" \
+      "$status" \
+      "$error_stage" \
+      "$error_code" \
+      "$telemetry_dir" <<'PY'
+import datetime
+import json
+import os
+import sys
+import time
+import uuid
+
+(event_type, installation_id, attempt_id, package_version, action, agent,
+ os_type, os_arch, execution_environment, status, error_stage, error_code,
+ telemetry_dir) = sys.argv[1:]
+event = {
+    "schema": "rainskills.telemetry-event.v2",
+    "event_id": str(uuid.uuid4()),
+    "event_type": event_type,
+    "installation_id": installation_id,
+    "package_version": package_version,
+    "occurred_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+}
+if event_type in {"install_result", "agent_config_result"}:
+    event["install_attempt_id"] = attempt_id
+    event["action"] = action
+if event_type == "install_result":
+    event.update({
+        "os_type": os_type,
+        "os_arch": os_arch,
+        "execution_environment": execution_environment,
+        "status": status,
+    })
+elif event_type == "agent_config_result":
+    event.update({"agent_type": agent, "status": status})
+if status == "failed":
+    event["error_stage"] = error_stage
+    event["error_code"] = error_code
+pending_dir = os.path.join(telemetry_dir, "pending-v2")
+try:
+    os.makedirs(pending_dir, mode=0o700, exist_ok=True)
+    os.chmod(telemetry_dir, 0o700)
+    os.chmod(pending_dir, 0o700)
+    now = time.time()
+    entries = []
+    for name in os.listdir(pending_dir):
+        if not name.endswith(".json"):
+            continue
+        file_path = os.path.join(pending_dir, name)
+        try:
+            entries.append((os.stat(file_path).st_mtime, file_path))
+        except OSError:
+            pass
+    entries.sort()
+    expired = [entry for entry in entries if now - entry[0] > 7 * 24 * 60 * 60]
+    remaining = [entry for entry in entries if now - entry[0] <= 7 * 24 * 60 * 60]
+    overflow = remaining[:max(0, len(remaining) - 99)]
+    for _, file_path in expired + overflow:
+        try:
+            os.remove(file_path)
+        except OSError:
+            pass
+    event_path = os.path.join(pending_dir, event["event_id"] + ".json")
+    with open(event_path, "x", encoding="utf-8") as stream:
+        stream.write(json.dumps(event, separators=(",", ":")) + "\n")
+    os.chmod(event_path, 0o600)
+except Exception:
+    pass
+print(json.dumps(event, separators=(",", ":")))
+PY
+  } 2>/dev/null || true)"
+  [[ -n "$payload" ]] || return 0
+  local event_id pending_file
+  event_id="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["event_id"])' <<<"$payload" 2>/dev/null || true)"
+  pending_file="$telemetry_dir/pending-v2/${event_id}.json"
+  (
+    if curl --silent --show-error --connect-timeout 2 --max-time 3 \
+      -X POST "$RAINSKILLS_TELEMETRY_REPORT_URL" \
+      -H 'Content-Type: application/json' \
+      --data-binary "$payload" >/dev/null 2>&1; then
+      [[ -n "$event_id" ]] && rm -f "$pending_file"
+    fi
+  ) &
+}
+
+record_rainskills_v2_configured_agent() {
+  local agent
+  agent="$(rainskills_v2_agent "$1")"
+  [[ "$agent" != "unknown" ]] || return 0
+  rainskills_v2_enabled || return 0
+  command -v python3 >/dev/null 2>&1 || return 0
+  local telemetry_dir
+  telemetry_dir="${RAINSKILLS_TELEMETRY_DIR:-${HOME:-/tmp}/.rainbond/rainskills/telemetry}"
+  python3 - "$telemetry_dir" "$agent" <<'PY' >/dev/null 2>&1 || true
+import json
+import os
+import sys
+
+directory, agent = sys.argv[1:]
+os.makedirs(directory, mode=0o700, exist_ok=True)
+os.chmod(directory, 0o700)
+path = os.path.join(directory, "configured-agents.json")
+try:
+    current = json.load(open(path, encoding="utf-8"))
+except Exception:
+    current = []
+agents = sorted(set(value for value in current + [agent] if isinstance(value, str)))
+temporary = "{}.{}.tmp".format(path, os.getpid())
+with open(temporary, "x", encoding="utf-8") as stream:
+    json.dump(agents, stream, separators=(",", ":"))
+    stream.write("\n")
+os.chmod(temporary, 0o600)
+os.replace(temporary, path)
+os.chmod(path, 0o600)
+PY
 }
 
 rainskills_install_client_for_target() {
@@ -325,6 +597,7 @@ report_rainskills_installation() {
   local failure_stage="${3:-}"
   local failure_category="${4:-}"
 
+  [[ "${RAINSKILLS_LEGACY_TELEMETRY_ENABLED:-0}" == "1" ]] || return 0
   [[ -n "$RAINSKILLS_INSTALL_ATTEMPT_ID" ]] || return 0
   if [[ "$phase" == "authorized" || "$phase" == "configured" ]]; then
     [[ -n "$RAINSKILLS_INSTALL_EID" ]] || return 0
@@ -423,6 +696,7 @@ report_rainskills_lifecycle_event() {
   local blocked_reason="${6:-}"
   local auth_method="${7:-}"
 
+  [[ "${RAINSKILLS_LEGACY_TELEMETRY_ENABLED:-0}" == "1" ]] || return 0
   [[ -n "$RAINSKILLS_INSTALL_ATTEMPT_ID" ]] || return 0
   command -v python3 >/dev/null 2>&1 || return 0
   RAINSKILLS_TELEMETRY_SEQUENCE=$((RAINSKILLS_TELEMETRY_SEQUENCE + 1))
@@ -536,6 +810,7 @@ initialize_rainskills_installation_reporting() {
     esac
   done
   RAINSKILLS_INSTALL_CLIENT="$(rainskills_install_client_for_target "$target")"
+  initialize_rainskills_v2_identity
   report_rainskills_lifecycle_event "bootstrap" "resume" "resume" "started"
   report_rainskills_installation "started" "started"
 }
@@ -636,6 +911,25 @@ report_unhandled_rainskills_installation_failure() {
   local exit_status="$1"
   if [[ "$exit_status" -ne 0 && \
         "${BASH_SUBSHELL:-0}" -eq 0 && \
+        "$RAINSKILLS_V2_TERMINAL_REPORTED" -eq 0 ]]; then
+    RAINSKILLS_V2_TERMINAL_REPORTED=1
+    if [[ -n "$RAINSKILLS_V2_CURRENT_AGENT" ]]; then
+      report_rainskills_v2_event \
+        "agent_config_result" \
+        "failed" \
+        "$RAINSKILLS_V2_CURRENT_AGENT" \
+        "agent_configuration" \
+        "agent_config_failed"
+    fi
+    report_rainskills_v2_event \
+      "install_result" \
+      "failed" \
+      "" \
+      "$(rainskills_v2_error_stage)" \
+      "$(rainskills_v2_error_code)"
+  fi
+  if [[ "$exit_status" -ne 0 && \
+        "${BASH_SUBSHELL:-0}" -eq 0 && \
         "$RAINSKILLS_INSTALL_TERMINAL_REPORTED" -eq 0 ]]; then
     RAINSKILLS_INSTALL_TERMINAL_REPORTED=1
     report_rainskills_lifecycle_event \
@@ -716,6 +1010,23 @@ handle_installer_exit() {
 }
 
 die() {
+  if [[ "${BASH_SUBSHELL:-0}" -eq 0 && "$RAINSKILLS_V2_TERMINAL_REPORTED" -eq 0 ]]; then
+    RAINSKILLS_V2_TERMINAL_REPORTED=1
+    if [[ -n "$RAINSKILLS_V2_CURRENT_AGENT" ]]; then
+      report_rainskills_v2_event \
+        "agent_config_result" \
+        "failed" \
+        "$RAINSKILLS_V2_CURRENT_AGENT" \
+        "agent_configuration" \
+        "agent_config_failed"
+    fi
+    report_rainskills_v2_event \
+      "install_result" \
+      "failed" \
+      "" \
+      "$(rainskills_v2_error_stage)" \
+      "$(rainskills_v2_error_code)"
+  fi
   if [[ "${BASH_SUBSHELL:-0}" -eq 0 && "$RAINSKILLS_INSTALL_TERMINAL_REPORTED" -eq 0 ]]; then
     RAINSKILLS_INSTALL_TERMINAL_REPORTED=1
     report_rainskills_installation \
@@ -1102,6 +1413,24 @@ collect_destinations() {
   fi
 
   printf '%s\n' "${destinations[@]}"
+}
+
+collect_target_agents() {
+  if [[ -n "$CUSTOM_DEST" ]]; then
+    printf 'unknown\n'
+    return 0
+  fi
+  case "$TARGET" in
+    claude) printf 'claude\n' ;;
+    codex) printf 'codex\n' ;;
+    pi) printf 'pi\n' ;;
+    dsh) printf 'dsh\n' ;;
+    workbuddy) printf 'workbuddy\n' ;;
+    all)
+      printf '%s\n' claude codex pi dsh workbuddy
+      ;;
+    *) printf 'unknown\n' ;;
+  esac
 }
 
 normalize_rainbond_url() {
@@ -2549,6 +2878,8 @@ do_refresh() {
     log "如果想立刻在当前终端使用，请执行：source ${ACTIVE_SHELL_RC}"
   fi
   RAINSKILLS_INSTALL_TERMINAL_REPORTED=1
+  RAINSKILLS_V2_TERMINAL_REPORTED=1
+  report_rainskills_v2_event "install_result" "success"
   report_rainskills_lifecycle_event "configure_cli" "install_cli" "configure_cli" "completed"
   report_rainskills_installation "configured" "success"
 }
@@ -2629,6 +2960,10 @@ configure_runtime_connection() {
   report_rainskills_lifecycle_event "configure_cli" "install_cli" "configure_cli" "started"
   install_local_cli
   RAINSKILLS_INSTALL_TERMINAL_REPORTED=1
+  RAINSKILLS_V2_TERMINAL_REPORTED=1
+  report_rainskills_v2_event "agent_config_result" "success" "$TARGET"
+  record_rainskills_v2_configured_agent "$TARGET"
+  report_rainskills_v2_event "install_result" "success"
   report_rainskills_lifecycle_event "configure_cli" "install_cli" "configure_cli" "completed"
   report_rainskills_installation "configured" "success"
 
@@ -2690,16 +3025,28 @@ main() {
   done
 
   local destinations=()
+  local target_agents=()
   local dest
   while IFS= read -r dest; do
     destinations+=("$dest")
   done < <(collect_destinations)
 
-  for dest in "${destinations[@]}"; do
+  local target_agent
+  while IFS= read -r target_agent; do
+    target_agents+=("$target_agent")
+  done < <(collect_target_agents)
+
+  local destination_index
+  for destination_index in "${!destinations[@]}"; do
+    dest="${destinations[$destination_index]}"
+    RAINSKILLS_V2_CURRENT_AGENT="${target_agents[$destination_index]:-unknown}"
     install_detail_log "安装到：$dest"
     for skill_dir in "${skills[@]}"; do
       copy_skill "$skill_dir" "$dest"
     done
+    report_rainskills_v2_event "agent_config_result" "success" "$RAINSKILLS_V2_CURRENT_AGENT"
+    record_rainskills_v2_configured_agent "$RAINSKILLS_V2_CURRENT_AGENT"
+    RAINSKILLS_V2_CURRENT_AGENT=""
   done
 
   install_local_cli
@@ -2708,6 +3055,9 @@ main() {
   install_detail_log "安装完成。本次：${INSTALL_COUNT_NEW} 项新装 / ${INSTALL_COUNT_UPDATED} 项已更新 / ${INSTALL_COUNT_UNCHANGED} 项已是最新 / ${INSTALL_COUNT_FORCED} 项强制覆盖"
   install_detail_log ""
   print_capability_summary
+  RAINSKILLS_INSTALL_TERMINAL_REPORTED=1
+  RAINSKILLS_V2_TERMINAL_REPORTED=1
+  report_rainskills_v2_event "install_result" "success"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

@@ -407,6 +407,53 @@ test("protected commands report the missing Skill binding instead of invalid com
   assert.doesNotMatch(result.stderr, /invalid command/);
 });
 
+test("successful RainSkills tool calls emit first-use and one daily-active event", async () => {
+  await withRpcServer((record, response) => {
+    if (record.url === "/telemetry") {
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ status: "success" }));
+      return;
+    }
+    rpcResult(response, record.body.id, {
+      isError: false,
+      structuredContent: { apps: [] },
+    });
+  }, async (baseUrl, requests) => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-bridge-telemetry-"));
+    const telemetryDirectory = path.join(home, ".rainbond", "rainskills", "telemetry");
+    fs.mkdirSync(telemetryDirectory, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(
+      path.join(telemetryDirectory, "configured-agents.json"),
+      `${JSON.stringify(["codex"])}\n`,
+      { mode: 0o600 }
+    );
+    const env = {
+      RAINBOND_URL: new URL(baseUrl).origin,
+      RAINBOND_JWT: "bridge-jwt.payload.signature",
+      RAINSKILLS_TELEMETRY_REPORT_URL: `${new URL(baseUrl).origin}/telemetry`,
+    };
+
+    const first = await runBridge(
+      ["read", "rainbond_query_apps", "--input", "-"],
+      { env, home, input: "{}" }
+    );
+    assert.equal(first.code, 0, first.stderr);
+    const firstTelemetry = requests.filter((request) => request.url === "/telemetry");
+    assert.deepEqual(firstTelemetry.map((request) => request.body.event_type).sort(), [
+      "active_daily",
+      "first_use_result",
+    ]);
+    assert(firstTelemetry.every((request) => request.body.agent_type === "codex"));
+
+    const second = await runBridge(
+      ["read", "rainbond_query_apps", "--input", "-"],
+      { env, home, input: "{}" }
+    );
+    assert.equal(second.code, 0, second.stderr);
+    assert.equal(requests.filter((request) => request.url === "/telemetry").length, 2);
+  });
+});
+
 test("mutable calls validate Console tool schemas before issuing confirmation", async () => {
   await withRpcServer((record, response) => {
     assert.equal(record.body.method, "tools/list");

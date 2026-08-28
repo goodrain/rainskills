@@ -98,6 +98,7 @@ function createLifecycleTelemetry({
   randomUUID = crypto.randomUUID,
   now = () => new Date().toISOString(),
   timeoutMs = 1500,
+  enabled = process.env.RAINSKILLS_LEGACY_TELEMETRY_ENABLED === "1",
 } = {}) {
   let sequence = 0;
   const deliveries = new Set();
@@ -213,6 +214,7 @@ function createLifecycleTelemetry({
   }
 
   async function send(event) {
+    if (!enabled) return false;
     const result = await sendRequest(reportUrl, event);
     if (result.ok) return true;
     if (![400, 404, 415, 422].includes(result.status)) return false;
@@ -224,6 +226,7 @@ function createLifecycleTelemetry({
 
   function record(input = {}) {
     const event = buildEvent(input);
+    if (!enabled) return { event, delivery: Promise.resolve(false) };
     writeLocalEvent(directory, event);
     const delivery = send(event).catch(() => false);
     deliveries.add(delivery);

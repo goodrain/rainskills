@@ -19,6 +19,11 @@ const {
 const { validateMcp } = require("./windows-client-config.js");
 const { createLifecycleTelemetry } = require("./telemetry.js");
 const {
+  createResultTelemetry,
+  normalizeAgent,
+  writeConfiguredAgents,
+} = require("./result-telemetry.js");
+const {
   destinationsForHostTarget,
   isHostTarget,
   telemetryClientForTarget,
@@ -619,21 +624,100 @@ async function main(argv, dependencies = {}) {
   const skills = discoverSkills(packageRoot);
   const logger = dependencies.logger || ((message) => stdout.write(`${message}\n`));
   const detailLogger = options.verbose ? logger : () => {};
-  const counts = copySkills({
-    skills,
-    destinations,
-    force: options.force,
-    logger: detailLogger,
-  });
-  if (!options.customDest) {
-    await (dependencies.installLocalCli || installLocalCli)({ packageRoot, home });
+  const telemetryDirectory = path.join(home, ".rainbond", "rainskills", "telemetry");
+  const packageVersion = (() => {
+    try {
+      const value = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8")).version;
+      return typeof value === "string" && value ? value : "unknown";
+    } catch {
+      return "unknown";
+    }
+  })();
+  const installAttemptId = UUID_PATTERN.test(environment.RAINSKILLS_INSTALL_ATTEMPT_ID || "")
+    ? environment.RAINSKILLS_INSTALL_ATTEMPT_ID
+    : crypto.randomUUID();
+  const osArch = os.arch() === "x64" ? "amd64" : os.arch() === "arm64" ? "arm64" : "other";
+  const resultTelemetry = (() => {
+    try {
+      return (dependencies.resultTelemetryFactory || createResultTelemetry)({
+        directory: telemetryDirectory,
+        packageVersion,
+        agentType: "unknown",
+        disabled: environment.RAINSKILLS_TELEMETRY_DISABLED === "1",
+        installAttemptId,
+        osArch,
+      });
+    } catch {
+      return {
+        record: () => ({ recorded: false, delivery: Promise.resolve(false) }),
+      };
+    }
+  })();
+  const targets = options.customDest
+    ? ["unknown"]
+    : (target === "all" ? ["claude", "codex", "pi", "dsh", "workbuddy"] : [target]);
+  const deliveries = [];
+  try {
+    const counts = copySkills({
+      skills,
+      destinations,
+      force: options.force,
+      logger: detailLogger,
+    });
+    if (!options.customDest) {
+      await (dependencies.installLocalCli || installLocalCli)({ packageRoot, home });
+    }
+    for (const configuredTarget of targets) {
+      const agent = normalizeAgent(configuredTarget);
+      const result = resultTelemetry.record({
+        event_type: "agent_config_result",
+        install_attempt_id: installAttemptId,
+        action: "install",
+        agent_type: agent,
+        status: "success",
+      });
+      deliveries.push(result.delivery);
+    }
+    const installResult = resultTelemetry.record({
+      event_type: "install_result",
+      install_attempt_id: installAttemptId,
+      action: "install",
+      os_type: "windows",
+      os_arch: osArch,
+      execution_environment: "native",
+      status: "success",
+    });
+    deliveries.push(installResult.delivery);
+    if (environment.RAINSKILLS_TELEMETRY_DISABLED !== "1") {
+      try {
+        (dependencies.configuredAgentsWriter || writeConfiguredAgents)(
+          telemetryDirectory,
+          targets.map(normalizeAgent)
+        );
+      } catch { /* telemetry state must not block installation */ }
+    }
+    await Promise.allSettled(deliveries);
+    detailLogger("");
+    detailLogger(`安装完成。本次：${counts.installed} 项新装 / ${counts.updated} 项已更新 / ${counts.unchanged} 项已是最新 / ${counts.forced} 项强制覆盖`);
+    detailLogger("");
+    logger(CAPABILITY_SUMMARY);
+    logger(AGENT_SUMMARY_REQUIREMENT);
+    return { status: "skills-installed", counts };
+  } catch (error) {
+    const failure = resultTelemetry.record({
+      event_type: "install_result",
+      install_attempt_id: installAttemptId,
+      action: "install",
+      os_type: "windows",
+      os_arch: osArch,
+      execution_environment: "native",
+      status: "failed",
+      error_stage: "agent_configuration",
+      error_code: "agent_config_failed",
+    });
+    await failure.delivery.catch(() => false);
+    throw error;
   }
-  detailLogger("");
-  detailLogger(`安装完成。本次：${counts.installed} 项新装 / ${counts.updated} 项已更新 / ${counts.unchanged} 项已是最新 / ${counts.forced} 项强制覆盖`);
-  detailLogger("");
-  logger(CAPABILITY_SUMMARY);
-  logger(AGENT_SUMMARY_REQUIREMENT);
-  return { status: "skills-installed", counts };
 }
 
 module.exports = {
