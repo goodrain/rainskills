@@ -212,6 +212,9 @@ make_connect_node_wrapper() {
   cat >"$bin_dir/node" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ "${1:-}" == "--version" || "${1:-}" == "-v" ]]; then
+  exec "$TEST_REAL_NODE" --version
+fi
 if [[ "${1:-}" == */scripts/install-local-cli.mjs ]]; then
   exec "$TEST_REAL_NODE" "$@"
 fi

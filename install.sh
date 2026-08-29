@@ -1108,6 +1108,11 @@ validate_skill_dir() {
 
 install_local_cli() {
   command -v node >/dev/null 2>&1 || return 0
+  local node_version node_major
+  node_version="$(node --version 2>/dev/null)" || return 0
+  node_major="${node_version#v}"
+  node_major="${node_major%%.*}"
+  [[ "$node_major" =~ ^[0-9]+$ && "$node_major" -ge 18 ]] || return 0
   local installer="$SCRIPT_DIR/scripts/install-local-cli.mjs"
   [[ -f "$installer" ]] || die "Rainskills 本地 CLI 安装器缺失。"
   node "$installer" --source-root "$SCRIPT_DIR" --home "$HOME" >/dev/null \
