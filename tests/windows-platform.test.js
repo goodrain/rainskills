@@ -1741,9 +1741,18 @@ test("Windows source inspector executes the fixed no-follow handle path", {
   ], { encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr || result.stdout);
   const facts = JSON.parse(result.stdout.trim());
+  const ownerResult = spawnSync("powershell.exe", [
+    "-NoProfile", "-NonInteractive", "-Command",
+    "$owner = (Get-Acl -LiteralPath $env:RAINSKILLS_SOURCE_PATH).Owner; " +
+      "([Security.Principal.NTAccount]$owner).Translate([Security.Principal.SecurityIdentifier]).Value",
+  ], {
+    encoding: "utf8",
+    env: { ...process.env, RAINSKILLS_SOURCE_PATH: sourcePath },
+  });
+  assert.equal(ownerResult.status, 0, ownerResult.stderr || ownerResult.stdout);
   assert.equal(facts.reparsePoint, false);
   assert.equal(facts.fileIdentity, `sha256:${crypto.createHash("sha256").update(fs.readFileSync(sourcePath)).digest("hex")}:${fs.statSync(sourcePath).size}`);
-  assert.equal(facts.ownerSid, sid);
+  assert.equal(facts.ownerSid, ownerResult.stdout.trim());
 });
 
 test("Windows executes the dynamically hashed installer instead of a package-pinned digest", () => {
