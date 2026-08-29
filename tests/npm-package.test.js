@@ -218,7 +218,7 @@ test("npm exec installs from the packed skills without downloading a repository 
       encoding: "utf8",
       env: {
         ...process.env,
-        npm_config_offline: "true",
+        npm_config_prefer_offline: "true",
         PATH: `${fakeBin}${path.delimiter}${process.env.PATH || ""}`,
         RAINSKILLS_CURL_LOG: curlLog,
       },
@@ -267,7 +267,7 @@ test("the packed default installer installs only Skills and prints the approved 
       encoding: "utf8",
       env: {
         ...process.env,
-        npm_config_offline: "true",
+        npm_config_prefer_offline: "true",
         npm_config_cache: path.join(os.homedir(), ".npm"),
         HOME: home,
         PATH: `${fakeBin}${path.delimiter}${process.env.PATH || ""}`,
@@ -356,7 +356,7 @@ test("the packed installer supports a custom Hermes profile home", () => {
       encoding: "utf8",
       env: {
         ...process.env,
-        npm_config_offline: "true",
+        npm_config_prefer_offline: "true",
         npm_config_cache: path.join(os.homedir(), ".npm"),
         HOME: home,
         HERMES_HOME: hermesHome,
@@ -387,7 +387,7 @@ test("the packed artifact exposes a real npx command", () => {
   const result = spawnSync(
     npxCommand,
     ["--yes", `--package=${packed.tarballPath}`, "rainskills", "--help"],
-    { cwd: tempDir, encoding: "utf8", env: { ...process.env, npm_config_offline: "true" } }
+    { cwd: tempDir, encoding: "utf8", env: { ...process.env, npm_config_prefer_offline: "true" } }
   );
 
   assert.equal(result.status, 0, result.stderr || result.stdout);
@@ -405,7 +405,7 @@ test("the packed artifact exposes platform install and resume commands", () => {
     const result = spawnSync(
       npxCommand,
       ["--yes", `--package=${packed.tarballPath}`, "rainskills", ...args],
-      { cwd: tempDir, encoding: "utf8", env: { ...process.env, npm_config_offline: "true" } }
+      { cwd: tempDir, encoding: "utf8", env: { ...process.env, npm_config_prefer_offline: "true" } }
     );
     assert.equal(result.status, 0, result.stderr || result.stdout);
     assert.match(result.stdout, /--onboarding-id ID/);
