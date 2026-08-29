@@ -37,12 +37,18 @@ AGENT_SUMMARY_REQUIREMENT = "[RAINSKILLS_AGENT_SUMMARY_REQUIRED:include-next-act
 def read_process_output(pid: int, master_fd: int, timeout: float) -> tuple[bytes, int]:
     output = bytearray()
     status = None
+    pty_closed = False
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if status is None:
             waited_pid, wait_status = os.waitpid(pid, os.WNOHANG)
             if waited_pid == pid:
                 status = wait_status
+        if pty_closed:
+            if status is not None:
+                break
+            time.sleep(0.05)
+            continue
         readable, _, _ = select.select([master_fd], [], [], 0.1)
         if readable:
             try:
@@ -50,7 +56,7 @@ def read_process_output(pid: int, master_fd: int, timeout: float) -> tuple[bytes
             except OSError as error:
                 if error.errno != errno.EIO:
                     raise
-                break
+                pty_closed = True
         elif status is not None:
             break
     if status is None:
