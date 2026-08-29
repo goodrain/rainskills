@@ -312,6 +312,23 @@ test("the packed default installer installs only Skills and prints the approved 
   assert.equal(fs.existsSync(path.join(installedRuntimeRoot, "bin", "rainskills.js")), true);
   assert.equal(fs.existsSync(path.join(installedRuntimeRoot, "install.sh")), true);
   assert.equal(fs.existsSync(path.join(installedRuntimeRoot, "node_modules", "yaml", "package.json")), true);
+  const installedUploadArgs = [
+    "package-upload", "--archive", path.join(tempDir, "package.zip"), "--input", "-",
+    "--skill-id", "rainbond-fullstack-bootstrap",
+  ];
+  assert.deepEqual(
+    require(path.join(installedRuntimeRoot, "bin", "rainskills.js")).resolveInvocation(
+      installedUploadArgs,
+      { execPath: process.execPath }
+    ),
+    {
+      executable: process.execPath,
+      args: [
+        path.join(fs.realpathSync(installedRuntimeRoot), "bin", "rainskills-tools.js"),
+        ...installedUploadArgs,
+      ],
+    }
+  );
   assert.equal(
     JSON.parse(fs.readFileSync(path.join(installedRuntimeRoot, "package.json"), "utf8")).version,
     require("../package.json").version

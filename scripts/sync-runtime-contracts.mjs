@@ -53,6 +53,10 @@ const requiredAuthorizationGuidance = [
   "action=\"wait\"",
   "单引号 heredoc",
 ];
+const versionGuardSkills = new Set([
+  "rainbond-app-assistant",
+  "rainbond-fullstack-bootstrap",
+]);
 
 function runtimeGate(source, skillId) {
   const match = source.match(
@@ -86,6 +90,26 @@ function runtimeContract(gate, skillId) {
       throw new Error(`${skillId} ${name} CLI contract 无效`);
     }
   }
+  if (skillId === "rainbond-fullstack-bootstrap") {
+    const packageUpload = contract.input_commands?.package_upload;
+    const expectedArgv = [
+      "node",
+      "<home>/.rainbond/bin/rainskills-tools.js",
+      "package-upload",
+      "--archive",
+      "<archive-path>",
+      "--input",
+      "-",
+      "--skill-id",
+      skillId,
+    ];
+    if (
+      JSON.stringify(packageUpload?.argv) !== JSON.stringify(expectedArgv)
+      || packageUpload?.stdin_schema_source !== "rainbond_init_package_upload.upload_request"
+    ) {
+      throw new Error(`${skillId} package upload CLI contract 无效`);
+    }
+  }
   const contextInput = contract.input_commands.context_resolve.stdin;
   if (JSON.stringify(contextInput) !== JSON.stringify({
     default: { required: ["enterprise", "workspace"] },
@@ -114,6 +138,13 @@ for (const skillId of skillIds) {
   }
   for (const value of requiredAuthorizationGuidance) {
     if (!gate.includes(value)) throw new Error(`${skillId} 缺少授权同步门禁：${value}`);
+  }
+  if (
+    versionGuardSkills.has(skillId)
+    && (!gate.includes("`package_version` 与本 Skill JSON contract")
+      || !gate.includes("不得在版本错配时继续业务调用"))
+  ) {
+    throw new Error(`${skillId} 缺少 Skill/CLI 版本一致性门禁`);
   }
   runtimeContract(gate, skillId);
 }

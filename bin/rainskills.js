@@ -4,6 +4,7 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const os = require("node:os");
 const { spawn } = require("node:child_process");
+const { pathToFileURL } = require("node:url");
 const {
   detectControlEnvironment,
 } = require("../rainbond-platform-installer/scripts/control-environment.js");
@@ -275,8 +276,12 @@ async function runBuiltin(args, {
     if (args.length !== 3 || args[2] !== "--json") {
       throw new Error("runtime status 只支持固定参数 --json");
     }
+    const packageVersion = require("../package.json").version;
     if (runtimeStateManager) {
-      write(`${JSON.stringify(await runtimeStateManager.status())}\n`);
+      write(`${JSON.stringify({
+        ...(await runtimeStateManager.status()),
+        package_version: packageVersion,
+      })}\n`);
       return true;
     }
     const runtime = getSingleRuntimeStore().read();
@@ -285,6 +290,7 @@ async function runBuiltin(args, {
         schema: "rainskills.runtime-status.v1",
         state: "not_started",
         usable: false,
+        package_version: packageVersion,
       })}\n`);
       return true;
     }
@@ -309,6 +315,7 @@ async function runBuiltin(args, {
         usable: true,
         console_origin: runtime.console_origin,
         environment_kind: runtime.kind,
+        package_version: packageVersion,
       })}\n`);
     } catch {
       write(`${JSON.stringify({
@@ -317,6 +324,7 @@ async function runBuiltin(args, {
         usable: false,
         console_origin: runtime.console_origin,
         environment_kind: runtime.kind,
+        package_version: packageVersion,
       })}\n`);
     }
     return true;
@@ -574,6 +582,13 @@ function resolveInvocation(args, {
     };
   }
 
+  if (args[0] === "package-upload") {
+    return {
+      executable: execPath,
+      args: [path.resolve(__dirname, "rainskills-tools.js"), ...args],
+    };
+  }
+
   if (args[0] === "platform" && args[1] === "install") {
     return {
       executable: execPath,
@@ -608,6 +623,12 @@ function resolveInvocation(args, {
   };
 }
 
+async function installLocalCliFromPackage({ sourceRoot, home }) {
+  const installerPath = path.join(sourceRoot, "scripts", "install-local-cli.mjs");
+  const { installLocalCli } = await import(pathToFileURL(installerPath).href);
+  return installLocalCli({ source_root: sourceRoot, home });
+}
+
 async function runAutoUpdatePhase(args, {
   currentVersion = require("../package.json").version,
   env = process.env,
@@ -616,6 +637,7 @@ async function runAutoUpdatePhase(args, {
   packageRoot = path.resolve(__dirname, ".."),
   checkForUpdate,
   acquireArtifact,
+  installCli,
   synchronizeSkills,
   updateState,
   delegate,
@@ -643,6 +665,10 @@ async function runAutoUpdatePhase(args, {
       if (detectActive()) {
         throw new Error("存在正在执行的 Rainskills 操作");
       }
+      await (installCli || installLocalCliFromPackage)({
+        sourceRoot: packageRoot,
+        home,
+      });
       (synchronizeSkills || autoUpdate.synchronizeInstalledSkills)({
         packageRoot,
         home,

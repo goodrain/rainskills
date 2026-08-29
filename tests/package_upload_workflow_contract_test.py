@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import json
+import re
 import unittest
 from pathlib import Path
 
@@ -11,6 +13,7 @@ SOURCE_AND_PACKAGE_RULES = (
     / "40-source-and-package-rules.md"
 )
 APP_ASSISTANT_SKILL = REPO_ROOT / "rainbond-app-assistant" / "SKILL.md"
+BOOTSTRAP_SKILL = REPO_ROOT / "rainbond-fullstack-bootstrap" / "SKILL.md"
 
 
 class PackageUploadWorkflowContractTest(unittest.TestCase):
@@ -19,7 +22,7 @@ class PackageUploadWorkflowContractTest(unittest.TestCase):
         ordered_tokens = (
             "upload_local_package.py prepare",
             "rainbond_init_package_upload",
-            "protected local CLI command `package-upload",
+            "input_commands.package_upload.argv",
             "upload_local_package.py cleanup",
             "rainbond_get_package_upload_status",
             "rainbond_create_component_from_package",
@@ -38,15 +41,43 @@ class PackageUploadWorkflowContractTest(unittest.TestCase):
 
         self.assertIn("Never pass `source.local_path` to a Rainbond Tool", guidance)
         self.assertIn("complete `upload_request` object through stdin", guidance)
-        self.assertIn(
-            "--input - --skill-id rainbond-fullstack-bootstrap",
-            guidance,
-        )
         self.assertNotIn("--operation-id", guidance)
         self.assertNotIn("environment already bound to the protected operation", guidance)
         self.assertNotIn("`upload_request.url` -> `--upload-url`", guidance)
         self.assertNotIn("`upload_request.upload_url`", guidance)
         self.assertNotIn("Run `upload_local_package.py upload`", guidance)
+
+    def test_runtime_contract_pins_the_complete_package_upload_argv(self) -> None:
+        skill = BOOTSTRAP_SKILL.read_text(encoding="utf-8")
+        gate = skill.split("<!-- rainskills-runtime-gate:start -->", 1)[1].split(
+            "<!-- rainskills-runtime-gate:end -->", 1
+        )[0]
+        match = re.search(r"```json\n([\s\S]*?)\n```", gate)
+        self.assertIsNotNone(match, "bootstrap runtime gate JSON is missing")
+        contract = json.loads(match.group(1))
+
+        self.assertEqual(
+            contract["input_commands"]["package_upload"]["argv"],
+            [
+                "node",
+                "<home>/.rainbond/bin/rainskills-tools.js",
+                "package-upload",
+                "--archive",
+                "<archive-path>",
+                "--input",
+                "-",
+                "--skill-id",
+                "rainbond-fullstack-bootstrap",
+            ],
+        )
+        self.assertEqual(
+            contract["input_commands"]["package_upload"]["stdin_schema_source"],
+            "rainbond_init_package_upload.upload_request",
+        )
+
+        guidance = SOURCE_AND_PACKAGE_RULES.read_text(encoding="utf-8")
+        self.assertIn("input_commands.package_upload.argv", guidance)
+        self.assertIn("不得替换为 runtime launcher", guidance)
 
     def test_app_assistant_does_not_offer_server_local_package_tools(self) -> None:
         guidance = APP_ASSISTANT_SKILL.read_text(encoding="utf-8")

@@ -2,6 +2,8 @@
 
 const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
+const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 
@@ -13,6 +15,7 @@ const {
   runtimeChildEnvironment,
   runtimeConnectionInvocation,
   runAttached,
+  runAutoUpdatePhase,
   runBuiltin,
 } = require(launcherPath);
 
@@ -28,6 +31,115 @@ test("launcher rejects the removed local MCP entry point", () => {
     () => resolveInvocation(["mcp", "serve", "--client", "codex"]),
     /不再提供本地 MCP 服务/
   );
+});
+
+test("launcher forwards package-upload to the protected tools CLI", () => {
+  const args = [
+    "package-upload", "--archive", "/tmp/package.zip", "--input", "-",
+    "--skill-id", "rainbond-fullstack-bootstrap",
+  ];
+  const invocation = resolveInvocation(args, {
+    execPath: "/usr/bin/node",
+  });
+
+  assert.deepEqual(invocation, {
+    executable: "/usr/bin/node",
+    args: [path.resolve(__dirname, "../bin/rainskills-tools.js"), ...args],
+  });
+});
+
+test("delegated auto-update refreshes the local CLI before installed Skills", async () => {
+  const events = [];
+  const result = await runAutoUpdatePhase(["runtime", "status", "--json"], {
+    currentVersion: "1.2.4",
+    env: {
+      RAINSKILLS_AUTO_UPDATE_HOP: "1",
+      RAINSKILLS_AUTO_UPDATE_FROM: "1.2.3",
+      RAINSKILLS_AUTO_UPDATE_TARGET: "1.2.4",
+    },
+    home: "/tmp/rainskills-home",
+    packageRoot: "/tmp/rainskills-package",
+    activeOperationDetector: () => false,
+    installCli(input) {
+      events.push(["cli", input]);
+    },
+    synchronizeSkills(input) {
+      events.push(["skills", input]);
+    },
+    updateState: {
+      recordApplied(version) { events.push(["applied", version]); },
+      recordFailure() { events.push(["failed"]); },
+    },
+  });
+
+  assert.deepEqual(result, { handled: false, reason: "delegated-sync-complete" });
+  assert.deepEqual(events.map(([event]) => event), ["cli", "skills", "applied"]);
+  assert.deepEqual(events[0][1], {
+    sourceRoot: "/tmp/rainskills-package",
+    home: "/tmp/rainskills-home",
+  });
+  assert.equal(events[1][1].packageRoot, "/tmp/rainskills-package");
+  assert.equal(events[1][1].home, "/tmp/rainskills-home");
+});
+
+test("delegated auto-update never publishes new Skills when CLI refresh fails", async () => {
+  let skillSynchronizations = 0;
+  let failures = 0;
+  const result = await runAutoUpdatePhase(["runtime", "status", "--json"], {
+    currentVersion: "1.2.4",
+    env: {
+      RAINSKILLS_AUTO_UPDATE_HOP: "1",
+      RAINSKILLS_AUTO_UPDATE_FROM: "1.2.3",
+      RAINSKILLS_AUTO_UPDATE_TARGET: "1.2.4",
+    },
+    activeOperationDetector: () => false,
+    installCli() { throw new Error("CLI refresh failed"); },
+    synchronizeSkills() { skillSynchronizations += 1; },
+    updateState: {
+      recordApplied() { throw new Error("must not record a failed update"); },
+      recordFailure() { failures += 1; },
+    },
+  });
+
+  assert.deepEqual(result, {
+    handled: true,
+    code: 75,
+    signal: null,
+  });
+  assert.equal(skillSynchronizations, 0);
+  assert.equal(failures, 1);
+});
+
+test("delegated auto-update installs the real runtime bundle and package-upload bridge", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-delegated-install-"));
+  const packageRoot = path.resolve(__dirname, "..");
+  const currentVersion = require("../package.json").version;
+  const result = await runAutoUpdatePhase(["runtime", "status", "--json"], {
+    currentVersion,
+    env: {
+      RAINSKILLS_AUTO_UPDATE_HOP: "1",
+      RAINSKILLS_AUTO_UPDATE_FROM: "0.1.33",
+      RAINSKILLS_AUTO_UPDATE_TARGET: currentVersion,
+    },
+    home,
+    packageRoot,
+    activeOperationDetector: () => false,
+    synchronizeSkills() {},
+    updateState: {
+      recordApplied() {},
+      recordFailure() { throw new Error("real CLI installation must succeed"); },
+    },
+  });
+
+  assert.deepEqual(result, { handled: false, reason: "delegated-sync-complete" });
+  const installedRoot = path.join(home, ".rainbond", "lib", "rainskills");
+  assert.equal(require(path.join(installedRoot, "package.json")).version, currentVersion);
+  const installedBridge = path.join(home, ".rainbond", "bin", "rainskills-tools.js");
+  assert.equal(fs.existsSync(installedBridge), true);
+  assert.equal(require(installedBridge).parseCommand([
+    "package-upload", "--archive", "/tmp/package.zip", "--input", "-",
+    "--skill-id", "rainbond-fullstack-bootstrap",
+  ]).command, "package-upload");
 });
 
 test("runtime connect accepts one environment route without a business intent", () => {
@@ -189,7 +301,9 @@ test("runtime status remains an in-process command", async () => {
     },
     write: (value) => output.push(value),
   }), true);
-  assert.equal(JSON.parse(output.join("")).usable, true);
+  const status = JSON.parse(output.join(""));
+  assert.equal(status.usable, true);
+  assert.equal(status.package_version, require("../package.json").version);
 });
 
 test("failed runtime authorization clears only its own connecting state", async () => {
