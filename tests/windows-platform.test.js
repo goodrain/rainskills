@@ -1743,8 +1743,8 @@ test("Windows source inspector executes the fixed no-follow handle path", {
   const facts = JSON.parse(result.stdout.trim());
   const ownerResult = spawnSync("powershell.exe", [
     "-NoProfile", "-NonInteractive", "-Command",
-    "$owner = (Get-Acl -LiteralPath $env:RAINSKILLS_SOURCE_PATH).Owner; " +
-      "([Security.Principal.NTAccount]$owner).Translate([Security.Principal.SecurityIdentifier]).Value",
+    "[IO.File]::GetAccessControl($env:RAINSKILLS_SOURCE_PATH)" +
+      ".GetOwner([Security.Principal.SecurityIdentifier]).Value",
   ], {
     encoding: "utf8",
     env: { ...process.env, RAINSKILLS_SOURCE_PATH: sourcePath },
