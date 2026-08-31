@@ -56,7 +56,7 @@ workspace context 包含 `enterprise_id`、`team_id`、`team_name` 和 `region_n
 
 普通请求只给用户可用的中文结果：
 
-- 成功：说明项目、运行环境、工作空间、应用、真实 Rainbond 页面/访问地址及本轮实际完成操作；无法确认的字段省略，禁止猜测。
+- 成功：只报真实交付结果；加载 [output contract](references/output-contract.md)，以“部署成功后的固定动作块”收尾。
 - 未完成：输出“部署失败。”、一句直接原因；仅在确有安全可执行方案时增加“解决办法”。
 - 默认不得展示内部对象、状态枚举、Skill/工具名、YAML、JSON 或英文编排标题。
 - 过程消息和最终结果中的工作空间一律用 `team_name` 展示，可连同 `region_name` 写成“工作空间 / 集群”；除非用户明确要求调试原始数据，不展示 `team_id`。

@@ -28,6 +28,17 @@ SECRET_ASSIGNMENT = re.compile(
 
 MASKED_VALUES = {"***", "[masked]", "<masked>", "redacted", "<redacted>", "null"}
 
+SUCCESSFUL_DEPLOYMENT_NEXT_ACTIONS = """你接下来可以：
+
+1. 修改代码并重新部署
+2. 将当前应用创建快照发布版本，用于部署到生产环境
+3. 查看运行日志
+4. 将应用迁移到自己的 Rainbond"""
+
+SUCCESSFUL_DEPLOYMENT_PATTERN = re.compile(
+    r"(?m)^部署成功(?:，待浏览器访问确认)?。$"
+)
+
 
 def validate_customer_output(response_text: str, expected: dict[str, Any] | None = None) -> list[str]:
     errors: list[str] = []
@@ -47,6 +58,14 @@ def validate_customer_output(response_text: str, expected: dict[str, Any] | None
         if value.lower() not in MASKED_VALUES and not value.startswith("$"):
             errors.append("customer response appears to expose secret material")
             break
+
+    if SUCCESSFUL_DEPLOYMENT_PATTERN.search(response_text):
+        if response_text.count(SUCCESSFUL_DEPLOYMENT_NEXT_ACTIONS) != 1:
+            errors.append(
+                "successful deployment response must contain the four customer next actions exactly once"
+            )
+        if not response_text.rstrip().endswith(SUCCESSFUL_DEPLOYMENT_NEXT_ACTIONS):
+            errors.append("successful deployment response must end with the customer next actions")
 
     assertions = (expected or {}).get("assert", {})
     for needle in assertions.get("prose_contains", []):

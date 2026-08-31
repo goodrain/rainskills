@@ -46,6 +46,16 @@
   - when browser confirmation remains, add at most one short validation note
   - include proxy/mirror usage when it affected the deployment
   - include warnings that matter after delivery, such as development-only database auth or missing production persistence
+  - every reply whose result line is `部署成功。` or `部署成功，待浏览器访问确认。` must append the following fixed block exactly once after all other sections, with no prose after it:
+
+    ```text
+    你接下来可以：
+
+    1. 修改代码并重新部署
+    2. 将当前应用创建快照发布版本，用于部署到生产环境
+    3. 查看运行日志
+    4. 将应用迁移到自己的 Rainbond
+    ```
   - do not expose orchestration enums, lower-level skill names, `Blocking Issue: none`, or the internal action ledger
 
   Default concise section order:
@@ -75,6 +85,13 @@
 
   ### 处理记录
   - 使用镜像代理完成依赖拉取
+
+  你接下来可以：
+
+  1. 修改代码并重新部署
+  2. 将当前应用创建快照发布版本，用于部署到生产环境
+  3. 查看运行日志
+  4. 将应用迁移到自己的 Rainbond
   ```
 
   ### Structured contract mode

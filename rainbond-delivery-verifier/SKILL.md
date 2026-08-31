@@ -22,6 +22,13 @@ description: "Use only when the user explicitly asks for final delivery or acces
 - 运行环境地址：<Rainbond Console 或应用管理页面地址>
 - 应用访问地址：<部署完成后真实可访问的应用地址>
 - 已完成操作：<用一句话概括本轮实际完成的项目识别、应用创建、组件构建、启动和访问验证；只列真实执行过的操作>
+
+你接下来可以：
+
+1. 修改代码并重新部署
+2. 将当前应用创建快照发布版本，用于部署到生产环境
+3. 查看运行日志
+4. 将应用迁移到自己的 Rainbond
 ```
 
 部署失败或未完成时只输出：
@@ -61,7 +68,7 @@ Hermes Agent 执行带 `--input -` 的一次性业务命令时，使用 `termina
 ```json
 {
   "schema": "rainskills.single-runtime-contract.v1",
-  "package_version": "rainskills@0.1.35",
+  "package_version": "rainskills@0.1.36",
   "runtime_status": [
     "node",
     "<home>/.rainbond/lib/rainskills/bin/rainskills.js",

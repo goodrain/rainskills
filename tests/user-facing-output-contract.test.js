@@ -6,6 +6,12 @@ const { spawnSync } = require("node:child_process");
 const test = require("node:test");
 
 const root = path.resolve(__dirname, "..");
+const successfulDeploymentNextActions = `你接下来可以：
+
+1. 修改代码并重新部署
+2. 将当前应用创建快照发布版本，用于部署到生产环境
+3. 查看运行日志
+4. 将应用迁移到自己的 Rainbond`;
 
 const customerFacingSkills = [
   "rainbond-app-assistant",
@@ -158,5 +164,65 @@ test("reply validators accept customer text by default and reject internal contr
       { encoding: "utf8" },
     );
     assert.notEqual(rejected.status, 0, `${validator} must reject implicit structured output`);
+  }
+});
+
+test("successful deployment replies end with the four customer next actions", () => {
+  const entrypoint = read("rainbond-app-assistant/SKILL.md");
+  assert.match(entrypoint, /部署成功后的固定动作块/);
+  assert.match(entrypoint, /references\/output-contract\.md/);
+
+  for (const relativePath of [
+    "rainbond-app-assistant/references/output-contract.md",
+    "rainbond-app-assistant/references/workflow-rules.md",
+    "rainbond-delivery-verifier/SKILL.md",
+  ]) {
+    assert.match(read(relativePath), /你接下来可以：/, relativePath);
+    assert.match(read(relativePath), /将应用迁移到自己的 Rainbond/, relativePath);
+  }
+
+  for (const relativePath of [
+    "rainbond-app-assistant/evals/04-delivered-stop-without-promotion.response.md",
+    "rainbond-app-assistant/evals/11-delivered-with-proxy-and-local-binding.response.md",
+    "rainbond-app-assistant/evals/16-source-delivered-manual-validation.response.md",
+  ]) {
+    const response = read(relativePath).trim();
+    assert.equal(
+      response.split(successfulDeploymentNextActions).length - 1,
+      1,
+      relativePath,
+    );
+    assert.equal(response.endsWith(successfulDeploymentNextActions), true, relativePath);
+  }
+});
+
+test("customer validators reject a successful deployment without the next actions", () => {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-success-actions-"));
+  const incompleteResponse = path.join(temporary, "incomplete.md");
+  const completeResponse = path.join(temporary, "complete.md");
+  fs.writeFileSync(
+    incompleteResponse,
+    "部署成功。\n\n- 应用：demo\n- 访问地址：https://example.com\n",
+    "utf8",
+  );
+  fs.writeFileSync(
+    completeResponse,
+    `部署成功。\n\n- 应用：demo\n- 访问地址：https://example.com\n\n${successfulDeploymentNextActions}\n`,
+    "utf8",
+  );
+
+  for (const validator of [
+    "rainbond-app-assistant/scripts/validate_app_assistant_output.py",
+    "rainbond-delivery-verifier/scripts/validate_delivery_verifier_output.py",
+  ]) {
+    const rejected = spawnSync("python3", [path.join(root, validator), incompleteResponse], {
+      encoding: "utf8",
+    });
+    assert.notEqual(rejected.status, 0, validator);
+
+    const accepted = spawnSync("python3", [path.join(root, validator), completeResponse], {
+      encoding: "utf8",
+    });
+    assert.equal(accepted.status, 0, accepted.stderr || accepted.stdout || validator);
   }
 });
