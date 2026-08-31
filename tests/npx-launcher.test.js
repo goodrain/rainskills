@@ -311,6 +311,7 @@ test("failed runtime authorization clears only its own connecting state", async 
   const started = [];
   const startOptions = [];
   const aborted = [];
+  const telemetry = [];
   const manager = {
     startConnecting(value, options) { started.push(value); startOptions.push(options); },
     abortConnecting(value) { aborted.push(value); return true; },
@@ -329,6 +330,12 @@ test("failed runtime authorization clears only its own connecting state", async 
     connectionRunner: async () => {
       throw new Error("authorization failed");
     },
+    resultTelemetryFactory: () => ({
+      recordRuntimeConnect(status, details) {
+        telemetry.push({ status, details });
+        return { recorded: true, delivery: Promise.resolve(true) };
+      },
+    }),
     write: (value) => output.push(value),
   }), /authorization failed/);
 
@@ -337,4 +344,69 @@ test("failed runtime authorization clears only its own connecting state", async 
   assert.equal(aborted.length, 1);
   assert.deepEqual(aborted[0], started[0]);
   assert.equal(JSON.parse(output.join("")).action, "retry-runtime-connect");
+  assert.deepEqual(telemetry, [{
+    status: "failed",
+    details: {
+      environment_kind: "saas",
+      error_stage: "authorization",
+      error_code: "authorization_failed",
+    },
+  }]);
+});
+
+test("successful runtime connection reports activation only after credential persistence and live probe", async () => {
+  const output = [];
+  const telemetry = [];
+  let state = null;
+  let storedRuntime = null;
+  const manager = {
+    startConnecting(value) { state = { ...value, state: "connecting" }; },
+    async markConnected(value) { state = { ...value, state: "connected" }; },
+    read: () => state,
+  };
+  const store = {
+    read: () => storedRuntime,
+    write(value) {
+      storedRuntime = {
+        console_origin: value.consoleOrigin,
+        kind: value.kind,
+        token: value.token,
+      };
+    },
+  };
+
+  assert.equal(await runBuiltin([
+    "runtime", "connect", "codex", "--rainbond-url", "https://private.example.com",
+  ], {
+    runtimeStateManager: manager,
+    singleRuntimeStore: store,
+    originInspector: async () => ({
+      origin: "https://private.example.com",
+      httpConfirmationRequired: false,
+      pendingRedirectOrigin: null,
+    }),
+    connectionRunner: async (_invocation, { completeWithCredential }) => {
+      await completeWithCredential("header.payload.signature");
+      return { code: 0, signal: null, completesRuntimeState: true };
+    },
+    resultTelemetryFactory(context) {
+      assert.equal(context.agentType, "codex");
+      assert.equal(context.packageVersion, require("../package.json").version);
+      return {
+        recordRuntimeConnect(status, details) {
+          assert(storedRuntime, "credential must be stored before activation telemetry");
+          assert.equal(state.state, "connected");
+          telemetry.push({ status, details });
+          return { recorded: true, delivery: Promise.resolve(true) };
+        },
+      };
+    },
+    write: (value) => output.push(value),
+  }), true);
+
+  assert.equal(JSON.parse(output.join("")).state, "connected");
+  assert.deepEqual(telemetry, [{
+    status: "success",
+    details: { environment_kind: "private" },
+  }]);
 });

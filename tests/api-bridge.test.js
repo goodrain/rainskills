@@ -59,11 +59,16 @@ function prepareConnectedEnvironment(home, origin, token) {
   return { runtime };
 }
 
-function runRawBridge(args, { home, input = "" } = {}) {
+function runRawBridge(args, { env = {}, home, input = "" } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [bridgePath, ...args], {
       cwd: repoRoot,
-      env: { ...process.env, HOME: home },
+      env: {
+        ...process.env,
+        HOME: home,
+        RAINSKILLS_TELEMETRY_DISABLED: "1",
+        ...env,
+      },
       stdio: ["pipe", "pipe", "pipe"],
     });
     let stdout = "";
@@ -101,6 +106,7 @@ function runBridge(args, {
       env: {
         ...process.env,
         HOME: actualHome,
+        RAINSKILLS_TELEMETRY_DISABLED: "1",
         ...(allowInsecureHttp ? { RAINBOND_ALLOW_INSECURE_HTTP: "true" } : {}),
         ...env,
       },
@@ -407,6 +413,15 @@ test("protected commands report the missing Skill binding instead of invalid com
   assert.doesNotMatch(result.stderr, /invalid command/);
 });
 
+test("only authenticated Rainbond business commands count as product usage", () => {
+  const { commandTracksBusinessUsage } = require(bridgePath);
+  assert.equal(commandTracksBusinessUsage({ command: "read" }), true);
+  assert.equal(commandTracksBusinessUsage({ command: "call" }), true);
+  for (const command of ["status", "list", "describe", "context", "package-upload"]) {
+    assert.equal(commandTracksBusinessUsage({ command }), false, command);
+  }
+});
+
 test("successful RainSkills tool calls emit first-use and one daily-active event", async () => {
   await withRpcServer((record, response) => {
     if (record.url === "/telemetry") {
@@ -431,6 +446,7 @@ test("successful RainSkills tool calls emit first-use and one daily-active event
       RAINBOND_URL: new URL(baseUrl).origin,
       RAINBOND_JWT: "bridge-jwt.payload.signature",
       RAINSKILLS_TELEMETRY_REPORT_URL: `${new URL(baseUrl).origin}/telemetry`,
+      RAINSKILLS_TELEMETRY_DISABLED: "0",
     };
 
     const first = await runBridge(
@@ -451,6 +467,36 @@ test("successful RainSkills tool calls emit first-use and one daily-active event
     );
     assert.equal(second.code, 0, second.stderr);
     assert.equal(requests.filter((request) => request.url === "/telemetry").length, 2);
+
+  });
+});
+
+test("bridge test helper disables usage telemetry unless a test explicitly enables it", async () => {
+  await withRpcServer((record, response) => {
+    if (record.url === "/telemetry") {
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ status: "success" }));
+      return;
+    }
+    rpcResult(response, record.body.id, {
+      isError: false,
+      structuredContent: { apps: [] },
+    });
+  }, async (baseUrl, requests) => {
+    const result = await runBridge(
+      ["read", "rainbond_query_apps", "--input", "-"],
+      {
+        env: {
+          RAINBOND_URL: new URL(baseUrl).origin,
+          RAINBOND_JWT: "bridge-jwt.payload.signature",
+          RAINSKILLS_TELEMETRY_REPORT_URL: `${new URL(baseUrl).origin}/telemetry`,
+        },
+        input: "{}",
+      }
+    );
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(requests.filter((request) => request.url === "/telemetry").length, 0);
   });
 });
 

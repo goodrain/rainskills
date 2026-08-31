@@ -6,9 +6,13 @@ const path = require("node:path");
 const { randomUUID: defaultRandomUUID } = require("node:crypto");
 
 const SCHEMA = "rainskills.telemetry-event.v2";
+const RUNTIME_CONNECT_SCHEMA = "rainskills.telemetry-event.v3";
 const DEFAULT_REPORT_URL = "https://log.rainbond.com/api/rainskills/events";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const AGENTS = new Set(["codex", "pi", "claude_code", "deepseek", "workbuddy", "hermes_agent", "other", "unknown"]);
+const RUNTIME_CONNECT_ERROR_CODES = new Set([
+  "authorization_failed", "verification_failed", "network_unreachable", "user_cancelled", "unknown",
+]);
 const MAX_PENDING_EVENTS = 100;
 const MAX_PENDING_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -135,7 +139,7 @@ function prunePending(directory, nowMs) {
 
 function buildEvent({ installationId, packageVersion, agentType, randomUUID, now }, input) {
   const event = {
-    schema: SCHEMA,
+    schema: input.event_type === "runtime_connect_result" ? RUNTIME_CONNECT_SCHEMA : SCHEMA,
     event_id: randomUUID(),
     event_type: input.event_type,
     installation_id: installationId,
@@ -144,10 +148,10 @@ function buildEvent({ installationId, packageVersion, agentType, randomUUID, now
   };
   const fields = [
     "install_attempt_id", "action", "agent_type", "os_type", "os_arch",
-    "execution_environment", "status", "error_stage", "error_code",
+    "execution_environment", "environment_kind", "status", "error_stage", "error_code",
   ];
   for (const field of fields) {
-    const usesDefaultAgent = ["first_use_result", "active_daily"].includes(input.event_type);
+    const usesDefaultAgent = ["runtime_connect_result", "first_use_result", "active_daily"].includes(input.event_type);
     const value = field === "agent_type"
       ? (input[field] || (usesDefaultAgent ? agentType : ""))
       : input[field];
@@ -239,8 +243,26 @@ function createResultTelemetry({
   }
 
   function recordActiveDaily() {
-    const activeDate = now().toISOString().slice(0, 10);
+    const activeDate = formatBeijingDate(now());
     return record({ event_type: "active_daily" }, `active:${resolvedAgent}:${activeDate}`);
+  }
+
+  function recordRuntimeConnect(status, details = {}) {
+    if (!["success", "failed"].includes(status)) return skippedResult();
+    if (!["saas", "private"].includes(details.environment_kind)) return skippedResult();
+    if (status === "failed" && ![
+      "authorization", "verification",
+    ].includes(details.error_stage)) return skippedResult();
+    if (status === "failed" && !RUNTIME_CONNECT_ERROR_CODES.has(details.error_code)) return skippedResult();
+    return record({
+      event_type: "runtime_connect_result",
+      environment_kind: details.environment_kind,
+      status,
+      ...(status === "failed" ? {
+        error_stage: details.error_stage,
+        error_code: details.error_code,
+      } : {}),
+    }, `runtime-connect:${resolvedAgent}:${details.environment_kind}:${status}`);
   }
 
   async function flushPending(limit = MAX_PENDING_EVENTS) {
@@ -270,14 +292,21 @@ function createResultTelemetry({
     installationId: resolvedInstallationId,
     agentType: resolvedAgent,
     record,
+    recordRuntimeConnect,
     recordFirstUse,
     recordActiveDaily,
     flushPending,
   };
 }
 
+function formatBeijingDate(value) {
+  const shifted = new Date(value.getTime() + 8 * 60 * 60 * 1000);
+  return shifted.toISOString().slice(0, 10);
+}
+
 module.exports = {
   DEFAULT_REPORT_URL,
+  RUNTIME_CONNECT_SCHEMA,
   SCHEMA,
   createResultTelemetry,
   ensureInstallationId,
