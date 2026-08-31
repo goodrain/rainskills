@@ -17,11 +17,14 @@ const version = packageManifest.version;
 const repository = "https://github.com/goodrain/rainskills";
 const homepage = `${repository}#readme`;
 const description =
-  "Install and initialize the complete Rainbond skill suite as one product.";
+  "Install the complete Rainskills AI deployment skill suite as one product.";
 const keywords = [
   "rainbond",
   "codex",
   "claude-code",
+  "deepseek-harness",
+  "workbuddy",
+  "hermes-agent",
   "skills",
   "installer",
 ];
@@ -32,14 +35,16 @@ function serializeJson(value) {
 
 function buildVersionedSkill() {
   const unversionedCommand = `npx --yes ${packageName}`;
-  const occurrences = canonicalSkill.split(unversionedCommand).length - 1;
+  const escapedCommand = unversionedCommand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const unversionedPattern = new RegExp(`${escapedCommand}(?!@)`, "g");
+  const occurrences = canonicalSkill.match(unversionedPattern)?.length || 0;
   if (occurrences !== 1) {
     throw new Error(
       `SKILL.md must contain exactly one fallback command: ${unversionedCommand}`
     );
   }
   return canonicalSkill.replace(
-    unversionedCommand,
+    unversionedPattern,
     `${unversionedCommand}@${version}`
   );
 }
@@ -63,14 +68,14 @@ const codexPlugin = {
   skills: "./skills/",
   interface: {
     displayName: "Rainskills",
-    shortDescription: "Install and connect the complete Rainbond skill suite",
+    shortDescription: "Install the complete Rainskills AI deployment skill suite",
     longDescription:
-      "Install every independent Rainskills capability, choose Rainbond Cloud or a private platform, authorize access, configure MCP, and verify the connection.",
+      "Install every independent Rainskills capability. Application runtime selection and connection happen later, only when the user requests an action that needs them.",
     developerName: "Goodrain",
     category: "Engineering",
     capabilities: ["Interactive", "Write"],
     websiteURL: "https://www.rainbond.com",
-    defaultPrompt: ["Install and initialize Rainskills for me."],
+    defaultPrompt: ["Install Rainskills for me."],
     brandColor: "#2563EB",
     screenshots: [],
   },
@@ -159,7 +164,7 @@ function marketplaceFiles(root) {
   return files;
 }
 
-function checkOutputs() {
+function checkOutputs({ quiet = false } = {}) {
   const errors = [];
   for (const [filePath, expected] of outputs) {
     if (!fs.existsSync(filePath)) {
@@ -190,7 +195,9 @@ function checkOutputs() {
     return;
   }
 
-  console.log(`Marketplace package is current for ${packageName}@${version}.`);
+  if (!quiet) {
+    console.log(`Marketplace package is current for ${packageName}@${version}.`);
+  }
 }
 
 function writeAtomically(filePath, content) {
@@ -213,7 +220,15 @@ if (args.length === 0) {
   writeOutputs();
 } else if (args.length === 1 && args[0] === "--check") {
   checkOutputs();
+} else if (
+  args.length === 2 &&
+  args[0] === "--check" &&
+  args[1] === "--quiet"
+) {
+  checkOutputs({ quiet: true });
 } else {
-  console.error("Usage: node scripts/build-marketplace-package.mjs [--check]");
+  console.error(
+    "Usage: node scripts/build-marketplace-package.mjs [--check [--quiet]]"
+  );
   process.exitCode = 2;
 }

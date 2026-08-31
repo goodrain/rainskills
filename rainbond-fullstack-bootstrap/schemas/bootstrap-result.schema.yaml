@@ -33,7 +33,7 @@ $defs:
       - frontend access-path issue
       - source build still running
       - source build failed
-      - mcp backend issue
+      - platform backend issue
       - external artifact unreachable
       - cluster capacity blocked
   build_strategy_decision:
@@ -91,7 +91,8 @@ properties:
                 $ref: "#/$defs/non_empty_string"
               app_id:
                 anyOf:
-                  - $ref: "#/$defs/non_empty_string"
+                  - type: integer
+                    minimum: 1
                   - type: "null"
           environment:
             type: object

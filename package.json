@@ -1,7 +1,7 @@
 {
   "name": "rainskills",
-  "version": "1.0.0",
-  "description": "Interactive Rainbond skill installer for Codex and Claude Code",
+  "version": "0.1.36",
+  "description": "Interactive Rainbond skill installer for Codex, Claude Code, Pi Agent, DeepSeek Harness, WorkBuddy, and Hermes Agent",
   "license": "Apache-2.0",
   "homepage": "https://github.com/goodrain/rainskills#readme",
   "bugs": {
@@ -15,6 +15,9 @@
     "rainbond",
     "codex",
     "claude-code",
+    "deepseek-harness",
+    "workbuddy",
+    "hermes-agent",
     "skills",
     "installer"
   ],
@@ -27,16 +30,20 @@
     "bin/",
     "install.sh",
     "marketplace/",
-    "pi/",
     "rainbond-app-assistant/",
     "rainbond-app-version-assistant/",
     "rainbond-delivery-verifier/",
     "rainbond-env-sync/",
     "rainbond-fullstack-bootstrap/",
     "rainbond-fullstack-troubleshooter/",
+    "rainbond-opensource-app-deploy/",
     "rainbond-platform-installer/",
+    "rainbond-platform-query/",
     "rainbond-project-init/",
     "rainbond-template-installer/",
+    "scripts/build-skill-manifest.mjs",
+    "scripts/install-local-cli.mjs",
+    "scripts/validate_customer_output.py",
     "!**/__pycache__/",
     "!**/*.pyc"
   ],
@@ -48,21 +55,27 @@
     "linux",
     "win32"
   ],
-  "pi": {
-    "skills": [
-      "./marketplace/rainskills/skills"
-    ]
-  },
   "scripts": {
     "build:marketplace": "node scripts/build-marketplace-package.mjs",
-    "build:pi": "node scripts/build-pi-extension.mjs",
     "check:marketplace": "node scripts/build-marketplace-package.mjs --check",
-    "check:pi": "node scripts/build-pi-extension.mjs --check",
-    "test": "npm run test:launcher && npm run test:marketplace && npm run test:pi && npm run test:platform && npm run test:windows && npm run test:package-upload && npm run test:package && npm run test:installer && npm run test:signal && npm run test:npx-pty",
-    "test:launcher": "node --test tests/npx-launcher.test.js",
+    "sync:runtime-version": "node scripts/sync-runtime-version.mjs",
+    "check:runtime-version": "node scripts/sync-runtime-version.mjs --check",
+    "sync:runtime-contracts": "node scripts/sync-runtime-contracts.mjs",
+    "check:runtime-contracts": "node scripts/sync-runtime-contracts.mjs --check",
+    "version": "npm run sync:runtime-version && npm run sync:runtime-contracts && npm run build:marketplace",
+    "prepack": "node scripts/sync-runtime-version.mjs --check && node scripts/sync-runtime-contracts.mjs --check && node scripts/build-marketplace-package.mjs --check --quiet",
+    "test": "npm run test:runtime-version && npm run test:runtime-contracts && npm run test:auto-update && npm run test:launcher && npm run test:api-bridge && npm run test:console-contract && npm run test:skill-profile && npm run test:marketplace && npm run test:runtime-routing && npm run test:telemetry && npm run test:platform && npm run test:windows && npm run test:package-upload && npm run test:package && npm run test:installer && npm run test:signal && npm run test:npx-pty",
+    "test:runtime-version": "node --test tests/runtime-version-sync.test.js",
+    "test:runtime-contracts": "node scripts/sync-runtime-contracts.mjs --check",
+    "test:auto-update": "node --test tests/auto-update.test.js",
+    "test:launcher": "node --test tests/console-origin.test.js tests/host-targets.test.js tests/local-cli-installer.test.js tests/npx-launcher.test.js tests/runtime-state.test.js tests/single-runtime.test.js tests/single-runtime-cli.test.js tests/single-runtime-launcher.test.js tests/skill-manifest-builder.test.js",
+    "test:api-bridge": "node --test tests/api-bridge.test.js",
+    "test:console-contract": "python3 tests/console_tool_contract_test.py",
+    "test:skill-profile": "node --test tests/skill-profile-builder.test.js tests/markdown-link-integrity.test.js tests/user-facing-output-contract.test.js",
     "test:marketplace": "node --test tests/marketplace-entry.test.js",
-    "test:pi": "npm run check:pi && node --test tests/pi-extension.test.js",
-    "test:platform": "node --test tests/platform-installer.test.js",
+    "test:runtime-routing": "node --test tests/runtime-onboarding-routing.test.js && python3 rainbond-app-assistant/scripts/validate_progressive_loading.py && python3 rainbond-app-assistant/scripts/validate_cross_skill_routing.py && python3 tests/progressive-loading-validators.test.py && python3 tests/run_skill_routing_evals.py",
+    "test:telemetry": "node --test tests/telemetry.test.js",
+    "test:platform": "node --test tests/platform-installer.test.js tests/host-cluster-installer.test.js tests/existing-kubernetes-installer.test.js tests/ssh-key-setup.test.js",
     "test:windows": "node --test tests/windows-onboarding.test.js tests/windows-platform.test.js",
     "test:package-upload": "python3 tests/package_upload_helper_test.py && python3 tests/package_upload_workflow_contract_test.py && python3 rainbond-fullstack-bootstrap/scripts/run_bootstrap_evals.py",
     "test:package": "node --test tests/npm-package.test.js",
@@ -70,9 +83,8 @@
     "test:signal": "python3 tests/installer_signal_cleanup_test.py",
     "test:npx-pty": "python3 tests/npx_pty_test.py"
   },
-  "devDependencies": {
-    "@modelcontextprotocol/sdk": "1.30.0",
-    "esbuild": "0.25.8"
+  "dependencies": {
+    "yaml": "2.9.0"
   },
   "publishConfig": {
     "access": "public",

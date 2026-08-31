@@ -18,7 +18,7 @@ BootstrapResult:
       team_name: demo-team
       region_name: rainbond
       app_name: inferred-dependency-demo
-      app_id: app-demo-009
+      app_id: 9
     environment:
       name: preview
       source: default

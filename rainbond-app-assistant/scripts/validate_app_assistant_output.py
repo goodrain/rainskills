@@ -14,6 +14,10 @@ from urllib.parse import quote, urlsplit
 
 import yaml
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+from validate_customer_output import validate_customer_output  # noqa: E402
+
 
 REQUIRED_SECTIONS = [
     "### Project State",
@@ -23,31 +27,6 @@ REQUIRED_SECTIONS = [
     "### Next Step",
     "### Structured Output",
 ]
-
-CONCISE_SUCCESS_SECTIONS = [
-    "### 部署结果",
-    "### 运行状态",
-]
-
-CONCISE_SUCCESS_SECTION_ORDERS = {
-    tuple(CONCISE_SUCCESS_SECTIONS),
-    (*CONCISE_SUCCESS_SECTIONS, "### 处理记录"),
-    (*CONCISE_SUCCESS_SECTIONS, "### 注意事项"),
-    (*CONCISE_SUCCESS_SECTIONS, "### 处理记录", "### 注意事项"),
-}
-
-FORBIDDEN_CONCISE_INTERNAL_PATTERNS = (
-    r"\bAppAssistantResult\b",
-    r"\blinked-and-",
-    r"\borchestration_state\b",
-    r"\bruntime_state\b",
-    r"\bdelivery_state\b",
-    r"\bpromotion_result\b",
-    r"\bactions_performed\b",
-    r"\bnext_action\b",
-    r"\bdelivered-but-needs-manual-validation\b",
-    r"\bruntime_(?:healthy|unhealthy)\b",
-)
 
 SECRET_KEYWORDS = (
     "password",
@@ -191,12 +170,14 @@ def validate_response_file(
 
     errors: list[str] = []
 
-    presentation_mode = (expected or {}).get("presentation_mode", "structured")
-    if presentation_mode == "concise":
+    presentation_mode = (expected or {}).get("presentation_mode", "customer")
+    if presentation_mode == "customer":
         errors.extend(check_for_secret_leaks(response_text, "", {}))
-        errors.extend(validate_concise_response(response_text, expected or {}))
+        errors.extend(validate_customer_output(response_text, expected or {}))
         return errors
-    if presentation_mode != "structured":
+    if presentation_mode == "structured":
+        pass
+    else:
         return [f"unsupported presentation_mode: {presentation_mode!r}"]
 
     try:
@@ -227,43 +208,6 @@ def validate_response_file(
     if expected_path and not errors:
         errors.extend(validate_expected_fixture(sections, payload, expected or {}))
 
-    return errors
-
-
-def validate_concise_response(response_text: str, expected: dict[str, Any]) -> list[str]:
-    errors: list[str] = []
-    headings = re.findall(r"(?m)^### [^\n]+$", response_text)
-
-    if tuple(headings) not in CONCISE_SUCCESS_SECTION_ORDERS:
-        errors.append(
-            "concise success headings must start with: "
-            + ", ".join(CONCISE_SUCCESS_SECTIONS)
-            + "; optional trailing sections are ### 处理记录 and ### 注意事项"
-            + f"; got: {headings}"
-        )
-
-    required_patterns = {
-        "a successful deployment result": r"部署成功",
-        "an application name": r"(?m)^应用：`?[^`\n]+`?\s*$",
-        "an environment name": r"(?m)^环境：`?[^`\n]+`?\s*$",
-        "a Rainbond deployment location link": r"(?m)^- 部署位置：\[[^\]]+\]\(https?://[^)\s]+\)\s*$",
-        "a public access link": r"(?m)^- 访问地址：\[[^\]]+\]\(https?://[^)\s]+\)\s*$",
-        "component runtime status": r"(?m)^- `?[^`\n：]+`?：运行中\s*$",
-        "HTTP verification evidence": r"(?im)^- HTTP (?:检查|验证)：[^\n]+$",
-    }
-    for label, pattern in required_patterns.items():
-        if not re.search(pattern, response_text):
-            errors.append(f"concise success response requires {label}")
-
-    if re.search(r"(?s)```(?:yaml|yml|json)?\s*\n", response_text, flags=re.IGNORECASE):
-        errors.append("concise success response must not contain fenced structured output")
-
-    for pattern in FORBIDDEN_CONCISE_INTERNAL_PATTERNS:
-        if re.search(pattern, response_text, flags=re.IGNORECASE):
-            errors.append("concise success response must not expose internal orchestration fields or enum values")
-            break
-
-    errors.extend(validate_expected_prose(response_text, expected))
     return errors
 
 

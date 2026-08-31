@@ -1,0 +1,26 @@
+case: complete-cnb-recreate-confirmed
+presentation_mode: structured
+in_scope_components:
+  - api
+assert:
+  equal:
+    BootstrapResult.deployment_plan.workflow.created:
+      - api
+    BootstrapResult.deployment_plan.workflow.reused: []
+    BootstrapResult.deployment_plan.workflow.skipped: []
+    BootstrapResult.deployment_plan.workflow.skipped_reasons: {}
+    BootstrapResult.deployment_plan.workflow.deferred_dependencies: []
+    BootstrapResult.runtime_state.overall: topology_building
+    BootstrapResult.runtime_state.blocking_bucket: null
+    BootstrapResult.next_handoff: none
+  contains:
+    BootstrapResult.deployment_plan.workflow.build_strategy_decisions:
+      api:
+        picked: dockerfile
+        source: user_choice
+        reason: Confirmed replacement is required because completed CNB has no general in-place switch.
+  prose_contains:
+    - create_status=complete
+    - topology and configuration snapshot
+    - explicit user confirmation
+    - recreated once

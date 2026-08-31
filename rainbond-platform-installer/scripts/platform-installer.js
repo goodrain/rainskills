@@ -10,6 +10,13 @@ const path = require("node:path");
 const readline = require("node:readline/promises");
 const { spawn, spawnSync } = require("node:child_process");
 const { createSecureStateStore } = require("./secure-state.js");
+const { writeUserMessage } = require("./user-message.js");
+const {
+  selectPlatformRoute,
+  validatePersistedRouteTuple,
+  validateRawRoutingInputs,
+  validateRoutingRequest,
+} = require("./platform-routing.js");
 const {
   assertSafePackageVersion,
   createRecoveryBundle,
@@ -22,6 +29,10 @@ const {
   validateWindowsStageTransition,
   verifyRecoveryBundle,
 } = require("./windows-platform.js");
+const { createLifecycleTelemetry } = require("./telemetry.js");
+const { isHostTarget } = require("./host-targets.js");
+const { installHostCluster } = require("./host-cluster-installer.js");
+const { installExistingKubernetes } = require("./existing-kubernetes-installer.js");
 
 const packageManifest = require("../../package.json");
 const POLICY = require("../references/installation-policy.json");
@@ -33,14 +44,29 @@ const BUNDLED_INSTALLER_ENV = "RAINSKILLS_USE_BUNDLED_RAINBOND_INSTALLER";
 
 let activeChild = null;
 let activeChildDetached = false;
+const activeChildren = new Map();
 let activeRequest = null;
 let activeOperation = null;
 let activeSshSession = null;
 let interruptedSignal = null;
+let activeAbortState = null;
+
+function registerActiveChild(child, detached = false) {
+  if (!child) return () => {};
+  activeChildren.set(child, Boolean(detached));
+  activeChild = child;
+  activeChildDetached = Boolean(detached);
+  return () => {
+    activeChildren.delete(child);
+    const remaining = [...activeChildren.entries()].at(-1);
+    activeChild = remaining?.[0] || null;
+    activeChildDetached = remaining?.[1] || false;
+  };
+}
 
 function usage() {
   process.stdout.write(`Usage:
-  npx rainskills platform install --onboarding-id <id> [--target <kind>] [--ssh <target>] [--ssh-port <port>] [--console-host <host>] [--rainbond-image <image>] [--yes] [--no-resume]
+  npx rainskills platform install --onboarding-id <id> [--location <place>] [--mode <mode>] [--cluster-config <path>] [--kubeconfig <path>] [--kube-context <name>] [--values <path>] [--chart-version <version>] [--target <kind>] [--ssh <target>] [--ssh-port <port>] [--console-host <host>] [--rainbond-image <image>] [--yes] [--no-resume]
   npx rainskills resume --onboarding-id <id>
 
 Commands:
@@ -49,13 +75,23 @@ Commands:
 
 Options:
   --onboarding-id ID  Resume the protected RainSkills onboarding checkpoint
-  --target KIND       Use local-linux, local-macos, local-windows, or remote-linux
+  --location PLACE    Deploy to local or server
+  --mode MODE         Use single-node, host-cluster, or existing-kubernetes on a server
+  --cluster-config PATH
+                      Import an existing ROI cluster.yaml for host-cluster mode
+  --kubeconfig PATH   Import kubeconfig for existing-kubernetes mode (default ~/.kube/config)
+  --kube-context NAME Explicit Kubernetes context to lock for every command
+  --values PATH       Import optional Helm values bytes into the protected operation
+  --chart-version VER Lock an exact rainbond/rainbond chart version
+  --target KIND       Backward-compatible explicit single-node target
   --ssh TARGET        Existing SSH alias or user@host for remote-linux
   --ssh-port PORT     SSH port (default: 22)
   --console-host HOST Public IP or DNS name used to reach Console on port 7070
   --rainbond-image IMAGE
                       Override the complete Rainbond all-in-one image
   --yes               Confirm the displayed installation effects non-interactively
+  --agent-handoff     Restrict confirmation continuation to the current AI installation task
+  --cancel            Cancel a pending AI confirmation without changing any server
   --no-resume         Stop after verified platform installation
   -h, --help          Show this help
 `);
@@ -65,12 +101,21 @@ function parseArgs(argv) {
   const result = {
     command: argv[0] || "",
     onboardingId: "",
+    location: "",
+    mode: "",
+    clusterConfig: "",
+    kubeconfig: "",
+    kubeContext: "",
+    values: "",
+    chartVersion: "",
     target: "",
     ssh: "",
-    sshPort: 22,
+    sshPort: null,
     consoleHost: "",
     rainbondImage: "",
     yes: false,
+    agentHandoff: false,
+    cancel: false,
     noResume: false,
   };
   for (let index = 1; index < argv.length; index += 1) {
@@ -79,13 +124,47 @@ function parseArgs(argv) {
       if (!argv[index + 1]) throw new Error("--onboarding-id 需要一个值");
       result.onboardingId = argv[index + 1];
       index += 1;
+    } else if (argument === "--location") {
+      if (!argv[index + 1]) throw new Error("--location 需要一个值");
+      result.location = argv[index + 1];
+      index += 1;
+    } else if (argument === "--mode") {
+      if (!argv[index + 1]) throw new Error("--mode 需要一个值");
+      result.mode = argv[index + 1];
+      index += 1;
     } else if (argument === "--target") {
       if (!argv[index + 1]) throw new Error("--target 需要一个值");
       result.target = argv[index + 1];
       index += 1;
+    } else if (argument === "--cluster-config") {
+      if (!argv[index + 1]) throw new Error("--cluster-config 需要一个值");
+      const rawPath = argv[index + 1];
+      if (rawPath !== rawPath.trim() || /[\u0000-\u001f\u007f-\u009f]/u.test(rawPath)) {
+        throw new Error("--cluster-config 配置路径无效");
+      }
+      result.clusterConfig = path.resolve(rawPath);
+      index += 1;
     } else if (argument === "--ssh") {
       if (!argv[index + 1]) throw new Error("--ssh 需要一个值");
       result.ssh = argv[index + 1];
+      index += 1;
+    } else if (["--kubeconfig", "--values"].includes(argument)) {
+      if (!argv[index + 1]) throw new Error(`${argument} 需要一个值`);
+      const rawPath = argv[index + 1];
+      if (rawPath !== rawPath.trim() || /[\u0000-\u001f\u007f-\u009f]/u.test(rawPath)) throw new Error(`${argument} 路径无效`);
+      result[argument === "--kubeconfig" ? "kubeconfig" : "values"] = path.resolve(rawPath);
+      index += 1;
+    } else if (argument === "--kube-context") {
+      if (!argv[index + 1]) throw new Error("--kube-context 需要一个值");
+      const context = argv[index + 1];
+      if (context !== context.trim() || /[\u0000-\u001f\u007f-\u009f]/u.test(context) || context.startsWith("-")) throw new Error("--kube-context 无效");
+      result.kubeContext = context;
+      index += 1;
+    } else if (argument === "--chart-version") {
+      if (!argv[index + 1]) throw new Error("--chart-version 需要一个值");
+      const version = argv[index + 1];
+      if (!/^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/.test(version)) throw new Error("--chart-version 必须是 exact semver");
+      result.chartVersion = version;
       index += 1;
     } else if (argument === "--ssh-port") {
       if (!argv[index + 1]) throw new Error("--ssh-port 需要一个值");
@@ -101,6 +180,10 @@ function parseArgs(argv) {
       index += 1;
     } else if (argument === "--yes") {
       result.yes = true;
+    } else if (argument === "--agent-handoff") {
+      result.agentHandoff = true;
+    } else if (argument === "--cancel") {
+      result.cancel = true;
     } else if (argument === "--no-resume") {
       result.noResume = true;
     } else if (argument === "-h" || argument === "--help") {
@@ -109,7 +192,36 @@ function parseArgs(argv) {
       throw new Error(`未知参数：${argument}`);
     }
   }
+  validateRawRoutingInputs(result);
+  if (result.location && !["local", "server"].includes(result.location)) {
+    throw new Error("--location 只支持 local 或 server");
+  }
+  if (result.mode && !["single-node", "host-cluster", "existing-kubernetes"].includes(result.mode)) {
+    throw new Error("--mode 只支持 single-node、host-cluster 或 existing-kubernetes");
+  }
+  if (result.clusterConfig && result.mode !== "host-cluster") {
+    throw new Error("--cluster-config 只能与 --mode host-cluster 一起使用");
+  }
+  if ((result.kubeconfig || result.kubeContext || result.values || result.chartVersion) && result.mode !== "existing-kubernetes") {
+    throw new Error("--kubeconfig、--kube-context、--values 和 --chart-version 只能与 --mode existing-kubernetes 一起使用");
+  }
+  if (result.cancel && !result.agentHandoff) throw new Error("--cancel 只能与 --agent-handoff 一起使用");
+  if (result.yes && result.cancel) throw new Error("--yes 和 --cancel 不能同时使用");
+  if (result.agentHandoff && result.noResume) throw new Error("--agent-handoff 不能与 --no-resume 同时使用");
+  if (result.command === "resume" && (result.agentHandoff || result.cancel)) {
+    throw new Error("platform resume 不支持 --agent-handoff 或 --cancel");
+  }
   return result;
+}
+
+function assertAgentHandoffRoute(options, savedTarget) {
+  if (!options.agentHandoff) return;
+  const location = savedTarget?.location || options.location;
+  const mode = savedTarget?.mode || options.mode;
+  if (options.command && options.command !== "install") throw new Error("--agent-handoff 只能用于 platform install");
+  if (location !== "server" || mode !== "host-cluster") {
+    throw new Error("--agent-handoff 只能用于独立服务器的 host-cluster 安装");
+  }
 }
 
 function assertOperationId(operationId) {
@@ -138,11 +250,14 @@ function readOnboardingState(filePath, expectedOperationId, stateStore = secureS
   if (!UUID_PATTERN.test(state.operation_id || "")) {
     throw new Error("状态文件中的 operation_id 无效");
   }
-  if (!["codex", "claude", "all"].includes(state.target)) {
+  if (!isHostTarget(state.target)) {
     throw new Error("状态文件中的安装目标无效");
   }
   if (state.deployment_mode !== "self-hosted") {
     throw new Error("状态文件不是私有化部署流程");
+  }
+  if (Object.hasOwn(state, "intent")) {
+    throw new Error("平台 onboarding 状态不能包含业务 intent");
   }
   if (state.control_mode !== undefined) {
     if (!["windows-native", "wsl", "posix"].includes(state.control_mode)) {
@@ -163,13 +278,15 @@ function readOnboardingState(filePath, expectedOperationId, stateStore = secureS
 function readPlatformState(filePath, expectedOperationId, stateStore = secureStateStore) {
   stateStore.assertProtectedRegularFile(filePath);
   const state = JSON.parse(fs.readFileSync(filePath, "utf8"));
+  validateRawRoutingInputs({}, { host: state.host });
+  if (state.host) normalizeRemoteTarget(state.host, state.ssh_port ?? 22);
   if (state.schema !== PLATFORM_STATE_SCHEMA || state.version !== 1) {
     throw new Error("不支持的 Rainbond 平台安装状态版本");
   }
   if (state.operation_id !== expectedOperationId) {
     throw new Error("平台安装状态与 onboarding id 不匹配");
   }
-  return state;
+  return validatePersistedRouteTuple(state);
 }
 
 function atomicWriteJson(filePath, value, stateStore = secureStateStore) {
@@ -284,12 +401,9 @@ function closeSshSession(session, runner = runCommand) {
 }
 
 async function establishSshSession(target, {
-  platform = process.platform,
-  interactive = process.stdin.isTTY && process.stdout.isTTY,
   runner = runCommand,
-  attachedRunner = spawnAttached,
-  createTempDirectory = createSshTempDirectory,
   write = (value) => process.stdout.write(value),
+  deferAuthenticationMessage = false,
 } = {}) {
   const normalized = normalizeRemoteTarget(target.host, target.port);
   const probe = runner("ssh", [...sshArgs(normalized), "true"], { timeout: 30000 });
@@ -311,92 +425,41 @@ async function establishSshSession(target, {
   if (!/(Permission denied|Host key verification failed|authentication failed|no supported authentication methods)/i.test(detail)) {
     throw new Error(`无法通过 SSH 连接 ${normalized.host}：${detail}`);
   }
-  if (!interactive) {
-    write("\n[RAINSKILLS_USER_INPUT_REQUIRED:ssh_authentication]\n");
-    write("该服务器需要确认主机指纹或输入 SSH 密码，请在交互终端继续。\n");
-    return null;
-  }
-
-  if (platform === "win32") {
-    write("\nWindows 自带 OpenSSH 不支持 ControlMaster 连接复用；后续远程步骤会继续由系统 SSH 读取认证，可能再次请求密码。\n");
-    const result = await attachedRunner(
-      "ssh",
-      [
-        "-o", "BatchMode=no",
-        "-o", "ConnectTimeout=10",
-        "-p", String(normalized.port),
-        normalized.host,
-        "true",
-      ],
-      { env: process.env, interactive: true },
-      null
-    );
-    if (result.signal || result.code !== 0) {
-      if (result.signal) throw new Error(`SSH 认证被信号 ${result.signal} 中断`);
-      throw new Error(`SSH 认证未完成，无法连接 ${normalized.host}`);
-    }
-    return {
-      target: normalized,
-      controlPath: null,
-      tempDirectory: null,
-      multiplexed: false,
-      interactive: true,
-      closed: false,
-    };
-  }
-
-  const tempDirectory = createTempDirectory();
-  fs.chmodSync(tempDirectory, 0o700);
-  const controlPath = path.join(tempDirectory, "control");
-  write("\n首次连接可能需要确认服务器指纹，并输入一次 SSH 密码。\n");
-  write("密码由系统 ssh 直接读取，Rainskills 不会保存。完成后安装将自动继续。\n\n");
-  const result = await attachedRunner(
-    "ssh",
+  if (deferAuthenticationMessage) return null;
+  write("\n[RAINSKILLS_USER_INPUT_REQUIRED:ssh_authentication]\n");
+  writeUserMessage(
+    write,
+    "platform.ssh-authentication",
     [
-      "-o", "ControlMaster=yes",
-      "-o", "ControlPersist=600",
-      "-o", `ControlPath=${controlPath}`,
-      "-o", "BatchMode=no",
-      "-o", "ConnectTimeout=10",
-      "-p", String(normalized.port),
-      normalized.host,
-      "true",
-    ],
-    { env: process.env, interactive: true },
-    null
+      "当前还不能通过 SSH 免密连接服务器。",
+      "",
+      "请打开你电脑上的系统终端，执行下面这一条命令：",
+      `npx --yes rainskills@${packageManifest.version} ssh prepare --ssh ${normalized.host} --ssh-port ${normalized.port}`,
+      "",
+      "这一步只准备 SSH 连接，不会安装 Rainbond。服务器指纹确认和 SSH 密码只会由系统 ssh 读取。",
+      "完成后回到这里回复“已完成”，我会在当前任务中继续安装，不会重新选择流程。",
+    ].join("\n"),
   );
-  if (result.signal || result.code !== 0) {
-    removeSshTempDirectory(tempDirectory);
-    if (result.signal) throw new Error(`SSH 认证被信号 ${result.signal} 中断`);
-    throw new Error(`SSH 认证未完成，无法连接 ${normalized.host}`);
-  }
-  return {
-    target: normalized,
-    controlPath,
-    tempDirectory,
-    multiplexed: true,
-    interactive: false,
-    closed: false,
-  };
+  return null;
 }
 
 function targetChoicesForPlatform(platform) {
   if (platform === "linux") {
     return [
-      { value: "local-linux", label: "安装到本地" },
-      { value: "remote-linux", label: "安装到 Linux 服务器" },
+      { value: "local-linux", label: "部署到本机" },
+      { value: "remote-linux", label: "部署到独立服务器" },
     ];
   }
   if (platform === "darwin") {
     return [
-      { value: "local-macos", label: "安装到本地" },
-      { value: "remote-linux", label: "安装到 Linux 服务器" },
+      { value: "local-macos", label: "部署到本机" },
+      { value: "remote-linux", label: "部署到独立服务器" },
     ];
   }
   if (platform === "win32") {
     return [
-      { value: "local-windows", label: "安装到本地" },
-      { value: "remote-linux", label: "安装到 Linux 服务器" },
+      { value: "local-windows", label: "部署到本机" },
+      { value: "remote-linux", label: "部署到独立服务器" },
     ];
   }
   return [];
@@ -552,15 +615,21 @@ async function resolveRemoteConsole({
   const automatic = await selectReachableConsole(candidates, probe);
   if (automatic.consoleUrl) return automatic;
 
-  write("\nRainbond 已启动，但自动发现的 Console 地址不可访问：\n");
-  for (const attempt of automatic.attempts) {
-    write(`- ${attempt.url}：${attempt.error || "访问失败"}\n`);
-  }
+  const unavailableMessage = [
+    "Rainbond 已启动，但自动发现运行环境地址不可访问：",
+    ...automatic.attempts.map((attempt) => `- ${attempt.url}：${attempt.error || "访问失败"}`),
+  ].join("\n");
   if (!interactive) {
     write("\n[RAINSKILLS_USER_INPUT_REQUIRED:console_address]\n");
-    write("请提供服务器公网 IP 或域名，并在原命令后添加 --console-host <IP或域名>。\n");
+    writeUserMessage(
+      write,
+      "platform.console-address",
+      `${unavailableMessage}\n\n请提供服务器公网 IP 或域名，并在原命令后添加 --console-host <IP或域名>。`,
+    );
     return null;
   }
+
+  write(`\n${unavailableMessage}\n`);
 
   let prompt;
   let ownsPrompt = false;
@@ -587,7 +656,7 @@ async function resolveRemoteConsole({
 
 function sshArgs(target, session = null) {
   return [
-    "-o", `BatchMode=${session?.interactive ? "no" : "yes"}`,
+    "-o", "BatchMode=yes",
     "-o", "ConnectTimeout=10",
     ...sshSessionOptions(session),
     "-p", String(target.port),
@@ -595,31 +664,8 @@ function sshArgs(target, session = null) {
   ];
 }
 
-function shellQuote(value) {
-  return `'${String(value).replace(/'/g, "'\\''")}'`;
-}
-
-function remoteScriptInvocationArgs(script, scriptArgs = []) {
-  const encoded = Buffer.from(script, "utf8").toString("base64");
-  const argumentsText = scriptArgs.map(shellQuote).join(" ");
-  const command = `printf '%s' '${encoded}' | base64 -d | bash -s --${argumentsText ? ` ${argumentsText}` : ""}`;
-  return [
-    "bash",
-    "-lc",
-    shellQuote(command),
-  ];
-}
-
 function remoteScriptInvocation(target, session, script, scriptArgs = [], options = {}) {
   const normalized = normalizeRemoteTarget(target.host, target.port);
-  if (session?.interactive) {
-    return {
-      args: [...sshArgs(normalized, session), ...remoteScriptInvocationArgs(script, scriptArgs)],
-      // Native Windows OpenSSH reads the password from the attached terminal.
-      // Do not let spawnSync kill that prompt while the user is typing it.
-      options: { ...options, timeout: null, interactive: true },
-    };
-  }
   return {
     args: [...sshArgs(normalized, session), "bash", "-s", "--", ...scriptArgs],
     options: { ...options, input: script },
@@ -634,74 +680,17 @@ async function selectInstallTarget({
   ask,
   write = (value) => process.stdout.write(value),
 }) {
-  if (savedTarget?.kind) return savedTarget;
-
-  const choices = targetChoicesForPlatform(platform);
-  if (choices.length === 0) {
-    throw new Error(`不支持当前控制端系统 ${platform}`);
-  }
-
-  let prompt;
-  let ownsPrompt = false;
-  if (!ask && interactive) {
-    prompt = readline.createInterface({ input: process.stdin, output: process.stdout });
-    ownsPrompt = true;
-    ask = (question) => prompt.question(question);
-  }
-
-  try {
-    let requestedKind = options.target || (options.ssh ? "remote-linux" : "");
-    if (requestedKind && !choices.some((choice) => choice.value === requestedKind)) {
-      throw new Error(`当前 ${platform} 不能使用安装目标 ${requestedKind}`);
-    }
-
-    write(`\n检测到当前设备为 ${platform === "darwin" ? "macOS" : platform === "win32" ? "Windows" : "Linux"}。\n`);
-    if (!requestedKind && !interactive) {
-      write("\n[RAINSKILLS_USER_INPUT_REQUIRED:platform_install_target]\n");
-      for (const choice of choices) write(`- ${choice.label}\n`);
-      if (platform === "linux") write("选择当前设备：--target local-linux\n");
-      if (platform === "darwin") write("选择当前 Mac：--target local-macos\n");
-      if (platform === "win32") write("选择当前 Windows 设备：--target local-windows\n");
-      write("选择 Linux 服务器：--target remote-linux --ssh <user@host> [--ssh-port 22]\n");
-      return null;
-    }
-
-    if (!requestedKind) {
-      write("\n请选择 Rainbond 安装位置：\n");
-      choices.forEach((choice, index) => write(`  ${index + 1}) ${choice.label}\n`));
-      while (!requestedKind) {
-        const answer = (await ask(`请输入选项 [1-${choices.length}，回车默认 1]: `)).trim();
-        const index = answer === "" ? 0 : Number.parseInt(answer, 10) - 1;
-        if (Number.isInteger(index) && choices[index]) requestedKind = choices[index].value;
-        else write(`请输入 1 到 ${choices.length} 之间的选项。\n`);
-      }
-    }
-
-    if (requestedKind !== "remote-linux") {
-      return { kind: requestedKind, host: os.hostname(), sshPort: null };
-    }
-
-    if (!options.ssh && !interactive) {
-      write("\n[RAINSKILLS_USER_INPUT_REQUIRED:platform_install_target]\n");
-      write("请提供 Linux SSH 地址，并重新执行：--target remote-linux --ssh <user@host> [--ssh-port 22]\n");
-      return null;
-    }
-
-    let remoteHost = options.ssh || "";
-    while (!remoteHost) {
-      remoteHost = (await ask("Linux SSH 地址（例如 root@192.168.1.20 或主机别名）: ")).trim();
-      if (!remoteHost) write("SSH 地址不能为空。\n");
-    }
-    let remotePort = options.sshPort ?? 22;
-    if (!options.ssh && interactive) {
-      const answer = (await ask("SSH 端口 [回车默认 22]: ")).trim();
-      remotePort = answer || 22;
-    }
-    const remote = normalizeRemoteTarget(remoteHost, remotePort);
-    return { kind: "remote-linux", host: remote.host, sshPort: remote.port };
-  } finally {
-    if (ownsPrompt) prompt.close();
-  }
+  const route = await selectPlatformRoute({
+    platform,
+    options,
+    savedRoute: savedTarget,
+    interactive,
+    ask,
+    write,
+  });
+  if (route.waiting || route.kind !== "remote-linux") return route;
+  const remote = normalizeRemoteTarget(route.host, route.sshPort);
+  return { ...route, host: remote.host, sshPort: remote.port };
 }
 
 const REMOTE_INSPECTION_SCRIPT = String.raw`set -u
@@ -844,13 +833,13 @@ function prepareRemoteInstaller(target, operationId, installerPath, runner = run
   assertCommandResult(prepare, `无法在 ${normalized.host} 创建安装目录`);
 
   const copy = runner("scp", [
-    "-o", `BatchMode=${session?.interactive ? "no" : "yes"}`,
+    "-o", "BatchMode=yes",
     "-o", "ConnectTimeout=10",
     ...sshSessionOptions(session),
     "-P", String(normalized.port),
     installerPath,
     `${normalized.host}:${workspace}/rainbond-install.sh`,
-  ], session?.interactive ? { timeout: null, interactive: true } : { timeout: 120000 });
+  ], { timeout: 120000 });
   assertCommandResult(copy, `无法把官方安装脚本传输到 ${normalized.host}`);
   return workspace;
 }
@@ -1106,10 +1095,8 @@ function gibibytes(bytes) {
 
 function evaluatePreflight(facts) {
   const blockers = [];
-  const warnings = [];
   const effects = [];
   const minimums = POLICY.minimums;
-  const recommended = POLICY.recommended;
   if (!POLICY.supported_platforms.includes(facts.platform)) {
     blockers.push(`不支持当前系统 ${facts.platform}，首版仅支持 Linux 和 macOS`);
   }
@@ -1118,18 +1105,12 @@ function evaluatePreflight(facts) {
   }
   if (facts.cpuCores < minimums.cpu_cores) {
     blockers.push(`CPU 最低需要 ${minimums.cpu_cores} 核，当前 ${facts.cpuCores} 核`);
-  } else if (facts.cpuCores < recommended.cpu_cores) {
-    warnings.push(`CPU ${facts.cpuCores} 核低于推荐配置 ${recommended.cpu_cores} 核`);
   }
   if (facts.memoryBytes < minimums.memory_bytes) {
     blockers.push(`内存最低需要 ${gibibytes(minimums.memory_bytes).toFixed(0)} GB，当前 ${gibibytes(facts.memoryBytes).toFixed(1)} GB`);
-  } else if (facts.memoryBytes < recommended.memory_bytes) {
-    warnings.push(`内存 ${gibibytes(facts.memoryBytes).toFixed(1)} GB 低于推荐配置 ${gibibytes(recommended.memory_bytes).toFixed(0)} GB`);
   }
   if (facts.diskBytes < minimums.disk_bytes) {
     blockers.push(`可用磁盘最低需要 ${gibibytes(minimums.disk_bytes).toFixed(0)} GB，当前 ${gibibytes(facts.diskBytes).toFixed(1)} GB`);
-  } else if (facts.diskBytes < recommended.disk_bytes) {
-    warnings.push(`可用磁盘 ${gibibytes(facts.diskBytes).toFixed(1)} GB 低于推荐配置 ${gibibytes(recommended.disk_bytes).toFixed(0)} GB`);
   }
   if (facts.occupiedPorts.length > 0) blockers.push(`端口 ${facts.occupiedPorts.join("、")} 已被占用`);
   if (facts.platform === "linux" && !facts.hasPrivilege) blockers.push("Linux 安装需要 root 或已配置可用的 sudo -n 权限");
@@ -1147,7 +1128,7 @@ function evaluatePreflight(facts) {
   }
   effects.push("启动 privileged rainbond 容器并写入持久化数据");
 
-  return { ok: blockers.length === 0, blockers, warnings, effects };
+  return { ok: blockers.length === 0, blockers, effects };
 }
 
 function extractConsoleUrl(output) {
@@ -1201,11 +1182,17 @@ function createPlatformState(operationId, paths) {
     version: 1,
     operation_id: operationId,
     installation_id: crypto.randomUUID(),
+    install_attempt_id: crypto.randomUUID(),
     package_version: packageManifest.version,
     updated_at: now(),
     stage: "target-selection",
     status: "pending",
     control_platform: process.platform,
+    control_mode: null,
+    install_client: "unknown",
+    install_action: "install",
+    location: null,
+    mode: null,
     target_kind: null,
     host: null,
     ssh_port: null,
@@ -1251,6 +1238,95 @@ function appendEvent(paths, state, stage, status, extra = {}) {
   fs.chmodSync(paths.events, 0o600);
   state.last_sequence = sequence;
   atomicWriteJson(paths.state, state);
+  const telemetry = activeOperation?.telemetry;
+  if (telemetry) {
+    activeOperation.stageStartedAt ||= {};
+    if (status === "started") activeOperation.stageStartedAt[stage] = Date.now();
+    const stageStartedAt = activeOperation.stageStartedAt[stage];
+    const durationMs = status !== "started" && Number.isFinite(stageStartedAt)
+      ? Math.max(0, Date.now() - stageStartedAt)
+      : null;
+    telemetry.record({
+      phase: null,
+      lifecycle_phase: lifecyclePhaseForStage(stage),
+      step: lifecycleStepForStage(stage),
+      lifecycle_action: lifecycleActionForStage(stage),
+      lifecycle_status: lifecycleStatusForProgress(status),
+      status: null,
+      error_code: status === "failed" ? lifecycleErrorCodeForStage(stage) : null,
+      error_stage: status === "failed" ? lifecyclePhaseForStage(stage) : null,
+      reason_code: status === "failed" ? lifecycleErrorCodeForStage(stage) : null,
+      blocked_reason: status === "waiting_user" ? lifecycleBlockedReasonForStage(stage) : null,
+      retryable: status === "waiting_user" || status === "progress",
+      duration_ms: durationMs,
+      transport: lifecycleTransportForState(state),
+      sequence,
+    });
+    if (["completed", "failed", "interrupted", "skipped"].includes(status)) {
+      delete activeOperation.stageStartedAt[stage];
+    }
+  }
+}
+
+const LIFECYCLE_STAGE_MAP = {
+  "target-selection": ["target_selection", "select_target", "preflight"],
+  preflight: ["preflight", "inspect_host", "preflight"],
+  "awaiting-confirmation": ["confirmation", "confirm_install", "preflight"],
+  "enabling-wsl": ["prepare_wsl", "enable_wsl", "prepare_wsl"],
+  "reboot-required": ["prepare_wsl", "request_reboot", "request_reboot"],
+  "downloading-rootfs": ["rootfs_download", "download_rootfs", "download_rootfs"],
+  "importing-distro": ["import_distro", "import_distro", "import_distro"],
+  "preparing-runtime": ["prepare_runtime", "prepare_runtime", "prepare_runtime"],
+  "installing-rainbond": ["install_rainbond", "install_rainbond", "install_rainbond"],
+  "configuring-windows-access": ["configure_network", "configure_network", "configure_network"],
+  verifying: ["verify_console", "verify_console", "verify_deployment"],
+  downloading: ["rootfs_download", "download_rootfs", "preflight"],
+  starting: ["install_rainbond", "install_rainbond", "install_rainbond"],
+  "ssh-authentication": ["preflight", "inspect_host", "preflight"],
+  "platform-ready": ["completed", "finalize", "finalize"],
+};
+
+function lifecycleStageEntry(stage) {
+  return LIFECYCLE_STAGE_MAP[stage] || ["bootstrap", "resume", null];
+}
+
+function lifecyclePhaseForStage(stage) { return lifecycleStageEntry(stage)[0]; }
+function lifecycleStepForStage(stage) { return lifecycleStageEntry(stage)[1]; }
+function lifecycleActionForStage(stage) { return lifecycleStageEntry(stage)[2]; }
+
+function lifecycleStatusForProgress(status) {
+  if (status === "completed") return "completed";
+  if (status === "waiting_user") return "blocked";
+  if (status === "failed") return "failed";
+  if (status === "interrupted") return "interrupted";
+  if (status === "skipped") return "skipped";
+  return "started";
+}
+
+function lifecycleBlockedReasonForStage(stage) {
+  if (stage === "reboot-required") return "awaiting_reboot";
+  if (stage === "awaiting-confirmation") return "awaiting_user_confirmation";
+  if (stage === "ssh-authentication") return "ssh_password_prompt";
+  if (stage === "verifying") return "manual_console_input";
+  return "unknown";
+}
+
+function lifecycleErrorCodeForStage(stage) {
+  if (stage === "preflight" || stage === "awaiting-confirmation") return "preflight_blocked";
+  if (stage === "downloading" || stage === "downloading-rootfs") return "download_failed";
+  if (stage === "ssh-authentication") return "ssh_auth_failed";
+  if (stage === "enabling-wsl" || stage === "reboot-required") return "wsl_not_ready";
+  if (stage === "preparing-runtime") return "docker_not_ready";
+  if (stage === "installing-rainbond" || stage === "starting") return "rainbond_deploy_failed";
+  if (stage === "verifying" || stage === "platform-ready") return "console_unreachable";
+  return "unknown";
+}
+
+function lifecycleTransportForState(state) {
+  if (state.target_kind === "remote-linux") return "ssh";
+  if (state.control_mode === "windows-native") return "powershell";
+  if (state.control_mode === "wsl") return "wsl";
+  return "direct";
 }
 
 function updateOnboarding(state, values) {
@@ -1544,8 +1620,7 @@ function spawnAttached(command, args, options, logPath) {
         ? "inherit"
         : [input === undefined ? "inherit" : "pipe", "pipe", "pipe"],
     });
-    activeChild = child;
-    activeChildDetached = detached;
+    const unregisterChild = registerActiveChild(child, detached);
     if (input !== undefined) {
       child.stdin.end(input);
     }
@@ -1561,8 +1636,7 @@ function spawnAttached(command, args, options, logPath) {
     }
     child.on("error", (error) => {
       if (logFd !== null) fs.closeSync(logFd);
-      activeChild = null;
-      activeChildDetached = false;
+      unregisterChild();
       reject(error);
     });
     child.on("close", (code, signal) => {
@@ -1571,8 +1645,7 @@ function spawnAttached(command, args, options, logPath) {
         fs.closeSync(logFd);
         fs.chmodSync(logPath, 0o600);
       }
-      activeChild = null;
-      activeChildDetached = false;
+      unregisterChild();
       resolve({ code, signal });
     });
   });
@@ -1627,52 +1700,68 @@ function probeConsole(url) {
   });
 }
 
-function printPreflight(facts, assessment, target) {
+function singleNodeResourceEstimate() {
+  return "- 需要安装运行环境所需要的依赖（预计占用：2 GB 内存 / 10 GB 磁盘）";
+}
+
+function preflightMessage(facts, assessment, target) {
   const location = target.kind === "remote-linux"
     ? `Linux 服务器 ${target.host}`
     : facts.platform === "darwin" ? "当前 Mac" : "当前 Linux 设备";
-  process.stdout.write(`\n${location} 环境检查${assessment.ok ? "已通过" : "未通过"}：\n\n`);
-  process.stdout.write(`${facts.cpuCores} 核 CPU / ${gibibytes(facts.memoryBytes).toFixed(1)} GB 内存 / ${gibibytes(facts.diskBytes).toFixed(1)} GB 可用磁盘\n`);
-  if (facts.platform === "darwin") process.stdout.write("macOS 安装依赖 OrbStack，首次准备时间通常比 Linux 更长。\n");
+  const lines = [
+    `${location} 环境检查${assessment.ok ? "已通过" : "未通过"}：`,
+    "",
+    `${facts.cpuCores} 核 CPU / ${gibibytes(facts.memoryBytes).toFixed(1)} GB 内存 / ${gibibytes(facts.diskBytes).toFixed(1)} GB 可用磁盘`,
+  ];
   if (!assessment.ok) {
-    process.stdout.write("\n需要先处理：\n");
-    for (const blocker of assessment.blockers) process.stdout.write(`- ${blocker}\n`);
-    return;
+    lines.push("", "需要先处理：", ...assessment.blockers.map((blocker) => `- ${blocker}`));
+    return lines.join("\n");
   }
-  if (assessment.warnings?.length) {
-    process.stdout.write("\n资源低于推荐配置，仍会继续安装；最终以 Rainbond 实际部署验证结果为准：\n");
-    for (const warning of assessment.warnings) process.stdout.write(`- ${warning}\n`);
-  }
-  process.stdout.write("\n确认后将执行：\n");
-  for (const effect of assessment.effects) process.stdout.write(`- ${effect}\n`);
+  lines.push("", "确认后将执行：", singleNodeResourceEstimate());
+  return lines.join("\n");
 }
 
-function printWindowsPreflight(facts, assessment) {
-  process.stdout.write(`\n本地（Windows / WSL2）环境检查${assessment.ok ? "已通过" : "未通过"}：\n\n`);
-  process.stdout.write(`${facts.cpuCores} 核 CPU / ${gibibytes(facts.memoryBytes).toFixed(1)} GB 内存 / ${gibibytes(facts.diskBytes).toFixed(1)} GB 可用磁盘\n`);
-  if (!assessment.ok) {
-    process.stdout.write("\n需要先处理：\n");
-    for (const blocker of assessment.blockers) process.stdout.write(`- ${blocker}\n`);
-    return;
-  }
-  if (assessment.warnings?.length) {
-    process.stdout.write("\n资源低于推荐配置，仍会继续安装；最终以 Rainbond 实际部署验证结果为准：\n");
-    for (const warning of assessment.warnings) process.stdout.write(`- ${warning}\n`);
-  }
-  process.stdout.write("\n确认后将执行：\n");
-  for (const effect of assessment.effects) process.stdout.write(`- ${effect}\n`);
+function printPreflight(facts, assessment, target, {
+  write = (value) => process.stdout.write(value),
+} = {}) {
+  write("\n");
+  writeUserMessage(write, "platform.preflight", preflightMessage(facts, assessment, target));
 }
 
-async function confirmInstall(assumeYes) {
+function printWindowsPreflight(facts, assessment, {
+  write = (value) => process.stdout.write(value),
+} = {}) {
+  const lines = [
+    `本地（Windows / WSL2）环境检查${assessment.ok ? "已通过" : "未通过"}：`,
+    "",
+    `${facts.cpuCores} 核 CPU / ${gibibytes(facts.memoryBytes).toFixed(1)} GB 内存 / ${gibibytes(facts.diskBytes).toFixed(1)} GB 可用磁盘`,
+  ];
+  if (!assessment.ok) {
+    lines.push("", "需要先处理：", ...assessment.blockers.map((blocker) => `- ${blocker}`));
+  } else {
+    lines.push("", "确认后将执行：", singleNodeResourceEstimate());
+  }
+  write("\n");
+  writeUserMessage(write, "platform.preflight", lines.join("\n"));
+}
+
+async function confirmInstall(assumeYes, {
+  interactive = process.stdin.isTTY && process.stdout.isTTY,
+  write = (value) => process.stdout.write(value),
+} = {}) {
   if (assumeYes) return true;
-  if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    process.stdout.write("\n[RAINSKILLS_USER_INPUT_REQUIRED:platform_install_confirmation]\n");
-    process.stdout.write("确认上述系统变更后，重新执行相同命令并添加 --yes。\n");
+  if (!interactive) {
+    write("\n[RAINSKILLS_USER_INPUT_REQUIRED:platform_install_confirmation]\n");
+    writeUserMessage(
+      write,
+      "platform.install-confirmation",
+      "是否开始安装 Rainbond？请回复 y 或 n。",
+    );
     return false;
   }
   const prompt = readline.createInterface({ input: process.stdin, output: process.stdout });
   try {
-    const answer = await prompt.question("\n是否开始安装 Rainbond？[y/N]: ");
+    const answer = await prompt.question("\n是否开始安装 Rainbond？请回复 y 或 n：");
     return /^(y|yes)$/i.test(answer.trim());
   } finally {
     prompt.close();
@@ -2206,22 +2295,19 @@ async function installWindowsRainbond({ adapter, onboarding, options, paths, sta
 }
 
 function resumeInvocationForOnboarding(onboarding, execPath = process.execPath) {
+  assertOperationId(onboarding.operation_id);
   const args = [
+    path.resolve(__dirname, "..", "..", "bin", "rainskills.js"),
+    "runtime",
+    "connect",
     onboarding.target,
-    "--self-hosted",
     "--rainbond-url",
     onboarding.console_url,
   ];
   if (onboarding.console_url.startsWith("http://")) args.push("--allow-insecure-http");
-  if (onboarding.control_mode === "windows-native") {
-    return {
-      executable: execPath,
-      args: [path.resolve(__dirname, "windows-onboarding.js"), ...args],
-    };
-  }
   return {
-    executable: "bash",
-    args: [path.resolve(__dirname, "..", "..", "install.sh"), ...args],
+    executable: execPath,
+    args,
   };
 }
 
@@ -2298,6 +2384,13 @@ async function waitForWindowsConsole({
   throw new Error(`WINDOWS_CONSOLE_UNAVAILABLE: ${consoleUrl} 在等待时间内未就绪`);
 }
 
+function assertHostOperationActive(abortState) {
+  if (!abortState?.aborted) return;
+  const error = new Error(`主机集群安装已被 ${abortState.signal || "信号"} 中断`);
+  error.code = "RAINSKILLS_HOST_INSTALL_INTERRUPTED";
+  throw error;
+}
+
 async function runResume(onboardingId, {
   onboardingPath = onboardingStatePath,
   ensurePrivateDirectory = ensurePrivateOperationDirectory,
@@ -2310,9 +2403,12 @@ async function runResume(onboardingId, {
   consoleReadiness = waitForWindowsConsole,
   onboardingUpdater = updateOnboarding,
   invocationBuilder = resumeInvocationForOnboarding,
+  environment = process.env,
   attachedRunner = spawnAttached,
   write = (value) => process.stdout.write(value),
+  abortState = null,
 } = {}) {
+  assertHostOperationActive(abortState);
   assertOperationId(onboardingId);
   ensurePrivateDirectory(path.dirname(onboardingPath()));
   let onboarding = onboardingReader(onboardingPath(), onboardingId);
@@ -2323,6 +2419,8 @@ async function runResume(onboardingId, {
   const paths = pathsResolver(onboardingId);
   let windowsContext = null;
   let runtimeLease = null;
+  let resumeState = null;
+  let resumeTelemetry = null;
   try {
     if (onboarding.platform_state_path) {
       if (path.resolve(onboarding.platform_state_path) !== path.resolve(paths.state)) {
@@ -2330,36 +2428,76 @@ async function runResume(onboardingId, {
       }
       ensurePrivateDirectory(paths.root);
       assertFilesSafe(paths);
-      const state = platformStateReader(paths.state, onboardingId);
-      if (state.target_kind === "local-windows") {
-        if (state.stage !== "platform-ready") {
-          throw new Error(`当前 Windows 平台阶段不能恢复授权：${state.stage}`);
+      resumeState = platformStateReader(paths.state, onboardingId);
+      resumeTelemetry = createLifecycleTelemetry({
+        context: {
+          install_attempt_id: resumeState.install_attempt_id || onboarding.install_attempt_id || onboarding.operation_id,
+          operation_id: resumeState.operation_id,
+          installation_id: resumeState.installation_id,
+          package_version: packageManifest.version,
+          platform: process.platform,
+          control_mode: resumeState.control_mode || onboarding.control_mode || "posix",
+          target: resumeState.target_kind,
+          client: resumeState.install_client || onboarding.target || "unknown",
+          action: resumeState.install_action || "install",
+          eid: resumeState.eid,
+        },
+      });
+      resumeTelemetry.record({
+        lifecycle_phase: "resume",
+        step: "resume",
+        lifecycle_action: "resume",
+        lifecycle_status: "started",
+        transport: lifecycleTransportForState(resumeState),
+      });
+      if (resumeState.target_kind === "local-windows") {
+        if (resumeState.stage !== "platform-ready") {
+          throw new Error(`当前 Windows 平台阶段不能恢复授权：${resumeState.stage}`);
         }
-        if (!UUID_PATTERN.test(state.installation_id || "")) {
+        if (!UUID_PATTERN.test(resumeState.installation_id || "")) {
           throw new Error("Windows 平台安装状态缺少有效的 installation id");
         }
         write("\n正在启动 Rainbond WSL，Console 就绪后将直接继续授权。\n");
+        assertHostOperationActive(abortState);
         runtimeLease = await windowsRuntimeLease({
           controlMode: onboarding.control_mode || "windows-native",
         });
+        assertHostOperationActive(abortState);
         await consoleReadiness({
           consoleUrl: onboarding.console_url,
           lease: runtimeLease,
         });
-        windowsContext = { installationId: state.installation_id };
+        assertHostOperationActive(abortState);
+        windowsContext = { installationId: resumeState.installation_id };
       }
     }
 
+    assertHostOperationActive(abortState);
     onboarding = onboardingUpdater(onboarding, { stage: "authorizing" });
+    assertHostOperationActive(abortState);
     const invocation = invocationBuilder(onboarding);
+    const resumeEnvironment = resumeState
+      ? {
+        ...environment,
+        RAINSKILLS_INSTALL_ATTEMPT_ID: resumeState.install_attempt_id || onboarding.install_attempt_id || onboarding.operation_id,
+        RAINSKILLS_TELEMETRY_OPERATION_ID: resumeState.operation_id,
+        RAINSKILLS_TELEMETRY_INSTALLATION_ID: resumeState.installation_id,
+        RAINSKILLS_PACKAGE_VERSION: packageManifest.version,
+        RAINSKILLS_TELEMETRY_TARGET: resumeState.target_kind,
+        RAINSKILLS_TELEMETRY_CONTROL_MODE: resumeState.control_mode || onboarding.control_mode || "posix",
+        RAINSKILLS_TELEMETRY_CLIENT: resumeState.install_client || onboarding.target || "unknown",
+      }
+      : { ...environment };
 
     write("\n正在恢复 RainSkills 授权流程，将在浏览器中完成登录和授权。\n");
+    assertHostOperationActive(abortState);
     const result = await attachedRunner(
       invocation.executable,
       invocation.args,
-      { env: process.env },
+      { env: resumeEnvironment },
       null
     );
+    assertHostOperationActive(abortState);
     if (result.signal) throw new Error(`授权流程被信号 ${result.signal} 中断`);
     if (result.code !== 0) {
       write(`\nRainbond 已部署，授权尚未完成。稍后继续：\n  npx rainskills@${packageManifest.version} resume --onboarding-id ${onboardingId}\n`);
@@ -2368,20 +2506,66 @@ async function runResume(onboardingId, {
     if (windowsContext) {
       const adapter = windowsAdapterFactory(onboarding);
       write("\n最后会弹出一次 Windows 管理员确认，用于清理自动恢复任务。\n");
+      assertHostOperationActive(abortState);
       await adapter.finalize({
         operationId: onboardingId,
         installationId: windowsContext.installationId,
         payload: { status: "success" },
       });
+      assertHostOperationActive(abortState);
     }
+    assertHostOperationActive(abortState);
     onboardingUpdater(onboarding, { stage: "configured" });
+    resumeTelemetry?.record({
+      lifecycle_phase: "resume",
+      step: "finalize",
+      lifecycle_action: "finalize",
+      lifecycle_status: "completed",
+      transport: resumeState ? lifecycleTransportForState(resumeState) : null,
+    });
     write("\nRainSkills 已连接到新部署的 Rainbond。\n");
+  } catch (error) {
+    resumeTelemetry?.record({
+      lifecycle_phase: "resume",
+      step: "resume",
+      lifecycle_action: "resume",
+      lifecycle_status: "failed",
+      error_code: "authorization_failed",
+      error_stage: "resume",
+      reason_code: "authorization_failed",
+      retryable: true,
+      transport: resumeState ? lifecycleTransportForState(resumeState) : null,
+    });
+    throw error;
   } finally {
     runtimeLease?.stop();
   }
 }
 
-async function completePlatform(onboarding, state, paths, verification, noResume) {
+const PLATFORM_AUTHORIZATION_PENDING_CODE = "RAINSKILLS_PLATFORM_AUTHORIZATION_PENDING";
+
+function isPlatformAuthorizationPending(error) {
+  return error?.code === PLATFORM_AUTHORIZATION_PENDING_CODE;
+}
+
+async function resumeAfterPlatformCompletion(onboardingId, {
+  abortState = null,
+  resumeRunner = runResume,
+} = {}) {
+  try {
+    await resumeRunner(onboardingId, { abortState });
+  } catch (error) {
+    const pending = new Error(
+      "Rainbond 运行环境已部署成功，但连接或授权尚未完成；请使用原任务继续。",
+      { cause: error }
+    );
+    pending.code = PLATFORM_AUTHORIZATION_PENDING_CODE;
+    throw pending;
+  }
+}
+
+async function completePlatform(onboarding, state, paths, verification, noResume, { abortState = null } = {}) {
+  assertHostOperationActive(abortState);
   const controlConsoleUrl = verification.controlConsoleUrl || verification.consoleUrl;
   state = updateState(paths.state, state, {
     stage: "platform-ready",
@@ -2390,24 +2574,134 @@ async function completePlatform(onboarding, state, paths, verification, noResume
     control_console_url: controlConsoleUrl,
     verification,
   });
+  assertHostOperationActive(abortState);
   appendEvent(paths, state, "platform-ready", "completed");
+  assertHostOperationActive(abortState);
   onboarding = updateOnboarding(onboarding, {
     stage: "platform-ready",
     platform_state_path: paths.state,
     console_url: controlConsoleUrl,
     display_console_url: verification.consoleUrl,
   });
+  assertHostOperationActive(abortState);
   activeOperation = null;
 
   const deploymentLocation = verification.location || state.host;
-  process.stdout.write(`\nRainbond 部署成功\n\n部署位置：${deploymentLocation}\n运行状态：正常\nConsole 地址：${verification.consoleUrl}\n\n接下来将连接该平台并完成授权。\n`);
-  if (!noResume) await runResume(onboarding.operation_id);
+  process.stdout.write("\n");
+  writeUserMessage(
+    (value) => process.stdout.write(value),
+    "platform.completed",
+    platformCompletionMessage({ deploymentLocation, consoleUrl: verification.consoleUrl }),
+  );
+  assertHostOperationActive(abortState);
+  if (!noResume) await resumeAfterPlatformCompletion(onboarding.operation_id, { abortState });
 }
 
-async function runInstallOperation(options) {
+function platformCompletionMessage({ deploymentLocation, consoleUrl }) {
+  return [
+    "Rainbond 运行环境部署成功",
+    "",
+    `部署位置：${deploymentLocation}`,
+    "运行状态：正常",
+    `Console 地址：${consoleUrl}`,
+    "",
+    "接下来将连接该平台并完成授权。",
+  ].join("\n");
+}
+
+async function waitForHostClusterConfiguration({ write = (value) => process.stdout.write(value) } = {}) {
+  write("\n[RAINSKILLS_NEXT_ACTION_REQUIRED:host_cluster_configuration]\n");
+  writeUserMessage(
+    write,
+    "platform.host-cluster-configuration",
+    "多节点主机集群模式已选择。Rainskills 将生成受保护的中文 servers.txt 表单；填写服务器信息后，会自动生成集群配置。",
+  );
+  return { waiting: true };
+}
+
+async function waitForExistingKubernetesConfiguration({ write = (value) => process.stdout.write(value) } = {}) {
+  write("\n[RAINSKILLS_NEXT_ACTION_REQUIRED:existing_kubernetes_configuration]\n");
+  writeUserMessage(
+    write,
+    "platform.existing-kubernetes-configuration",
+    "已有 Kubernetes 集群模式已选择。请继续提供目标 context 和安装参数。",
+  );
+  return { waiting: true };
+}
+
+function savedRouteFromState(state) {
+  if (!state.target_kind && !state.location) return null;
+  const legacyMode = ["host-cluster", "existing-kubernetes"].includes(state.target_kind)
+    ? state.target_kind
+    : "single-node";
+  return {
+    location: state.location || (state.target_kind?.startsWith("local-") ? "local" : "server"),
+    mode: state.mode ?? (state.location ? null : legacyMode),
+    kind: state.target_kind,
+    host: state.host,
+    sshPort: state.ssh_port,
+  };
+}
+
+async function runHostClusterDriver(context, {
+  installer = installHostCluster,
+  establishSession = establishSshSession,
+  closeSession = closeSshSession,
+  packageVersion = packageManifest.version,
+} = {}) {
+  const ownsAbortState = !context.abortState;
+  const abortState = context.abortState || { aborted: false, signal: null };
+  if (ownsAbortState) activeAbortState = abortState;
+  try {
+    return await installer(context, {
+      sessionFactory: (item, options) => establishSession({
+        host: `root@${item.address}`,
+        port: item.port,
+      }, options),
+      closeSession,
+      registerChild: registerActiveChild,
+      packageVersion,
+      abortState,
+    });
+  } finally {
+    if (ownsAbortState && activeAbortState === abortState) activeAbortState = null;
+  }
+}
+
+async function runExistingKubernetesDriver(context, {
+  installer = installExistingKubernetes,
+} = {}) {
+  const ownsAbortState = !context.abortState;
+  const abortState = context.abortState || { aborted: false, signal: null };
+  if (ownsAbortState) activeAbortState = abortState;
+  try {
+    return await installer(context, {
+      registerChild: registerActiveChild,
+      abortState,
+    });
+  } finally {
+    if (ownsAbortState && activeAbortState === abortState) activeAbortState = null;
+  }
+}
+
+async function runInstallOperation(options, {
+  onboardingPathResolver = onboardingStatePath,
+  ensurePrivateDirectory = ensurePrivateOperationDirectory,
+  onboardingReader = readOnboardingState,
+  pathsResolver = operationPaths,
+  targetSelector = selectInstallTarget,
+  hostClusterInstaller = runHostClusterDriver,
+  existingKubernetesInstaller = runExistingKubernetesDriver,
+  platformCompleter = completePlatform,
+  stateWriter = atomicWriteJson,
+  stateUpdater = updateState,
+  platformStateReader = readPlatformState,
+} = {}) {
+  validateRawRoutingInputs(options);
+  if (options.ssh) normalizeRemoteTarget(options.ssh, options.sshPort ?? 22);
   assertOperationId(options.onboardingId);
-  ensurePrivateOperationDirectory(path.dirname(onboardingStatePath()));
-  let onboarding = readOnboardingState(onboardingStatePath(), options.onboardingId);
+  const onboardingPath = onboardingPathResolver();
+  let onboarding = onboardingReader(onboardingPath, options.onboardingId);
   if (!["awaiting-platform", "platform-ready", "authorizing"].includes(onboarding.stage)) {
     throw new Error(`当前 onboarding 阶段不能安装平台：${onboarding.stage}`);
   }
@@ -2415,16 +2709,32 @@ async function runInstallOperation(options) {
     if (!options.noResume) await runResume(options.onboardingId);
     return;
   }
+  const controlPlatform = controlHostPlatform(onboarding);
+  validateRoutingRequest({ platform: controlPlatform, options });
+  ensurePrivateDirectory(path.dirname(onboardingPath));
 
-  const paths = operationPaths(options.onboardingId);
-  ensurePrivateOperationDirectory(paths.root);
+  const paths = pathsResolver(options.onboardingId);
+  ensurePrivateDirectory(paths.root);
   assertOperationFilesSafe(paths);
   let state = fs.existsSync(paths.state)
-    ? readPlatformState(paths.state, options.onboardingId)
+    ? platformStateReader(paths.state, options.onboardingId)
     : createPlatformState(options.onboardingId, paths);
+  validateRawRoutingInputs({}, { host: state.host });
+  if (state.host) normalizeRemoteTarget(state.host, state.ssh_port ?? 22);
+  validatePersistedRouteTuple(state, { controlPlatform });
+  const savedTarget = savedRouteFromState(state);
+  validateRoutingRequest({ platform: controlPlatform, options, savedRoute: savedTarget });
+  assertAgentHandoffRoute(options, savedTarget);
   if (!UUID_PATTERN.test(state.installation_id || "")) {
     state = { ...state, installation_id: crypto.randomUUID() };
   }
+  state = {
+    ...state,
+    install_attempt_id: state.install_attempt_id || onboarding.install_attempt_id || onboarding.operation_id || crypto.randomUUID(),
+    control_mode: state.control_mode || onboarding.control_mode || "posix",
+    install_client: state.install_client || onboarding.target || "unknown",
+    install_action: state.install_action || "install",
+  };
   const configuredRainbondImage = requestedRainbondImage(options, state);
   if (state.rainbond_image && configuredRainbondImage && state.rainbond_image !== configuredRainbondImage) {
     throw new Error("当前 onboarding 已绑定另一个 Rainbond 镜像，请使用原镜像继续或清理后重新安装");
@@ -2432,23 +2742,23 @@ async function runInstallOperation(options) {
   if (configuredRainbondImage && state.rainbond_image !== configuredRainbondImage) {
     state = { ...state, rainbond_image: configuredRainbondImage };
   }
-  atomicWriteJson(paths.state, state);
-  activeOperation = { paths, state, onboardingId: options.onboardingId };
+  stateWriter(paths.state, state);
+  activeOperation = { paths, state, onboardingId: options.onboardingId, telemetry: null, stageStartedAt: {} };
 
-  const savedTarget = state.target_kind ? {
-    kind: state.target_kind,
-    host: state.host,
-    sshPort: state.ssh_port,
-  } : null;
-  const target = await selectInstallTarget({
-    platform: controlHostPlatform(onboarding),
+  const target = await targetSelector({
+    platform: controlPlatform,
     options,
     savedTarget,
   });
-  if (!target) {
-    state = updateState(paths.state, state, {
+  if (target.waiting) {
+    state = stateUpdater(paths.state, state, {
       stage: "target-selection",
       status: "waiting_user",
+      location: target.location,
+      mode: target.mode,
+      target_kind: target.kind,
+      host: target.host,
+      ssh_port: target.sshPort,
     });
     activeOperation.state = state;
     return;
@@ -2456,13 +2766,81 @@ async function runInstallOperation(options) {
   const remoteTarget = target.kind === "remote-linux"
     ? { host: target.host, port: target.sshPort }
     : null;
-  state = updateState(paths.state, state, {
+  state = stateUpdater(paths.state, state, {
+    location: target.location,
+    mode: target.mode,
     target_kind: target.kind,
     host: target.host,
     ssh_port: target.sshPort,
     remote_workspace: remoteTarget ? remoteWorkspacePath(options.onboardingId) : null,
   });
   activeOperation.state = state;
+  activeOperation.telemetry = createLifecycleTelemetry({
+    context: {
+      install_attempt_id: state.install_attempt_id,
+      operation_id: state.operation_id,
+      installation_id: state.installation_id,
+      package_version: packageManifest.version,
+      platform: process.platform,
+      control_mode: state.control_mode,
+      target: state.target_kind,
+      client: state.install_client,
+      action: state.install_action,
+      eid: state.eid,
+    },
+  });
+  activeOperation.telemetry.record({
+    lifecycle_phase: "target_selection",
+    step: "select_target",
+    lifecycle_action: "preflight",
+    lifecycle_status: "completed",
+    transport: lifecycleTransportForState(state),
+  });
+
+  if (target.mode === "host-cluster" || target.mode === "existing-kubernetes") {
+    state = stateUpdater(paths.state, state, {
+      stage: "mode-configuration",
+      status: "running",
+    });
+    activeOperation.state = state;
+    const driver = target.mode === "host-cluster"
+      ? hostClusterInstaller
+      : existingKubernetesInstaller;
+    const abortState = { aborted: false, signal: null };
+    if (abortState) activeAbortState = abortState;
+    let result;
+    try {
+      result = await driver({ onboarding, state, paths, options, target, abortState });
+      if (abortState?.aborted) {
+        state = stateUpdater(paths.state, state, { status: "interrupted" });
+        activeOperation.state = state;
+        return;
+      }
+      if (result?.verification) {
+        state = stateUpdater(paths.state, state, { input_path: null });
+        activeOperation.state = state;
+        await platformCompleter(onboarding, state, paths, result.verification, options.noResume, { abortState });
+        return;
+      }
+      if (abortState?.aborted) {
+        state = stateUpdater(paths.state, state, { status: "interrupted" });
+        activeOperation.state = state;
+        return;
+      }
+    } finally {
+      if (abortState && activeAbortState === abortState) activeAbortState = null;
+    }
+    if (result?.verification) {
+      return;
+    }
+    state = stateUpdater(paths.state, state, {
+      stage: result?.waitingStage || "mode-configuration",
+      status: result?.cancelled ? "cancelled" : "waiting_user",
+      input_path: result?.inputPath ?? null,
+    });
+    activeOperation.state = state;
+    return;
+  }
 
   const isWindowsLocal = target.kind === "local-windows";
   const windowsAdapter = isWindowsLocal
@@ -2581,7 +2959,6 @@ async function runInstallOperation(options) {
         status: "waiting_user",
       });
       appendEvent(paths, state, "ssh-authentication", "waiting_user");
-      process.stdout.write(`请在交互终端继续：\n  npx rainskills@${packageManifest.version} platform install --onboarding-id ${options.onboardingId} --target remote-linux --ssh ${remoteTarget.host} --ssh-port ${remoteTarget.port}\n`);
       return;
     }
     activeSshSession = sshSession;
@@ -2640,6 +3017,7 @@ async function runInstallOperation(options) {
       await completePlatform(onboarding, state, paths, verification, options.noResume);
       return;
     } catch (error) {
+      if (isPlatformAuthorizationPending(error)) throw error;
       state = updateState(paths.state, state, {
         status: "failed",
         blocker: `检测到已有 rainbond 容器，但尚未通过完整验证：${error.message}`,
@@ -2806,6 +3184,7 @@ async function runInstallOperation(options) {
     process.stdout.write("[4/4] Console 健康检查通过\n");
     await completePlatform(onboarding, state, paths, verification, options.noResume);
   } catch (error) {
+    if (isPlatformAuthorizationPending(error)) throw error;
     if (!interruptedSignal) {
       state = updateState(paths.state, state, { status: "failed", blocker: error.message });
       appendEvent(paths, state, state.stage, "failed");
@@ -2830,14 +3209,21 @@ async function runInstall(options, {
 
 function interruptActiveOperation(signal) {
   interruptedSignal = signal;
+  if (activeAbortState) Object.assign(activeAbortState, { aborted: true, signal });
   if (activeRequest) {
     activeRequest.destroy(new Error(`下载被 ${signal} 中断`));
     activeRequest = null;
   }
-  if (activeChild?.pid) {
+  const children = activeChildren.size > 0
+    ? [...activeChildren.entries()]
+    : activeChild?.pid ? [[activeChild, activeChildDetached]] : [];
+  activeChildren.clear();
+  activeChild = null;
+  activeChildDetached = false;
+  for (const [child, detached] of children) {
     try {
-      if (activeChildDetached && process.platform !== "win32") process.kill(-activeChild.pid, signal);
-      else activeChild.kill(signal);
+      if (detached && process.platform !== "win32") process.kill(-child.pid, signal);
+      else child.kill(signal);
     } catch {
       // The child may already have exited.
     }
@@ -2850,7 +3236,11 @@ function interruptActiveOperation(signal) {
       const state = JSON.parse(fs.readFileSync(paths.state, "utf8"));
       const interrupted = updateState(paths.state, state, { status: "interrupted" });
       appendEvent(paths, interrupted, interrupted.stage, "interrupted");
-      process.stderr.write(`\n安装已中断，状态已保留。继续时执行：\n  npx rainskills@${packageManifest.version} platform install --onboarding-id ${activeOperation.onboardingId}\n`);
+      if (interrupted.target_kind === "host-cluster") {
+        process.stderr.write("\n[RAINSKILLS_AGENT_CONTINUATION_REQUIRED:host_cluster_interrupted]\n安装会话已中断，受保护状态已保留；当前任务将先进行安全核对再继续。\n");
+      } else {
+        process.stderr.write(`\n安装已中断，状态已保留。继续时执行：\n  npx rainskills@${packageManifest.version} platform install --onboarding-id ${activeOperation.onboardingId}\n`);
+      }
     } catch (error) {
       process.stderr.write(`\n保存中断状态失败：${error.message}\n`);
     }
@@ -2867,6 +3257,14 @@ async function main(argv) {
   if (options.command === "install") await runInstall(options);
   else if (options.command === "resume") await runResume(options.onboardingId);
   else throw new Error(`未知命令：${options.command}`);
+}
+
+function printCliError(error, write = (value) => process.stderr.write(value)) {
+  if (error?.code === "RAINSKILLS_OPERATION_LOCK_BUSY") {
+    write("[RAINSKILLS_OPERATION_LOCK_BUSY]\n已有安装会话仍在运行；当前任务将继续等待该会话。\n");
+    return;
+  }
+  write(`错误：${error.message}\n`);
 }
 
 module.exports = {
@@ -2891,16 +3289,28 @@ module.exports = {
   normalizeRemoteTarget,
   normalizeWindowsExecutableForControl,
   parseArgs,
+  printCliError,
+  platformCompletionMessage,
+  printPreflight,
+  printWindowsPreflight,
+  confirmInstall,
+  interruptActiveOperation,
   prepareInstallerForRainbondImage,
   prepareRemoteInstaller,
   readOnboardingState,
   readPlatformState,
+  resumeAfterPlatformCompletion,
+  isPlatformAuthorizationPending,
   refreshWindowsMachineBundleBeforeAuthorization,
   remoteInstallerInvocation,
   useBundledInstaller,
   runCommand,
+  runHostClusterDriver,
+  runExistingKubernetesDriver,
   runInstall,
+  runInstallOperation,
   runResume,
+  savedRouteFromState,
   resolveRemoteConsole,
   resumeInvocationForOnboarding,
   resolveSshHostname,
@@ -2914,6 +3324,8 @@ module.exports = {
   verifyRemoteDeployment,
   verifyRemoteRainbond,
   waitForWindowsConsole,
+  waitForHostClusterConfiguration,
+  waitForExistingKubernetesConfiguration,
   windowsRecoveryBundle,
   windowsHelperRunOptions,
 };
@@ -2929,7 +3341,7 @@ if (require.main === module) {
   });
   main(process.argv.slice(2)).catch((error) => {
     if (!interruptedSignal) {
-      process.stderr.write(`错误：${error.message}\n`);
+      printCliError(error);
       process.exitCode = 1;
     }
   });

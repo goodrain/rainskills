@@ -1,5 +1,5 @@
 case: source-delivered-manual-validation
-presentation_mode: concise
+presentation_mode: customer
 assert:
   prose_contains:
     - 部署成功，待浏览器访问确认

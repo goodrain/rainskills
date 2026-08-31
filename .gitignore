@@ -5,3 +5,13 @@ __pycache__/
 .vscode/
 node_modules/
 *.tgz
+
+# Local design, planning, and generated specification artifacts
+.claude/specs/
+.superpowers/
+docs/core-test-cases*.md
+docs/marketing/
+docs/plans/
+docs/*-acceptance.md
+docs/superpowers/plans/
+docs/superpowers/specs/

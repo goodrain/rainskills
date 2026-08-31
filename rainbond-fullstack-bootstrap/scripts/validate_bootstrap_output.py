@@ -13,6 +13,10 @@ from typing import Any
 
 import yaml
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+from validate_customer_output import validate_customer_output  # noqa: E402
+
 
 REQUIRED_SECTIONS = [
     "### Creation Result",
@@ -98,6 +102,14 @@ def validate_response_file(
     expected = load_yaml(expected_path) if expected_path else None
 
     errors: list[str] = []
+
+    presentation_mode = (expected or {}).get("presentation_mode", "customer")
+    if presentation_mode == "customer":
+        return validate_customer_output(response_text, expected or {})
+    if presentation_mode == "structured":
+        pass
+    else:
+        return [f"unsupported presentation_mode: {presentation_mode!r}"]
 
     try:
         sections = parse_required_sections(response_text)
@@ -384,8 +396,8 @@ def validate_cross_field_rules(payload: dict[str, Any]) -> list[str]:
             "blocking_bucket='cluster capacity blocked'"
         )
 
-    if blocking_bucket == "mcp backend issue" and next_handoff != "none":
-        errors.append("blocking_bucket='mcp backend issue' requires next_handoff='none'")
+    if blocking_bucket == "platform backend issue" and next_handoff != "none":
+        errors.append("blocking_bucket='platform backend issue' requires next_handoff='none'")
 
     if blocking_bucket == "external artifact unreachable":
         if overall != "code_or_build_handoff_needed":

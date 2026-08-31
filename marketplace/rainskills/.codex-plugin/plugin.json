@@ -1,7 +1,7 @@
 {
   "name": "rainskills",
-  "version": "1.0.0",
-  "description": "Install and initialize the complete Rainbond skill suite as one product.",
+  "version": "0.1.36",
+  "description": "Install the complete Rainskills AI deployment skill suite as one product.",
   "author": {
     "name": "Goodrain",
     "url": "https://www.rainbond.com"
@@ -13,14 +13,17 @@
     "rainbond",
     "codex",
     "claude-code",
+    "deepseek-harness",
+    "workbuddy",
+    "hermes-agent",
     "skills",
     "installer"
   ],
   "skills": "./skills/",
   "interface": {
     "displayName": "Rainskills",
-    "shortDescription": "Install and connect the complete Rainbond skill suite",
-    "longDescription": "Install every independent Rainskills capability, choose Rainbond Cloud or a private platform, authorize access, configure MCP, and verify the connection.",
+    "shortDescription": "Install the complete Rainskills AI deployment skill suite",
+    "longDescription": "Install every independent Rainskills capability. Application runtime selection and connection happen later, only when the user requests an action that needs them.",
     "developerName": "Goodrain",
     "category": "Engineering",
     "capabilities": [
@@ -29,7 +32,7 @@
     ],
     "websiteURL": "https://www.rainbond.com",
     "defaultPrompt": [
-      "Install and initialize Rainskills for me."
+      "Install Rainskills for me."
     ],
     "brandColor": "#2563EB",
     "screenshots": []

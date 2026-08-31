@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 
-"""Deterministic routing-policy evals for generic Rainbond skill prompts."""
+"""Route fixtures against the descriptions in real Rainbond Skill frontmatter."""
 
 from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import re
 
 import yaml
 
@@ -16,68 +17,141 @@ SKILL_FILES = {
     "rainbond-fullstack-bootstrap": ROOT / "rainbond-fullstack-bootstrap" / "SKILL.md",
     "rainbond-fullstack-troubleshooter": ROOT / "rainbond-fullstack-troubleshooter" / "SKILL.md",
     "rainbond-delivery-verifier": ROOT / "rainbond-delivery-verifier" / "SKILL.md",
+    "rainbond-platform-query": ROOT / "rainbond-platform-query" / "SKILL.md",
+    "rainbond-app-version-assistant": ROOT / "rainbond-app-version-assistant" / "SKILL.md",
+    "rainbond-env-sync": ROOT / "rainbond-env-sync" / "SKILL.md",
+    "rainbond-project-init": ROOT / "rainbond-project-init" / "SKILL.md",
+    "rainbond-template-installer": ROOT / "rainbond-template-installer" / "SKILL.md",
+    "rainbond-opensource-app-deploy": ROOT / "rainbond-opensource-app-deploy" / "SKILL.md",
 }
 
 
-def classify_prompt(prompt: str) -> str | None:
+def parse_frontmatter(skill_path: Path) -> dict[str, str]:
+    text = skill_path.read_text(encoding="utf-8")
+    match = re.match(r"\A---\s*\n(.*?)\n---\s*\n", text, re.DOTALL)
+    if not match:
+        raise ValueError(f"missing YAML frontmatter: {skill_path}")
+    metadata = yaml.safe_load(match.group(1))
+    if not isinstance(metadata, dict) or set(metadata) != {"name", "description"}:
+        raise ValueError(f"frontmatter must contain only name and description: {skill_path}")
+    if metadata["name"] != skill_path.parent.name or not isinstance(metadata["description"], str):
+        raise ValueError(f"invalid Skill frontmatter: {skill_path}")
+    return metadata
+
+
+def skill_contract_text(skill_path: Path) -> str:
+    texts = [skill_path.read_text(encoding="utf-8")]
+    references = skill_path.parent / "references"
+    if references.is_dir():
+        texts.extend(
+            path.read_text(encoding="utf-8")
+            for path in sorted(references.glob("*.md"))
+        )
+    return "\n".join(texts)
+
+
+def normalize(value: str) -> str:
+    return "".join(character.lower() for character in value if character.isalnum())
+
+
+def common_substring_coverage(prompt: str, description: str) -> float:
+    left = normalize(prompt)
+    right = normalize(description)
+    if not left:
+        return 0.0
+    previous = [0] * (len(right) + 1)
+    longest = 0
+    for left_character in left:
+        current = [0]
+        for index, right_character in enumerate(right, start=1):
+            length = previous[index - 1] + 1 if left_character == right_character else 0
+            current.append(length)
+            longest = max(longest, length)
+        previous = current
+    return longest / len(left)
+
+
+def classify_prompt(prompt: str, metadata_by_skill: dict[str, dict[str, str]]) -> str | None:
     text = prompt.lower().strip()
+    explicit = [name for name in metadata_by_skill if f"${name}" in text or name in text]
+    if len(explicit) == 1:
+        return explicit[0]
+    if explicit:
+        return None
 
-    explicit_names = {
-        "rainbond-app-assistant": ["$rainbond-app-assistant", "rainbond-app-assistant"],
-        "rainbond-fullstack-bootstrap": ["$rainbond-fullstack-bootstrap", "rainbond-fullstack-bootstrap"],
-        "rainbond-fullstack-troubleshooter": [
-            "$rainbond-fullstack-troubleshooter",
-            "rainbond-fullstack-troubleshooter",
-        ],
-        "rainbond-delivery-verifier": ["$rainbond-delivery-verifier", "rainbond-delivery-verifier"],
-    }
-    for skill, needles in explicit_names.items():
-        if any(needle in text for needle in needles):
-            return skill
-
-    bootstrap_needles = [
-        "只帮我创建应用和组件",
-        "只创建应用和组件",
-        "create app and components",
-        "create topology",
-        "bootstrap only",
+    platform_query_needles = [
+        "当前企业",
+        "当前登录的用户",
+        "有哪些团队",
+        "有哪些集群",
+        "团队里的应用",
+        "应用有哪些组件",
+        "current enterprise",
+        "current user",
+        "list teams",
+        "list regions",
+        "list apps",
+        "list components",
     ]
-    if any(needle in text for needle in bootstrap_needles):
-        return "rainbond-fullstack-bootstrap"
+    if any(needle in text for needle in platform_query_needles):
+        return "rainbond-platform-query"
 
-    troubleshoot_needles = [
-        "为什么构建失败",
-        "构建失败",
-        "先查事件和构建日志",
-        "why build failed",
-        "build failure",
-    ]
-    if any(needle in text for needle in troubleshoot_needles):
-        return "rainbond-fullstack-troubleshooter"
+    if "模板" in text or "market template" in text:
+        return "rainbond-template-installer"
 
-    delivery_needles = [
-        "交付成功",
-        "访问地址",
-        "是否已经交付成功",
-        "delivery complete",
-        "verify delivery",
-    ]
-    if any(needle in text for needle in delivery_needles):
-        return "rainbond-delivery-verifier"
+    if "只初始化" in text or "rainbond.app.json" in text:
+        return "rainbond-project-init"
 
-    generic_app_assistant_needles = [
-        "部署到 rainbond",
-        "部署到rainbond",
-        "帮我把这个项目跑起来",
-        "帮我看看当前项目卡在哪",
-        "如果还没初始化就先初始化",
-        "自动继续到应该停止的位置",
-        "continue to the right stop point",
+    project_source_needles = [
+        "当前项目",
+        "当前目录",
+        "本地项目",
+        "本地目录",
+        "这个 git 仓库",
+        "this git repository",
+        "github.com/",
+        "gitlab.com/",
+        "gitee.com/",
     ]
-    if any(needle in text for needle in generic_app_assistant_needles):
+    if any(needle in text for needle in project_source_needles):
         return "rainbond-app-assistant"
 
-    return None
+    open_source_descriptor_needles = [
+        "docker-compose",
+        "docker compose",
+        "compose 文件",
+        "compose file",
+        "helm chart",
+        "helm 图表",
+        "镜像清单",
+        "image set",
+    ]
+    if any(needle in text for needle in open_source_descriptor_needles):
+        return "rainbond-opensource-app-deploy"
+
+    named_open_source_suites = ("harbor", "dify", "n8n")
+    if any(name in text for name in named_open_source_suites):
+        return "rainbond-opensource-app-deploy"
+
+    if (
+        "镜像" in text
+        and "组件" in text
+        and "应用" in text
+        and ("新建" in text or "创建" in text)
+    ):
+        return "rainbond-app-assistant"
+
+    scores = sorted(
+        (
+            common_substring_coverage(prompt, metadata["description"]),
+            name,
+        )
+        for name, metadata in metadata_by_skill.items()
+    )
+    best_score, best_name = scores[-1]
+    if best_score < 0.35 or (len(scores) > 1 and best_score == scores[-2][0]):
+        return None
+    return best_name
 
 
 def main() -> int:
@@ -93,11 +167,15 @@ def main() -> int:
     payload = yaml.safe_load(args.fixtures.read_text(encoding="utf-8"))
     cases = payload.get("cases", [])
     required_markers = payload.get("required_markers", {})
+    metadata_by_skill = {
+        name: parse_frontmatter(skill_path)
+        for name, skill_path in SKILL_FILES.items()
+    }
 
     failures = 0
     for skill_name, markers in required_markers.items():
         skill_path = SKILL_FILES[skill_name]
-        text = skill_path.read_text(encoding="utf-8")
+        text = skill_contract_text(skill_path)
         for marker in markers:
             if marker not in text:
                 print(f"FAIL marker {skill_name}")
@@ -105,7 +183,7 @@ def main() -> int:
                 failures += 1
 
     for case in cases:
-        predicted = classify_prompt(case["prompt"])
+        predicted = classify_prompt(case["prompt"], metadata_by_skill)
         expected = case["expected_skill"]
         if predicted != expected:
             print(f"FAIL {case['id']}")

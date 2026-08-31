@@ -23,6 +23,9 @@ jobs:
           node-version: '24'
           package-manager-cache: false
 
+      - name: Install package dependencies
+        run: npm ci --ignore-scripts
+
       - name: Parse PowerShell and verify browser data handling
         shell: powershell
         run: .\tests\windows-contract.ps1
@@ -58,17 +61,28 @@ jobs:
       - name: Install package build dependencies
         run: npm ci --ignore-scripts
 
-      - name: Verify Pi extension
-        run: node scripts/build-pi-extension.mjs --check
+      - name: Verify runtime package versions
+        run: node scripts/sync-runtime-version.mjs --check
 
       - name: Verify marketplace package
         run: node scripts/build-marketplace-package.mjs --check
+
+      - name: Build embedded Agent profile
+        run: |
+          SHA="${{ steps.meta.outputs.sha }}"
+          node scripts/build-skill-profile.mjs \
+            --profile embedded \
+            --revision "$SHA" \
+            --output rainskills-embedded
 
       - name: Pack release tarball
         run: |
           SHA="${{ steps.meta.outputs.sha }}"
           git archive --format=tar.gz --prefix=rainskills/ -o rainskills-latest.tar.gz HEAD
           cp rainskills-latest.tar.gz "rainskills-${SHA}.tar.gz"
+          tar -czf "rainskills-embedded-${SHA}.tar.gz" \
+            --transform 's,^,rainskills/,' \
+            -C rainskills-embedded .
           ls -lh rainskills-*.tar.gz
 
       - name: Build canary channel manifest
@@ -77,12 +91,26 @@ jobs:
           cat > canary.json <<EOF
           {
             "sha": "${SHA}",
+            "profile": "cli",
+            "transport": "api",
             "promoted_at": "$(TZ='Asia/Shanghai' date +%Y-%m-%dT%H:%M:%S%:z)",
             "tarball_url": "https://get.rainbond.com/rainskills/rainskills-${SHA}.tar.gz",
             "manifest_version": 1
           }
           EOF
           cat canary.json
+
+          cat > canary-embedded.json <<EOF
+          {
+            "sha": "${SHA}",
+            "profile": "embedded",
+            "transport": "mcp",
+            "promoted_at": "$(TZ='Asia/Shanghai' date +%Y-%m-%dT%H:%M:%S%:z)",
+            "tarball_url": "https://get.rainbond.com/rainskills/profiles/embedded/rainskills-embedded-${SHA}.tar.gz",
+            "manifest_version": 1
+          }
+          EOF
+          cat canary-embedded.json
 
       - name: Install tosutil
         env:
@@ -130,6 +158,8 @@ jobs:
           /tmp/tosutil cp rainskills-latest.tar.gz   "tos://${TOS_BUCKET}/${PREFIX}rainskills-latest.tar.gz"   "${TOSUTIL_OPTS[@]}"
           /tmp/tosutil cp "rainskills-${SHA}.tar.gz" "tos://${TOS_BUCKET}/${PREFIX}rainskills-${SHA}.tar.gz"   "${TOSUTIL_OPTS[@]}"
           /tmp/tosutil cp canary.json                "tos://${TOS_BUCKET}/${PREFIX}channels/canary.json"       "${TOSUTIL_OPTS[@]}"
+          /tmp/tosutil cp "rainskills-embedded-${SHA}.tar.gz" "tos://${TOS_BUCKET}/${PREFIX}profiles/embedded/rainskills-embedded-${SHA}.tar.gz" "${TOSUTIL_OPTS[@]}"
+          /tmp/tosutil cp canary-embedded.json "tos://${TOS_BUCKET}/${PREFIX}profiles/embedded/channels/canary.json" "${TOSUTIL_OPTS[@]}"
 
       - name: Summary
         run: |
@@ -146,6 +176,8 @@ jobs:
             echo "- rainskills-latest.tar.gz"
             echo "- rainskills-${SHA}.tar.gz"
             echo "- channels/canary.json → sha=${SHA}"
+            echo "- profiles/embedded/rainskills-embedded-${SHA}.tar.gz"
+            echo "- profiles/embedded/channels/canary.json → sha=${SHA}"
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ─────────────────────────────────────────────────────────────
@@ -194,6 +226,7 @@ jobs:
           SHA="$(git rev-parse --short HEAD)"
           TAG="${GITHUB_REF#refs/tags/}"
           TARBALL_URL="https://get.rainbond.com/rainskills/rainskills-${SHA}.tar.gz"
+          EMBEDDED_TARBALL_URL="https://get.rainbond.com/rainskills/profiles/embedded/rainskills-embedded-${SHA}.tar.gz"
           PACKAGE_NAME="$(node -p "require('./package.json').name")"
           VERSION="$(node -p "require('./package.json').version")"
 
@@ -212,6 +245,7 @@ jobs:
           echo "sha=${SHA}"           >> "$GITHUB_OUTPUT"
           echo "tag=${TAG}"           >> "$GITHUB_OUTPUT"
           echo "tarball=${TARBALL_URL}" >> "$GITHUB_OUTPUT"
+          echo "embedded_tarball=${EMBEDDED_TARBALL_URL}" >> "$GITHUB_OUTPUT"
           echo "package_name=${PACKAGE_NAME}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
@@ -256,13 +290,14 @@ jobs:
 
       - name: Validate tagged commit has a tarball on CDN
         run: |
-          URL="${{ steps.meta.outputs.tarball }}"
-          echo "Checking $URL ..."
-          if ! curl -fsSI "$URL" >/dev/null; then
-            echo "ERROR: tarball not found at $URL" >&2
-            echo "Did you push the commit to main first? promote_stable cannot run on a commit that hasn't been released." >&2
-            exit 1
-          fi
+          for URL in "${{ steps.meta.outputs.tarball }}" "${{ steps.meta.outputs.embedded_tarball }}"; do
+            echo "Checking $URL ..."
+            if ! curl -fsSI "$URL" >/dev/null; then
+              echo "ERROR: tarball not found at $URL" >&2
+              echo "Did you push the commit to main first? promote_stable cannot run on a commit that hasn't been released." >&2
+              exit 1
+            fi
+          done
 
       - name: Build stable channel manifest
         run: |
@@ -273,12 +308,27 @@ jobs:
           {
             "sha": "${SHA}",
             "tag": "${TAG}",
+            "profile": "cli",
+            "transport": "api",
             "promoted_at": "$(TZ='Asia/Shanghai' date +%Y-%m-%dT%H:%M:%S%:z)",
             "tarball_url": "${TARBALL}",
             "manifest_version": 1
           }
           EOF
           cat stable.json
+
+          cat > stable-embedded.json <<EOF
+          {
+            "sha": "${SHA}",
+            "tag": "${TAG}",
+            "profile": "embedded",
+            "transport": "mcp",
+            "promoted_at": "$(TZ='Asia/Shanghai' date +%Y-%m-%dT%H:%M:%S%:z)",
+            "tarball_url": "${{ steps.meta.outputs.embedded_tarball }}",
+            "manifest_version": 1
+          }
+          EOF
+          cat stable-embedded.json
 
       - name: Install tosutil
         env:
@@ -291,7 +341,7 @@ jobs:
           chmod +x "$TOSUTIL_BIN"
           cp "$TOSUTIL_BIN" /tmp/tosutil
 
-      - name: Upload stable.json to TOS
+      - name: Upload stable profile manifests to TOS
         env:
           TOS_ENDPOINT: ${{ secrets.TOS_ENDPOINT }}
           TOS_REGION: ${{ secrets.TOS_REGION }}
@@ -310,6 +360,10 @@ jobs:
           PREFIX="${PREFIX%/}/"
           /tmp/tosutil cp stable.json \
             "tos://${TOS_BUCKET}/${PREFIX}channels/stable.json" \
+            "-e=${TOS_ENDPOINT}" "-re=${TOS_REGION}" \
+            "-i=${TOS_ACCESS_KEY_ID}" "-k=${TOS_ACCESS_KEY_SECRET}"
+          /tmp/tosutil cp stable-embedded.json \
+            "tos://${TOS_BUCKET}/${PREFIX}profiles/embedded/channels/stable.json" \
             "-e=${TOS_ENDPOINT}" "-re=${TOS_REGION}" \
             "-i=${TOS_ACCESS_KEY_ID}" "-k=${TOS_ACCESS_KEY_SECRET}"
 
@@ -363,8 +417,9 @@ jobs:
 
           - **tag**: \`${TAG}\`
           - **sha**: \`${SHA}\`
-          - **tarball**: ${TARBALL}
-          - **stable.json**: https://get.rainbond.com/rainskills/channels/stable.json
+          - **CLI tarball**: ${TARBALL}
+          - **embedded tarball**: ${{ steps.meta.outputs.embedded_tarball }}
+          - **embedded stable manifest**: https://get.rainbond.com/rainskills/profiles/embedded/channels/stable.json
 
           ## Vendor sync 步骤
 
@@ -373,12 +428,7 @@ jobs:
           git pull origin main
           git checkout -b chore/sync-skills-${SHA}
 
-          bash scripts/sync-skills.sh rainbond-app-assistant rainbond-fullstack-bootstrap
-          npm run skills:sync -- rainbond-fullstack-troubleshooter
-          npm run skills:sync -- rainbond-delivery-verifier
-          npm run skills:sync -- rainbond-template-installer
-          npm run skills:sync -- rainbond-app-version-assistant
-          npm run skills:sync -- rainbond-project-init
+          RAINBOND_SKILLS_UPSTREAM=../rainskills npm run skills:sync
 
           git diff --stat skills-src/rainbond/
           git add skills-src/rainbond/
@@ -417,7 +467,7 @@ jobs:
           {
             echo "Promoted to stable: ${{ steps.meta.outputs.tag }}"
             echo "- sha: ${{ steps.meta.outputs.sha }}"
-            echo "- stable.json updated"
+            echo "- CLI and embedded stable manifests updated"
             if [[ "${{ steps.meta.outputs.tag }}" == stable-v* ]]; then
               echo "- npm: ${{ steps.meta.outputs.package_name }}@${{ steps.meta.outputs.version }}"
             fi

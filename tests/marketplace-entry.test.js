@@ -41,8 +41,11 @@ test("repository exposes one complete Rainskills marketplace entry", () => {
   assert.match(skill, /install\.sh/);
   assert.match(skill, /every bundled `rainbond-\*` Skill as an independent Skill/i);
   assert.match(skill, /Do not ask the user to choose only one/i);
-  assert.match(skill, /Codex=`codex` or Claude Code=`claude`/);
-  assert.match(skill, /does not support OpenClaw or Pi Agent/);
+  assert.match(
+    skill,
+    /Codex=`codex`.*Claude Code=`claude`.*Pi Agent=`pi`.*DeepSeek Harness=`dsh`.*WorkBuddy=`workbuddy`.*Hermes Agent=`hermes`/
+  );
+  assert.match(skill, /does not support OpenClaw/);
   assert.match(skill, /attached interactive terminal/i);
   assert.match(skill, /RAINSKILLS_USER_INPUT_REQUIRED/);
   assert.match(skill, /rainskills\.next-action\.v1/);
@@ -69,6 +72,8 @@ test("marketplace metadata presents Rainskills as one product", () => {
   assert.match(metadata, /display_name: "Rainskills"/);
   assert.match(metadata, /short_description: ".{25,64}"/);
   assert.match(metadata, /default_prompt: ".*\$rainskills.*"/);
+  assert.match(metadata, /安装.*Skill|install.*Skill/i);
+  assert.doesNotMatch(metadata, /connect.*Rainbond|initialize.*Rainbond/i);
 });
 
 test("generated marketplace package contains one version-pinned Skill", () => {
@@ -169,6 +174,18 @@ test("marketplace generator reports committed output is current", () => {
   assert.match(result.stdout, /Marketplace package is current/);
 });
 
+test("marketplace generator can check quietly during npm pack JSON output", () => {
+  const result = spawnSync(
+    process.execPath,
+    ["scripts/build-marketplace-package.mjs", "--check", "--quiet"],
+    { cwd: repoRoot, encoding: "utf8" }
+  );
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, "");
+});
+
 test("release verifies marketplace output before building the repository tarball", () => {
   const workflow = read(".github/workflows/release.yml");
   const validationStep = workflow.indexOf("name: Verify marketplace package");
@@ -183,21 +200,41 @@ test("release verifies marketplace output before building the repository tarball
   );
 });
 
-test("npm artifact includes the marketplace entry", () => {
+test("Windows workflow contracts install package dependencies before running Node tests", () => {
+  for (const workflowPath of [".github/workflows/release.yml", ".github/workflows/test.yml"]) {
+    const workflow = read(workflowPath);
+    const windowsJob = workflow.match(/windows[_-]contract:[\s\S]*?\n  [a-z][a-z_-]*:\n/)?.[0];
+    assert(windowsJob, `${workflowPath} must define a Windows contract job`);
+    const installStep = windowsJob.indexOf("npm ci --ignore-scripts");
+    const testStep = windowsJob.indexOf("node --test tests/windows-onboarding.test.js");
+    assert.notEqual(installStep, -1, `${workflowPath} must install package dependencies`);
+    assert.notEqual(testStep, -1, `${workflowPath} must run Windows installer contracts`);
+    assert(installStep < testStep, `${workflowPath} must install dependencies before tests`);
+  }
+});
+
+test("npm artifact includes the marketplace entry without a Pi adapter", () => {
   const manifest = readJson("package.json");
 
   assert(manifest.files.includes("SKILL.md"));
   assert(manifest.files.includes("agents/"));
   assert(manifest.files.includes("marketplace/"));
-  assert(manifest.files.includes("pi/"));
-  assert.deepEqual(manifest.pi, {
-    skills: ["./marketplace/rainskills/skills"],
-  });
+  assert(!manifest.files.includes("pi/"));
+  assert.equal(manifest.pi, undefined);
+  assert.equal(manifest.scripts["build:pi"], undefined);
+  assert.equal(manifest.scripts["check:pi"], undefined);
+  assert.equal(manifest.scripts["test:pi"], undefined);
+  assert.doesNotMatch(manifest.scripts.test, /test:pi/);
   assert.equal(
     manifest.scripts["test:marketplace"],
     "node --test tests/marketplace-entry.test.js"
   );
   assert.match(manifest.scripts.test, /npm run test:marketplace/);
+  assert.equal(
+    manifest.scripts["test:runtime-routing"],
+    "node --test tests/runtime-onboarding-routing.test.js && python3 rainbond-app-assistant/scripts/validate_progressive_loading.py && python3 rainbond-app-assistant/scripts/validate_cross_skill_routing.py && python3 tests/progressive-loading-validators.test.py && python3 tests/run_skill_routing_evals.py"
+  );
+  assert.match(manifest.scripts.test, /npm run test:runtime-routing/);
   assert.equal(
     manifest.scripts["build:marketplace"],
     "node scripts/build-marketplace-package.mjs"
@@ -215,7 +252,15 @@ test("README distinguishes marketplace and direct installer Node requirements", 
   assert.match(readme, /直接运行.*最低支持 Node\.js 18/s);
 });
 
-test("README documents one-product installation and updates for each adapter", () => {
+test("README routes named open-source suites to official-source acquisition", () => {
+  const readme = read("README.md");
+
+  assert.match(readme, /只说.*Harbor.*自动联网获取官方.*部署资料/s);
+  assert.match(readme, /当前项目.*rainbond-app-assistant/s);
+  assert.match(readme, /Rainbond.*市场模板.*rainbond-template-installer/s);
+});
+
+test("README documents one-product installation and adapter-neutral stable auto-updates", () => {
   const readme = read("README.md");
 
   assert.match(readme, /npx skills add goodrain\/rainskills/);
@@ -223,11 +268,65 @@ test("README documents one-product installation and updates for each adapter", (
   assert.match(readme, /codex plugin add rainskills@goodrain/);
   assert.match(readme, /\/plugin marketplace add goodrain\/rainskills/);
   assert.match(readme, /\/plugin install rainskills@goodrain/);
-  assert.match(readme, /npx skills update rainskills/);
-  assert.match(readme, /codex plugin marketplace upgrade goodrain/);
-  assert.match(readme, /\/plugin update rainskills@goodrain/);
-  assert.match(readme, /支持 Codex 和 Claude Code/);
-  assert.match(readme, /不支持 OpenClaw 或 Pi Agent 安装/);
-  assert.doesNotMatch(readme, /npx --yes rainskills (openclaw|pi)/);
+  assert.match(readme, /静默检查更新/);
+  assert.match(readme, /本地运行时立即返回.*后台任务静默检查更新/s);
+  assert.match(readme, /不会阻塞或改变当前操作/);
+  assert.match(readme, /只跟随.*正式版/s);
+  assert.match(readme, /RC.*不会.*自动升级/s);
+  assert.match(readme, /升级只更新 Rainskills 自身，不触发 Rainbond/s);
+  assert.match(readme, /支持 Codex、Claude Code、Pi Agent、DeepSeek Harness、WorkBuddy 和 Hermes Agent/);
+  assert.match(readme, /不支持 OpenClaw 安装/);
+  assert.doesNotMatch(readme, /npx --yes rainskills openclaw/);
   assert.match(readme, /只会看到一个.*Rainskills/s);
+  assert.match(readme, /安装完成后.*不会.*运行环境|安装完成后.*只.*Skills/s);
+});
+
+test("generated marketplace guidance installs Skills without eager runtime setup", () => {
+  const skill = read("marketplace/rainskills/skills/rainskills/SKILL.md");
+  const plugin = readJson("marketplace/rainskills/.codex-plugin/plugin.json");
+
+  assert.match(skill, /Rainskills 安装完成/);
+  assert.doesNotMatch(skill, /Stay attached until (?:all )?MCP|Report the configured Rainbond environment/);
+  assert.match(plugin.description, /skill/i);
+  assert.doesNotMatch(plugin.description, /connect|authoriz|MCP/i);
+  assert.doesNotMatch(plugin.interface.longDescription, /choose Rainbond Cloud|authorize access|configure MCP/i);
+  const completion = skill.slice(skill.indexOf("## Completion Message"));
+  assert.match(completion, /下一步可以直接说/);
+  assert.doesNotMatch(completion, /reload|restart|重新加载|重启/i);
+});
+
+test("Pi uses the generic Skills and CLI path without restoring its adapter", () => {
+  const manifest = readJson("package.json");
+  assert.match(read("SKILL.md"), /Pi Agent=`pi`/);
+  assert.match(read("install.sh"), /\.pi\/agent\/skills/);
+  assert.match(read("README.md"), /Codex、Claude Code、Pi Agent、DeepSeek Harness、WorkBuddy 和 Hermes Agent/);
+  assert.equal(manifest.pi, undefined);
+  assert(!manifest.files.includes("pi/"));
+  assert.equal(manifest.scripts["build:pi"], undefined);
+  assert.equal(manifest.scripts["test:pi"], undefined);
+});
+
+test("DeepSeek Harness and WorkBuddy are documented as first-class hosts", () => {
+  const readme = read("README.md");
+  const skill = read("SKILL.md");
+
+  assert.match(readme, /npx --yes rainskills dsh/);
+  assert.match(readme, /npx --yes rainskills workbuddy/);
+  assert.match(readme, /DSH_HOME.*\.dsh.*skills/s);
+  assert.match(readme, /WORKBUDDY_CONFIG_DIR.*\.workbuddy-ai.*skills/s);
+  assert.match(skill, /DeepSeek Harness=`dsh`/);
+  assert.match(skill, /WorkBuddy=`workbuddy`/);
+  assert.match(read("rainbond-app-assistant/SKILL.md"), /priority over the built-in Sites skill/);
+});
+
+test("Hermes Agent uses the shared CLI profile and native skills home", () => {
+  const readme = read("README.md");
+  const skill = read("SKILL.md");
+
+  assert.match(readme, /npx --yes rainskills hermes/);
+  assert.match(readme, /HERMES_HOME.*\.hermes.*skills/s);
+  assert.match(readme, /\/reset/);
+  assert.match(skill, /Hermes Agent=`hermes`/);
+  assert.match(skill, /process[^\n]*action="wait"/);
+  assert.doesNotMatch(readme, /Hermes profile/);
 });

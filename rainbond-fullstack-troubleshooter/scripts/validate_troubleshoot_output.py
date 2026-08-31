@@ -13,6 +13,10 @@ from typing import Any
 
 import yaml
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+from validate_customer_output import validate_customer_output  # noqa: E402
+
 
 REQUIRED_SECTIONS = [
     "### Problem Judgment",
@@ -31,9 +35,10 @@ CANONICAL_BUCKETS = {
     "frontend access-path issue",
     "source build still running",
     "source build failed",
-    "mcp backend issue",
+    "platform backend issue",
     "external artifact unreachable",
     "cluster capacity blocked",
+    "config_file_configmap_missing",
 }
 
 SECRET_KEYWORDS = (
@@ -133,6 +138,14 @@ def validate_response_file(
     expected = load_yaml(expected_path) if expected_path else None
 
     errors: list[str] = []
+
+    presentation_mode = (expected or {}).get("presentation_mode", "customer")
+    if presentation_mode == "customer":
+        return validate_customer_output(response_text, expected or {})
+    if presentation_mode == "structured":
+        pass
+    else:
+        return [f"unsupported presentation_mode: {presentation_mode!r}"]
 
     try:
         sections = parse_required_sections(response_text)
@@ -478,6 +491,26 @@ def validate_troubleshoot_cross_field_rules(payload: dict[str, Any]) -> list[str
             errors.append("cluster capacity blocked must not continue to delivery verifier")
         if stop_reason != "cluster_capacity_blocked":
             errors.append("cluster capacity blocked requires stop_reason=cluster_capacity_blocked")
+
+    if bucket == "config_file_configmap_missing":
+        if label != "runtime_unhealthy":
+            errors.append("config_file_configmap_missing requires runtime_unhealthy")
+        if next_handoff != "none":
+            errors.append("config_file_configmap_missing requires next_handoff=none")
+        if stop_reason != "api_startup_issue":
+            errors.append("config_file_configmap_missing requires stop_reason=api_startup_issue")
+        if boundary.get("delivery_verifier_allowed") is not False:
+            errors.append("config_file_configmap_missing must not continue to delivery verifier")
+
+    if bucket == "platform backend issue":
+        if label != "runtime_unhealthy":
+            errors.append("platform backend issue requires runtime_unhealthy")
+        if next_handoff != "none":
+            errors.append("platform backend issue requires next_handoff=none")
+        if stop_reason != "platform_backend_issue":
+            errors.append("platform backend issue requires stop_reason=platform_backend_issue")
+        if boundary.get("delivery_verifier_allowed") is not False:
+            errors.append("platform backend issue must not continue to delivery verifier")
 
     if label == "code_or_build_handoff_needed" or next_handoff == "code_build_handoff":
         errors.extend(validate_code_or_build_stop_boundary(result))

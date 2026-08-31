@@ -5,9 +5,9 @@
 - Depends on: [../SKILL.md](../SKILL.md), [60-verification-and-handoffs.md](60-verification-and-handoffs.md), [../schemas/bootstrap-result.schema.yaml](../schemas/bootstrap-result.schema.yaml).
 - Produces: the required human-readable section order, `BootstrapResult` assembly rules, and cross-field consistency requirements.
 
-## Required Reply Shape
+## Explicit Structured Reply Shape
 
-Every final reply must contain these sections, in exactly this order:
+Only when the user, automation, or evaluation explicitly requests structured output, include these sections in exactly this order:
 
 1. `### Creation Result`
 2. `### Actions Taken`
@@ -76,7 +76,7 @@ Must summarize:
 - declared frontend `access_mode`, if any
 - deferred dependencies caused by source convergence, if any
 
-If MCP reports a raw platform state such as `undeploy`, translate it into the canonical vocabulary instead of echoing the raw label as the primary state.
+If the platform reports a raw state such as `undeploy`, translate it into the canonical vocabulary instead of echoing the raw label as the primary state.
 
 ### `Handoff Recommendation`
 
@@ -103,7 +103,7 @@ Must:
 - `deployment_plan.workflow.deferred_dependencies`
   - contains every dependency edge intentionally left incomplete
 - `runtime_state.component_status`
-  - reflects the current MCP/runtime evidence observed after bootstrap actions
+  - reflects the current platform evidence observed after bootstrap actions
   - normalizes raw platform-native states into canonical vocabulary
 - `runtime_state.blocking_bucket`
   - uses the canonical blocker vocabulary
@@ -122,7 +122,7 @@ Must:
 - if prose says a dependency is deferred, it must appear in `deferred_dependencies`
 - if prose says a multi-component topology is ready for delivery verification, it must also say the dependency completeness gate checked accepted provider/consumer edges or otherwise explain why dependency verification was deferred
 - if prose says the current blocker is capacity-related, `runtime_state.overall` must not be `runtime_healthy`
-- if `runtime_state.blocking_bucket = mcp backend issue`, `next_handoff` must be `none`
+- if `runtime_state.blocking_bucket = platform backend issue`, `next_handoff` must be `none`
 - if `runtime_state.blocking_bucket = external artifact unreachable`, `runtime_state.overall` should be `code_or_build_handoff_needed` and `next_handoff` should be `code_build_handoff`
 - `next_handoff` must agree with the prose handoff recommendation
 - no secret values may appear in the structured object

@@ -1,5 +1,5 @@
 case: delivered-stop-without-promotion
-presentation_mode: concise
+presentation_mode: customer
 assert:
   prose_contains:
     - 部署成功
@@ -7,7 +7,7 @@ assert:
     - preview
     - 部署位置
     - 访问地址
-    - https://run.rainbond.com/#/team/demo-team/region/cn/apps/app-204/overview
+    - https://run.rainbond.com/#/team/demo-team/region/cn/apps/204/overview
     - https://demo-team-cn.rainbond.me/payments-app
     - 200 OK
   prose_not_contains:

@@ -21,10 +21,10 @@ AppAssistantResult:
       team_name: demo-team
       region_name: cn
       app_name: billing-app
-      app_id: app-203
+      app_id: 203
     linked: true
     selected_environment: preview
-    deployment_location_url: https://run.rainbond.com/#/team/demo-team/region/cn/apps/app-203/overview
+    deployment_location_url: https://run.rainbond.com/#/team/demo-team/region/cn/apps/203/overview
   environment:
     name: preview
     source: explicit
@@ -46,7 +46,7 @@ AppAssistantResult:
   actions_performed:
     - skill: inspection-only
       status: completed
-      details: Confirmed runtime convergence for the linked source app from current MCP truth.
+      details: Confirmed runtime convergence for the linked source app from current platform truth.
     - skill: rainbond-delivery-verifier
       status: pending
       details: Selected because runtime is healthy but delivery acceptance is still unknown.

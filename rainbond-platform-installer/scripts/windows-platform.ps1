@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
   [Parameter(Mandatory = $true)]
-  [ValidateSet("Preflight", "InspectState", "ProtectState", "PrepareWsl", "ProvisionRainbond", "ConvergeInstalledPlatform", "InstallMachineBundle", "EnableWsl", "UpdateWsl", "VerifyWsl", "RegisterResume", "RegisterFinalize", "RequestReboot", "Finalize", "ImportDistro", "PrepareRuntime", "ConfigureNetwork", "VerifyNetwork", "PrepareDocker", "InstallRainbond", "VerifyDeployment", "WslKeepalive")]
+  [ValidateSet("Preflight", "InspectState", "InspectSourceFile", "ProtectState", "PrepareWsl", "ProvisionRainbond", "ConvergeInstalledPlatform", "InstallMachineBundle", "EnableWsl", "UpdateWsl", "VerifyWsl", "RegisterResume", "RegisterFinalize", "RequestReboot", "Finalize", "ImportDistro", "PrepareRuntime", "ConfigureNetwork", "VerifyNetwork", "PrepareDocker", "InstallRainbond", "VerifyDeployment", "WslKeepalive")]
   [string]$Action,
 
   [string]$RequestPath = "",
@@ -58,31 +58,262 @@ function Set-StateAcl([string]$PathValue, [string]$Kind, $Acl) {
   [IO.File]::SetAccessControl($PathValue, $Acl)
 }
 
-function Get-StateAclFacts([string]$PathValue, [string]$Kind, [string]$HomeValue) {
-  $fullPath = Assert-PathInsideRoot $PathValue $HomeValue
-  $item = Get-Item -LiteralPath $fullPath -Force
-  if (($Kind -eq "file" -and $item.PSIsContainer) -or ($Kind -eq "directory" -and -not $item.PSIsContainer)) {
-    throw "TargetPath kind mismatch"
+$sourceFileInspectorType = @'
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Runtime.InteropServices;
+using System.Security.AccessControl;
+using System.Security.Cryptography;
+using Microsoft.Win32.SafeHandles;
+
+public sealed class SourceFileFacts {
+  public string ownerSid { get; set; }
+  public string[] writableSids { get; set; }
+  public string[] readableSids { get; set; }
+  public bool reparsePoint { get; set; }
+  public string fileIdentity { get; set; }
+}
+
+public static class SourceFileInspector {
+  private const uint GENERIC_READ = 0x80000000;
+  private const uint READ_CONTROL = 0x00020000;
+  private const uint FILE_SHARE_READ = 0x00000001;
+  private const uint OPEN_EXISTING = 3;
+  private const uint FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000;
+  private const uint FILE_ATTRIBUTE_DIRECTORY = 0x00000010;
+  private const uint FILE_ATTRIBUTE_DEVICE = 0x00000040;
+  private const uint FILE_ATTRIBUTE_REPARSE_POINT = 0x00000400;
+  private const uint OWNER_SECURITY_INFORMATION = 0x00000001;
+  private const uint DACL_SECURITY_INFORMATION = 0x00000004;
+  private const uint SDDL_REVISION_1 = 1;
+  private const uint WRITE_MASK = 0x00000002 | 0x00000004 | 0x00010000 | 0x00040000 | 0x00080000 | 0x40000000 | 0x10000000;
+  private const uint READ_MASK = 0x00000001 | 0x00000008 | 0x00000080 | 0x00020000 | 0x80000000 | 0x10000000;
+
+  [StructLayout(LayoutKind.Sequential)]
+  private struct FILETIME {
+    public uint Low;
+    public uint High;
   }
-  $reparsePoint = [bool]($item.Attributes -band [IO.FileAttributes]::ReparsePoint)
-  $acl = Get-StateAcl $fullPath $Kind
-  $writeMask = [Security.AccessControl.FileSystemRights]::WriteData -bor
-    [Security.AccessControl.FileSystemRights]::CreateFiles -bor
-    [Security.AccessControl.FileSystemRights]::AppendData -bor
-    [Security.AccessControl.FileSystemRights]::Delete -bor
-    [Security.AccessControl.FileSystemRights]::ChangePermissions -bor
-    [Security.AccessControl.FileSystemRights]::TakeOwnership
-  $writableSids = @($acl.Access |
-    Where-Object {
-      $_.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and
-      ([int64]$_.FileSystemRights -band [int64]$writeMask) -ne 0
-    } |
-    ForEach-Object { Convert-IdentityToSid $_.IdentityReference } |
-    Sort-Object -Unique)
-  return [ordered]@{
-    ownerSid = Convert-IdentityToSid $acl.Owner
-    writableSids = $writableSids
-    reparsePoint = $reparsePoint
+
+  [StructLayout(LayoutKind.Sequential)]
+  private struct BY_HANDLE_FILE_INFORMATION {
+    public uint FileAttributes;
+    public FILETIME CreationTime;
+    public FILETIME LastAccessTime;
+    public FILETIME LastWriteTime;
+    public uint VolumeSerialNumber;
+    public uint FileSizeHigh;
+    public uint FileSizeLow;
+    public uint NumberOfLinks;
+    public uint FileIndexHigh;
+    public uint FileIndexLow;
+  }
+
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  private static extern SafeFileHandle CreateFileW(
+    string fileName,
+    uint desiredAccess,
+    uint shareMode,
+    IntPtr securityAttributes,
+    uint creationDisposition,
+    uint flagsAndAttributes,
+    IntPtr templateFile
+  );
+
+  [DllImport("kernel32.dll", SetLastError = true)]
+  [return: MarshalAs(UnmanagedType.Bool)]
+  private static extern bool GetFileInformationByHandle(
+    SafeFileHandle file,
+    out BY_HANDLE_FILE_INFORMATION information
+  );
+
+  [DllImport("advapi32.dll", SetLastError = true)]
+  private static extern uint GetSecurityInfo(
+    SafeFileHandle handle,
+    uint objectType,
+    uint securityInformation,
+    out IntPtr owner,
+    out IntPtr group,
+    out IntPtr dacl,
+    out IntPtr sacl,
+    out IntPtr securityDescriptor
+  );
+
+  [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  [return: MarshalAs(UnmanagedType.Bool)]
+  private static extern bool ConvertSecurityDescriptorToStringSecurityDescriptorW(
+    IntPtr securityDescriptor,
+    uint requestedRevision,
+    uint securityInformation,
+    out IntPtr stringSecurityDescriptor,
+    out uint stringSecurityDescriptorLength
+  );
+
+  [DllImport("kernel32.dll")]
+  private static extern IntPtr LocalFree(IntPtr memory);
+
+  public static SourceFileFacts Inspect(string fullPath) {
+    using (SafeFileHandle handle = CreateFileW(
+      fullPath,
+      GENERIC_READ | READ_CONTROL,
+      FILE_SHARE_READ,
+      IntPtr.Zero,
+      OPEN_EXISTING,
+      FILE_FLAG_OPEN_REPARSE_POINT,
+      IntPtr.Zero
+    )) {
+      if (handle.IsInvalid) throw new InvalidOperationException("SourceFileOpenFailed");
+
+      BY_HANDLE_FILE_INFORMATION information;
+      if (!GetFileInformationByHandle(handle, out information)) {
+        throw new InvalidOperationException("SourceFileInformationFailed");
+      }
+      if ((information.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+        throw new InvalidOperationException("SourceFileReparsePointRejected");
+      }
+      if ((information.FileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_DEVICE)) != 0) {
+        throw new InvalidOperationException("SourceFileKindRejected");
+      }
+
+      IntPtr owner;
+      IntPtr group;
+      IntPtr dacl;
+      IntPtr sacl;
+      IntPtr securityDescriptor;
+      uint securityResult = GetSecurityInfo(
+        handle,
+        1,
+        OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+        out owner,
+        out group,
+        out dacl,
+        out sacl,
+        out securityDescriptor
+      );
+      if (securityResult != 0 || securityDescriptor == IntPtr.Zero) {
+        throw new InvalidOperationException("SourceFileSecurityFailed");
+      }
+
+      string sddl;
+      IntPtr sddlPointer = IntPtr.Zero;
+      try {
+        uint sddlLength;
+        if (!ConvertSecurityDescriptorToStringSecurityDescriptorW(
+          securityDescriptor,
+          SDDL_REVISION_1,
+          OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+          out sddlPointer,
+          out sddlLength
+        )) {
+          throw new InvalidOperationException("SourceFileSecurityConversionFailed");
+        }
+        sddl = Marshal.PtrToStringUni(sddlPointer);
+      } finally {
+        if (sddlPointer != IntPtr.Zero) LocalFree(sddlPointer);
+        LocalFree(securityDescriptor);
+      }
+
+      RawSecurityDescriptor descriptor = new RawSecurityDescriptor(sddl);
+      if (descriptor.Owner == null || descriptor.DiscretionaryAcl == null) {
+        throw new InvalidOperationException("SourceFileDaclMissing");
+      }
+      HashSet<string> writable = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+      HashSet<string> readable = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+      foreach (GenericAce genericAce in descriptor.DiscretionaryAcl) {
+        QualifiedAce qualifiedAce = genericAce as QualifiedAce;
+        KnownAce knownAce = genericAce as KnownAce;
+        if (qualifiedAce == null || knownAce == null || qualifiedAce.AceQualifier != AceQualifier.AccessAllowed) continue;
+        string sid = qualifiedAce.SecurityIdentifier.Value;
+        uint accessMask = unchecked((uint)knownAce.AccessMask);
+        if ((accessMask & WRITE_MASK) != 0) writable.Add(sid);
+        if ((accessMask & READ_MASK) != 0) readable.Add(sid);
+      }
+
+      long length = ((long)information.FileSizeHigh << 32) | information.FileSizeLow;
+      string digest;
+      using (FileStream stream = new FileStream(handle, FileAccess.Read, 4096, false)) {
+        using (SHA256 hasher = SHA256.Create()) {
+          digest = BitConverter.ToString(hasher.ComputeHash(stream)).Replace("-", "").ToLowerInvariant();
+        }
+      }
+      return new SourceFileFacts {
+        ownerSid = descriptor.Owner.Value,
+        writableSids = writable.OrderBy(value => value, StringComparer.OrdinalIgnoreCase).ToArray(),
+        readableSids = readable.OrderBy(value => value, StringComparer.OrdinalIgnoreCase).ToArray(),
+        reparsePoint = false,
+        fileIdentity = "sha256:" + digest + ":" + length.ToString()
+      };
+    }
+  }
+}
+'@
+
+if ($Action -eq "InspectSourceFile") {
+  Add-Type -TypeDefinition $sourceFileInspectorType -Language CSharp
+}
+
+function Get-StateAclFacts([string]$PathValue, [string]$Kind, [string]$HomeValue, [bool]$RequireInsideHome = $true) {
+  $fullPath = if ($RequireInsideHome) {
+    Assert-PathInsideRoot $PathValue $HomeValue
+  } else {
+    [IO.Path]::GetFullPath($PathValue)
+  }
+  $stream = $null
+  try {
+    if ($Kind -eq "file") {
+      $stream = [IO.File]::Open($fullPath, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+    }
+    $item = Get-Item -LiteralPath $fullPath -Force
+    if (($Kind -eq "file" -and $item.PSIsContainer) -or ($Kind -eq "directory" -and -not $item.PSIsContainer)) {
+      throw "TargetPath kind mismatch"
+    }
+    $reparsePoint = [bool]($item.Attributes -band [IO.FileAttributes]::ReparsePoint)
+    $acl = Get-StateAcl $fullPath $Kind
+    $writeMask = [Security.AccessControl.FileSystemRights]::WriteData -bor
+      [Security.AccessControl.FileSystemRights]::CreateFiles -bor
+      [Security.AccessControl.FileSystemRights]::AppendData -bor
+      [Security.AccessControl.FileSystemRights]::Delete -bor
+      [Security.AccessControl.FileSystemRights]::ChangePermissions -bor
+      [Security.AccessControl.FileSystemRights]::TakeOwnership
+    $readMask = [Security.AccessControl.FileSystemRights]::ReadData -bor
+      [Security.AccessControl.FileSystemRights]::ReadAttributes -bor
+      [Security.AccessControl.FileSystemRights]::ReadExtendedAttributes -bor
+      [Security.AccessControl.FileSystemRights]::ReadPermissions
+    $writableSids = @($acl.Access |
+      Where-Object {
+        $_.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and
+        ([int64]$_.FileSystemRights -band [int64]$writeMask) -ne 0
+      } |
+      ForEach-Object { Convert-IdentityToSid $_.IdentityReference } |
+      Sort-Object -Unique)
+    $readableSids = @($acl.Access |
+      Where-Object {
+        $_.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and
+        ([int64]$_.FileSystemRights -band [int64]$readMask) -ne 0
+      } |
+      ForEach-Object { Convert-IdentityToSid $_.IdentityReference } |
+      Sort-Object -Unique)
+    $fileIdentity = $null
+    if ($Kind -eq "file" -and -not $reparsePoint) {
+      $hasher = [Security.Cryptography.SHA256]::Create()
+      try {
+        $digest = [BitConverter]::ToString($hasher.ComputeHash($stream)).Replace("-", "").ToLowerInvariant()
+      } finally {
+        $hasher.Dispose()
+      }
+      $fileIdentity = "sha256:${digest}:$($stream.Length)"
+    }
+    return [ordered]@{
+      ownerSid = Convert-IdentityToSid $acl.Owner
+      writableSids = $writableSids
+      readableSids = $readableSids
+      reparsePoint = $reparsePoint
+      fileIdentity = $fileIdentity
+    }
+  } finally {
+    if ($null -ne $stream) { $stream.Dispose() }
   }
 }
 
@@ -121,14 +352,19 @@ function Protect-StatePath([string]$PathValue, [string]$Kind, [string]$Sid, [str
   Set-StateAcl $fullPath $Kind $acl
 }
 
-if ($Action -eq "InspectState" -or $Action -eq "ProtectState") {
+if ($Action -eq "InspectState" -or $Action -eq "InspectSourceFile" -or $Action -eq "ProtectState") {
   if ([string]::IsNullOrWhiteSpace($TargetPath) -or [string]::IsNullOrWhiteSpace($UserHome) -or
       [string]$UserSid -notmatch "^S-\d-(?:\d+-)+\d+$") {
     throw "State action parameters are invalid"
   }
   if ($Action -eq "ProtectState") { Protect-StatePath $TargetPath $ExpectedKind $UserSid $UserHome }
-  $aclFacts = Get-StateAclFacts $TargetPath $ExpectedKind $UserHome
-  if ($Action -eq "InspectState") { $aclFacts | ConvertTo-Json -Depth 4 -Compress }
+  $aclFacts = if ($Action -eq "InspectSourceFile") {
+    if ($ExpectedKind -ne "file") { throw "InspectSourceFile kind mismatch" }
+    [SourceFileInspector]::Inspect([IO.Path]::GetFullPath($TargetPath))
+  } else {
+    Get-StateAclFacts $TargetPath $ExpectedKind $UserHome
+  }
+  if ($Action -eq "InspectState" -or $Action -eq "InspectSourceFile") { $aclFacts | ConvertTo-Json -Depth 4 -Compress }
   exit 0
 }
 

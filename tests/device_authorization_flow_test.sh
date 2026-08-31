@@ -18,6 +18,36 @@ fail() {
   exit 1
 }
 
+(
+  RAINSKILLS_RUNTIME_CONNECT_COMPLETION=1
+  RAINSKILLS_RUNTIME_OPERATION_ID="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+  node() { return 0; }
+  assert_internal_connect_entry \
+    connect codex \
+    --self-hosted \
+    --rainbond-url http://10.0.0.8:7070 \
+    --allow-insecure-http \
+    --no-cached-token
+) || fail "internal runtime connect gate rejected the launcher's fixed --no-cached-token argument"
+
+set +e
+unknown_gate_output="$(
+  (
+    RAINSKILLS_RUNTIME_CONNECT_COMPLETION=1
+    RAINSKILLS_RUNTIME_OPERATION_ID="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    node() { return 0; }
+    assert_internal_connect_entry connect codex --saas --unsupported-sensitive-value
+  ) 2>&1
+)"
+unknown_gate_status=$?
+set -e
+[[ "$unknown_gate_status" -ne 0 ]] || fail "internal runtime connect gate accepted an unknown argument"
+grep -F "内部门禁包含不支持的参数" <<<"$unknown_gate_output" >/dev/null \
+  || fail "internal runtime connect gate did not explain an unknown argument"
+if grep -F -- "--unsupported-sensitive-value" <<<"$unknown_gate_output" >/dev/null; then
+  fail "internal runtime connect gate reflected an unknown argument"
+fi
+
 assert_equal() {
   local name="$1" expected="$2" actual="$3"
   [[ "$actual" == "$expected" ]] || fail "$name: expected '$expected', got '$actual'"
@@ -98,7 +128,85 @@ if sed -n '/validate_mcp_connectivity()/,/^}/p' "$REPO_ROOT/install.sh" \
     | grep -F -- '-H "Authorization: GRJWT' >/dev/null; then
   fail "MCP JWT leaked into curl arguments"
 fi
+validation_source="$(sed -n '/validate_mcp_connectivity()/,/^}/p' "$REPO_ROOT/install.sh")"
+grep -F -- '--connect-timeout 10' <<<"$validation_source" >/dev/null \
+  || fail "MCP validation has no bounded connect timeout"
+grep -F -- '--max-time 30' <<<"$validation_source" >/dev/null \
+  || fail "MCP validation has no bounded wall-clock timeout"
 assert_contains "terminal code" "$TEST_ROOT/output.log" "BCDF-GHJK"
+assert_contains \
+  "fixed authorization message begin" \
+  "$TEST_ROOT/output.log" \
+  "[RAINSKILLS_USER_MESSAGE_BEGIN:runtime.device-authorization]"
+assert_contains \
+  "fixed authorization message end" \
+  "$TEST_ROOT/output.log" \
+  "[RAINSKILLS_USER_MESSAGE_END:runtime.device-authorization]"
+assert_contains \
+  "authorization wait marker" \
+  "$TEST_ROOT/output.log" \
+  "[RAINSKILLS_AGENT_WAIT_REQUIRED:runtime-connect]"
+
+connect_completion_source="$(sed -n '/if \[\[ "\$ACTION" == "connect" \]\]/,/return 0/p' "$REPO_ROOT/install.sh")"
+grep -F '[RAINSKILLS_AGENT_WAIT_COMPLETE:runtime-connect]' <<<"$connect_completion_source" >/dev/null \
+  || fail "runtime connect has no completion marker after complete-connect"
+
+prepare_device_flow_temp_dir
+DEVICE_FLOW_DEVICE_CODE="superseded-device-code"
+DEVICE_FLOW_INTERVAL=5
+DEVICE_FLOW_EXPIRES_IN=600
+RAINSKILLS_RUNTIME_CONNECT_COMPLETION=1
+RAINSKILLS_RUNTIME_OPERATION_ID="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+TARGET=codex
+DEPLOYMENT_MODE_INPUT=saas
+node() {
+  printf '%s\n' "$*" > "$TEST_ROOT/superseded-assert.log"
+  return 1
+}
+device_flow_sleep() { :; }
+device_flow_http_post() {
+  fail "superseded authorization polled the token endpoint"
+}
+
+if poll_device_authorization "https://console.example.com"; then
+  fail "superseded authorization continued polling"
+fi
+assert_equal \
+  "superseded authorization error" \
+  "本次设备授权已被新的授权尝试替换。" \
+  "$DEVICE_FLOW_ERROR"
+assert_contains \
+  "superseded operation assertion" \
+  "$TEST_ROOT/superseded-assert.log" \
+  "runtime assert-connect --onboarding-id aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa --target codex --environment-kind saas --console-origin https://console.example.com"
+cleanup_device_flow
+unset RAINSKILLS_RUNTIME_CONNECT_COMPLETION RAINSKILLS_RUNTIME_OPERATION_ID
+unset -f node
+
+non_tty_result="$TEST_ROOT/non-tty-token"
+non_tty_error="$TEST_ROOT/non-tty-error"
+set +e
+(
+  NON_INTERACTIVE=0
+  RAINBOND_TOKEN_INPUT=""
+  RAINBOND_USERNAME_INPUT=""
+  RAINBOND_PASSWORD_INPUT=""
+  device_flow_login_to_rainbond() {
+    [[ ! -t 0 ]] || exit 91
+    OBTAINED_RAINBOND_TOKEN="non.tty.token"
+    return 0
+  }
+  obtain_rainbond_token "https://console.example.com" "saas"
+  printf '%s' "$OBTAINED_RAINBOND_TOKEN" > "$non_tty_result"
+) </dev/null 2>"$non_tty_error"
+non_tty_status=$?
+set -e
+[[ "$non_tty_status" -eq 0 ]] || fail "Device Flow was blocked without a terminal TTY"
+assert_equal "non-TTY Device Flow token" "non.tty.token" "$(cat "$non_tty_result")"
+assert_contains \
+  "post-authorization progress" \
+  "$non_tty_error" \
+  "浏览器授权已完成，正在验证 Rainbond 连接…"
 
 scoped_token="$(python3 - <<'PY'
 import base64

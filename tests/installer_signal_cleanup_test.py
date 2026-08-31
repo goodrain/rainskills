@@ -4,6 +4,7 @@ import os
 import pty
 import re
 import select
+import shutil
 import signal
 import socket
 import stat
@@ -17,6 +18,35 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 AUTH_READY_PATTERN = re.compile(rb"127\.0\.0\.1:(\d+)/cli-callback")
 MANUAL_PASTE_PATTERN = re.compile("请粘贴回调 URL 或 JWT".encode())
+NODE_EXECUTABLE = shutil.which("node")
+if NODE_EXECUTABLE is None:
+    raise RuntimeError("Node.js 18+ is required for installer signal tests")
+NODE_BIN_DIR = str(Path(NODE_EXECUTABLE).resolve().parent)
+
+
+def authorization_shell_argv() -> list[str]:
+    script = r'''
+source "$1/install.sh" --dest "$HOME/source-probe" --force
+trap 'handle_installer_signal 130' INT
+trap 'handle_installer_signal 143' TERM
+trap 'handle_installer_exit "$?"' EXIT
+TARGET=codex
+DEPLOYMENT_MODE_INPUT=saas
+RAINBOND_TOKEN_INPUT=""
+RAINBOND_TOKEN_FROM_FLAG=0
+RAINBOND_URL_INPUT=""
+RAINBOND_URL_FROM_FLAG=0
+SKIP_MCP=0
+NON_INTERACTIVE=0
+configure_mcp
+'''
+    return [
+        "bash",
+        "-c",
+        script,
+        "rainskills-authorization-test",
+        str(REPO_ROOT),
+    ]
 
 
 def write_executable(path: Path, content: str) -> None:
@@ -161,7 +191,7 @@ exit 0
             {
                 "HOME": str(home),
                 "TMPDIR": str(temp_dir),
-                "PATH": f"{bin_dir}:/usr/bin:/bin",
+                "PATH": f"{bin_dir}:{NODE_BIN_DIR}:/usr/bin:/bin",
                 "SHELL": "/bin/bash",
                 "RAINBOND_LOGIN_TIMEOUT": "60",
             }
@@ -177,18 +207,7 @@ exit 0
         pid, master_fd = pty.fork()
         if pid == 0:
             os.chdir(REPO_ROOT)
-            os.execve(
-                "/bin/bash",
-                [
-                    "bash",
-                    str(REPO_ROOT / "install.sh"),
-                    "codex",
-                    "--saas",
-                    "--no-cached-token",
-                    "--force",
-                ],
-                env,
-            )
+            os.execve("/bin/bash", authorization_shell_argv(), env)
 
         status = None
         tracked_pids = [pid]
@@ -274,7 +293,7 @@ exit 0
             {
                 "HOME": str(home),
                 "TMPDIR": str(temp_dir),
-                "PATH": f"{bin_dir}:/usr/bin:/bin",
+                "PATH": f"{bin_dir}:{NODE_BIN_DIR}:/usr/bin:/bin",
                 "SHELL": "/bin/bash",
                 "REAL_CURL": real_curl,
                 "RAINBOND_LOGIN_TIMEOUT": "60",
@@ -293,18 +312,7 @@ exit 0
         pid, master_fd = pty.fork()
         if pid == 0:
             os.chdir(REPO_ROOT)
-            os.execve(
-                "/bin/bash",
-                [
-                    "bash",
-                    str(REPO_ROOT / "install.sh"),
-                    "codex",
-                    "--saas",
-                    "--no-cached-token",
-                    "--force",
-                ],
-                env,
-            )
+            os.execve("/bin/bash", authorization_shell_argv(), env)
 
         output = bytearray()
         status = None

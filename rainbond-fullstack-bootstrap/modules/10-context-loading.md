@@ -27,7 +27,7 @@ Backward compatibility:
 - `.rainbond/secrets.<environment>.json`
   - local-only secret source for component env values that must not live in repo files
 - `.rainbond/local.json`
-  - bound project context for `team_name`, `region_name`, `app_name`, `app_id`, MCP server, and `preferences.default_environment`
+  - bound project context for `team_name`, `region_name`, `app_name`, `app_id`, platform server, and `preferences.default_environment`
 - `.rainbond/local.json.runtime_components`
   - optional local mapping cache from logical roles such as `web`, `api`, and `postgres` to existing runtime components; use it only as a reuse hint
 - `.rainbond/env.<environment>.json`
@@ -61,12 +61,12 @@ Resolve fields using the highest applicable layer:
 If `.rainbond/local.json.runtime_components` exists:
 - use it to help match logical roles such as `web`, `api`, and `postgres` to already-existing runtime components
 - use it to decide whether an existing runtime component should be reused instead of creating a duplicate
-- do not trust it over MCP runtime facts
+- do not trust it over current platform runtime facts
 
-If `runtime_components` and MCP disagree:
-- trust MCP
+If `runtime_components` and current platform evidence disagree:
+- trust current platform runtime facts
 - report the drift
-- continue using MCP-discovered runtime components
+- continue using runtime components discovered through Rainbond Tools
 
 ## Execution Filter
 
@@ -86,7 +86,7 @@ Rules:
 Follow this order before asking the user for anything:
 
 1. Collect any user-explicit identifiers, environment choice, component overrides, or env overrides.
-2. Read `.rainbond/local.json` if present for bound `team_name`, `region_name`, `app_name`, `app_id`, MCP server, and `preferences.default_environment`.
+2. Read `.rainbond/local.json` if present for bound `team_name`, `region_name`, `app_name`, `app_id`, platform server, and `preferences.default_environment`.
 3. If `.rainbond/local.json.runtime_components` exists, load it as a reuse hint for later role-to-runtime matching.
 4. Select the environment file with this order: user explicit input > `.rainbond/local.json.preferences.default_environment` > `preview`.
 5. Read `.rainbond/secrets.<environment>.json` if present and extract component-level secret env values.
@@ -133,10 +133,10 @@ The list above is not exhaustive; the principle is "files that declare project s
 
 Regardless of how curious the model is about the environment:
 
-- user-level home directories as a whole (`~/.codex`, `~/.claude`, `~/.rainbond`, `~/.cache`, etc.). Only specific named files such as `~/.rainbond/mcp.env` are allowed when explicitly required by a configured workflow step.
+- user-level home directories as a whole (`~/.codex`, `~/.claude`, `~/.rainbond`, `~/.cache`, etc.). Only the protected `~/.rainbond/rainskills/single-runtime-v1.json` may be read by the configured CLI runtime.
 - repository-root file enumeration: `rg --files`, `find . -type f`, `ls -R`, `tree`, or any equivalent that returns "every path in the repo." If the goal is to find a specific kind of file, search by content or name pattern, not by listing everything.
 - following arbitrary public web pages on transport failure. If a `curl` / package-download / upload-helper request returns a redirect or HTML error page, capture the status code and the first short prefix of the body for diagnosis; do not follow into a full third-party site render.
-- re-reading the same MCP tool schema, the same skill file, or the same reference document a second time within the run. If the information is needed again, recall the prior read.
+- re-reading the same Rainbond Tool schema, the same skill file, or the same reference document a second time within the run. If the information is needed again, recall the prior read.
 
 ### Expansion conditions
 

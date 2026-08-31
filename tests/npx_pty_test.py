@@ -1,29 +1,70 @@
 #!/usr/bin/env python3
 import json
+import errno
 import os
 import pty
 import re
+import select
 import shutil
-import signal
 import stat
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 from installer_signal_cleanup_test import (
-    AUTH_READY_PATTERN,
-    assert_port_closed,
-    descendant_pids,
-    process_exists,
-    read_until,
     terminate_process_tree,
-    wait_for_exit,
     write_executable,
 )
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TTY_PATTERN = re.compile(rb"RAINSKILLS_TTY stdin=1 stdout=1 stderr=1")
+APPROVED_CAPABILITY_SUMMARY = """Rainskills 安装完成，下一条消息即可直接使用。
+
+下一步可以直接说：
+
+- 帮我部署当前项目
+- 帮我部署一个 Git 仓库
+- 帮我通过镜像或安装包部署应用
+- 帮我安装一个应用模板
+- 帮我分析当前项目应该如何部署
+
+也可以直接告诉我你想部署什么应用。"""
+AGENT_SUMMARY_REQUIREMENT = "[RAINSKILLS_AGENT_SUMMARY_REQUIRED:include-next-actions]"
+
+
+def read_process_output(pid: int, master_fd: int, timeout: float) -> tuple[bytes, int]:
+    output = bytearray()
+    status = None
+    pty_closed = False
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if status is None:
+            waited_pid, wait_status = os.waitpid(pid, os.WNOHANG)
+            if waited_pid == pid:
+                status = wait_status
+        if pty_closed:
+            if status is not None:
+                break
+            time.sleep(0.05)
+            continue
+        readable, _, _ = select.select([master_fd], [], [], 0.1)
+        if readable:
+            try:
+                output.extend(os.read(master_fd, 4096))
+            except OSError as error:
+                if error.errno != errno.EIO:
+                    raise
+                pty_closed = True
+        elif status is not None:
+            break
+    if status is None:
+        raise AssertionError(
+            "npx Skills-only installer did not exit; output:\n"
+            + output.decode("utf-8", errors="replace")
+        )
+    return bytes(output), status
 
 
 def pack_package(destination: Path, env: dict[str, str]) -> Path:
@@ -39,7 +80,7 @@ def pack_package(destination: Path, env: dict[str, str]) -> Path:
     return destination / packed["filename"]
 
 
-def test_npx_pty_signal_cleanup() -> None:
+def test_npx_pty_skills_only_completion() -> None:
     if not shutil.which("npm") or not shutil.which("npx"):
         raise AssertionError("npm and npx are required for the package PTY test")
 
@@ -74,23 +115,11 @@ exec /bin/bash "$@"
         write_executable(
             bin_dir / "curl",
             """#!/bin/sh
-if echo "$*" | grep -q '/console/mcp/device/code'; then
-  output_file=''
-  header_file=''
-  while [ "$#" -gt 0 ]; do
-    case "$1" in
-      --output) output_file="$2"; shift 2 ;;
-      --dump-header) header_file="$2"; shift 2 ;;
-      *) shift ;;
-    esac
-  done
-  printf 'Not Found' > "$output_file"
-  printf 'HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\n\r\n' > "$header_file"
-  printf '404'
-fi
+printf '%s\n' "$*" >> "$RAINSKILLS_CURL_LOG"
 exit 0
 """,
         )
+        curl_log = workdir / "curl.log"
 
         env = os.environ.copy()
         env.update(
@@ -99,7 +128,9 @@ exit 0
                 "TMPDIR": str(temp_dir),
                 "PATH": f"{bin_dir}:{env.get('PATH', '')}",
                 "SHELL": "/bin/bash",
-                "RAINBOND_LOGIN_TIMEOUT": "60",
+                "RAINSKILLS_CURL_LOG": str(curl_log),
+                "npm_config_cache": str(Path.home() / ".npm"),
+                "npm_config_offline": "true",
             }
         )
         for name in (
@@ -130,31 +161,38 @@ exit 0
             )
 
         status = None
-        tracked_pids = [pid]
         try:
-            output, match = read_until(master_fd, AUTH_READY_PATTERN, timeout=30)
-            assert TTY_PATTERN.search(output), output.decode("utf-8", errors="replace")
-            port = int(match.group(1))
-            tracked_pids.extend(descendant_pids(pid))
-
-            os.write(master_fd, b"\x03")
-            status = wait_for_exit(pid, master_fd, timeout=10, signal_name="Ctrl+C")
-
-            exit_code = os.WEXITSTATUS(status) if os.WIFEXITED(status) else None
-            assert os.WIFSIGNALED(status) or exit_code in (1, 130), (
-                f"expected SIGINT or npm signal exit code, got wait status {status}"
+            output, status = read_process_output(pid, master_fd, timeout=30)
+            decoded = output.decode("utf-8", errors="replace").replace("\r\n", "\n")
+            assert os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0, (
+                f"expected normal Skills-only exit, got wait status {status}:\n{decoded}"
             )
-            assert_port_closed(port)
+            assert TTY_PATTERN.search(output), decoded
+            assert decoded.count(APPROVED_CAPABILITY_SUMMARY) == 1, decoded
+            assert decoded.count(AGENT_SUMMARY_REQUIREMENT) == 1, decoded
+            assert decoded.index(APPROVED_CAPABILITY_SUMMARY) < decoded.index(AGENT_SUMMARY_REQUIREMENT), decoded
+            assert "[RAINSKILLS_USER_MESSAGE_BEGIN:install.completed]" in decoded, decoded
+            assert "[RAINSKILLS_USER_MESSAGE_END:install.completed]" in decoded, decoded
+            for forbidden in (
+                "Rainbond Cloud",
+                "私有",
+                "MCP",
+                "登录",
+                "授权",
+                "Rainbond Console",
+                "rainskills.next-action.v1",
+            ):
+                assert forbidden not in decoded, f"default npx output contains {forbidden}"
+            assert (home / ".codex" / "skills" / "rainbond-app-assistant" / "SKILL.md").is_file()
+            assert not (home / ".rainbond" / "mcp.env").exists()
+            assert not (home / ".rainbond" / "rainskills-onboarding-v1.json").exists()
+            assert not (home / ".rainbond" / "platform-installer").exists()
+            assert not (home / ".codex" / "config.toml").exists()
             assert not list(temp_dir.glob("rainskills-auth.*")), (
                 "authorization temporary files were not removed"
             )
-            remaining_pids = [
-                process_id for process_id in tracked_pids if process_exists(process_id)
-            ]
-            assert not remaining_pids, (
-                "npx authorization processes are still running: "
-                + ", ".join(str(process_id) for process_id in remaining_pids)
-            )
+            curl_calls = curl_log.read_text(encoding="utf-8") if curl_log.exists() else ""
+            assert "/console/" not in curl_calls, curl_calls
         finally:
             os.close(master_fd)
             if status is None:
@@ -166,5 +204,5 @@ exit 0
 
 
 if __name__ == "__main__":
-    test_npx_pty_signal_cleanup()
-    print("PASS: npx PTY signal cleanup test")
+    test_npx_pty_skills_only_completion()
+    print("PASS: npx PTY Skills-only completion test")

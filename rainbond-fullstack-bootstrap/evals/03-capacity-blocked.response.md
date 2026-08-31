@@ -18,7 +18,7 @@ BootstrapResult:
       team_name: demo-team
       region_name: us-west
       app_name: capacity-demo
-      app_id: app-demo-003
+      app_id: 3
     environment:
       name: preview
       source: local_preference

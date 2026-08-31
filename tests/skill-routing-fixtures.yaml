@@ -11,6 +11,12 @@ cases:
   - id: generic_init_then_continue
     prompt: 如果还没初始化就先初始化，然后自动继续到应该停止的位置
     expected_skill: rainbond-app-assistant
+  - id: ambiguous_app_action
+    prompt: 帮我处理一下这个应用
+    expected_skill: rainbond-app-assistant
+  - id: deploy_named_image_app_in_team
+    prompt: 在zqh团队下新建一个x-codex的应用，然后使用镜像构建一个nginx组件
+    expected_skill: rainbond-app-assistant
   - id: explicit_bootstrap_only
     prompt: 只帮我创建应用和组件，不要继续排障
     expected_skill: rainbond-fullstack-bootstrap
@@ -20,19 +26,117 @@ cases:
   - id: explicit_delivery_verification
     prompt: 只帮我确认当前应用是否已经交付成功，并给我访问地址
     expected_skill: rainbond-delivery-verifier
+  - id: current_enterprise_query
+    prompt: 帮我查询当前企业的信息
+    expected_skill: rainbond-platform-query
+  - id: current_user_query
+    prompt: 查询我当前登录的用户信息
+    expected_skill: rainbond-platform-query
+  - id: team_query
+    prompt: 查询我有哪些团队
+    expected_skill: rainbond-platform-query
+  - id: region_query
+    prompt: 查询当前企业有哪些集群
+    expected_skill: rainbond-platform-query
+  - id: app_query
+    prompt: 查询团队里的应用
+    expected_skill: rainbond-platform-query
+  - id: component_query
+    prompt: 查询这个应用有哪些组件
+    expected_skill: rainbond-platform-query
+  - id: explicit_create_snapshot
+    prompt: 为这个已有应用创建快照
+    expected_skill: rainbond-app-version-assistant
+  - id: explicit_sync_environment
+    prompt: 同步生产环境配置到本地
+    expected_skill: rainbond-env-sync
+  - id: explicit_project_init
+    prompt: 只初始化当前项目并生成 rainbond.app.json
+    expected_skill: rainbond-project-init
+  - id: explicit_template_install
+    prompt: 从模板安装 WordPress 应用
+    expected_skill: rainbond-template-installer
+  - id: open_source_descriptor_deploy
+    prompt: 按这个 docker-compose 部署 Harbor 到 Rainbond
+    expected_skill: rainbond-opensource-app-deploy
+  - id: named_open_source_harbor
+    prompt: 帮我部署一个开源 Harbor
+    expected_skill: rainbond-opensource-app-deploy
+  - id: named_harbor_suite
+    prompt: 帮我部署 Harbor
+    expected_skill: rainbond-opensource-app-deploy
+  - id: named_open_source_dify
+    prompt: 帮我部署开源应用 Dify
+    expected_skill: rainbond-opensource-app-deploy
+  - id: named_open_source_n8n
+    prompt: 在 Rainbond 上运行开源套件 n8n
+    expected_skill: rainbond-opensource-app-deploy
+  - id: local_project_named_harbor
+    prompt: 帮我部署当前目录里的 Harbor 项目
+    expected_skill: rainbond-app-assistant
+  - id: bare_git_harbor_fork
+    prompt: 帮我部署这个 Git 仓库 https://github.com/example/harbor-fork
+    expected_skill: rainbond-app-assistant
+  - id: harbor_market_template
+    prompt: 从 Rainbond 市场模板安装 Harbor
+    expected_skill: rainbond-template-installer
 
 required_markers:
   rainbond-app-assistant:
     - "default top-level owner for generic current-project"
     - "the request should start here"
-    - "Concise delivery report mode"
+    - "Customer report mode"
     - "do not expose the fenced YAML block"
+    - "部署新应用还是管理已有应用"
+    - "确认前不连接运行环境"
+    - "1) 云端环境（免费体验）"
+    - "2) 本机环境"
+    - "3) 独立服务器"
+    - "4) 已有 Rainbond"
+    - "本机只允许连接一个 Rainbond 运行环境"
+    - '"hints": {"team_name": "<team-name>"}'
+    - '"selection": {"option_id": "<option-id>"}'
   rainbond-fullstack-bootstrap:
-    - "Do not use as the first or default response to a generic current-project deployment request"
+    - "Do not use for a generic current-project deployment request"
     - "route that to `rainbond-app-assistant`"
+    - "1) 云端环境（免费体验）"
+    - "2) 本机环境"
+    - "3) 独立服务器"
+    - "4) 已有 Rainbond"
   rainbond-fullstack-troubleshooter:
-    - "Do not use as the first or default response to a generic current-project deployment request"
+    - "Do not use for a generic current-project deployment request"
     - "route that to `rainbond-app-assistant`"
+    - "只让用户选择 `Rainbond Cloud` 或承载目标应用的`已有私有 Rainbond`"
   rainbond-delivery-verifier:
-    - "Do not use as the first or default response to a generic current-project deployment request"
+    - "Do not use for a generic current-project deployment request"
     - "route that to `rainbond-app-assistant`"
+    - "只让用户选择 `Rainbond Cloud` 或承载目标应用的`已有私有 Rainbond`"
+  rainbond-platform-query:
+    - "explicit, read-only platform questions"
+    - "Do not expand a narrow question"
+  rainbond-app-version-assistant:
+    - "<!-- rainskills-runtime-gate:start -->"
+    - "只让用户选择 `Rainbond Cloud` 或承载目标应用的`已有私有 Rainbond`"
+  rainbond-env-sync:
+    - "<!-- rainskills-runtime-gate:start -->"
+    - "只让用户选择 `Rainbond Cloud` 或承载目标应用的`已有私有 Rainbond`"
+  rainbond-project-init:
+    - "<!-- rainskills-runtime-gate:start -->"
+    - "1) 云端环境（免费体验）"
+    - "2) 本机环境"
+    - "3) 独立服务器"
+    - "4) 已有 Rainbond"
+  rainbond-template-installer:
+    - "<!-- rainskills-runtime-gate:start -->"
+    - "1) 云端环境（免费体验）"
+    - "2) 本机环境"
+    - "3) 独立服务器"
+    - "4) 已有 Rainbond"
+  rainbond-opensource-app-deploy:
+    - "explicit named third-party open-source suite"
+    - "active upstream fetch"
+    - "installer-generated topology"
+    - "per-component image modeling"
+    - "Helm is evidence, not a deployment path"
+    - "Rainbond-generated entry"
+    - "do not ask the user for a domain"

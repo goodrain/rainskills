@@ -34,7 +34,7 @@ const MACHINE_ACTIONS = Object.freeze([
   "InstallRainbond",
   "VerifyDeployment",
 ]);
-const STATE_ACTIONS = Object.freeze(["InspectState", "ProtectState"]);
+const STATE_ACTIONS = Object.freeze(["InspectState", "InspectSourceFile", "ProtectState"]);
 const FIXED_ACTIONS = Object.freeze([...USER_ACTIONS, ...MACHINE_ACTIONS, ...STATE_ACTIONS]);
 const WINDOWS_STAGES = Object.freeze([
   "target-selection",
@@ -155,8 +155,8 @@ function createWindowsSecureStateStore({
     platform: "win32",
     home,
     currentSid,
-    inspectWindowsAcl(targetPath, expectedKind) {
-      const execution = invokeStateAction("InspectState", targetPath, expectedKind);
+    inspectWindowsAcl(targetPath, expectedKind, { externalSource = false } = {}) {
+      const execution = invokeStateAction(externalSource ? "InspectSourceFile" : "InspectState", targetPath, expectedKind);
       try {
         return JSON.parse(String(execution.stdout || "").trim());
       } catch {
@@ -789,9 +789,7 @@ function evaluateWindowsPreflight(facts, policy, expectedUserSid) {
   if (!windowsPolicy) throw new Error("缺少 Windows 安装策略");
 
   const blockers = [];
-  const warnings = [];
   const minimums = policy.minimums;
-  const recommended = policy.recommended;
   if (!windowsPolicy.supported_product_types.includes(facts.productType)) {
     blockers.push("仅支持 Windows 工作站版本，当前系统不是受支持的 Windows 工作站");
   }
@@ -808,18 +806,12 @@ function evaluateWindowsPreflight(facts, policy, expectedUserSid) {
   if (!facts.uacEnabled) blockers.push("必须启用 Windows UAC，才能安全执行需要管理员权限的固定操作");
   if (Number(facts.cpuCores) < minimums.cpu_cores) {
     blockers.push(`CPU 最低需要 ${minimums.cpu_cores} 核，当前 ${Number(facts.cpuCores) || 0} 核`);
-  } else if (Number(facts.cpuCores) < recommended.cpu_cores) {
-    warnings.push(`CPU ${Number(facts.cpuCores) || 0} 核低于推荐配置 ${recommended.cpu_cores} 核`);
   }
   if (Number(facts.memoryBytes) < minimums.memory_bytes) {
     blockers.push(`内存最低需要 ${gibibytes(minimums.memory_bytes).toFixed(0)} GB，当前 ${gibibytes(facts.memoryBytes).toFixed(1)} GB`);
-  } else if (Number(facts.memoryBytes) < recommended.memory_bytes) {
-    warnings.push(`内存 ${gibibytes(facts.memoryBytes).toFixed(1)} GB 低于推荐配置 ${gibibytes(recommended.memory_bytes).toFixed(0)} GB`);
   }
   if (Number(facts.diskBytes) < minimums.disk_bytes) {
     blockers.push(`可用磁盘最低需要 ${gibibytes(minimums.disk_bytes).toFixed(0)} GB，当前 ${gibibytes(facts.diskBytes).toFixed(1)} GB`);
-  } else if (Number(facts.diskBytes) < recommended.disk_bytes) {
-    warnings.push(`可用磁盘 ${gibibytes(facts.diskBytes).toFixed(1)} GB 低于推荐配置 ${gibibytes(recommended.disk_bytes).toFixed(0)} GB`);
   }
   if (!facts.virtualizationEnabled) blockers.push("未检测到可用的固件虚拟化，请先在 BIOS/UEFI 中启用虚拟化");
   if (facts.wslInstalled && !windowsPolicy.networking_modes.includes(String(facts.wslNetworkingMode || "").toLowerCase())) {
@@ -856,7 +848,6 @@ function evaluateWindowsPreflight(facts, policy, expectedUserSid) {
   return {
     ok: blockers.length === 0,
     blockers,
-    warnings,
     effects: [
       "启用 WSL 2 和虚拟机平台组件（可能需要重启 Windows）",
       "安装或更新经过验证的 WSL 运行时",

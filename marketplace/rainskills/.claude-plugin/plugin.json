@@ -1,7 +1,7 @@
 {
   "name": "rainskills",
-  "version": "1.0.0",
-  "description": "Install and initialize the complete Rainbond skill suite as one product.",
+  "version": "0.1.36",
+  "description": "Install the complete Rainskills AI deployment skill suite as one product.",
   "author": {
     "name": "Goodrain",
     "url": "https://www.rainbond.com"
@@ -13,6 +13,9 @@
     "rainbond",
     "codex",
     "claude-code",
+    "deepseek-harness",
+    "workbuddy",
+    "hermes-agent",
     "skills",
     "installer"
   ]
