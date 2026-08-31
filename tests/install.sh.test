@@ -1202,6 +1202,7 @@ test_expired_flag_token_fails_without_writing_config() {
   [[ ! -f "$tmpdir/home/.rainbond/rainskills/single-runtime-v1.json" ]] || fail "did not expect runtime file for expired --token"
   grep -F -- "--token 提供的 Rainbond JWT 已过期" /tmp/rainbond-install-expired-flag.out >/dev/null || fail "expected expired --token guidance"
   wait_for_file_line_count "$tmpdir/logs/install-report.log" "2"
+  wait_for_file_line_count "$tmpdir/logs/telemetry-v2.log" "2"
   python3 - "$tmpdir/logs/install-report.log" <<'PY'
 import json
 import sys
@@ -1212,6 +1213,20 @@ if len(failed) != 1:
     raise SystemExit("expected exactly one failed report: {!r}".format(records))
 if failed[0]["failure_stage"] != "authorization" or failed[0]["failure_category"] != "authorization_failed":
     raise SystemExit("unexpected authorization failure report: {!r}".format(failed[0]))
+PY
+  python3 - "$tmpdir/logs/telemetry-v2.log" <<'PY'
+import json
+import sys
+
+records = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8") if line.strip()]
+runtime = [record for record in records if record["event_type"] == "runtime_connect_result"]
+if len(runtime) != 1:
+    raise SystemExit("expected one failed runtime connection: {!r}".format(records))
+event = runtime[0]
+if event["schema"] != "rainskills.telemetry-event.v3" or event["status"] != "failed":
+    raise SystemExit("unexpected runtime connection failure: {!r}".format(event))
+if event["environment_kind"] != "private" or event["error_stage"] != "authorization":
+    raise SystemExit("unexpected runtime failure classification: {!r}".format(event))
 PY
 }
 
@@ -1364,7 +1379,7 @@ test_mcp_server_error_does_not_downgrade_to_generic_endpoint() {
 }
 
 test_installer_reports_installation_lifecycle() {
-  local tmpdir report_file telemetry_file
+	local tmpdir report_file telemetry_file result_file
   tmpdir="$(mktemp -d)"
   trap 'rm -rf "$tmpdir"' RETURN
   mkdir -p "$tmpdir/home" "$tmpdir/logs"
@@ -1376,7 +1391,9 @@ test_installer_reports_installation_lifecycle() {
   report_file="$tmpdir/logs/install-report.log"
   wait_for_file_line_count "$report_file" "3"
   telemetry_file="$tmpdir/home/.rainbond/rainskills/telemetry/events.jsonl"
-  wait_for_file_line_count "$telemetry_file" "5"
+	wait_for_file_line_count "$telemetry_file" "5"
+	result_file="$tmpdir/logs/telemetry-v2.log"
+	wait_for_file_line_count "$result_file" "3"
   python3 - "$report_file" <<'PY'
 import json
 import sys
@@ -1431,6 +1448,23 @@ if any("Bearer" in open(sys.argv[1], encoding="utf-8").read() for _ in [0]):
     raise SystemExit("lifecycle events leaked authorization data")
 if not any(record["lifecycle_phase"] == "configure_cli" and record["lifecycle_status"] == "completed" for record in records):
     raise SystemExit("missing configure lifecycle completion")
+PY
+  python3 - "$result_file" <<'PY'
+import json
+import sys
+
+records = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8") if line.strip()]
+runtime = [record for record in records if record["event_type"] == "runtime_connect_result"]
+if len(runtime) != 1:
+    raise SystemExit("expected one runtime connection result: {!r}".format(records))
+event = runtime[0]
+if event["schema"] != "rainskills.telemetry-event.v3":
+    raise SystemExit("runtime connection must use v3 schema: {!r}".format(event))
+if event["environment_kind"] != "private" or event["status"] != "success":
+    raise SystemExit("unexpected runtime connection result: {!r}".format(event))
+for forbidden in ("console_origin", "eid", "token", "raw_error"):
+    if forbidden in event:
+        raise SystemExit("runtime connection leaked {}".format(forbidden))
 PY
 }
 

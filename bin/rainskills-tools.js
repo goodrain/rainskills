@@ -474,7 +474,7 @@ function createBridgeTelemetry(config) {
 }
 
 async function executeWithUsageTelemetry(command, config) {
-  const tracksUsage = command.command === "read" || command.command === "call";
+  const tracksUsage = commandTracksBusinessUsage(command);
   const telemetry = tracksUsage ? createBridgeTelemetry(config) : null;
   if (telemetry) await telemetry.flushPending(3).catch(() => {});
   try {
@@ -497,6 +497,10 @@ async function executeWithUsageTelemetry(command, config) {
     }
     throw error;
   }
+}
+
+function commandTracksBusinessUsage(command) {
+  return command?.command === "read" || command?.command === "call";
 }
 
 function loadSkillBinding(config, skillId, rootSkillId) {
@@ -1451,6 +1455,7 @@ module.exports = {
   CATALOG_TTL_MS,
   CLI_VERSION,
   loadConfig,
+  commandTracksBusinessUsage,
   executePackageUpload,
   packageUploadEnvironment,
   parseCommand,

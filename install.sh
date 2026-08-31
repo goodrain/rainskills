@@ -423,6 +423,14 @@ rainskills_v2_execution_environment() {
   fi
 }
 
+rainskills_v2_environment_kind() {
+  case "$DEPLOYMENT_MODE_INPUT" in
+    saas) printf 'saas\n' ;;
+    self-hosted) printf 'private\n' ;;
+    *) return 1 ;;
+  esac
+}
+
 rainskills_v2_error_stage() {
   case "${RAINSKILLS_INSTALL_FAILURE_STAGE:-install}" in
     bootstrap) printf 'preflight\n' ;;
@@ -453,6 +461,7 @@ report_rainskills_v2_event() {
   local agent="${3:-}"
   local error_stage="${4:-}"
   local error_code="${5:-}"
+  local environment_kind="${6:-}"
   rainskills_v2_enabled || return 0
   [[ -n "${RAINSKILLS_TELEMETRY_INSTALLATION_ID:-}" ]] || return 0
   command -v curl >/dev/null 2>&1 || return 0
@@ -474,6 +483,7 @@ report_rainskills_v2_event() {
       "$status" \
       "$error_stage" \
       "$error_code" \
+      "$environment_kind" \
       "$telemetry_dir" <<'PY'
 import datetime
 import json
@@ -483,10 +493,10 @@ import time
 import uuid
 
 (event_type, installation_id, attempt_id, package_version, action, agent,
- os_type, os_arch, execution_environment, status, error_stage, error_code,
+ os_type, os_arch, execution_environment, status, error_stage, error_code, environment_kind,
  telemetry_dir) = sys.argv[1:]
 event = {
-    "schema": "rainskills.telemetry-event.v2",
+    "schema": "rainskills.telemetry-event.v3" if event_type == "runtime_connect_result" else "rainskills.telemetry-event.v2",
     "event_id": str(uuid.uuid4()),
     "event_type": event_type,
     "installation_id": installation_id,
@@ -505,6 +515,8 @@ if event_type == "install_result":
     })
 elif event_type == "agent_config_result":
     event.update({"agent_type": agent, "status": status})
+elif event_type == "runtime_connect_result":
+    event.update({"agent_type": agent, "environment_kind": environment_kind, "status": status})
 if status == "failed":
     event["error_stage"] = error_stage
     event["error_code"] = error_code
@@ -553,6 +565,27 @@ PY
       [[ -n "$event_id" ]] && rm -f "$pending_file"
     fi
   ) &
+}
+
+report_rainskills_runtime_connect_result() {
+  local status="$1"
+  local environment_kind
+  environment_kind="$(rainskills_v2_environment_kind 2>/dev/null || true)"
+  [[ -n "$environment_kind" ]] || return 0
+  report_rainskills_v2_event \
+    "runtime_connect_result" \
+    "$status" \
+    "$RAINSKILLS_INSTALL_CLIENT" \
+    "$([[ "$status" == "failed" ]] && rainskills_v2_error_stage || true)" \
+    "$([[ "$status" == "failed" ]] && rainskills_v2_error_code || true)" \
+    "$environment_kind"
+}
+
+report_rainskills_runtime_connect_failure_if_applicable() {
+  [[ "$ACTION" != "connect" ]] || return 0
+  case "$RAINSKILLS_INSTALL_FAILURE_STAGE" in
+    authorization|verification) report_rainskills_runtime_connect_result "failed" ;;
+  esac
 }
 
 record_rainskills_v2_configured_agent() {
@@ -938,6 +971,7 @@ report_unhandled_rainskills_installation_failure() {
         "${BASH_SUBSHELL:-0}" -eq 0 && \
         "$RAINSKILLS_V2_TERMINAL_REPORTED" -eq 0 ]]; then
     RAINSKILLS_V2_TERMINAL_REPORTED=1
+    report_rainskills_runtime_connect_failure_if_applicable
     if [[ -n "$RAINSKILLS_V2_CURRENT_AGENT" ]]; then
       report_rainskills_v2_event \
         "agent_config_result" \
@@ -1037,6 +1071,7 @@ handle_installer_exit() {
 die() {
   if [[ "${BASH_SUBSHELL:-0}" -eq 0 && "$RAINSKILLS_V2_TERMINAL_REPORTED" -eq 0 ]]; then
     RAINSKILLS_V2_TERMINAL_REPORTED=1
+    report_rainskills_runtime_connect_failure_if_applicable
     if [[ -n "$RAINSKILLS_V2_CURRENT_AGENT" ]]; then
       report_rainskills_v2_event \
         "agent_config_result" \
@@ -2914,6 +2949,7 @@ do_refresh() {
 
   export RAINBOND_JWT="$token"
   write_token_file "$token" "$base_url"
+  report_rainskills_runtime_connect_result "success"
   set_rainskills_failure_context "configuration" "cli_configuration_failed"
   report_rainskills_lifecycle_event "configure_cli" "install_cli" "configure_cli" "started"
   install_local_cli
@@ -2999,6 +3035,7 @@ configure_runtime_connection() {
       || die "runtime connect 凭据安全写入失败。"
   else
     write_token_file "$token" "$base_url"
+    report_rainskills_runtime_connect_result "success"
   fi
 
   set_rainskills_failure_context "configuration" "cli_configuration_failed"

@@ -239,7 +239,7 @@ test("first use and daily activity are locally deduplicated", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-result-once-"));
   const requests = [];
   let sequence = 0;
-  let current = new Date("2026-08-28T01:00:00.000Z");
+  let current = new Date("2026-08-28T15:59:00.000Z");
   const telemetry = createResultTelemetry({
     directory,
     installationId: "11111111-1111-4111-8111-111111111111",
@@ -275,11 +275,75 @@ test("first use and daily activity are locally deduplicated", async () => {
   assert.equal(repeatedActive.recorded, false);
   assert.equal(requests.length, 3);
 
-  current = new Date("2026-08-29T01:00:00.000Z");
+  current = new Date("2026-08-28T16:01:00.000Z");
   const nextDay = telemetry.recordActiveDaily();
   await nextDay.delivery;
   assert.equal(nextDay.recorded, true);
   assert.equal(requests.length, 4);
+});
+
+test("runtime connection telemetry records only minimal v3 environment results", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-runtime-connect-"));
+  const requests = [];
+  let sequence = 0;
+  const telemetry = createResultTelemetry({
+    directory,
+    installationId: "11111111-1111-4111-8111-111111111111",
+    packageVersion: "1.0.0",
+    agentType: "codex",
+    randomUUID: () => `33333333-3333-4333-8333-${String(++sequence).padStart(12, "0")}`,
+    now: () => new Date("2026-08-31T00:00:00.000Z"),
+    fetchImpl: async (_url, options) => {
+      requests.push(JSON.parse(options.body));
+      return { ok: true, status: 200 };
+    },
+  });
+
+  const success = telemetry.recordRuntimeConnect("success", { environment_kind: "saas" });
+  const repeated = telemetry.recordRuntimeConnect("success", { environment_kind: "saas" });
+  const failure = telemetry.recordRuntimeConnect("failed", {
+    environment_kind: "private",
+    error_stage: "authorization",
+    error_code: "authorization_failed",
+    console_origin: "https://must-not-be-sent.example.com",
+    token: "must-not-be-sent",
+    eid: "must-not-be-sent",
+  });
+  await Promise.all([success.delivery, failure.delivery]);
+
+  assert.equal(success.recorded, true);
+  assert.equal(repeated.recorded, false);
+  assert.equal(failure.recorded, true);
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests.map((event) => ({
+    schema: event.schema,
+    event_type: event.event_type,
+    environment_kind: event.environment_kind,
+    status: event.status,
+  })), [
+    { schema: "rainskills.telemetry-event.v3", event_type: "runtime_connect_result", environment_kind: "saas", status: "success" },
+    { schema: "rainskills.telemetry-event.v3", event_type: "runtime_connect_result", environment_kind: "private", status: "failed" },
+  ]);
+  assert(requests.every((event) => event.agent_type === "codex"));
+  assert.doesNotMatch(JSON.stringify(requests), /must-not-be-sent|console_origin|token|eid/);
+});
+
+test("runtime connection telemetry rejects unsupported environment kinds", () => {
+  const telemetry = createResultTelemetry({
+    directory: fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-runtime-invalid-")),
+    installationId: "11111111-1111-4111-8111-111111111111",
+    packageVersion: "1.0.0",
+    agentType: "codex",
+    fetchImpl: async () => ({ ok: true, status: 200 }),
+  });
+
+  assert.equal(telemetry.recordRuntimeConnect("success", { environment_kind: "unknown" }).recorded, false);
+  assert.equal(telemetry.recordRuntimeConnect("completed", { environment_kind: "saas" }).recorded, false);
+  assert.equal(telemetry.recordRuntimeConnect("failed", {
+    environment_kind: "private",
+    error_stage: "authorization",
+    error_code: "raw server error",
+  }).recorded, false);
 });
 
 test("disabled result telemetry performs no writes or requests", async () => {

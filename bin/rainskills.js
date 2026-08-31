@@ -252,6 +252,7 @@ async function runBuiltin(args, {
   credentialEnvironment = process.env,
   credentialPersister,
   connectedCredentialReader,
+  resultTelemetryFactory,
 } = {}) {
   const getSingleRuntimeStore = () => singleRuntimeStore || require(
     "../rainbond-platform-installer/scripts/single-runtime.js"
@@ -445,6 +446,27 @@ async function runBuiltin(args, {
       intent: null,
       operation_id: operationId,
     };
+    const resultTelemetry = (() => {
+      try {
+        const factory = resultTelemetryFactory || require(
+          "../rainbond-platform-installer/scripts/result-telemetry.js"
+        ).createResultTelemetry;
+        return factory({
+          agentType: options.targetClient,
+          packageVersion: require("../package.json").version,
+        });
+      } catch {
+        return null;
+      }
+    })();
+    const reportRuntimeConnection = async (status, details) => {
+      try {
+        const result = resultTelemetry?.recordRuntimeConnect?.(status, details);
+        await result?.delivery?.catch(() => false);
+      } catch {
+        // Telemetry must never change authorization or connection behavior.
+      }
+    };
     manager.startConnecting(connection, { replaceExisting: true });
     try {
       const invocation = runtimeConnectionInvocation(options, inspection.origin);
@@ -490,15 +512,30 @@ async function runBuiltin(args, {
         manager.abortConnecting(connection);
       }
       write(`${JSON.stringify(runtimeConnectRetryAction(options, inspection.origin))}\n`);
+      await reportRuntimeConnection("failed", {
+        environment_kind: connection.environment_kind,
+        error_stage: "authorization",
+        error_code: "authorization_failed",
+      });
       throw error;
     }
     let storedRuntime = getSingleRuntimeStore().read();
     if (!storedRuntime || storedRuntime.console_origin !== inspection.origin) {
       if (!connectedCredentialReader) {
+        await reportRuntimeConnection("failed", {
+          environment_kind: connection.environment_kind,
+          error_stage: "verification",
+          error_code: "verification_failed",
+        });
         throw new Error("runtime connect 未写入唯一运行环境凭据");
       }
       const credential = await connectedCredentialReader(inspection.origin);
       if (!credential || credential.origin !== inspection.origin) {
+        await reportRuntimeConnection("failed", {
+          environment_kind: connection.environment_kind,
+          error_stage: "verification",
+          error_code: "verification_failed",
+        });
         throw new Error("运行环境凭据与已验证 Console origin 不匹配");
       }
       getSingleRuntimeStore().write({
@@ -510,8 +547,16 @@ async function runBuiltin(args, {
       storedRuntime = getSingleRuntimeStore().read();
     }
     if (!storedRuntime || storedRuntime.console_origin !== inspection.origin) {
+      await reportRuntimeConnection("failed", {
+        environment_kind: connection.environment_kind,
+        error_stage: "verification",
+        error_code: "verification_failed",
+      });
       throw new Error("唯一运行环境凭据与已连接 Console origin 不匹配");
     }
+    await reportRuntimeConnection("success", {
+      environment_kind: connection.environment_kind,
+    });
     write(`${JSON.stringify({
       schema: "rainskills.runtime-connect-result.v1",
       state: "connected",
