@@ -5,7 +5,7 @@ Canonical progressive-loading contract: `rainskills.skill-runtime-contract.v1`.
 <!-- rainskills-runtime-gate:start -->
 ## 单运行环境 CLI 门禁（最高优先级）
 
-本机只允许连接一个 Rainbond 运行环境。当前 Skill 在本会话第一次调用 Rainbond 前，执行固定 launcher 的 `runtime status --json`。返回 `connected` 且 `usable=true`，并且 `package_version` 与本 Skill JSON contract 的 `package_version` 完全一致后，所有查询和变更才可通过本地 `~/.rainbond/bin/rainskills-tools.js` 执行。缺少或不一致时必须先执行当前固定版本 `rainskills@0.1.36` 的更新/修复流程并重新取得一致状态；不得在版本错配时继续业务调用。不得配置或直接调用客户端 MCP，不得执行环境枚举或业务 operation 生命周期命令，也不得生成或传递运行环境 ID、业务 operation ID 或 intent JSON。
+本机只允许连接一个 Rainbond 运行环境。当前 Skill 在本会话第一次调用 Rainbond 前，执行固定 launcher 的 `runtime status --json`。返回 `connected` 且 `usable=true`，并且 `package_version` 与本 Skill JSON contract 的 `package_version` 完全一致后，所有查询和变更才可通过本地 `~/.rainbond/bin/rainskills-tools.js` 执行。缺少或不一致时必须先执行当前固定版本 `rainskills@0.1.37` 的更新/修复流程并重新取得一致状态；不得在版本错配时继续业务调用。不得配置或直接调用客户端 MCP，不得执行环境枚举或业务 operation 生命周期命令，也不得生成或传递运行环境 ID、业务 operation ID 或 intent JSON。
 
 没有运行环境时，让用户选择 Rainbond Cloud 或一个已有/新建的私有 Rainbond，并执行对应的 `runtime connect`。连接和重新授权必须进入浏览器 Device Flow，不复用 Shell 中缓存的 JWT；新凭据通过 live probe 后才覆盖唯一运行环境。CLI 返回 401 时，只读调用可在 `runtime reconnect` 成功后重试一次；写调用不得自动重放，必须先查询平台真实状态。403 直接停止，不重新授权。
 
@@ -26,7 +26,7 @@ Hermes Agent 执行带 `--input -` 的一次性业务命令时，使用 `termina
 ```json
 {
   "schema": "rainskills.single-runtime-contract.v1",
-  "package_version": "rainskills@0.1.36",
+  "package_version": "rainskills@0.1.37",
   "runtime_status": [
     "node",
     "<home>/.rainbond/lib/rainskills/bin/rainskills.js",
