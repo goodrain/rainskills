@@ -478,7 +478,10 @@ async function executeWithUsageTelemetry(command, config) {
   const telemetry = tracksUsage ? createBridgeTelemetry(config) : null;
   if (telemetry) await telemetry.flushPending(3).catch(() => {});
   try {
-    const output = await execute(command, config);
+    const executionCommand = telemetry?.installationId
+      ? { ...command, telemetryInstallationId: telemetry.installationId }
+      : command;
+    const output = await execute(executionCommand, config);
     if (telemetry) {
       const firstUse = telemetry.recordFirstUse("success");
       const active = telemetry.recordActiveDaily();
@@ -1362,8 +1365,12 @@ async function execute(command, config) {
       arguments: argumentsValue,
     };
     if (operation) {
-      params._meta = {
-        "com.rainbond/rainskills": buildAuditMetadata(operation, skillBinding),
+      params._meta = { "com.rainbond/rainskills": buildAuditMetadata(operation, skillBinding) };
+    }
+    if (command.telemetryInstallationId) {
+      params._meta ||= {};
+      params._meta["com.rainbond/telemetry"] = {
+        installation_id: command.telemetryInstallationId,
       };
     }
     const result = await rpcRequest(config, "tools/call", params);

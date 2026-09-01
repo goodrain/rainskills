@@ -618,6 +618,11 @@ test("status, compact list, describe, and call use the dedicated JSON-RPC endpoi
     { name: "other_tool", description: "other", inputSchema: { type: "object" } },
   ];
   await withRpcServer((record, response) => {
+    if (record.url === "/telemetry") {
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ status: "success" }));
+      return;
+    }
     assert.equal(record.method, "POST");
     assert.equal(record.url, "/console/mcp/rainskills/api/query");
     assert.equal(record.headers.authorization, "GRJWT bridge-jwt.payload.signature");
@@ -639,13 +644,23 @@ test("status, compact list, describe, and call use the dedicated JSON-RPC endpoi
       record.body.params._meta["com.rainbond/rainskills"].skill.id,
       "rainbond-app-assistant"
     );
+    assert.match(
+      record.body.params._meta["com.rainbond/telemetry"].installation_id,
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+    );
+    assert.equal(Object.hasOwn(record.body.params.arguments, "installation_id"), false);
     rpcResult(response, record.body.id, {
       isError: false,
       content: [{ type: "text", text: "must not be printed" }],
       structuredContent: { app_id: 42 },
     });
   }, async (baseUrl, requests) => {
-    const env = { RAINBOND_URL: new URL(baseUrl).origin, RAINBOND_JWT: "bridge-jwt.payload.signature" };
+    const env = {
+      RAINBOND_URL: new URL(baseUrl).origin,
+      RAINBOND_JWT: "bridge-jwt.payload.signature",
+      RAINSKILLS_TELEMETRY_DISABLED: "0",
+      RAINSKILLS_TELEMETRY_REPORT_URL: `${new URL(baseUrl).origin}/telemetry`,
+    };
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-bridge-catalog-"));
 
     const status = await runBridge(["status"], { env, home });
@@ -685,7 +700,11 @@ test("status, compact list, describe, and call use the dedicated JSON-RPC endpoi
     );
     assert.equal(swappedArguments.code, 2);
     assert.match(swappedArguments.stderr, /arguments.*match|confirmation.*match/i);
-    assert.equal(requests.length, 1, "changed arguments must be rejected before execution");
+    assert.equal(
+      requests.filter((request) => request.url !== "/telemetry").length,
+      1,
+      "changed arguments must be rejected before execution"
+    );
 
     const call = await runBridge(
       ["call", "rainbond_create_app", "--input", "-", "--confirm", confirmationPayload.confirmation_id],
@@ -696,7 +715,7 @@ test("status, compact list, describe, and call use the dedicated JSON-RPC endpoi
     assert.doesNotMatch(call.stdout, /must not be printed|structuredContent|content/);
     // status fetches and privately caches the catalog; list/describe reuse it and
     // only the mutating call reaches the Console afterwards.
-    assert.equal(requests.length, 2);
+    assert.equal(requests.filter((request) => request.url !== "/telemetry").length, 2);
   });
 });
 
