@@ -558,7 +558,7 @@ PY
   event_id="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["event_id"])' <<<"$payload" 2>/dev/null || true)"
   pending_file="$telemetry_dir/pending-v2/${event_id}.json"
   (
-    if curl --silent --show-error --connect-timeout 2 --max-time 3 \
+    if curl --silent --show-error --fail --connect-timeout 2 --max-time 3 \
       -X POST "$RAINSKILLS_TELEMETRY_REPORT_URL" \
       -H 'Content-Type: application/json' \
       --data-binary "$payload" >/dev/null 2>&1; then
@@ -754,7 +754,7 @@ report_rainskills_lifecycle_event() {
   local blocked_reason="${6:-}"
   local auth_method="${7:-}"
 
-  [[ "${RAINSKILLS_LEGACY_TELEMETRY_ENABLED:-0}" == "1" ]] || return 0
+  rainskills_v2_enabled || return 0
   [[ -n "$RAINSKILLS_INSTALL_ATTEMPT_ID" ]] || return 0
   command -v python3 >/dev/null 2>&1 || return 0
   RAINSKILLS_TELEMETRY_SEQUENCE=$((RAINSKILLS_TELEMETRY_SEQUENCE + 1))
@@ -1066,6 +1066,7 @@ handle_installer_exit() {
   cleanup_device_flow
   cleanup_mcp_validation
   report_unhandled_rainskills_installation_failure "$exit_code"
+  wait || true
 }
 
 die() {

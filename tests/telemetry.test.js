@@ -164,7 +164,7 @@ test("only explicit lifecycle compatibility responses use the legacy summary end
   assert.deepEqual(requests, ["https://log.rainbond.com/api/rainskills/lifecycle-events"]);
 });
 
-test("legacy lifecycle telemetry is disabled unless explicitly enabled", async () => {
+test("lifecycle telemetry honors an explicit disabled override", async () => {
   const directory = path.join(os.tmpdir(), `rainskills-legacy-disabled-${process.pid}-${Date.now()}`);
   let requests = 0;
   const telemetry = createLifecycleTelemetry({
@@ -181,6 +181,69 @@ test("legacy lifecycle telemetry is disabled unless explicitly enabled", async (
   await result.delivery;
   assert.equal(requests, 0);
   assert.equal(fs.existsSync(directory), false);
+});
+
+test("lifecycle telemetry is enabled by default and follows the global opt-out", { concurrency: false }, async () => {
+  const previous = process.env.RAINSKILLS_TELEMETRY_DISABLED;
+  delete process.env.RAINSKILLS_TELEMETRY_DISABLED;
+  try {
+    let requests = 0;
+    const enabledTelemetry = createLifecycleTelemetry({
+      directory: fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-lifecycle-default-")),
+      context: {
+        install_attempt_id: "11111111-1111-4111-8111-111111111111",
+        platform: "linux",
+        control_mode: "posix",
+        target: "local-linux",
+        client: "codex",
+        action: "install",
+      },
+      fetchImpl: async () => {
+        requests += 1;
+        return { ok: true, status: 200 };
+      },
+    });
+    await enabledTelemetry.record({ lifecycle_phase: "bootstrap", lifecycle_status: "started" }).delivery;
+    assert.equal(requests, 1);
+
+    process.env.RAINSKILLS_TELEMETRY_DISABLED = "1";
+    const disabledDirectory = path.join(os.tmpdir(), `rainskills-lifecycle-optout-${process.pid}-${Date.now()}`);
+    const disabledTelemetry = createLifecycleTelemetry({
+      directory: disabledDirectory,
+      context: { install_attempt_id: "22222222-2222-4222-8222-222222222222" },
+      fetchImpl: async () => {
+        requests += 1;
+        return { ok: true, status: 200 };
+      },
+    });
+    await disabledTelemetry.record({ lifecycle_phase: "bootstrap", lifecycle_status: "started" }).delivery;
+    assert.equal(requests, 1);
+    assert.equal(fs.existsSync(disabledDirectory), false);
+  } finally {
+    if (previous === undefined) delete process.env.RAINSKILLS_TELEMETRY_DISABLED;
+    else process.env.RAINSKILLS_TELEMETRY_DISABLED = previous;
+  }
+});
+
+test("lifecycle telemetry preserves platform installation targets", () => {
+  const telemetry = createLifecycleTelemetry({
+    enabled: false,
+    context: {
+      install_attempt_id: "11111111-1111-4111-8111-111111111111",
+      platform: "linux",
+      control_mode: "posix",
+      target: "host-cluster",
+      client: "hermes_agent",
+      action: "install",
+    },
+  });
+
+  const event = telemetry.buildEvent({
+    lifecycle_phase: "target_selection",
+    lifecycle_status: "completed",
+  });
+  assert.equal(event.target, "host-cluster");
+  assert.equal(event.client, "hermes_agent");
 });
 
 test("result telemetry keeps a stable anonymous installation id", () => {

@@ -13,7 +13,10 @@ const CLIENTS = new Set([
 ]);
 const PLATFORMS = new Set(["darwin", "linux", "win32"]);
 const CONTROL_MODES = new Set(["posix", "wsl", "windows-native"]);
-const TARGETS = new Set(["local-linux", "local-macos", "local-windows", "remote-linux"]);
+const TARGETS = new Set([
+  "local-linux", "local-macos", "local-windows", "remote-linux",
+  "host-cluster", "existing-kubernetes",
+]);
 const ACTIONS = new Set(["install", "refresh"]);
 const LIFECYCLE_STATUSES = new Set(["started", "completed", "blocked", "failed", "interrupted", "skipped"]);
 const LEGACY_PHASES = new Set(["started", "authorized", "configured", "failed"]);
@@ -98,7 +101,7 @@ function createLifecycleTelemetry({
   randomUUID = crypto.randomUUID,
   now = () => new Date().toISOString(),
   timeoutMs = 1500,
-  enabled = process.env.RAINSKILLS_LEGACY_TELEMETRY_ENABLED === "1",
+  enabled = process.env.RAINSKILLS_TELEMETRY_DISABLED !== "1",
 } = {}) {
   let sequence = 0;
   const deliveries = new Set();

@@ -2539,6 +2539,7 @@ async function runResume(onboardingId, {
     throw error;
   } finally {
     runtimeLease?.stop();
+    await resumeTelemetry?.flush?.();
   }
 }
 
@@ -3201,6 +3202,8 @@ async function runInstall(options, {
   try {
     await installOperation(options);
   } finally {
+    await activeOperation?.telemetry?.flush?.();
+    activeOperation = null;
     closeSshSession(activeSshSession);
     activeSshSession = null;
     operationLock.release();
