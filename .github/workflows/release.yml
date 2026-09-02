@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+env:
+  RAINSKILLS_TELEMETRY_DISABLED: '1'
+  RAINSKILLS_PACKAGE_VERSION: 'test'
+
 jobs:
   windows_contract:
     name: Windows non-mutating contract

@@ -873,6 +873,18 @@ initialize_rainskills_installation_reporting() {
   report_rainskills_installation "started" "started"
 }
 
+rainskills_should_report_invocation() {
+  local arg
+  for arg in "$@"; do
+    case "$arg" in
+      -h|--help)
+        return 1
+        ;;
+    esac
+  done
+  return 0
+}
+
 enterprise_id_from_jwt() {
   python3 -c '
 import base64
@@ -3138,6 +3150,7 @@ main() {
   install_detail_log "安装完成。本次：${INSTALL_COUNT_NEW} 项新装 / ${INSTALL_COUNT_UPDATED} 项已更新 / ${INSTALL_COUNT_UNCHANGED} 项已是最新 / ${INSTALL_COUNT_FORCED} 项强制覆盖"
   install_detail_log ""
   print_capability_summary
+  report_rainskills_lifecycle_event "bootstrap" "resume" "resume" "completed"
   RAINSKILLS_INSTALL_TERMINAL_REPORTED=1
   RAINSKILLS_V2_TERMINAL_REPORTED=1
   report_rainskills_v2_event "install_result" "success"
@@ -3148,6 +3161,8 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   trap 'handle_installer_signal 130' INT
   trap 'handle_installer_signal 143' TERM
   trap 'handle_installer_exit "$?"' EXIT
-  initialize_rainskills_installation_reporting "$@"
+  if rainskills_should_report_invocation "$@"; then
+    initialize_rainskills_installation_reporting "$@"
+  fi
   main "$@"
 fi

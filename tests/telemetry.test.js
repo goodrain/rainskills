@@ -260,6 +260,7 @@ test("result telemetry sends only the fixed v2 fields", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-result-fixed-"));
   const requests = [];
   const telemetry = createResultTelemetry({
+    disabled: false,
     directory,
     installationId: "11111111-1111-4111-8111-111111111111",
     packageVersion: "1.0.0",
@@ -304,6 +305,7 @@ test("first use and daily activity are locally deduplicated", async () => {
   let sequence = 0;
   let current = new Date("2026-08-28T15:59:00.000Z");
   const telemetry = createResultTelemetry({
+    disabled: false,
     directory,
     installationId: "11111111-1111-4111-8111-111111111111",
     packageVersion: "1.0.0",
@@ -350,6 +352,7 @@ test("runtime connection telemetry records only minimal v3 environment results",
   const requests = [];
   let sequence = 0;
   const telemetry = createResultTelemetry({
+    disabled: false,
     directory,
     installationId: "11111111-1111-4111-8111-111111111111",
     packageVersion: "1.0.0",
@@ -393,6 +396,7 @@ test("runtime connection telemetry records only minimal v3 environment results",
 
 test("runtime connection telemetry rejects unsupported environment kinds", () => {
   const telemetry = createResultTelemetry({
+    disabled: false,
     directory: fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-runtime-invalid-")),
     installationId: "11111111-1111-4111-8111-111111111111",
     packageVersion: "1.0.0",
