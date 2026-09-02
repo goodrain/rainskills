@@ -234,6 +234,15 @@ test("CI and release tests cannot publish production telemetry", () => {
     /process\.env\.RAINSKILLS_TELEMETRY_DISABLED\s*=\s*["']1["']/,
     "package installer tests must disable telemetry for local and CI runs"
   );
+
+  const manifest = readJson("package.json");
+  assert.equal(manifest.scripts.test, "node scripts/run-test-suite.js");
+  const runner = read("scripts/run-test-suite.js");
+  assert.match(runner, /RAINSKILLS_TELEMETRY_DISABLED:\s*["']1["']/);
+  assert.match(runner, /RAINSKILLS_PACKAGE_VERSION:\s*["']test["']/);
+
+  const releaseRunbook = read("docs/npm-release-runbook.md");
+  assert.match(releaseRunbook, /rainskills@(?:next|<version>)[^\n]*--no-telemetry/);
 });
 
 test("npm artifact includes the marketplace entry without a Pi adapter", () => {
@@ -252,12 +261,13 @@ test("npm artifact includes the marketplace entry without a Pi adapter", () => {
     manifest.scripts["test:marketplace"],
     "node --test tests/marketplace-entry.test.js"
   );
-  assert.match(manifest.scripts.test, /npm run test:marketplace/);
+  assert.equal(manifest.scripts.test, "node scripts/run-test-suite.js");
+  assert.match(read("scripts/run-test-suite.js"), /"test:marketplace"/);
   assert.equal(
     manifest.scripts["test:runtime-routing"],
     "node --test tests/runtime-onboarding-routing.test.js && python3 rainbond-app-assistant/scripts/validate_progressive_loading.py && python3 rainbond-app-assistant/scripts/validate_cross_skill_routing.py && python3 tests/progressive-loading-validators.test.py && python3 tests/run_skill_routing_evals.py"
   );
-  assert.match(manifest.scripts.test, /npm run test:runtime-routing/);
+  assert.match(read("scripts/run-test-suite.js"), /"test:runtime-routing"/);
   assert.equal(
     manifest.scripts["build:marketplace"],
     "node scripts/build-marketplace-package.mjs"

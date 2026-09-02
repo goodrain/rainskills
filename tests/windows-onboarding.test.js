@@ -333,6 +333,7 @@ test("Windows argument parsing rejects unknown input before installation", () =>
     "--rainbond-url",
     "https://rainbond.example.com",
     "--no-browser",
+    "--no-telemetry",
   ]);
 
   assert.equal(options.target, "all");
@@ -342,6 +343,7 @@ test("Windows argument parsing rejects unknown input before installation", () =>
   assert.equal(options.deploymentMode, "self-hosted");
   assert.equal(options.rainbondUrl, "https://rainbond.example.com");
   assert.equal(options.noBrowser, true);
+  assert.equal(options.noTelemetry, true);
   assert.deepEqual(destinationsForTarget("all", home, {}), [
     path.join(home, ".claude", "skills"),
     path.join(home, ".codex", "skills"),
@@ -1083,6 +1085,25 @@ test("native Windows installation reports one install result and each configured
     execution_environment: "native",
     status: "success",
   });
+});
+
+test("native Windows no-telemetry installation creates no telemetry state", async () => {
+  const { main } = require(windowsOnboardingPath);
+  const home = temporaryHome();
+  const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-package-no-telemetry-"));
+  writeSkill(packageRoot, "rainbond-test");
+  fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ version: "1.0.0" }));
+
+  const result = await main(["codex", "--force", "--no-telemetry"], {
+    env: { RAINSKILLS_TELEMETRY_DISABLED: "0" },
+    home,
+    packageRoot,
+    installLocalCli: async () => ({ status: "installed" }),
+    logger() {},
+  });
+
+  assert.equal(result.status, "skills-installed");
+  assert.equal(fs.existsSync(path.join(home, ".rainbond", "rainskills", "telemetry")), false);
 });
 
 test("native Windows installation remains fail-open when telemetry initialization fails", async () => {
