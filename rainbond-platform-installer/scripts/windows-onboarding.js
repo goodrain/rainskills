@@ -100,6 +100,7 @@ function parseWindowsInstallerArgs(argv) {
     deploymentMode: "",
     allowInsecureHttp: false,
     noBrowser: false,
+    noTelemetry: false,
     help: false,
   };
 
@@ -131,6 +132,8 @@ function parseWindowsInstallerArgs(argv) {
       options.allowInsecureHttp = true;
     } else if (argument === "--no-browser") {
       options.noBrowser = true;
+    } else if (argument === "--no-telemetry") {
+      options.noTelemetry = true;
     } else if (argument === "-h" || argument === "--help") {
       options.help = true;
     } else {
@@ -656,13 +659,14 @@ async function main(argv, dependencies = {}) {
     ? environment.RAINSKILLS_INSTALL_ATTEMPT_ID
     : crypto.randomUUID();
   const osArch = os.arch() === "x64" ? "amd64" : os.arch() === "arm64" ? "arm64" : "other";
+  const telemetryDisabled = options.noTelemetry || environment.RAINSKILLS_TELEMETRY_DISABLED === "1";
   const resultTelemetry = (() => {
     try {
       return (dependencies.resultTelemetryFactory || createResultTelemetry)({
         directory: telemetryDirectory,
         packageVersion,
         agentType: "unknown",
-        disabled: environment.RAINSKILLS_TELEMETRY_DISABLED === "1",
+        disabled: telemetryDisabled,
         installAttemptId,
         osArch,
       });
@@ -707,7 +711,7 @@ async function main(argv, dependencies = {}) {
       status: "success",
     });
     deliveries.push(installResult.delivery);
-    if (environment.RAINSKILLS_TELEMETRY_DISABLED !== "1") {
+    if (!telemetryDisabled) {
       try {
         (dependencies.configuredAgentsWriter || writeConfiguredAgents)(
           telemetryDirectory,

@@ -67,6 +67,8 @@ npx --yes rainskills hermes
 
 安装流程支持 Codex、Claude Code、Pi Agent、DeepSeek Harness、WorkBuddy 和 Hermes Agent；所有 Agent 共用同一组 Skills、CLI profile 和本地 Rainskills CLI，不提供单独的客户端 MCP adapter。macOS、Linux 和 WSL 不支持 OpenClaw 安装。不要手工复制 Skill、拼接凭据或修改 Agent 配置。
 
+测试或发布烟测可在安装命令末尾追加 `--no-telemetry`，仅关闭当前进程的匿名安装遥测；普通安装不传该参数时保持默认遥测行为。
+
 ## 安装完成时用户会看到什么
 
 安装完成后只完成 Skills 和受保护本地 CLI 的安装并展示能力列表，不选择运行环境、不登录 Rainbond，也不配置 Agent MCP：

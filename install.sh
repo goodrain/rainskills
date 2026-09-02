@@ -238,6 +238,7 @@ Options:
   --token JWT            Use an existing Rainbond JWT, skip browser login
   --no-browser           Do not open a local browser; print the authorization URL
   --no-cached-token      Ignore RAINBOND_JWT inherited from the shell and re-login
+  --no-telemetry         Disable anonymous installation telemetry for this run
   --username NAME        Legacy: Rainbond login username (self-hosted only)
   --allow-insecure-http  Allow plain HTTP for internal trial environments
   -h, --help             Show this help message
@@ -877,7 +878,7 @@ rainskills_should_report_invocation() {
   local arg
   for arg in "$@"; do
     case "$arg" in
-      -h|--help)
+      -h|--help|--no-telemetry)
         return 1
         ;;
     esac
@@ -1258,6 +1259,10 @@ parse_args() {
         ;;
       --no-browser)
         NO_BROWSER=1
+        shift
+        ;;
+      --no-telemetry)
+        export RAINSKILLS_TELEMETRY_DISABLED=1
         shift
         ;;
       --saas)

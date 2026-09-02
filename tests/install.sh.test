@@ -1622,6 +1622,25 @@ test_help_does_not_emit_installation_telemetry() {
   assert_file_not_exists "$tmpdir/logs/install-report.log"
 }
 
+test_no_telemetry_flag_keeps_normal_installation_local_only() {
+  local tmpdir output_file
+  tmpdir="$(mktemp -d)"
+  trap 'rm -rf "$tmpdir"' RETURN
+  mkdir -p "$tmpdir/home" "$tmpdir/logs"
+  make_fake_commands "$tmpdir/bin"
+  output_file="$tmpdir/install.out"
+
+  run_installer "$tmpdir" all --no-telemetry --force >"$output_file" 2>&1
+
+  assert_exact_capability_summary "$output_file"
+  assert_file_exists "$tmpdir/home/.codex/skills/rainbond-app-assistant/SKILL.md"
+  assert_file_exists "$tmpdir/home/.hermes/skills/rainbond-app-assistant/SKILL.md"
+  assert_file_not_exists "$tmpdir/home/.rainbond/rainskills/telemetry/installation-id"
+  assert_file_not_exists "$tmpdir/home/.rainbond/rainskills/telemetry/events.jsonl"
+  assert_file_not_exists "$tmpdir/logs/telemetry-v2.log"
+  assert_file_not_exists "$tmpdir/logs/install-report.log"
+}
+
 test_v2_reporting_failure_is_queued_and_does_not_block_installation() {
   local tmpdir pending_count
   tmpdir="$(mktemp -d)"
@@ -1811,6 +1830,8 @@ printf 'RUN: test_installer_reports_minimal_v2_results\n'
 test_installer_reports_minimal_v2_results
 printf 'RUN: test_help_does_not_emit_installation_telemetry\n'
 test_help_does_not_emit_installation_telemetry
+printf 'RUN: test_no_telemetry_flag_keeps_normal_installation_local_only\n'
+test_no_telemetry_flag_keeps_normal_installation_local_only
 printf 'RUN: test_v2_reporting_failure_is_queued_and_does_not_block_installation\n'
 test_v2_reporting_failure_is_queued_and_does_not_block_installation
 printf 'RUN: test_public_connect_action_is_rejected_before_url_or_configuration_side_effects\n'
