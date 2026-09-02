@@ -5,6 +5,11 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const test = require("node:test");
 
+// Package tests execute the real installer in subprocesses. Never let those
+// subprocesses publish production telemetry from local development or CI.
+process.env.RAINSKILLS_TELEMETRY_DISABLED = "1";
+process.env.RAINSKILLS_PACKAGE_VERSION = "test";
+
 const repoRoot = path.resolve(__dirname, "..");
 const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
 const npxCommand = process.platform === "win32" ? "npx.cmd" : "npx";

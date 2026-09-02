@@ -539,6 +539,7 @@ run_installer() {
     TEST_FAKE_INSTALL_REPORT_FAIL="${TEST_FAKE_INSTALL_REPORT_FAIL:-}" \
     TEST_FAKE_DETAILS_HTTP_CODE="${TEST_FAKE_DETAILS_HTTP_CODE:-}" \
     TEST_FAKE_V2_REPORT_FAIL="${TEST_FAKE_V2_REPORT_FAIL:-}" \
+    RAINSKILLS_TELEMETRY_DISABLED=0 \
     RAINSKILLS_LEGACY_TELEMETRY_ENABLED=1 \
     TEST_REAL_NODE="$TEST_SUITE_REAL_NODE" \
     bash "$REPO_ROOT/install.sh" "$@"
@@ -558,15 +559,16 @@ run_mcp_configuration() {
     HOME="$workdir/home" \
     SHELL="/bin/zsh" \
     TEST_LOG_DIR="$workdir/logs" \
-      PATH="$workdir/bin:$(dirname "$TEST_SUITE_REAL_NODE"):/usr/bin:/bin" \
+    PATH="$workdir/bin:$(dirname "$TEST_SUITE_REAL_NODE"):/usr/bin:/bin" \
     TEST_FAKE_MCP_HTTP_CODE="${TEST_FAKE_MCP_HTTP_CODE:-}" \
     TEST_FAKE_LOGIN_TOKEN="${TEST_FAKE_LOGIN_TOKEN:-}" \
     TEST_FAKE_RENEWED_TOKEN="${TEST_FAKE_RENEWED_TOKEN:-}" \
     TEST_FAKE_CODEX_ADD_FAIL="${TEST_FAKE_CODEX_ADD_FAIL:-}" \
     TEST_FAKE_INSTALL_REPORT_FAIL="${TEST_FAKE_INSTALL_REPORT_FAIL:-}" \
     TEST_FAKE_DETAILS_HTTP_CODE="${TEST_FAKE_DETAILS_HTTP_CODE:-}" \
-      RAINSKILLS_LEGACY_TELEMETRY_ENABLED=1 \
-      bash -s -- "$REPO_ROOT" "$@" <<'BASH'
+    RAINSKILLS_TELEMETRY_DISABLED=0 \
+    RAINSKILLS_LEGACY_TELEMETRY_ENABLED=1 \
+    bash -s -- "$REPO_ROOT" "$@" <<'BASH'
 set -euo pipefail
 repo_root="$1"
 shift
@@ -1525,6 +1527,7 @@ test_unhandled_skill_installation_failure_is_reported() {
   HOME="$tmpdir/home" \
   TEST_LOG_DIR="$tmpdir/logs" \
   PATH="$tmpdir/bin:/usr/bin:/bin" \
+  RAINSKILLS_TELEMETRY_DISABLED=0 \
   RAINSKILLS_LEGACY_TELEMETRY_ENABLED=1 \
     bash "$source_dir/install.sh" codex --skip-mcp --force \
       >/tmp/rainbond-install-invalid-skill.out 2>&1
@@ -1549,7 +1552,7 @@ PY
 }
 
 test_installer_reports_minimal_v2_results() {
-  local tmpdir
+  local tmpdir lifecycle_file
   tmpdir="$(mktemp -d)"
   trap 'rm -rf "$tmpdir"' RETURN
   mkdir -p "$tmpdir/home" "$tmpdir/logs"
@@ -1589,6 +1592,34 @@ PY
   assert_file_exists "$tmpdir/home/.rainbond/rainskills/telemetry/configured-agents.json"
   [[ "$(file_mode "$tmpdir/home/.rainbond/rainskills/telemetry/installation-id")" == "600" ]] \
     || fail "installation id must use mode 600"
+
+  lifecycle_file="$tmpdir/home/.rainbond/rainskills/telemetry/events.jsonl"
+  wait_for_file_line_count "$lifecycle_file" "2"
+  python3 - "$lifecycle_file" <<'PY'
+import json
+import sys
+
+records = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8") if line.strip()]
+if records[-1]["lifecycle_phase"] != "bootstrap" or records[-1]["lifecycle_status"] != "completed":
+    raise SystemExit("skills-only installation did not close its lifecycle: {!r}".format(records))
+PY
+}
+
+test_help_does_not_emit_installation_telemetry() {
+  local tmpdir output_file
+  tmpdir="$(mktemp -d)"
+  trap 'rm -rf "$tmpdir"' RETURN
+  mkdir -p "$tmpdir/home" "$tmpdir/logs"
+  make_fake_commands "$tmpdir/bin"
+  output_file="$tmpdir/help.out"
+
+  run_installer "$tmpdir" --help >"$output_file" 2>&1
+
+  assert_contains "$output_file" "Usage:"
+  assert_file_not_exists "$tmpdir/home/.rainbond/rainskills/telemetry/installation-id"
+  assert_file_not_exists "$tmpdir/home/.rainbond/rainskills/telemetry/events.jsonl"
+  assert_file_not_exists "$tmpdir/logs/telemetry-v2.log"
+  assert_file_not_exists "$tmpdir/logs/install-report.log"
 }
 
 test_v2_reporting_failure_is_queued_and_does_not_block_installation() {
@@ -1778,6 +1809,8 @@ printf 'RUN: test_unhandled_skill_installation_failure_is_reported\n'
 test_unhandled_skill_installation_failure_is_reported
 printf 'RUN: test_installer_reports_minimal_v2_results\n'
 test_installer_reports_minimal_v2_results
+printf 'RUN: test_help_does_not_emit_installation_telemetry\n'
+test_help_does_not_emit_installation_telemetry
 printf 'RUN: test_v2_reporting_failure_is_queued_and_does_not_block_installation\n'
 test_v2_reporting_failure_is_queued_and_does_not_block_installation
 printf 'RUN: test_public_connect_action_is_rejected_before_url_or_configuration_side_effects\n'

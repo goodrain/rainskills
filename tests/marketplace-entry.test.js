@@ -213,6 +213,29 @@ test("Windows workflow contracts install package dependencies before running Nod
   }
 });
 
+test("CI and release tests cannot publish production telemetry", () => {
+  for (const workflowPath of [".github/workflows/test.yml", ".github/workflows/release.yml"]) {
+    const workflow = read(workflowPath);
+    assert.match(
+      workflow,
+      /RAINSKILLS_TELEMETRY_DISABLED:\s*["']?1["']?/,
+      `${workflowPath} must disable production telemetry`
+    );
+    assert.match(
+      workflow,
+      /RAINSKILLS_PACKAGE_VERSION:\s*["']?test["']?/,
+      `${workflowPath} must mark any test telemetry explicitly`
+    );
+  }
+
+  const packageTests = read("tests/npm-package.test.js");
+  assert.match(
+    packageTests,
+    /process\.env\.RAINSKILLS_TELEMETRY_DISABLED\s*=\s*["']1["']/,
+    "package installer tests must disable telemetry for local and CI runs"
+  );
+});
+
 test("npm artifact includes the marketplace entry without a Pi adapter", () => {
   const manifest = readJson("package.json");
 
