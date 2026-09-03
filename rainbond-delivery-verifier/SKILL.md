@@ -68,7 +68,7 @@ Hermes Agent 执行带 `--input -` 的一次性业务命令时，使用 `termina
 ```json
 {
   "schema": "rainskills.single-runtime-contract.v1",
-  "package_version": "rainskills@0.1.39",
+  "package_version": "rainskills@0.1.40",
   "runtime_status": [
     "node",
     "<home>/.rainbond/lib/rainskills/bin/rainskills.js",
