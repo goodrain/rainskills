@@ -778,6 +778,29 @@ test_noninteractive_http_requires_explicit_opt_in() {
   grep -F -- "--allow-insecure-http" /tmp/rainbond-install-test.out >/dev/null || fail "expected insecure http guidance"
 }
 
+test_noninteractive_install_requires_explicit_target() {
+  local tmpdir output_file rc
+  tmpdir="$(mktemp -d)"
+  trap 'rm -rf "$tmpdir"' RETURN
+  mkdir -p "$tmpdir/home" "$tmpdir/logs"
+  make_fake_commands "$tmpdir/bin"
+  output_file="$tmpdir/install.out"
+
+  set +e
+  run_installer "$tmpdir" --non-interactive --force >"$output_file" 2>&1
+  rc=$?
+  set -e
+
+  [[ $rc -ne 0 ]] || fail "expected non-interactive installation without a target to fail"
+  assert_contains "$output_file" "必须明确指定"
+  assert_file_not_exists "$tmpdir/home/.claude/skills"
+  assert_file_not_exists "$tmpdir/home/.codex/skills"
+  assert_file_not_exists "$tmpdir/home/.hermes/skills"
+  if sed -n '/resolve_target()/,/^}/p' "$REPO_ROOT/install.sh" | grep -F '7|"")' >/dev/null; then
+    fail "interactive installation must not default an empty choice to all"
+  fi
+}
+
 test_posix_client_openclaw_is_rejected() {
   local tmpdir output_file rc
   tmpdir="$(mktemp -d)"
@@ -1788,6 +1811,8 @@ test_internal_connect_requires_the_current_rainbond_cli_endpoint() {
 
 printf 'RUN: test_noninteractive_http_requires_explicit_opt_in\n'
 test_noninteractive_http_requires_explicit_opt_in
+printf 'RUN: test_noninteractive_install_requires_explicit_target\n'
+test_noninteractive_install_requires_explicit_target
 printf 'RUN: test_posix_client_openclaw_is_rejected\n'
 test_posix_client_openclaw_is_rejected
 printf 'RUN: test_default_install_is_skills_only\n'

@@ -66,6 +66,8 @@
     "prepack": "node scripts/sync-runtime-version.mjs --check && node scripts/sync-runtime-contracts.mjs --check && node scripts/build-marketplace-package.mjs --check --quiet",
     "test": "node scripts/run-test-suite.js",
     "test:test-runner": "node --test tests/test-suite-runner.test.js",
+    "test:published-verifier": "node --test tests/published-package-verifier.test.js",
+    "verify:published": "node scripts/verify-published-package.js",
     "test:runtime-version": "node --test tests/runtime-version-sync.test.js",
     "test:runtime-contracts": "node scripts/sync-runtime-contracts.mjs --check",
     "test:auto-update": "node --test tests/auto-update.test.js",

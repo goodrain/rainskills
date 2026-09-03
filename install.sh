@@ -142,7 +142,6 @@ else
   bootstrap_download_if_needed "$@"
 fi
 
-DEFAULT_TARGET="all"
 ACTION=""
 TARGET=""
 FORCE=0
@@ -1418,8 +1417,7 @@ resolve_target() {
   fi
 
   if [[ "$NON_INTERACTIVE" -eq 1 || ! -t 0 ]]; then
-    TARGET="$DEFAULT_TARGET"
-    return 0
+    die "非交互安装必须明确指定 codex、claude、pi、dsh、workbuddy、hermes 或 all"
   fi
 
   log "请选择要安装和配置的平台："
@@ -1459,7 +1457,7 @@ resolve_target() {
         TARGET="hermes"
         return 0
         ;;
-      7|"")
+      7)
         TARGET="all"
         return 0
         ;;

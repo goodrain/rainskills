@@ -44,8 +44,7 @@ Trusted Publisher 只能配置给已经存在的 npm 包，因此 `0.1.0-rc.0` �
 
    ```bash
    npm view rainskills@next version dist.integrity
-   npx --yes rainskills@next --help --no-telemetry
-   npx --yes rainskills@next --dest /tmp/rainskills-rc-test --force --no-telemetry
+   npm run verify:published -- next
    ```
 
 5. 保持当前临时登录，只用于下一节配置 Trusted Publisher；配置完成后立即退出。
@@ -147,10 +146,10 @@ OIDC 只用于 `npm publish`，不能用于 `npm dist-tag`，因此这一步必�
 
 ```bash
 npm view rainskills dist-tags versions
-npx --yes rainskills@latest --help --no-telemetry
+npm run verify:published -- latest
 curl -fsSL https://get.rainbond.com/rainskills/channels/stable.json
 ```
 
-任何发布前或发布后的安装烟测都必须使用 `--no-telemetry`。该参数只影响当前安装进程；普通用户未传入该参数时仍按默认策略发送匿名安装遥测。
+任何发布前或发布后的安装烟测都必须通过 `npm run verify:published -- <version>` 执行，不得直接拼装 `npx rainskills ...`。验证脚本会显式选择 `all`、使用临时 HOME，并通过参数和环境变量双重关闭遥测；普通用户安装仍按默认策略发送匿名安装遥测。
 
 官方参考：[Trusted Publishing](https://docs.npmjs.com/trusted-publishers/)、[`npm trust`](https://docs.npmjs.com/cli/v11/commands/npm-trust/)、[`npm publish`](https://docs.npmjs.com/cli/publish/)。
