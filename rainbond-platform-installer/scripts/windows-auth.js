@@ -8,6 +8,12 @@ const { spawn } = require("node:child_process");
 const JWT_PATTERN = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
 const USER_CODE_PATTERN = /^[23456789BCDFGHJKMNPQRTVWXY]{4}-[23456789BCDFGHJKMNPQRTVWXY]{4}$/;
 
+function authorizationError(message, code) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
 function looksLikeJwt(value) {
   return JWT_PATTERN.test(String(value || ""));
 }
@@ -56,7 +62,7 @@ function authorizeWithLoopback({
     }
 
     function abort() {
-      settle(new Error("Rainbond 浏览器授权已取消"));
+      settle(authorizationError("Rainbond 浏览器授权已取消", "DEVICE_AUTHORIZATION_CANCELLED"));
     }
 
     function writeResponse(request, response, status, success) {
@@ -134,7 +140,9 @@ function authorizeWithLoopback({
       return;
     }
     if (signal) signal.addEventListener("abort", abort, { once: true });
-    timer = setTimeout(() => settle(new Error("Rainbond 浏览器授权超时")), timeoutMs);
+    timer = setTimeout(() => settle(
+      authorizationError("Rainbond 浏览器授权超时", "DEVICE_AUTHORIZATION_EXPIRED")
+    ), timeoutMs);
     server.listen(0, "127.0.0.1", async () => {
       const address = server.address();
       const callback = `http://127.0.0.1:${address.port}/cli-callback`;
@@ -151,7 +159,9 @@ function authorizeWithLoopback({
 }
 
 function abortIfNeeded(signal) {
-  if (signal?.aborted) throw new Error("Rainbond 设备授权已取消");
+  if (signal?.aborted) {
+    throw authorizationError("Rainbond 设备授权已取消", "DEVICE_AUTHORIZATION_CANCELLED");
+  }
 }
 
 async function jsonResponse(response) {
@@ -214,7 +224,9 @@ async function authorizeWithDeviceFlow({
     abortIfNeeded(signal);
     await sleep(interval);
     abortIfNeeded(signal);
-    if (now() >= deadline) throw new Error("Rainbond 设备授权超时");
+    if (now() >= deadline) {
+      throw authorizationError("Rainbond 设备授权超时", "DEVICE_AUTHORIZATION_EXPIRED");
+    }
     let response;
     try {
       response = await fetchImpl(`${normalizedBase}/console/mcp/device/token`, {
@@ -254,8 +266,12 @@ async function authorizeWithDeviceFlow({
       interval += 5;
       continue;
     }
-    if (payload.error === "access_denied") throw new Error("你已拒绝 Rainbond 授权");
-    if (payload.error === "expired_token") throw new Error("Rainbond 设备授权码已过期");
+    if (payload.error === "access_denied") {
+      throw authorizationError("你已拒绝 Rainbond 授权", "DEVICE_AUTHORIZATION_DENIED");
+    }
+    if (payload.error === "expired_token") {
+      throw authorizationError("Rainbond 设备授权码已过期", "DEVICE_AUTHORIZATION_EXPIRED");
+    }
     throw new Error(`Rainbond Device Flow 轮询失败（HTTP ${response.status}）`);
   }
 }

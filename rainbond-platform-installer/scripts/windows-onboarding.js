@@ -88,6 +88,19 @@ function requireValue(argv, index, option) {
   return argv[index + 1];
 }
 
+function authorizationTelemetryCode(error) {
+  switch (error?.code) {
+    case "DEVICE_AUTHORIZATION_DENIED":
+      return "device_authorization_denied";
+    case "DEVICE_AUTHORIZATION_EXPIRED":
+      return "device_authorization_expired";
+    case "DEVICE_AUTHORIZATION_CANCELLED":
+      return "user_cancelled";
+    default:
+      return "authorization_failed";
+  }
+}
+
 function parseWindowsInstallerArgs(argv) {
   const options = {
     target: "",
@@ -410,14 +423,15 @@ async function authorizeAndConfigure({
     });
   } catch (error) {
     if (error.code !== "DEVICE_FLOW_UNSUPPORTED") {
+      const failureCode = authorizationTelemetryCode(error);
       telemetry.record({
         lifecycle_phase: "authorize_device_flow",
         step: "device_code",
         lifecycle_action: "authorize",
         lifecycle_status: "failed",
-        error_code: "authorization_failed",
+        error_code: failureCode,
         error_stage: "authorize_device_flow",
-        reason_code: "authorization_failed",
+        reason_code: failureCode,
         auth_method: "device_flow",
         transport: "powershell",
       });
@@ -545,7 +559,7 @@ async function promptTarget() {
       if (answer === "4") return "dsh";
       if (answer === "5") return "workbuddy";
       if (answer === "6") return "hermes";
-      if (answer === "" || answer === "7") return "all";
+      if (answer === "7") return "all";
       stdout.write("请输入 1、2、3、4、5、6 或 7。\n");
     }
   } finally {
@@ -635,11 +649,13 @@ async function main(argv, dependencies = {}) {
     || environment.HERMES_AGENT === "true"
     ? "hermes"
     : "";
-  const target = options.target || detectedTarget || (
-    options.nonInteractive || !stdin.isTTY
-      ? "all"
-      : await (dependencies.promptTarget || promptTarget)()
-  );
+  let target = options.target || detectedTarget;
+  if (!target && !options.customDest) {
+    if (options.nonInteractive || !stdin.isTTY) {
+      throw new Error("非交互安装必须明确指定 codex、claude、pi、dsh、workbuddy、hermes 或 all");
+    }
+    target = await (dependencies.promptTarget || promptTarget)();
+  }
   const destinations = options.customDest
     ? [path.resolve(options.customDest)]
     : destinationsForTarget(target, home, environment);

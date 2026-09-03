@@ -242,7 +242,16 @@ test("CI and release tests cannot publish production telemetry", () => {
   assert.match(runner, /RAINSKILLS_PACKAGE_VERSION:\s*["']test["']/);
 
   const releaseRunbook = read("docs/npm-release-runbook.md");
-  assert.match(releaseRunbook, /rainskills@(?:next|<version>)[^\n]*--no-telemetry/);
+  assert.match(releaseRunbook, /npm run verify:published/);
+
+  assert.equal(manifest.scripts["verify:published"], "node scripts/verify-published-package.js");
+  const verifier = read("scripts/verify-published-package.js");
+  assert.match(verifier, /"all"/);
+  assert.match(verifier, /"--no-telemetry"/);
+  assert.match(verifier, /RAINSKILLS_TELEMETRY_DISABLED:\s*"1"/);
+
+  const windowsInstaller = read("rainbond-platform-installer/scripts/windows-onboarding.js");
+  assert.doesNotMatch(windowsInstaller, /answer === "" \|\| answer === "7"/);
 });
 
 test("npm artifact includes the marketplace entry without a Pi adapter", () => {

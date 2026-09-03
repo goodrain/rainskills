@@ -368,6 +368,23 @@ test("Windows argument parsing rejects unknown input before installation", () =>
   assert.throws(() => parseWindowsInstallerArgs(["--dest"]), /--dest/);
 });
 
+test("native Windows non-interactive installation requires an explicit target", async () => {
+  const { main } = require(windowsOnboardingPath);
+  const home = temporaryHome();
+  const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-package-target-required-"));
+  writeSkill(packageRoot, "rainbond-test");
+
+  await assert.rejects(() => main(["--non-interactive", "--force"], {
+    env: {},
+    home,
+    packageRoot,
+    installLocalCli: async () => ({ status: "installed" }),
+    logger() {},
+  }), /必须明确指定/);
+  assert.equal(fs.existsSync(path.join(home, ".codex", "skills")), false);
+  assert.equal(fs.existsSync(path.join(home, ".hermes", "skills")), false);
+});
+
 test("Windows skill copying installs, skips, updates, and force-overwrites atomically", () => {
   const {
     copySkills,
@@ -778,7 +795,7 @@ test("Windows Device Flow handles unsupported, expiration, and cancellation", as
         throw new Error("must not fetch");
       },
     }),
-    /取消|abort/i
+    (error) => error.code === "DEVICE_AUTHORIZATION_CANCELLED"
   );
 
   let nowValue = 0;
@@ -800,8 +817,54 @@ test("Windows Device Flow handles unsupported, expiration, and cancellation", as
         return nowValue;
       },
     }),
-    /超时|过期/
+    (error) => error.code === "DEVICE_AUTHORIZATION_EXPIRED"
   );
+
+  const deniedResponses = [
+    new Response(JSON.stringify({
+      device_code: "private-device-code",
+      user_code: "BCDF-GHJK",
+      expires_in: 600,
+      interval: 1,
+    }), { status: 200 }),
+    new Response(JSON.stringify({ error: "access_denied" }), { status: 400 }),
+  ];
+  await assert.rejects(
+    authorizeWithDeviceFlow({
+      baseUrl: "https://rainbond.example.com",
+      fetchImpl: async () => deniedResponses.shift(),
+      openBrowser() {},
+      sleep: async () => {},
+      now: () => 0,
+    }),
+    (error) => error.code === "DEVICE_AUTHORIZATION_DENIED"
+  );
+});
+
+test("native authorization telemetry preserves concrete Device Flow failure codes", async () => {
+  const { authorizeAndConfigure } = require(windowsOnboardingPath);
+  const cases = [
+    ["DEVICE_AUTHORIZATION_DENIED", "device_authorization_denied"],
+    ["DEVICE_AUTHORIZATION_EXPIRED", "device_authorization_expired"],
+    ["DEVICE_AUTHORIZATION_CANCELLED", "user_cancelled"],
+  ];
+
+  for (const [code, expected] of cases) {
+    const events = [];
+    await assert.rejects(() => authorizeAndConfigure({
+      target: "dsh",
+      baseUrl: "https://rainbond.example.com",
+      authorizeWithDeviceFlowImpl: async () => {
+        const error = new Error(code);
+        error.code = code;
+        throw error;
+      },
+      telemetryFactory: () => ({ record(event) { events.push(event); } }),
+    }));
+    const failure = events.find((event) => event.lifecycle_status === "failed");
+    assert.equal(failure.error_code, expected);
+    assert.equal(failure.reason_code, expected);
+  }
 });
 
 test("Windows browser opener uses a fixed PowerShell file and treats URL as data", async () => {

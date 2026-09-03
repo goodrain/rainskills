@@ -6,6 +6,7 @@ const { spawnSync } = require("node:child_process");
 
 const TEST_SCRIPTS = Object.freeze([
   "test:test-runner",
+  "test:published-verifier",
   "test:runtime-version",
   "test:runtime-contracts",
   "test:auto-update",

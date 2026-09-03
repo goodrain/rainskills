@@ -69,6 +69,8 @@ npx --yes rainskills hermes
 
 测试或发布烟测可在安装命令末尾追加 `--no-telemetry`，仅关闭当前进程的匿名安装遥测；普通安装不传该参数时保持默认遥测行为。
 
+非交互安装必须明确指定 `codex`、`claude`、`pi`、`dsh`、`workbuddy`、`hermes` 或 `all`；`all` 不再作为无 target 时的默认值。发布后验证统一执行 `npm run verify:published -- <version>`，该脚本会在临时 HOME 中显式安装全部目标并强制关闭遥测。
+
 ## 安装完成时用户会看到什么
 
 安装完成后只完成 Skills 和受保护本地 CLI 的安装并展示能力列表，不选择运行环境、不登录 Rainbond，也不配置 Agent MCP：
