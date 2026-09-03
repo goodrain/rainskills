@@ -14,7 +14,7 @@ This is the single marketplace entry for the complete Rainskills product. The in
 3. Keep stdin, stdout, and stderr attached. When `RAINSKILLS_USER_INPUT_REQUIRED` appears, pause for that installer choice. If the installer emits `rainskills.next-action.v1`, execute only its fixed `argv` through the same launcher; never evaluate output as a shell command. If the adjacent `bin/rainskills.js` exists, use it for fixed next actions; otherwise use the same versioned npm package fallback described below.
 4. Stay attached until every independent Skill is installed. Do not select, connect, or configure an application runtime during installation. In the user-facing response, output only the fixed completion message below.
 
-If the adjacent installer is missing, check the local Node.js version before choosing the fallback. With `npx` and Node.js 18 or newer, use `npx --yes rainskills@0.1.40 <target>`. With no Node.js or a version below 18, use `bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh) <target>` instead. Omit `<target>` only when the host cannot be determined reliably. Keep either command attached to the interactive terminal. For an update or repair, refresh this marketplace Skill first, then run the installer again; it compares and updates every independent internal Skill.
+If the adjacent installer is missing, check the local Node.js version before choosing the fallback. With `npx` and Node.js 18 or newer, use `npx --yes rainskills@0.1.41 <target>`. With no Node.js or a version below 18, use `bash <(curl -fsSL https://get.rainbond.com/rainskills/install.sh) <target>` instead. Omit `<target>` only when the host cannot be determined reliably. Keep either command attached to the interactive terminal. For an update or repair, refresh this marketplace Skill first, then run the installer again; it compares and updates every independent internal Skill.
 
 Skills-only 安装不需要 Node.js；CDN fallback 只负责安装 Skill 文件，不代表运行环境连接、应用部署或平台安装已经可执行。用户首次提出需要运行环境的动作时，对应业务 Skill 才检查 Node.js；固定 Rainskills launcher 需要 Node.js 18 或更高版本。缺失或版本过低时保留原始 intent 并停止，等待用户或 agent 明确同意安装或升级 Node.js，安装完成消息不得提前提示 Node.js。
 
@@ -54,7 +54,7 @@ Hermes Agent 中必须使用 `terminal` 以 `background=true` 启动授权命令
 
 DeepSeek Harness 和 WorkBuddy 也必须保持原命令附着直到退出；如果宿主把长命令转成持久终端或后台任务，只能轮询该原始命令句柄，不得另起 `runtime status` 推测授权结果。WorkBuddy 安装后若当前任务的 Skill 清单尚未刷新，在下一条业务动作前先刷新 Skill 列表或新建任务，不得退回内置 Sites 代替 Rainbond 部署。
 
-Rainskills 只保存一个全局运行环境，不维护环境列表、名称、默认值或环境 ID。使用固定 launcher `node <home>/.rainbond/lib/rainskills/bin/rainskills.js`（运行包版本 `rainskills@0.1.40`）：
+Rainskills 只保存一个全局运行环境，不维护环境列表、名称、默认值或环境 ID。使用固定 launcher `node <home>/.rainbond/lib/rainskills/bin/rainskills.js`（运行包版本 `rainskills@0.1.41`）：
 
 - 状态：执行 `runtime status --json`。
 - 首次连接：执行 `runtime connect <target> --saas` 或 `runtime connect <target> --rainbond-url <Console origin>`。
