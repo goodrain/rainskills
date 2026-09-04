@@ -60,15 +60,16 @@ test("check mode rejects stale canonical launcher versions without changing file
   assert.equal(fs.readFileSync(skillPath, "utf8"), before);
 });
 
-test("sync mode updates every canonical launcher and preserves floating and historical text", () => {
+test("sync mode updates canonical launchers without rewriting README examples", () => {
   const root = createFixture();
+  const readmePath = path.join(root, "README.md");
+  const readmeBefore = fs.readFileSync(readmePath, "utf8");
 
   const syncResult = runSync(root);
   assert.equal(syncResult.status, 0, syncResult.stderr || syncResult.stdout);
 
   for (const relativePath of [
     "SKILL.md",
-    "README.md",
     "rainbond-example/SKILL.md",
     "rainbond-platform-installer/scripts/installed-version.js",
   ]) {
@@ -82,7 +83,7 @@ test("sync mode updates every canonical launcher and preserves floating and hist
     }
   }
   assert.match(fs.readFileSync(path.join(root, "SKILL.md"), "utf8"), /rainskills@latest/);
-  assert.match(fs.readFileSync(path.join(root, "README.md"), "utf8"), /history: version 0\.1\.7/);
+  assert.equal(fs.readFileSync(readmePath, "utf8"), readmeBefore);
 
   const checkResult = runSync(root, "--check");
   assert.equal(checkResult.status, 0, checkResult.stderr || checkResult.stdout);

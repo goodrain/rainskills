@@ -3076,14 +3076,17 @@ test("mutable official installer content is validated and hashed at download tim
 });
 
 test("published guidance describes local and remote target selection", () => {
-  const readme = fs.readFileSync(path.join(repoRoot, "README.md"), "utf8");
+  const runtimeGate = fs.readFileSync(
+    path.join(repoRoot, "rainbond-app-assistant", "references", "runtime-gate.md"),
+    "utf8"
+  );
   const policy = fs.readFileSync(
     path.join(repoRoot, "rainbond-platform-installer", "references", "installation-policy.md"),
     "utf8"
   );
-  assert.match(readme, /Windows.*本地.*Linux 服务器/s);
-  assert.match(readme, /Windows 10.*19041.*Windows 11/s);
-  assert.match(readme, /UAC/);
+  assert.match(policy, /Windows.*本机.*独立服务器/s);
+  assert.match(policy, /Windows 10.*19041.*Windows 11/s);
+  assert.match(policy, /UAC/);
   const troubleshooting = fs.readFileSync(
     path.join(repoRoot, "rainbond-platform-installer", "references", "troubleshooting.md"),
     "utf8"
@@ -3091,8 +3094,8 @@ test("published guidance describes local and remote target selection", () => {
   for (const blocker of ["19041", "虚拟化", "NAT", "端口", "UAC", "计划任务", "摘要"]) {
     assert.match(troubleshooting, new RegExp(blocker));
   }
-  assert.match(readme, /云端环境（免费体验）.*本机环境.*独立服务器.*已有 Rainbond/s);
-  assert.doesNotMatch(readme, /私有环境（去对接）/);
+  assert.match(runtimeGate, /云端环境（免费体验）.*本机环境.*独立服务器.*已有 Rainbond/s);
+  assert.doesNotMatch(runtimeGate, /私有环境（去对接）/);
   assert.match(policy, /远程 Linux/);
   assert.doesNotMatch(policy, /不支持远程 SSH/);
 });

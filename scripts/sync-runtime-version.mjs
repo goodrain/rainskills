@@ -40,7 +40,7 @@ function writeAtomically(filePath, content) {
 }
 
 function canonicalFiles(sourceRoot, manifest) {
-  const files = new Set(["SKILL.md", "README.md"]);
+  const files = new Set(["SKILL.md"]);
   for (const entry of manifest.files || []) {
     const normalized = String(entry).replace(/\\/g, "/");
     const match = normalized.match(/^(rainbond-[^/]+)\/$/);
