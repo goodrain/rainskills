@@ -287,40 +287,19 @@ test("npm artifact includes the marketplace entry without a Pi adapter", () => {
   );
 });
 
-test("README distinguishes marketplace and direct installer Node requirements", () => {
+test("README presents the concise public installation and capability overview", () => {
   const readme = read("README.md");
 
-  assert.match(readme, /Skill 市场.*Node\.js 22\.20\.0/s);
-  assert.match(readme, /直接运行.*最低支持 Node\.js 18/s);
-});
-
-test("README routes named open-source suites to official-source acquisition", () => {
-  const readme = read("README.md");
-
-  assert.match(readme, /只说.*Harbor.*自动联网获取官方.*部署资料/s);
-  assert.match(readme, /当前项目.*rainbond-app-assistant/s);
-  assert.match(readme, /Rainbond.*市场模板.*rainbond-template-installer/s);
-});
-
-test("README documents one-product installation and adapter-neutral stable auto-updates", () => {
-  const readme = read("README.md");
-
+  assert.match(readme, /> 让你的 AI Agent 把应用真正跑起来。/);
   assert.match(readme, /npx skills add goodrain\/rainskills/);
-  assert.match(readme, /codex plugin marketplace add goodrain\/rainskills/);
-  assert.match(readme, /codex plugin add rainskills@goodrain/);
-  assert.match(readme, /\/plugin marketplace add goodrain\/rainskills/);
-  assert.match(readme, /\/plugin install rainskills@goodrain/);
-  assert.match(readme, /静默检查更新/);
-  assert.match(readme, /本地运行时立即返回.*后台任务静默检查更新/s);
-  assert.match(readme, /不会阻塞或改变当前操作/);
-  assert.match(readme, /只跟随.*正式版/s);
-  assert.match(readme, /RC.*不会.*自动升级/s);
-  assert.match(readme, /升级只更新 Rainskills 自身，不触发 Rainbond/s);
-  assert.match(readme, /支持 Codex、Claude Code、Pi Agent、DeepSeek Harness、WorkBuddy 和 Hermes Agent/);
-  assert.match(readme, /不支持 OpenClaw 安装/);
-  assert.doesNotMatch(readme, /npx --yes rainskills openclaw/);
-  assert.match(readme, /只会看到一个.*Rainskills/s);
-  assert.match(readme, /安装完成后.*不会.*运行环境|安装完成后.*只.*Skills/s);
+  assert.match(readme, /npx --yes rainskills/);
+  assert.match(readme, /Codex、Claude Code、Pi Agent、\s*DeepSeek Harness、WorkBuddy 和 Hermes Agent/);
+  assert.match(readme, /AI 负责生成，Rainskills 负责部署，Rainbond 负责持续运行/);
+  const capabilities = readme
+    .split("## Rainskills 可以做什么")[1]
+    .split("## License")[0]
+    .match(/^- /gm) || [];
+  assert.equal(capabilities.length, 6);
 });
 
 test("generated marketplace guidance installs Skills without eager runtime setup", () => {
@@ -341,34 +320,24 @@ test("Pi uses the generic Skills and CLI path without restoring its adapter", ()
   const manifest = readJson("package.json");
   assert.match(read("SKILL.md"), /Pi Agent=`pi`/);
   assert.match(read("install.sh"), /\.pi\/agent\/skills/);
-  assert.match(read("README.md"), /Codex、Claude Code、Pi Agent、DeepSeek Harness、WorkBuddy 和 Hermes Agent/);
+  assert.match(read("README.md"), /Codex、Claude Code、Pi Agent、\s*DeepSeek Harness、WorkBuddy 和 Hermes Agent/);
   assert.equal(manifest.pi, undefined);
   assert(!manifest.files.includes("pi/"));
   assert.equal(manifest.scripts["build:pi"], undefined);
   assert.equal(manifest.scripts["test:pi"], undefined);
 });
 
-test("DeepSeek Harness and WorkBuddy are documented as first-class hosts", () => {
-  const readme = read("README.md");
+test("DeepSeek Harness and WorkBuddy are supported as first-class hosts", () => {
   const skill = read("SKILL.md");
 
-  assert.match(readme, /npx --yes rainskills dsh/);
-  assert.match(readme, /npx --yes rainskills workbuddy/);
-  assert.match(readme, /DSH_HOME.*\.dsh.*skills/s);
-  assert.match(readme, /WORKBUDDY_CONFIG_DIR.*\.workbuddy-ai.*skills/s);
   assert.match(skill, /DeepSeek Harness=`dsh`/);
   assert.match(skill, /WorkBuddy=`workbuddy`/);
   assert.match(read("rainbond-app-assistant/SKILL.md"), /priority over the built-in Sites skill/);
 });
 
 test("Hermes Agent uses the shared CLI profile and native skills home", () => {
-  const readme = read("README.md");
   const skill = read("SKILL.md");
 
-  assert.match(readme, /npx --yes rainskills hermes/);
-  assert.match(readme, /HERMES_HOME.*\.hermes.*skills/s);
-  assert.match(readme, /\/reset/);
   assert.match(skill, /Hermes Agent=`hermes`/);
   assert.match(skill, /process[^\n]*action="wait"/);
-  assert.doesNotMatch(readme, /Hermes profile/);
 });

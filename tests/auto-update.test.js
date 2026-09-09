@@ -679,11 +679,3 @@ test("an unsafe skill destination aborts before any installed skill changes", ()
   }), /symbolic|符号链接|reparse/i);
   assert.match(fs.readFileSync(path.join(codexRoot, "rainbond-one", "SKILL.md"), "utf8"), /old one/);
 });
-
-test("the public update contract is stable-only and never re-runs Rainbond onboarding", () => {
-  const readme = fs.readFileSync(path.join(repoRoot, "README.md"), "utf8");
-  assert.match(readme, /只(?:跟随|检查|自动升级到).{0,20}正式版/s);
-  assert.match(readme, /RC.{0,20}(?:不会|不参与|不自动升级)/s);
-  assert.match(readme, /升级.{0,40}(?:不会|不触发).{0,30}(?:Rainbond|运行环境).{0,30}(?:安装|授权|对接|连接)/s);
-  assert.match(readme, /原(?:始)?(?:业务)?操作.{0,20}(?:继续|恢复)/s);
-});
