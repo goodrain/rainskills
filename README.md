@@ -261,6 +261,7 @@ Rainskills 会在用户下一次发起业务动作时，由本地运行时立即
 
 ## 包含的 Skill
 
+- `rainbond-ai-assistant`
 - `rainbond-app-assistant`
 - `rainbond-app-version-assistant`
 - `rainbond-delivery-verifier`
@@ -269,12 +270,15 @@ Rainskills 会在用户下一次发起业务动作时，由本地运行时立即
 - `rainbond-fullstack-troubleshooter`
 - `rainbond-opensource-app-deploy`
 - `rainbond-platform-installer`
+- `rainbond-platform-plugin-manager`
 - `rainbond-platform-query`
 - `rainbond-project-init`
 - `rainbond-template-installer`
 
 ## 部署类 skill 怎么选
 
+- 安装、升级或卸载平台插件/功能扩展 → `rainbond-platform-plugin-manager`
+- 搜索、下载、部署、诊断或优化 AI Engine 模型（CPU/GPU）→ `rainbond-ai-assistant`
 - 已确认的 Rainbond 市场模板 → `rainbond-template-installer`（一键安装商店模板）
 - 只说“部署 Harbor / Dify / n8n”等第三方开源套件也可以 → `rainbond-opensource-app-deploy` 会自动联网获取官方仓库、文档和 Release 中的部署资料，固定版本并推导组件拓扑；用户已提供 Compose、Helm 或镜像集合时也走这里
 - 部署当前项目、普通 Git 仓库或私有镜像项目 → `rainbond-app-assistant`

@@ -1,6 +1,6 @@
 ---
 name: rainbond-project-init
-description: "Use only when the user explicitly asks to initialize or link a local project to Rainbond for the first time, including generating rainbond.app.json. Trigger phrases include: 只初始化当前项目并生成 rainbond.app.json / project init only."
+description: "Initialize or adopt/link a local project to Rainbond, including generating or repairing rainbond.app.json and .rainbond/local.json. Use when explicitly requested or when rainbond-app-assistant finds an uninitialized current workspace or local package before deployment. Do not use for a bare Git URL or image reference with no local project context."
 ---
 
 # Rainbond Project Init
@@ -187,6 +187,11 @@ It should:
 
 This skill is for **first-time setup**, not ongoing operations.
 
+It may be invoked explicitly or by `rainbond-app-assistant` for an uninitialized current workspace or local package.
+If current-run platform verification finds the exact app, use adopt/link mode: reuse its `app_id` and write or repair
+the local files without creating another Rainbond app. A bare Git URL or image reference alone has no local project
+artifact to initialize and must not enter this Skill unless the user explicitly asks to create local project metadata.
+
 ## Canonical Model Reference
 
 Use `docs/product-object-model.md` as the repository-level source of truth for:
@@ -235,18 +240,16 @@ This skill should describe how onboarding produces or resolves those objects. It
 8. 如果这个 skill 是由 `rainbond-app-assistant` 的单入口主线调用的，init 成功后应该把 `next_action` 交给 bootstrap，而不是停在 init。
 9. `team_name = default` 只有在用户明确给出或明确确认时才允许。
 10. 不要把本地 Docker 构建、临时镜像仓库推送、启动 Docker Desktop/OrbStack 当成 init 的自动兜底；这些都是 delivery-mode 策略切换，必须先得到用户明确确认。
-11. **bare Git URL + 无本地项目特征文件的默认路径**：当前 CWD 无任何项目特征文件（无 `rainbond.app.json`、`Dockerfile`、`package.json`、`go.mod`、`pom.xml`、`requirements.txt` 等）且用户仅给了一个 Git URL 时：
-    - 默认 `subdirectories=""`（仓库根）传给 source 检测工具，由 Rainbond 后端判断仓库结构
-    - 只生成**一个**组件；后端返回 `multiple services detected` 或等价多组件歧义 → 停下来按 Iron Law 10 让用户选子目录
-    - **禁止**凭模型对该仓库的先验知识枚举或猜测子目录（由 app-assistant Iron Law 36 字面值 verbatim 约束强制 — `subdirectories` 是受保护的字段）
-    - 仅当用户的需求文本本身明确说了某个子目录（"我要部署仓库下的 X 子目录"）才直接 verbatim 用用户给的子目录字面值，不需要再问
+11. **address-only guard**：当前 CWD 无任何项目特征文件，且用户仅给 bare Git URL 或 image reference 时，
+    这不是本地项目初始化。停止本 Skill 并交回 `rainbond-app-assistant` 使用平台上下文；不得在无本地项目语义的
+    目录生成 `rainbond.app.json` 或 `.rainbond/local.json`。Git 根目录、分支和子目录判断由后续 source 流程处理。
 
 ## 主线流程
 
 使用已知的 Rainbond MCP 工具。每个工具边界都要把十进制字符串 `app_id` 规范化为正整数，并拒绝非数字 ID。
 
 1. 读取当前项目目录里的 manifest / local binding。
-2. 如果没有 manifest，就按仓库结构推断生成 `rainbond.app.json`。
+2. 如果没有 manifest 且已确认当前目录是本地项目/本地软件包上下文，就按仓库结构推断生成 `rainbond.app.json`；address-only 请求不生成。
 3. 如果推断出的源码地址是原始 GitHub URL，且用户未显式给出代理地址，先询问是否改用 GitHub 代理。
 4. 解析 `team_name / region_name / app_name`。
 5. 通过 MCP 查找或创建 Rainbond app。
@@ -270,6 +273,7 @@ Use when:
 - `rainbond.app.json` may not exist yet
 - the user wants to bring a brand-new local project into Rainbond
 - the next step is unclear because the project has not been onboarded yet
+- `rainbond-app-assistant` delegates a current workspace or local package deployment whose local manifest/binding is missing or unlinked
 
 Do not use when:
 - the project is already linked and the user wants routine deploy or repair operations
@@ -440,6 +444,14 @@ If `rainbond.app.json` does not exist:
 - generate a first-draft manifest in the requested output mode
 - ask for minimal confirmation only if critical fields remain ambiguous
 - then proceed to linking
+
+### Mode C: Existing app adoption
+If the local project is not initialized but current-run platform verification finds one exact target app:
+- reuse that app and capture its `app_id`
+- generate or reuse `rainbond.app.json`
+- create or repair `.rainbond/local.json` with the verified identity
+- do not call app creation
+- continue to bootstrap only after the local files and verified platform identity agree
 
 ## Configuration Priority
 

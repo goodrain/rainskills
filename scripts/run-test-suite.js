@@ -13,6 +13,7 @@ const TEST_SCRIPTS = Object.freeze([
   "test:launcher",
   "test:api-bridge",
   "test:console-contract",
+  "test:ai-engine",
   "test:skill-profile",
   "test:marketplace",
   "test:runtime-routing",

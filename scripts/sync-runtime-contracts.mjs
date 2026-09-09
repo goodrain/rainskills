@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const packageVersion = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")).version;
 const skillIds = [
+  "rainbond-ai-assistant",
   "rainbond-app-assistant",
   "rainbond-app-version-assistant",
   "rainbond-delivery-verifier",
@@ -16,6 +17,7 @@ const skillIds = [
   "rainbond-fullstack-troubleshooter",
   "rainbond-platform-query",
   "rainbond-opensource-app-deploy",
+  "rainbond-platform-plugin-manager",
   "rainbond-project-init",
   "rainbond-template-installer",
 ];

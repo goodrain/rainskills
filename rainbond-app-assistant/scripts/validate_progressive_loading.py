@@ -31,6 +31,7 @@ def validate_progressive_loading(skill_dir: Path) -> list[str]:
     failures: list[str] = []
     root_path = skill_dir / "SKILL.md"
     runtime_gate = skill_dir / "references" / "runtime-gate.md"
+    workflow_path = skill_dir / "references" / "workflow-rules.md"
     root = root_path.read_text(encoding="utf-8")
     root_bytes = len(root.encode("utf-8"))
     root_lines = len(root.splitlines())
@@ -125,6 +126,19 @@ def validate_progressive_loading(skill_dir: Path) -> list[str]:
             "new-application-environment",
         ):
             require(required in gate, f"runtime gate is missing: {required}", failures)
+
+    require(workflow_path.is_file(), "missing references/workflow-rules.md", failures)
+    if workflow_path.is_file():
+        workflow = workflow_path.read_text(encoding="utf-8")
+        for required in (
+            "### 1. Local artifact initialization gate",
+            "本地软件包部署必须先完成本地项目初始化",
+            "address-only source/image requests do not require local project files",
+            "bare Git URL",
+            "image reference",
+            "adopt/link",
+        ):
+            require(required in workflow, f"local artifact init gate is missing: {required}", failures)
 
     return failures
 

@@ -11,6 +11,7 @@ const { parseCommand } = require("../bin/rainskills-tools.js");
 const root = path.resolve(__dirname, "..");
 const packageVersion = require("../package.json").version;
 const skillIds = [
+  "rainbond-ai-assistant",
   "rainbond-app-assistant",
   "rainbond-app-version-assistant",
   "rainbond-delivery-verifier",
@@ -19,6 +20,7 @@ const skillIds = [
   "rainbond-fullstack-troubleshooter",
   "rainbond-platform-query",
   "rainbond-opensource-app-deploy",
+  "rainbond-platform-plugin-manager",
   "rainbond-project-init",
   "rainbond-template-installer",
 ];

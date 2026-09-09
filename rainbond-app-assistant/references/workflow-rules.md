@@ -62,13 +62,24 @@
 
   ## Decision Rules
 
-  ### 1. Link check first
-  Before doing any deployment or repair work:
-  - check whether `.rainbond/local.json` exists
-  - check whether local binding identity is present
-  - if `.rainbond/local.json.metadata.status == linked`, treat the project as linked
-  - if local metadata is not `linked` but current-run platform confirmation proves the same app identity exists and is accessible, continue as linked and record the local metadata drift explicitly instead of stopping
-  - stop and ask for project linking only when neither local binding nor current-run platform evidence can confirm a linked project state
+  ### 1. Local artifact initialization gate
+
+  先按输入形态区分是否存在可持久化的本地项目上下文，不按 `source` / `package` / `image` 类型一刀切：
+
+  - 本地工作区：用户指向当前/本地目录、提供 `source.local_path`、要求读取并上传本地软件包，或当前目录已有
+    Rainbond 项目标记。此时本地软件包部署必须先完成本地项目初始化。
+  - address-only：用户只提供 bare Git URL 或 image reference，且没有当前目录/本地文件/项目标记语义。
+    `address-only source/image requests do not require local project files`；不得要求生成 `rainbond.app.json` 或 `.rainbond/local.json`，
+    直接用本轮解析出的 team、region、app 平台上下文执行。
+
+  对本地工作区，在任何 package upload 或首次组件创建前：
+  - 检查 `rainbond.app.json` 是否存在且可用
+  - 检查 `.rainbond/local.json` 是否存在、`metadata.status == linked` 且 identity 完整
+  - 任一缺失或不一致都先运行 `rainbond-project-init`
+  - 平台已有精确匹配应用时进入 adopt/link：复用该应用并写入本地 binding，禁止重复创建应用
+
+  对 address-only 请求，平台验证可以直接建立本轮临时操作上下文；该上下文不宣称当前目录已经初始化，
+  也不把远程 URL 或镜像地址伪装成一个需要落盘的本地项目。
 
   ### 2. Environment selection
   Select environment in this order:
@@ -242,6 +253,7 @@
   4. Sequence lower-level skills
   If `rainbond-project-init` is run:
   - review init result
+  - when an exact existing app is verified for a local workspace/package, use adopt/link: reuse the app and create or repair local manifest/binding files; do not create another app
   - if init is incomplete, stop there
   - if init completes and the user asked to continue, proceed into `rainbond-fullstack-bootstrap`
   - if init completes during a top-level single-entry deploy or dev-to-test mainline run, proceed into `rainbond-fullstack-bootstrap` automatically
@@ -466,10 +478,19 @@
     - **不允许**根据"模型对该仓库的先验知识"猜常见名字（Java-maven-demo、java_maven_demo、demo/java-maven 等）
     - 这与 Iron Law 29 入口"必须问用户"配套：29 管入口、30 管中途用户输入验证失败的二次询问。
     猜测换参数 + 删-再-create 循环是典型 anti-pattern，server 端可能直接 reject 重复 create 调用。
+30a. **软件包组件的后续发布必须原位替换**：先用 `rainbond_query_components` 建立目标 `service_id` 的来源，
+    再执行客户端上传事务。初始化上传时传 `component_id=service_id`，上传状态非空后调用
+    `rainbond_replace_component_package(service_id=原值, event_id=新上传事件)`；禁止再次调用
+    `rainbond_create_component_from_package`，禁止通过 `v2` / `v3` 后缀绕过英文名冲突。替换返回构建
+    `event_id` 后使用 `rainbond_wait_for_build_completion` 有界等待并验证健康状态。
+30b. **镜像组件的后续发布也必须复用组件**：期望镜像与当前镜像相同但需要重新拉取时，直接调用
+    `rainbond_build_component(service_id=原值)`；镜像地址或标签变化时，调用
+    `rainbond_change_component_image(service_id=原值, image=新值)`，再调用 `rainbond_build_component`。
+    禁止用 `rainbond_create_component_from_image` 生成替代组件。
 31. **任何 Rainbond 写工具调用之前**，必须先完整读取当前阶段对应专项 Skill 的 `SKILL.md`，再按其渐进加载规则读取本次动作需要的 modules / references；没有执行手册就直接动手等于**无授权操作**，是 Iron Law 违反。
     触发动作（凡是这类，第一次调用之前都必须先加载对应专项手册）：
-    - 创建/更新/部署组件：`rainbond_create_component_from_source`、`rainbond_create_component_from_image`、`rainbond_create_component_from_package`、`rainbond_create_component`、`rainbond_build_component`、`rainbond_update_component_build_source`、`rainbond_change_component_image`
-    - 包上传事务：`rainbond_init_package_upload`、`rainbond_delete_package_upload`；包内容必须由 bootstrap 的客户端 helper 上传，完成后再用上面的 event-based package create
+    - 创建/更新/部署组件：`rainbond_create_component_from_source`、`rainbond_create_component_from_image`、`rainbond_create_component_from_package`、`rainbond_replace_component_package`、`rainbond_create_component`、`rainbond_build_component`、`rainbond_update_component_build_source`、`rainbond_change_component_image`
+    - 包上传事务：`rainbond_init_package_upload`、`rainbond_delete_package_upload`；包内容必须由 bootstrap 的客户端 helper 上传，完成后根据组件是否存在选择 event-based package create 或 replace
     - 组件配置：`rainbond_manage_component_envs`、`rainbond_manage_component_ports`、`rainbond_manage_component_connection_envs`、`rainbond_manage_component_dependency`、`rainbond_manage_component_storage`、`rainbond_manage_component_probe`、`rainbond_manage_component_autoscaler`
     - 应用操作：`rainbond_operate_app`、`rainbond_horizontal_scale_component`、`rainbond_vertical_scale_component`、`rainbond_delete_component`
     映射表：

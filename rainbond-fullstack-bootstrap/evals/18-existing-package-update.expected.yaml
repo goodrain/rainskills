@@ -1,0 +1,28 @@
+case: existing-package-update
+presentation_mode: structured
+in_scope_components:
+  - api
+assert:
+  equal:
+    BootstrapResult.deployment_plan.workflow.created: []
+    BootstrapResult.deployment_plan.workflow.reused:
+      - api
+    BootstrapResult.deployment_plan.workflow.skipped: []
+    BootstrapResult.deployment_plan.workflow.skipped_reasons: {}
+    BootstrapResult.deployment_plan.workflow.deferred_dependencies: []
+    BootstrapResult.runtime_state.overall: runtime_healthy
+    BootstrapResult.runtime_state.blocking_bucket: null
+    BootstrapResult.next_handoff: delivery_verifier
+  contains:
+    BootstrapResult.runtime_state.component_status:
+      api: running
+  prose_contains:
+    - same `service_id`
+    - component_id=svc-api-1
+    - rainbond_replace_component_package
+    - expected_current_event_id=evt-old
+    - evt-build-2
+    - No blue/green component was created
+  prose_not_contains:
+    - created api-v2
+    - created api-v3

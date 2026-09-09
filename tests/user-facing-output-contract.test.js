@@ -14,6 +14,7 @@ const successfulDeploymentNextActions = `你接下来可以：
 4. 将应用迁移到自己的 Rainbond`;
 
 const customerFacingSkills = [
+  "rainbond-ai-assistant",
   "rainbond-app-assistant",
   "rainbond-app-version-assistant",
   "rainbond-delivery-verifier",
@@ -21,6 +22,7 @@ const customerFacingSkills = [
   "rainbond-fullstack-bootstrap",
   "rainbond-fullstack-troubleshooter",
   "rainbond-project-init",
+  "rainbond-platform-plugin-manager",
   "rainbond-template-installer",
 ];
 

@@ -82,6 +82,7 @@ FORBIDDEN_CODE_HANDOFF_ACTION_PATTERNS = (
 CANONICAL_NEXT_ACTIONS = (
     "stop",
     "run bootstrap",
+    "run project init in adopt/link mode, then continue to bootstrap",
     "run troubleshooter",
     "run troubleshooter on the same source path",
     "run delivery verifier",

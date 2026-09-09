@@ -8,12 +8,13 @@ const test = require("node:test");
 const repoRoot = path.resolve(__dirname, "..");
 const builder = path.join(repoRoot, "scripts", "build-skill-profile.mjs");
 const embeddedSkills = [
+  "rainbond-ai-assistant",
   "rainbond-app-assistant",
   "rainbond-app-version-assistant",
   "rainbond-delivery-verifier",
   "rainbond-fullstack-bootstrap",
   "rainbond-fullstack-troubleshooter",
-  "rainbond-opensource-app-deploy",
+  "rainbond-platform-plugin-manager",
   "rainbond-platform-query",
   "rainbond-template-installer",
 ];
@@ -127,7 +128,6 @@ test("embedded profile is explicit, transport-safe, and contains only Agent-comp
   }
   for (const skill of [
     "rainbond-app-assistant",
-    "rainbond-opensource-app-deploy",
   ]) {
     const embeddedRoot = fs.readFileSync(path.join(output, skill, "SKILL.md"), "utf8");
     assert.doesNotMatch(
@@ -159,7 +159,6 @@ test("embedded profile is explicit, transport-safe, and contains only Agent-comp
 
   for (const skill of [
     "rainbond-app-assistant",
-    "rainbond-opensource-app-deploy",
   ]) {
     const runtimeGate = fs.readFileSync(
       path.join(output, skill, "references", "runtime-gate.md"),
@@ -186,6 +185,11 @@ test("embedded profile is explicit, transport-safe, and contains only Agent-comp
 
   assert.equal(fs.existsSync(path.join(output, "rainbond-project-init")), false);
   assert.equal(fs.existsSync(path.join(output, "rainbond-env-sync")), false);
+  assert.equal(
+    fs.existsSync(path.join(output, "rainbond-opensource-app-deploy")),
+    false,
+    "embedded profile must exclude the network-dependent open-source acquisition skill"
+  );
   assert.equal(fs.existsSync(path.join(output, "rainbond-platform-installer")), false);
   assert.equal(fs.existsSync(path.join(output, "rainbond-platform-query")), true);
   assert.equal(

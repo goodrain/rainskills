@@ -1,9 +1,39 @@
 cases:
+  - id: install_platform_plugin
+    prompt: 帮我安装 AI Engine 平台插件
+    expected_skill: rainbond-platform-plugin-manager
+  - id: upgrade_generic_platform_plugin
+    prompt: 升级这个功能扩展插件
+    expected_skill: rainbond-platform-plugin-manager
+  - id: deploy_model_on_cpu
+    prompt: 没有 GPU，请用 CPU 部署这个大模型
+    expected_skill: rainbond-ai-assistant
+  - id: deploy_model_on_gpu
+    prompt: 从 ModelScope 下载 Qwen3 并部署一个 GPU 模型实例
+    expected_skill: rainbond-ai-assistant
+  - id: install_rainbond_platform
+    prompt: 帮我安装 Rainbond 平台
+    expected_skill: rainbond-platform-installer
   - id: generic_deploy_current_project
     prompt: 帮我把当前项目部署到 Rainbond 上
     expected_skill: rainbond-app-assistant
   - id: generic_run_current_project
     prompt: 帮我把这个项目跑起来
+    expected_skill: rainbond-app-assistant
+  - id: local_package_deploy_current_project
+    prompt: 使用本地打包上传软件包的方式部署当前项目
+    expected_skill: rainbond-app-assistant
+  - id: source_build_deploy_current_project
+    prompt: 使用源码构建部署当前项目
+    expected_skill: rainbond-app-assistant
+  - id: image_build_deploy_current_project
+    prompt: 使用镜像构建部署当前项目
+    expected_skill: rainbond-app-assistant
+  - id: address_only_source_deploy
+    prompt: 使用源码构建部署 https://gitee.com/rainbond/demo-2048.git
+    expected_skill: rainbond-app-assistant
+  - id: address_only_image_deploy
+    prompt: 在 Rainbond 应用中使用镜像 nginx:latest 创建组件
     expected_skill: rainbond-app-assistant
   - id: generic_check_blocker
     prompt: 帮我看看当前项目卡在哪
@@ -82,6 +112,15 @@ cases:
     expected_skill: rainbond-template-installer
 
 required_markers:
+  rainbond-ai-assistant:
+    - "CPU 是一等部署路径"
+    - "HAMi shared"
+    - "HAMi whole-GPU fallback"
+    - "NVIDIA Device Plugin"
+  rainbond-platform-plugin-manager:
+    - "通用平台插件"
+    - "rainbond_upgrade_app"
+    - "rainbond_delete_app"
   rainbond-app-assistant:
     - "default top-level owner for generic current-project"
     - "the request should start here"
@@ -94,6 +133,8 @@ required_markers:
     - "3) 独立服务器"
     - "4) 已有 Rainbond"
     - "本机只允许连接一个 Rainbond 运行环境"
+    - "本地软件包部署必须先完成本地项目初始化"
+    - "address-only source/image requests do not require local project files"
     - '"hints": {"team_name": "<team-name>"}'
     - '"selection": {"option_id": "<option-id>"}'
   rainbond-fullstack-bootstrap:

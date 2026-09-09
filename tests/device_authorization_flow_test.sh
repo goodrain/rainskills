@@ -147,6 +147,158 @@ assert_contains \
   "$TEST_ROOT/output.log" \
   "[RAINSKILLS_AGENT_WAIT_REQUIRED:runtime-connect]"
 
+(
+  CODE_CALLS=0
+  device_flow_http_post() {
+    local endpoint="$1" response_file="$3" header_file="$4" status_file="$5"
+    if [[ "$endpoint" == */console/mcp/device/code ]]; then
+      CODE_CALLS=$((CODE_CALLS + 1))
+      printf '%s' '{"device_code":"complete-code-response","user_code":"BCDF-GHJK","verification_uri":"https://console.example.com/#/device","verification_uri_complete":"https://console.example.com/#/device?user_code=BCDF-GHJK","expires_in":600,"interval":5}' > "$response_file"
+      printf 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n' > "$header_file"
+      printf '200' > "$status_file"
+      return 28
+    fi
+    printf '%s' '{"access_token":"header.complete-code.signature","token_type":"Bearer","expires_in":31536000,"scope":"mcp"}' > "$response_file"
+    printf 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n' > "$header_file"
+    printf '200' > "$status_file"
+  }
+  device_flow_sleep() { :; }
+  device_flow_now() { printf '0\n'; }
+  can_open_browser() { return 1; }
+  LOGIN_TIMEOUT=600
+  OBTAINED_RAINBOND_TOKEN=""
+
+  device_flow_login_to_rainbond "https://console.example.com" \
+    2>"$TEST_ROOT/complete-code-transport-error.log" \
+    || fail "complete device-code response was discarded after a transport error"
+  assert_equal "complete code response calls" "1" "$CODE_CALLS"
+  assert_equal \
+    "token after complete code response" \
+    "header.complete-code.signature" \
+    "$OBTAINED_RAINBOND_TOKEN"
+)
+
+(
+  TOKEN_CALLS=0
+  device_flow_http_post() {
+    local endpoint="$1" response_file="$3" header_file="$4" status_file="$5"
+    if [[ "$endpoint" == */console/mcp/device/code ]]; then
+      printf '%s' '{"device_code":"complete-token-response","user_code":"CDFG-HJKM","verification_uri":"https://console.example.com/#/device","verification_uri_complete":"https://console.example.com/#/device?user_code=CDFG-HJKM","expires_in":600,"interval":5}' > "$response_file"
+      printf 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n' > "$header_file"
+      printf '200' > "$status_file"
+      return 0
+    fi
+    TOKEN_CALLS=$((TOKEN_CALLS + 1))
+    printf '%s' '{"access_token":"header.complete-token.signature","token_type":"Bearer","expires_in":31536000,"scope":"mcp"}' > "$response_file"
+    printf 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n' > "$header_file"
+    printf '200' > "$status_file"
+    return 28
+  }
+  device_flow_sleep() { :; }
+  device_flow_now() { printf '0\n'; }
+  can_open_browser() { return 1; }
+  LOGIN_TIMEOUT=600
+  OBTAINED_RAINBOND_TOKEN=""
+
+  device_flow_login_to_rainbond "https://console.example.com" \
+    2>"$TEST_ROOT/complete-token-transport-error.log" \
+    || fail "complete token response was discarded after a transport error"
+  assert_equal "complete token response calls" "1" "$TOKEN_CALLS"
+  assert_equal \
+    "token from transport-error response" \
+    "header.complete-token.signature" \
+    "$OBTAINED_RAINBOND_TOKEN"
+)
+
+(
+  CODE_CALLS=0
+  TOKEN_CALLS=0
+  device_flow_http_post() {
+    local endpoint="$1" body_file="$2" response_file="$3" header_file="$4" status_file="$5"
+    if [[ "$endpoint" == */console/mcp/device/code ]]; then
+      CODE_CALLS=$((CODE_CALLS + 1))
+      if [[ "$CODE_CALLS" -eq 1 ]]; then
+        printf '%s' '{"device_code":"possibly-consumed-code","user_code":"GHJK-MNPQ","verification_uri":"https://console.example.com/#/device","verification_uri_complete":"https://console.example.com/#/device?user_code=GHJK-MNPQ","expires_in":600,"interval":5}' > "$response_file"
+      else
+        printf '%s' '{"device_code":"replacement-code","user_code":"RTVW-XY23","verification_uri":"https://console.example.com/#/device","verification_uri_complete":"https://console.example.com/#/device?user_code=RTVW-XY23","expires_in":600,"interval":5}' > "$response_file"
+      fi
+      printf 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n' > "$header_file"
+      printf '200' > "$status_file"
+      return 0
+    fi
+
+    TOKEN_CALLS=$((TOKEN_CALLS + 1))
+    if [[ "$TOKEN_CALLS" -eq 1 ]]; then
+      grep -F 'device_code=possibly-consumed-code' "$body_file" >/dev/null \
+        || fail "first flow polled with the wrong device code"
+      printf '%s' '{"access_token":' > "$response_file"
+      printf 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n' > "$header_file"
+      printf '200' > "$status_file"
+      return 28
+    fi
+
+    grep -F 'device_code=replacement-code' "$body_file" >/dev/null \
+      || fail "an uncertain token response reused the possibly consumed device code"
+    printf '%s' '{"access_token":"header.replacement.signature","token_type":"Bearer","expires_in":31536000,"scope":"mcp"}' > "$response_file"
+    printf 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n' > "$header_file"
+    printf '200' > "$status_file"
+    return 0
+  }
+  device_flow_sleep() { :; }
+  device_flow_now() { printf '0\n'; }
+  can_open_browser() { return 0; }
+  open_browser() { printf '%s\n' "$1" >> "$TEST_ROOT/replacement-browser.log"; }
+  LOGIN_TIMEOUT=600
+  OBTAINED_RAINBOND_TOKEN=""
+
+  device_flow_login_to_rainbond "https://console.example.com" \
+    2>"$TEST_ROOT/replacement-flow.log" \
+    || fail "an uncertain token response did not restart Device Flow once"
+  assert_equal "replacement code requests" "2" "$CODE_CALLS"
+  assert_equal "replacement token requests" "2" "$TOKEN_CALLS"
+  assert_equal "replacement flow token" "header.replacement.signature" "$OBTAINED_RAINBOND_TOKEN"
+  assert_contains \
+    "replacement flow notice" \
+    "$TEST_ROOT/replacement-flow.log" \
+    "正在发起新的设备授权码"
+  assert_contains \
+    "replacement browser code" \
+    "$TEST_ROOT/replacement-browser.log" \
+    "user_code=RTVW-XY23"
+)
+
+(
+  CODE_CALLS=0
+  TOKEN_CALLS=0
+  device_flow_http_post() {
+    local endpoint="$1" response_file="$3" header_file="$4" status_file="$5"
+    if [[ "$endpoint" == */console/mcp/device/code ]]; then
+      CODE_CALLS=$((CODE_CALLS + 1))
+      printf '%s' '{"device_code":"bounded-retry-code","user_code":"VWXY-2345","verification_uri":"https://console.example.com/#/device","verification_uri_complete":"https://console.example.com/#/device?user_code=VWXY-2345","expires_in":600,"interval":5}' > "$response_file"
+      printf 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n' > "$header_file"
+      printf '200' > "$status_file"
+      return 0
+    fi
+    TOKEN_CALLS=$((TOKEN_CALLS + 1))
+    printf '%s' '{"access_token":' > "$response_file"
+    printf 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n' > "$header_file"
+    printf '200' > "$status_file"
+    return 28
+  }
+  device_flow_sleep() { :; }
+  device_flow_now() { printf '0\n'; }
+  can_open_browser() { return 1; }
+  LOGIN_TIMEOUT=600
+  OBTAINED_RAINBOND_TOKEN=""
+
+  if device_flow_login_to_rainbond "https://console.example.com" \
+      2>"$TEST_ROOT/bounded-retry.log"; then
+    fail "ambiguous token responses retried Device Flow without a bound"
+  fi
+  assert_equal "bounded code requests" "2" "$CODE_CALLS"
+  assert_equal "bounded token requests" "2" "$TOKEN_CALLS"
+)
+
 connect_completion_source="$(sed -n '/if \[\[ "\$ACTION" == "connect" \]\]/,/return 0/p' "$REPO_ROOT/install.sh")"
 grep -F '[RAINSKILLS_AGENT_WAIT_COMPLETE:runtime-connect]' <<<"$connect_completion_source" >/dev/null \
   || fail "runtime connect has no completion marker after complete-connect"
