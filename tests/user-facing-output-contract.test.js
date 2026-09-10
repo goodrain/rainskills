@@ -12,6 +12,9 @@ const successfulDeploymentNextActions = `你接下来可以：
 2. 将当前应用创建快照发布版本，用于部署到生产环境
 3. 查看运行日志
 4. 将应用迁移到自己的 Rainbond`;
+const communityCard = `欢迎扫码加入交流群，一起交流使用经验。
+
+![交流群二维码](https://www.rainbond.com/wechat/rainbond-xzs.png)`;
 
 const customerFacingSkills = [
   "rainbond-ai-assistant",
@@ -24,6 +27,20 @@ const customerFacingSkills = [
   "rainbond-project-init",
   "rainbond-platform-plugin-manager",
   "rainbond-template-installer",
+];
+
+const communityContractFiles = [
+  "rainbond-ai-assistant/references/output-contract.md",
+  "rainbond-app-assistant/references/output-contract.md",
+  "rainbond-app-version-assistant/SKILL.md",
+  "rainbond-delivery-verifier/SKILL.md",
+  "rainbond-env-sync/SKILL.md",
+  "rainbond-fullstack-bootstrap/SKILL.md",
+  "rainbond-fullstack-troubleshooter/SKILL.md",
+  "rainbond-opensource-app-deploy/SKILL.md",
+  "rainbond-platform-plugin-manager/references/output-contract.md",
+  "rainbond-project-init/SKILL.md",
+  "rainbond-template-installer/SKILL.md",
 ];
 
 const outputContractFiles = [
@@ -58,6 +75,25 @@ function read(relativePath) {
   return fs.readFileSync(path.join(root, relativePath), "utf8");
 }
 
+test("every top-level customer workflow uses the shared terminal community card policy", () => {
+  for (const relativePath of communityContractFiles) {
+    const content = read(relativePath);
+    const section = content.match(
+      /<!-- rainskills-community-card:start -->([\s\S]*?)<!-- rainskills-community-card:end -->/,
+    )?.[1] || "";
+    assert.match(content, /<!-- rainskills-community-card:start -->/, relativePath);
+    assert.match(content, /<!-- rainskills-community-card:end -->/, relativePath);
+    assert.match(content, /顶层任务的最终回复/, relativePath);
+    assert.match(content, /执行过程、中间错误、重试、等待或下层 Skill/, relativePath);
+    assert.match(content, /最终失败或未完成[^。\n]*必须/, relativePath);
+    assert.match(content, /成功[^。\n]*当前对话[^。\n]*最多展示一次/, relativePath);
+    assert.match(content, /结构化、自动化或评测/, relativePath);
+    assert.equal(content.split(communityCard).length - 1, 1, relativePath);
+    assert.doesNotMatch(section, /小助手|反馈|获取帮助/, relativePath);
+    assert.equal(section.match(/https?:\/\//g)?.length, 1, relativePath);
+  }
+});
+
 test("ordinary user replies default to concise Chinese without internal contracts", () => {
   for (const skill of customerFacingSkills) {
     const content = read(`${skill}/SKILL.md`);
@@ -85,6 +121,10 @@ test("deployment progress identifies workspaces by name instead of team ID", () 
 
   assert.match(entrypoint, /过程消息[^\n]*team_name[^\n]*展示/);
   assert.match(entrypoint, /不展示 `team_id`/);
+  assert.match(
+    entrypoint,
+    /未完成：加载 \[output contract\]\(references\/output-contract\.md\)/,
+  );
   assert.match(workflow, /team_id[^。\n]*不得[^。\n]*过程消息[^。\n]*最终报告/);
 });
 
