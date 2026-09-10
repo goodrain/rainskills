@@ -10,7 +10,7 @@
 6. 长上下文或 multimodal/多模态模型不得直接继承模型声明的最大上下文。`max_model_len` 必须来自用户所需上限或服务端明确的安全候选，并与 KV cache、并发和媒体输入边界联合检查；两者都没有时，先询问会改变部署参数的最少信息，不执行创建。
 7. 使用结构化 `resources` / `dynamic_params`；调用方不提交 allocation、runtime image/digest、环境变量或线程绑定。`dynamic_params` 为空时不得直接创建，除非参数决策已用明确证据得出“运行时默认值安全且无需覆盖”的结论，并在结果中记录拒绝修改的理由。
 8. 高级参数只使用 `extra_argv[]`，不构造 shell 字符串；确认摘要只展示安全目标与规范化参数名。
-9. 写入前展示最终的安全参数方案及仍有影响的风险，并确认长任务监测方式：“持续监测”或“受理后结束，待下次唤醒再查询”。可与审批同一次询问；用户已表达可确定偏好时不重复询问。
+9. 写入前展示最终的安全参数方案及仍有影响的风险，并确认长任务监测方式：“持续监测”或“受理后结束，待下次唤醒再查询”。只有宿主审批界面能在写入前实际收集并保存监测选择时，才可合并到同一次交互；否则必须先询问并收到回答，再请求创建审批。用户已表达可确定偏好时不重复询问。
 10. `startup_safety` 未完成、关键 `missing_evidence` 会改变可启动性、或方案仍依赖物理显存猜测时，禁止调用 `rainbond_create_ai_engine_instance`。
 11. 审批后调用一次 `rainbond_create_ai_engine_instance`。结果未知时先 list/get 精确 instance ID/name/model key，不重放 create。
 12. 持续监测时，按服务端建议轮询实例和 deployment 到业务终态，只在 current stage 变化时更新用户。Pod Running 不等于完成；目标实例必须 Running、health 成功且 `served_model_registered=true`。
@@ -20,3 +20,13 @@
 16. 生效值与计划冲突时报告具体差异和业务影响；涉及容量安全时转部署诊断，不自动修改或重建。容量估算或启动日志的最大并发仅是容量证据，不能当成压测结果。配置证据不完整与服务健康分别报告，不把健康实例改报 Failed，也不宣称参数已全部验证。
 
 17. 健康与注册确认后，使用当前宿主实际提供且在授权范围内的推理能力验证代表性输入、输出长度和所需模态。无样本或无推理 Tool 时明确“服务已就绪，业务场景尚未验证”，不绕过平台直接请求内部服务。性能目标仅在对应负载验证后报告达标；部署请求不自动扩展为高负载压测或反复创建候选实例。
+
+## 宿主部署方案记录
+
+当前宿主若提供 `prepare_ai_engine_deployment`，完成上述规划后、调用创建前必须使用它记录方案。它不是平台容量预检，也不替代审批。`user_requirements` 按数组逐条引用用户已表达的用途、模型选择等原文，不把多条消息拼成一句；兼容旧宿主的 `user_requirement` 只传单条原文。用户只说“部署大模型”或指定模型/GPU 不代表已经说明用途，应先询问用途，不能自行编造场景。`deployment_arguments` 是符合实时创建 Tool schema 的完整参数，必须与后续创建保持一致；参数改变后重新规划并记录。
+
+记录前显式传入同一 `team_name`、`region_name` 查询 capabilities、resource capacity 和精确 `model_key` 的团队模型详情，加载当前阶段 references。`parameter_reasoning` 说明上下文、资源、并发、KV cache 和 allocation 的事实依据，`defaults_reasoning` 说明哪些参数继承已验证的默认值及原因；关键 `missing_evidence` 未消除时停止。内部方案内容不作为业务 API 参数提交，也不把内部字段清单交给用户填写。当前宿主未提供此工具时仍执行完整 `startup_safety` 规划，不虚构工具。
+
+方案记录与创建审批是不同阶段。新宿主通过 `monitoring_preference` 记录 `mode=continuous|deferred` 及真实用户选择原文 `user_quote`；该字段仅属于内部方案，不发送到平台创建 API。工具返回 `next_action=ask_monitoring_preference` 时先询问并等待回答，不调用创建工具；补录偏好后返回 `request_creation_approval` 才进入审批。已有同一实例的监测选择直接复用，参数调整不要求用户重复选择；新实例不能静默继承上一实例的偏好。批准创建不等于选择监测方式。
+
+跨轮次以当前宿主实际激活列表和手册为准，不把历史 `loaded_skill` 回执当作当前状态。当前手册缺失时重新加载；不知道模块路径时，若宿主支持省略 `module_path` 的 `read_skill_module(skill_id=...)`，先查询索引再读准确路径，不用猜错路径探测。

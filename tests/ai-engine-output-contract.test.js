@@ -137,3 +137,25 @@ test("model download omits unsafe optional display names and classifies expected
   assert.match(download, /model_download_not_found[^\n]*(?:正常|没有活动下载|未下载)/);
   assert.match(download, /Latin-1[^\n]*查询[^\n]*真实状态[^\n]*重试/);
 });
+
+
+test("embedded deployment planning preserves user intent and exact tool arguments", () => {
+  const deployment = read("rainbond-ai-assistant/references/instance-deployment.md");
+  const recovery = read("rainbond-ai-assistant/references/error-recovery.md");
+  for (const field of ["prepare_ai_engine_deployment", "user_requirement", "deployment_arguments", "defaults_reasoning", "missing_evidence"]) {
+    assert.ok(deployment.includes(field));
+  }
+  assert.match(deployment, /未提供此工具.*不虚构工具/);
+  assert.match(recovery, /禁止用 `arguments` 字符串再次包裹/);
+  assert.match(recovery, /不通过移除 `modelscope:` 前缀/);
+});
+
+
+test("AI planning distinguishes user references, monitoring choice and approval", () => {
+  const guide = read("rainbond-ai-assistant/references/instance-deployment.md");
+  assert.match(guide, /`user_requirements`.*逐条引用/);
+  assert.match(guide, /`user_requirement`.*单条原文/);
+  assert.match(guide, /ask_monitoring_preference.*等待回答.*不调用创建工具/);
+  assert.match(guide, /批准创建不等于选择监测方式/);
+  assert.match(guide, /历史 `loaded_skill`.*当前状态/);
+});
