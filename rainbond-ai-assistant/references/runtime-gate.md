@@ -18,7 +18,7 @@ Hermes Agent 使用 `terminal` 且 `background=true` 启动授权，随后 `proc
 ```json
 {
   "schema": "rainskills.single-runtime-contract.v1",
-  "package_version": "rainskills@0.1.41",
+  "package_version": "rainskills@0.1.42",
   "runtime_status": ["node", "<home>/.rainbond/lib/rainskills/bin/rainskills.js", "runtime", "status", "--json"],
   "runtime_connect": {
     "saas": ["node", "<home>/.rainbond/lib/rainskills/bin/rainskills.js", "runtime", "connect", "<target>", "--saas"],
