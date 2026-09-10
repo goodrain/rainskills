@@ -1,0 +1,196 @@
+cases:
+  - id: workspace_choice_without_onboarding_questionnaire
+    facts: {workspace_options: [platform_plugins, admin], selected_workspace: unknown, business_use: unknown, gpu_inventory_read: false}
+    expected: {ask: workspace_only, append_model_questionnaire: false, ask_gpu_availability: false, show_internal_team_ids: false}
+  - id: deployment_inventory_before_compute_choice
+    facts: {selected_workspace: admin, business_use: unknown, user_compute_preference: unspecified, capabilities_read: false, resource_capacity_read: false}
+    expected: {next_reads: [rainbond_get_ai_engine_capabilities, rainbond_get_ai_engine_resource_capacity], ask_user_to_inventory_hardware: false, later_scenario_question: open_ended}
+  - id: catalog_task_is_not_deployment_support
+    facts: {catalog_tasks: [speech_recognition, ocr], runtime_task_support: unknown, create_api_task_support: unknown}
+    expected: {offer_tasks_as_supported_examples: false, treat_catalog_as_compatibility_proof: false, verify_if_explicitly_requested: true}
+  - id: user_cpu_constraint_is_preserved
+    facts: {user_compute_preference: cpu, gpu_available: true, cpu_runtime_compatible: true}
+    expected: {compute_mode: cpu, ask_gpu_or_cpu_again: false, read_cpu_capacity: true}
+  - id: deployment_unknown_scenario
+    facts: {user_goal: deploy_selected_model, prior_scenario: unknown, model_ready: true, gpu_available: true}
+    expected: {next_action: ask_business_use, apply_fixed_startup_profile: false, ask_low_level_parameters: false}
+  - id: deployment_known_rag_scenario
+    facts: {scenario: knowledge_base_qa, concurrent_requests: 4, input_tokens: 6000, output_budget: 1000, repeated_prefix: true, model_metadata: verified, resource_capacity: available}
+    expected: {repeat_scenario_question: false, context_includes_input_and_output: true, jointly_evaluate: [max_model_len, max_num_seqs, max_num_batched_tokens, kv_cache], evaluate_prefix_caching: true, fixed_profile: false}
+  - id: deployment_business_estimates_are_not_measurements
+    facts: {scenario: document_analysis, document_size: dozens_of_pages, user_count: 10, tokenizer_measurement: unavailable}
+    expected: {exact_token_count_claimed: false, concurrency_equals_user_count: false, retain_estimate_uncertainty: true, ask_only_decisive_business_details: true}
+  - id: deployment_multimodal_tool_gap
+    facts: {scenario: image_qa, required_images_per_prompt: 2, create_tool_has_multimodal_params: false, limit_mm_flag_managed: true}
+    expected: {write_tool: null, report: interface_capability_gap, bypass_with_extra_argv: false, silently_disable_images: false}
+  - id: deployment_allocation_is_not_load_validation
+    facts: {allocation_estimate_passed: true, estimator_inputs: [weight_bytes, context_length], target_concurrency: 16, load_test: absent}
+    expected: {claim_target_concurrency_verified: false, evaluate_kv_and_batch_capacity: true, validation_plan: representative_workload}
+  - id: deployment_advanced_parameter_selection
+    facts: {scenario: long_document_interactive, concurrent_requests: 4, chunked_prefill_supported: true, structured_chunked_prefill_field: false, deployment_authorized: true}
+    expected: {evaluate_extra_argv: [enable_chunked_prefill], require_user_to_name_flag: false, parameter_by_parameter_approval: false, check_existing_runtime_behavior: true}
+  - id: deployment_safe_defaults_without_questionnaire
+    facts: {operation: create_instance, user_goal: trial_selected_model, workload_metrics: unavailable, server_safe_candidate: verified, capacity_preflight: passed, progress_mode: continuous, authorized: true}
+    expected: {recommended_plans: 1, ask_parameter_checklist: false, require_workload_percentiles: false, record_parameter_sources: true, verify_effective_config: true}
+  - id: deployment_missing_capacity_is_not_a_default
+    facts: {operation: create_instance, user_goal: deploy_with_few_questions, model_verified: true, allocation_window: unknown, capacity_default_evidence: unavailable}
+    expected: {write_tool: null, next_operation: targeted_capacity_read, guess_default_from_previous_instance: false, bypass_startup_safety: false}
+  - id: deployment_preserves_explicit_business_limits
+    facts: {required_context: 32768, required_modalities: [image], server_safe_candidate: {max_model_len: 8192, image_count: 0}}
+    expected: {silently_reduce_requirements: false, ask_business_tradeoff: true, ask_low_level_parameter_menu: false}
+  - id: deployment_saved_and_effective_config_differ
+    facts: {status: Running, health: ready, registered: true, saved_dynamic_params: {}, resolved_flags: [], startup_log: {dtype: bfloat16, enable_prefix_caching: true}, cpu_limits: unavailable}
+    expected: {dtype: bfloat16, prefix_caching: enabled, claim_missing_flags_disable_features: false, cpu_limits: unknown, report_service_healthy: true, claim_all_parameters_verified: false}
+  - id: deployment_effective_capacity_conflict
+    facts: {planned_max_model_len: 8192, effective_max_model_len: 32768, planned_capacity_verified: true, effective_capacity_verified: false, status: Running}
+    expected: {next_stage: deployment_diagnostics, report_config_mismatch: true, auto_recreate: false, claim_capacity_verified: false}
+  - id: modelscope_normalization
+    facts: {inputs: [Qwen/Qwen3-8B, "https://modelscope.cn/models/Qwen/Qwen3-8B"]}
+    expected: {same_identity: true}
+  - id: modelscope_openapi_fallback
+    facts: {catalog_exact_match: false, query: Qwen3.8-27B-FP8}
+    expected: {external_read: modelscope_official_openapi, detail_fields: [params, file_size, tasks, tags], fabricated_catalog_entry: false}
+  - id: reject_unsupported_sources
+    facts: {inputs: [local_path, file_upload, git, huggingface, arbitrary_url]}
+    expected: {write_tool: null, terminal: blocked}
+  - id: download_idempotent
+    facts: {model_status: downloading}
+    expected: {create_calls: 0}
+  - id: ai_long_task_progress_mode_required
+    facts: {operation: model_download, approved: true, progress_mode: unspecified}
+    expected: {write_tool: null, terminal: waiting_progress_mode}
+  - id: ai_deferred_resume
+    facts: {operation: model_download, accepted: true, progress_mode: deferred, model_key: modelscope:Qwen/Qwen3-8B}
+    expected: {periodic_poll: false, next_wake_read: rainbond_get_ai_engine_model_download, replay_write: false}
+  - id: download_job_gone_model_ready
+    facts: {download_status: not_found, model_status: ready, verified: true}
+    expected: {terminal: ready}
+  - id: download_bytes_not_terminal
+    facts: {percent: 100, verified: false}
+    expected: {terminal: downloading}
+  - id: cpu_only_deploy
+    facts: {gpu_available: false, cpu_runtime: ready}
+    expected: {compute_mode: cpu, gpu_count: 0}
+  - id: cpu_resource_invalid
+    facts: {cpu_request: 8, cpu_limit: 4}
+    expected: {write_tool: null, terminal: blocked}
+  - id: cpu_memory_preflight
+    facts: {weight_gib: 8, kvcache_gib: 4, memory_limit_gib: 10}
+    expected: {write_tool: null, terminal: blocked}
+  - id: cpu_gpu_params_rejected
+    facts: {compute_mode: cpu, params: [gpu_memory_utilization, kv_cache_memory_bytes, tensor_parallel_size]}
+    expected: {write_tool: null, terminal: blocked}
+  - id: standard_gpu_whole
+    facts: {provider: standard_nvidia, allocation_mode: standard_whole_gpu, request_unit: physical_gpu}
+    expected: {capacity_semantics: physical_gpu}
+  - id: hami_shared
+    facts: {provider: hami, allocation_mode: hami_shared_auto, request_unit: hami_vgpu, share_available: true}
+    expected: {capacity_semantics: memory_mib_per_gpu}
+  - id: hami_whole_fallback
+    facts: {provider: hami, allocation_mode: hami_whole_gpu_fallback, request_unit: physical_gpu}
+    expected: {capacity_semantics: physical_gpu}
+  - id: provider_conflict
+    facts: {device_plugin_conflict: true}
+    expected: {write_tool: null, terminal: blocked}
+  - id: usage_unavailable
+    facts: {available: false, source: unavailable, used_memory_bytes: null}
+    expected: {reported_zero: false}
+  - id: gpu_no_hardware
+    facts: {gpu_provider_state: no_gpu, driver_state: unknown, cpu_runtime: ready, model_cpu_compatible: true}
+    expected: {driver_missing_claimed: false, gpu_write_tool: null, evaluate_cpu_fallback: true}
+  - id: gpu_standard_pending
+    facts: {gpu_provider_state: standard_pending, hardware_detected: true, driver_state: unknown}
+    expected: {gpu_write_tool: null, terminal: blocked, diagnosis: layered_unknown}
+  - id: gpu_monitoring_unavailable
+    facts: {gpu_provider_state: standard_ready, allocatable_gpu_count: 1, observer_state: unavailable}
+    expected: {driver_missing_claimed: false, monitoring_available: false, whole_plugin_unavailable: false}
+  - id: gpu_driver_missing_verified
+    facts: {hardware_detected: true, driver_state: missing, driver_state_source: gpu_operator_validator}
+    expected: {gpu_write_tool: null, terminal: blocked, remediation_requires_admin_confirmation: true}
+  - id: pod_running_registration_missing
+    facts: {pod_status: Running, served_model_registered: false}
+    expected: {terminal: Creating}
+  - id: stopped_terminal
+    facts: {status: Stopped, desired_replicas: 0, available_replicas: 0}
+    expected: {terminal: Stopped}
+  - id: legacy_history_fallback
+    facts: {deployment_available: false, reason: deployment_history_unavailable}
+    expected: {fallback_reads: [details, events, current_logs, previous_logs]}
+  - id: mutation_unknown
+    facts: {write_result: timeout}
+    expected: {write_calls: 1, next_operation: exact_read}
+  - id: throughput_experiment
+    facts: {objective: throughput}
+    expected: {baseline_first: true, single_variable: true, keep_original: true}
+  - id: generic_latency_requires_classification
+    facts: {user_goal: 更快, ttft: unknown, tpot: unknown, queue_request_count: unknown}
+    expected: {bottleneck: unknown, parameter_changes: 0, ask_only_decisive_evidence: true}
+  - id: queued_with_gpu_headroom
+    facts: {objective: concurrency, queue_request_count: 8, queue_trend: sustained, gpu_utilization: 0.58, memory_headroom: true}
+    expected: {bottleneck: queue_capacity, evaluate: [max_num_seqs, max_num_batched_tokens], single_group_change: true}
+  - id: empty_queue_slow_decode
+    facts: {objective: decode_latency, queue_request_count: 0, gpu_compute_saturated: true, long_prefill: false}
+    expected: {bottleneck: decode_compute, reject: [max_num_seqs, max_num_batched_tokens], evaluate: [smaller_model, quantization, faster_device]}
+  - id: repeated_prefix_cache_candidate
+    facts: {stable_prefix_ratio: 0.8, representative_workload_available: true}
+    expected: {bottleneck: cache_reuse, dynamic_params: {prefix_caching: enabled}, validate: [latency, cache_benefit]}
+  - id: no_prefix_reuse_no_cache_claim
+    facts: {stable_prefix_ratio: 0.02, prefix_cache_metrics: unavailable}
+    expected: {enable_prefix_caching: false, fabricated_benefit: false}
+  - id: long_prompt_prefill_contention
+    facts: {p95_input_tokens: 24000, concurrent_requests: 12, ttft_regression: true, runtime_supports_chunked_prefill: true}
+    expected: {bottleneck: prefill, evaluate_extra_argv: [enable_chunked_prefill], claims_decode_improvement: false}
+  - id: chunked_prefill_support_unknown
+    facts: {long_prompt: true, runtime_supports_chunked_prefill: unknown}
+    expected: {submit_extra_argv: false, missing_evidence: [runtime_parameter_support]}
+  - id: long_context_coupled_capacity
+    facts: {objective: long_context, required_p99_tokens: 32768, model_max_tokens: 131072}
+    expected: {max_model_len_basis: required_p99_tokens, jointly_evaluate: [kv_cache, max_num_seqs, max_num_batched_tokens], use_model_max_blindly: false}
+  - id: fp8_kv_cache_quality_gate
+    facts: {memory_pressure: true, fp8_supported: true, quality_priority: true, quality_eval_available: false}
+    expected: {set_kv_cache_dtype_fp8: false, missing_evidence: [representative_quality_eval]}
+  - id: tensor_parallel_for_fit
+    facts: {model_fits_single_gpu: false, available_gpus: 4, topology_supported: true}
+    expected: {evaluate: [tensor_parallel_size], reason: memory_fit, claim_always_faster: false}
+  - id: pipeline_parallel_not_default
+    facts: {model_fits_single_node: true, uneven_split: false, cross_node_required: false}
+    expected: {increase_pipeline_parallel_size: false}
+  - id: explicit_kv_cache_conflict
+    facts: {candidate_params: [gpu_memory_utilization, kv_cache_memory_bytes]}
+    expected: {write_tool: null, terminal: blocked, reason: mutually_exclusive_capacity_controls}
+  - id: hami_utilization_uses_slice
+    facts: {allocation_mode: hami_shared_auto, memory_mib_per_gpu: 8192, physical_memory_mib_per_gpu: 24576, gpu_memory_utilization: 0.5}
+    expected: {executor_window_mib: 4096, uses_physical_memory_as_base: false}
+  - id: cpu_offload_is_fit_only
+    facts: {gpu_memory_insufficient: true, cpu_memory_available: true, objective: throughput}
+    expected: {cpu_offload_category: memory_fit, claim_tokens_per_second_improvement: false}
+  - id: quality_priority_avoids_aggressive_quantization
+    facts: {objective: quality, acceptable_quality_loss: 0, memory_preflight_passed: true}
+    expected: {kv_cache_dtype: auto, runtime_quantization: none, aggressive_quantization_enabled: false}
+  - id: cost_goal_keeps_slo_and_quality_constraints
+    facts: {objective: cost, latency_slo_ms: 1800, quality_floor: 0.92, current_resource_cost: high}
+    expected: {evaluate: [smaller_or_quantized_model, right_sized_context_and_concurrency, compatible_cpu_candidate], validate: [latency_slo, quality_floor, error_rate]}
+  - id: unstable_baseline_reduces_aggressive_settings
+    facts: {objective: stability, oom_count: 3, preemption_count: 7, recent_changes: [higher_memory_utilization, larger_batch]}
+    expected: {bottleneck: stability, direction: reduce_aggressive_settings, add_more_performance_flags: false}
+  - id: multimodal_requires_bounded_inputs
+    facts: {objective: multimodal, media_distribution: unknown, pure_text_capacity_estimate: true}
+    expected: {parameter_changes: 0, missing_evidence: [media_type_and_per_prompt_limit], reuse_text_only_estimate: false}
+  - id: new_multimodal_deploy_requires_startup_safety
+    facts: {operation: create_instance, model: Qwen2.5-VL-3B, model_max_tokens: 128000, gpu_provider_state: hami_ready, physical_gpu_memory_gib: 24, dynamic_params: {}}
+    expected: {write_tool: null, required_stage: startup_safety, reject_weight_only_fit: true, missing_evidence: [required_context, hami_allocation_window]}
+  - id: ai_context_resolve_exact_contract
+    facts: {operation: context_resolve, context_values_unknown: true}
+    expected: {stdin: {required: [enterprise, workspace]}, help_probe: false, empty_input: false, guess_dimension_values: false}
+  - id: model_download_identifier_translation
+    facts: {recommended_model_key: "modelscope:Qwen/Qwen3-4B", catalog_detail: {model_id: "Qwen/Qwen3-4B"}, team_model_status: not_found, download_status: not_found}
+    expected: {detail_input: {owner: Qwen, repo_name: Qwen3-4B}, create_input: {catalog_model_id: "Qwen/Qwen3-4B"}, create_uses_model_key: false, schema_probe_write: false}
+  - id: model_download_optional_display_name_guard
+    facts: {requested_display_name: "千问3-4B", backend_encoding: latin-1, display_name_required: false}
+    expected: {submit_display_name: false, fallback_to_catalog_name: true, state_read_before_corrected_retry_after_confirmed_400: true}
+  - id: stream_interval
+    facts: {changed: stream_interval}
+    expected: {tokens_per_second_improved: unknown}
+  - id: delete_order
+    facts: {model_has_instance_reference: true}
+    expected: {order: [instance, model]}

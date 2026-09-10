@@ -16,6 +16,7 @@ const npxCommand = process.platform === "win32" ? "npx.cmd" : "npx";
 const uploadHelper =
   "rainbond-fullstack-bootstrap/scripts/upload_local_package.py";
 const skillNames = [
+  "rainbond-ai-assistant",
   "rainbond-app-assistant",
   "rainbond-app-version-assistant",
   "rainbond-delivery-verifier",
@@ -24,6 +25,7 @@ const skillNames = [
   "rainbond-fullstack-troubleshooter",
   "rainbond-opensource-app-deploy",
   "rainbond-platform-installer",
+  "rainbond-platform-plugin-manager",
   "rainbond-platform-query",
   "rainbond-project-init",
   "rainbond-template-installer",

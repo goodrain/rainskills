@@ -1,0 +1,28 @@
+cases:
+  - id: already_running
+    facts: {installed: true, status: RUNNING}
+    expected: {write_tool: null, terminal: ready}
+  - id: installed_state_unavailable
+    facts: {installed_state: unavailable}
+    expected: {write_tool: null, terminal: blocked}
+  - id: absent_unconfirmed
+    facts: {installed: false, approved: false}
+    expected: {write_tool: null, terminal: waiting_approval}
+  - id: install_then_poll
+    facts: {installed: false, approved: true, progress_mode: continuous}
+    expected: {write_tool: rainbond_install_platform_plugin, poll_tool: rainbond_list_platform_plugins, terminal: RUNNING}
+  - id: plugin_progress_mode_required
+    facts: {installed: false, approved: true, progress_mode: unspecified}
+    expected: {write_tool: null, terminal: waiting_progress_mode}
+  - id: plugin_deferred_monitoring
+    facts: {installed: false, approved: true, progress_mode: deferred, accepted: true, app_id: 33}
+    expected: {periodic_poll: false, next_wake_read: rainbond_list_platform_plugins, replay_write: false}
+  - id: upgrade_existing
+    facts: {installed: true, app_id: 42, intent: upgrade}
+    expected: {write_tool: rainbond_upgrade_app}
+  - id: uninstall_existing
+    facts: {installed: true, app_id: 42, intent: uninstall}
+    expected: {write_tool: rainbond_delete_app, forbidden_tool: rainbond_delete_platform_plugin}
+  - id: resume_ai_intent
+    facts: {root_skill: rainbond-ai-assistant, status: RUNNING}
+    expected: {resume_root_skill: rainbond-ai-assistant}

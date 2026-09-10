@@ -284,7 +284,7 @@ Deployment gate table:
 
 | Gate | Evidence satisfies gate | Action when false | Next skill or handoff |
 | --- | --- | --- | --- |
-| link status | `.rainbond/local.json` exists and `metadata.status == linked` | pause and request linking | `rainbond-project-init` |
+| link status | local workspace/package: `.rainbond/local.json` exists and `metadata.status == linked`; address-only Git/image: current-run platform identity is unambiguous | local artifact pauses for init/adopt; address-only continues without local files | `rainbond-project-init` only for the local artifact case |
 | template intent | user explicitly requests template install or resolved topology marks next step as `template` | continue non-template path only for non-template components | `rainbond-template-installer` |
 | topology missing | app is missing, required components are absent, or topology is not created | do not treat the app as runtime-repair-only | `rainbond-fullstack-bootstrap` |
 | bootstrap completion | `access_mode` declared, source-backed components sufficiently converged, and no deeper runtime blocker surfaced | stop bootstrap and surface a blocker rather than claiming setup complete | `rainbond-fullstack-troubleshooter` |
@@ -1239,7 +1239,7 @@ Object responsibility split:
 
 ### 12.1 Source-Backed App
 
-1. `rainbond-project-init` resolves `Project.identity`, writes or reuses `rainbond.app.json`, and records local binding in `.rainbond/local.json`.
+1. For a current local workspace, `rainbond-project-init` resolves `Project.identity`, writes or reuses `rainbond.app.json`, and records local binding in `.rainbond/local.json`. For an address-only Git URL, App Assistant resolves an unambiguous platform context without creating local files.
 2. `Environment` resolution selects `preview` or `production`, then layers `.rainbond/env.<env>.json` and `.rainbond/secrets.<env>.json` without treating runtime metadata as configuration intent.
 3. `ComponentSource` resolves the business-code component as `kind = source` using Git remote/ref/subdirectory data from the manifest or other higher-priority inputs.
 4. `DeploymentPlan` sends that component through `bootstrap_source`, creates what can be created now, and records any downstream dependency as `deferred_by_upstream_convergence` until the source-backed target converges.
@@ -1257,7 +1257,7 @@ Object responsibility split:
 
 ### 12.3 Package-Backed Component
 
-1. `ComponentSource.kind = package` is selected only when `local_path` resolves deterministically enough for upload.
+1. `ComponentSource.kind = package` is selected only when `local_path` resolves deterministically enough for upload; because this is a local artifact, project init/adopt must complete before upload.
 2. If `local_path` is missing or ambiguous, the flow stops before bootstrap with `status = needs_confirmation` or `blocked`.
 3. `rainbond-fullstack-bootstrap` uses the package upload/create path for the component instead of image or source creation.
 4. Runtime observation then follows the same `RuntimeState` and `DeliveryState` model as other executable components.

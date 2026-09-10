@@ -85,6 +85,33 @@ class PackageUploadWorkflowContractTest(unittest.TestCase):
         self.assertNotIn("rainbond_upload_package_file", guidance)
         self.assertNotIn("rainbond_create_component_from_local_package", guidance)
 
+    def test_existing_package_component_uses_replace_instead_of_create(self) -> None:
+        guidance = SOURCE_AND_PACKAGE_RULES.read_text(encoding="utf-8")
+
+        self.assertIn("First deployment", guidance)
+        self.assertIn("Existing component update", guidance)
+        self.assertIn("rainbond_replace_component_package", guidance)
+        self.assertIn("expected_current_event_id", guidance)
+        self.assertIn("same `service_id`", guidance)
+        self.assertIn("do not call `rainbond_create_component_from_package`", guidance.lower())
+
+    def test_package_upload_contract_initializes_with_existing_component_id(self) -> None:
+        guidance = SOURCE_AND_PACKAGE_RULES.read_text(encoding="utf-8")
+        update_section = guidance.split("### Existing component update", 1)[1]
+
+        ordered_tokens = (
+            "rainbond_init_package_upload",
+            "component_id",
+            "rainbond_get_package_upload_status",
+            "rainbond_replace_component_package",
+        )
+        previous_position = -1
+        for token in ordered_tokens:
+            position = update_section.find(token)
+            self.assertNotEqual(position, -1, f"missing package-update token: {token}")
+            self.assertGreater(position, previous_position, f"package-update token is out of order: {token}")
+            previous_position = position
+
 
 if __name__ == "__main__":
     unittest.main()

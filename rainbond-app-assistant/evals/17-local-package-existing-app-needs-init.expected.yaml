@@ -1,0 +1,26 @@
+case: local-package-existing-app-needs-init
+presentation_mode: structured
+assert:
+  equal:
+    AppAssistantResult.execution_path.requested_kind: package
+    AppAssistantResult.execution_path.resolved_kind: package
+    AppAssistantResult.orchestration_state: unlinked
+    AppAssistantResult.project.identity.app_id: 36
+    AppAssistantResult.project.linked: false
+    AppAssistantResult.runtime_state: null
+    AppAssistantResult.delivery_state: null
+    AppAssistantResult.next_action: run project init in adopt/link mode, then continue to bootstrap
+  contains:
+    AppAssistantResult.actions_performed:
+      - skill: rainbond-project-init
+        status: pending
+        details: Reuse the existing Rainbond application and create or repair the missing local manifest and binding before package bootstrap.
+  prose_contains:
+    - current local package project is `unlinked`
+    - Platform application existence does not complete local initialization
+    - adopt/link mode
+    - package upload and component creation have not started
+  prose_not_contains:
+    - rainbond_create_component_from_package
+    - rainbond_create_component_from_source
+    - rainbond_create_component_from_image

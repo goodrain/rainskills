@@ -8,12 +8,15 @@ import { fileURLToPath } from "node:url";
 
 const scriptRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const EMBEDDED_SKILLS = [
+  "rainbond-ai-assistant",
   "rainbond-app-assistant",
   "rainbond-app-version-assistant",
   "rainbond-delivery-verifier",
   "rainbond-fullstack-bootstrap",
   "rainbond-fullstack-troubleshooter",
-  "rainbond-opensource-app-deploy",
+  // rainbond-opensource-app-deploy requires active upstream web research,
+  // which the RainAgent embedded runtime does not provide.
+  "rainbond-platform-plugin-manager",
   "rainbond-platform-query",
   "rainbond-template-installer",
 ];

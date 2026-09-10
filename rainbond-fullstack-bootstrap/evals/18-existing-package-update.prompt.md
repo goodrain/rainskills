@@ -1,0 +1,1 @@
+当前 `rainbond.app.json` 中的 package-backed `api` 已绑定到运行中的组件 `svc-api-1`，当前软件包事件为 `evt-old`。本地代码已经修改，请再次部署。假设新上传成功，`rainbond_replace_component_package` 返回构建事件 `evt-build-2`，构建和健康检查都成功。请输出完整 BootstrapResult。

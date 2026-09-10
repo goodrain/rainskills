@@ -1,0 +1,5 @@
+interface:
+  display_name: "Rainbond AI Engine 助手"
+  short_description: "发现、下载、部署、诊断和优化 CPU/GPU 大模型实例"
+  default_prompt: "Use $rainbond-ai-assistant to manage this AI Engine model or instance using verified platform facts."
+

@@ -14,6 +14,8 @@ const requireFromInstaller = createRequire(import.meta.url);
 const RUNTIME_BUNDLE_DIRECTORIES = Object.freeze([
   "bin",
   "scripts",
+  "contracts",
+  "rainbond-ai-assistant",
   "rainbond-app-assistant",
   "rainbond-app-version-assistant",
   "rainbond-delivery-verifier",
@@ -22,6 +24,7 @@ const RUNTIME_BUNDLE_DIRECTORIES = Object.freeze([
   "rainbond-fullstack-troubleshooter",
   "rainbond-opensource-app-deploy",
   "rainbond-platform-installer",
+  "rainbond-platform-plugin-manager",
   "rainbond-platform-query",
   "rainbond-project-init",
   "rainbond-template-installer",

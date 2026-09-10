@@ -14,6 +14,16 @@ description: "Use only when the user explicitly asks to create the Rainbond app 
 - 默认不得展示内部对象、状态枚举、team/region/app ID、关系 ID、Skill/工具名、YAML、JSON 或英文编排标题。
 - 只有用户明确要求 YAML、JSON、调试详情，或自动化/评测明确要求结构化契约时，才读取并使用 [output contract](modules/70-output-contract.md)。
 
+## Local artifact precondition
+
+When input depends on the current workspace or local package bytes, require a linked `rainbond.app.json` and
+`.rainbond/local.json` pair, or a just-completed `rainbond-project-init` result for the same app identity, before the
+first package upload or component creation. If an exact platform app already exists, init adopts it instead of creating
+another app.
+
+This precondition does not apply to an address-only Git or image request with no local workspace semantics; those
+requests use verified platform context and do not create local project files.
+
 <!-- rainskills-runtime-gate:start -->
 ## 单运行环境 CLI 门禁（最高优先级）
 

@@ -198,6 +198,7 @@ DEVICE_FLOW_VERIFICATION_URI=""
 DEVICE_FLOW_VERIFICATION_URI_COMPLETE=""
 DEVICE_FLOW_EXPIRES_IN=""
 DEVICE_FLOW_INTERVAL=""
+DEVICE_FLOW_RETRY_REQUIRED_STATUS=3
 
 usage() {
   cat <<'EOF'
@@ -2140,7 +2141,8 @@ prepare_device_flow_temp_dir() {
 
 request_device_authorization() {
   local base_url="$1"
-  local body_file response_file header_file status_file http_code parsed_file
+  local body_file response_file header_file status_file http_code parsed_file protocol_error
+  local transport_error_file transport_status
   DEVICE_FLOW_ERROR=""
   prepare_device_flow_temp_dir
   body_file="$RAINSKILLS_DEVICE_FLOW_TEMP_DIR/request.body"
@@ -2148,24 +2150,34 @@ request_device_authorization() {
   header_file="$RAINSKILLS_DEVICE_FLOW_TEMP_DIR/response.headers"
   status_file="$RAINSKILLS_DEVICE_FLOW_TEMP_DIR/response.status"
   parsed_file="$RAINSKILLS_DEVICE_FLOW_TEMP_DIR/response.fields"
+  transport_error_file="$RAINSKILLS_DEVICE_FLOW_TEMP_DIR/request.error"
   umask 077
   printf 'client_id=rainskills&scope=mcp' >"$body_file"
 
-  if ! device_flow_http_post \
+  transport_status=0
+  if device_flow_http_post \
       "${base_url}/console/mcp/device/code" \
-      "$body_file" "$response_file" "$header_file" "$status_file"; then
-    DEVICE_FLOW_ERROR="无法连接 Rainbond Device Flow 接口，请检查网络后重试。"
-    cleanup_device_flow
-    return 1
+      "$body_file" "$response_file" "$header_file" "$status_file" \
+      2>"$transport_error_file"; then
+    :
+  else
+    transport_status=$?
   fi
+  # Some proxies deliver the complete, self-describing response body and only
+  # then leave the connection open until curl hits its deadline. The endpoint-
+  # specific validation below is authoritative when that happens.
   http_code="$(cat "$status_file" 2>/dev/null || true)"
   if is_verified_legacy_device_route "$http_code" "$response_file" "$header_file"; then
     cleanup_device_flow
     return 2
   fi
   if [[ ! "$http_code" =~ ^2 ]]; then
-    local protocol_error=""
     protocol_error="$(device_flow_json_field "$response_file" error 2>/dev/null || true)"
+    if [[ "$transport_status" -ne 0 && -z "$protocol_error" ]]; then
+      DEVICE_FLOW_ERROR="无法确认 Rainbond Device Flow 初始化响应，将使用新的设备授权码重试。"
+      cleanup_device_flow
+      return "$DEVICE_FLOW_RETRY_REQUIRED_STATUS"
+    fi
     DEVICE_FLOW_ERROR="Rainbond Device Flow 初始化失败（HTTP ${http_code:-unknown}${protocol_error:+，${protocol_error}}）。"
     cleanup_device_flow
     return 1
@@ -2193,6 +2205,11 @@ for name, expected_type in fields:
     print(value)
 PY
   then
+    if [[ "$transport_status" -ne 0 ]]; then
+      DEVICE_FLOW_ERROR="Rainbond Device Flow 初始化响应不完整，将使用新的设备授权码重试。"
+      cleanup_device_flow
+      return "$DEVICE_FLOW_RETRY_REQUIRED_STATUS"
+    fi
     DEVICE_FLOW_ERROR="Rainbond Device Flow 返回了无效响应。"
     cleanup_device_flow
     return 1
@@ -2214,6 +2231,9 @@ PY
   # the only origin allowed to receive the browser authorization request.
   DEVICE_FLOW_VERIFICATION_URI="${base_url}/#/device"
   DEVICE_FLOW_VERIFICATION_URI_COMPLETE="${DEVICE_FLOW_VERIFICATION_URI}?user_code=${DEVICE_FLOW_USER_CODE}"
+  if [[ "$transport_status" -ne 0 ]]; then
+    warn "设备授权初始化连接未正常结束，但已收到完整响应，继续处理。"
+  fi
   return 0
 }
 
@@ -2246,6 +2266,7 @@ poll_device_authorization() {
   local interval="$DEVICE_FLOW_INTERVAL"
   local started_at deadline now
   local body_file response_file header_file status_file http_code protocol_error retry_after token token_type
+  local transport_error_file transport_status
   started_at="$(device_flow_now)"
   deadline=$((started_at + DEVICE_FLOW_EXPIRES_IN))
   if [[ "$LOGIN_TIMEOUT" =~ ^[0-9]+$ && "$LOGIN_TIMEOUT" -lt "$DEVICE_FLOW_EXPIRES_IN" ]]; then
@@ -2255,6 +2276,7 @@ poll_device_authorization() {
   response_file="$RAINSKILLS_DEVICE_FLOW_TEMP_DIR/token.json"
   header_file="$RAINSKILLS_DEVICE_FLOW_TEMP_DIR/token.headers"
   status_file="$RAINSKILLS_DEVICE_FLOW_TEMP_DIR/token.status"
+  transport_error_file="$RAINSKILLS_DEVICE_FLOW_TEMP_DIR/token.error"
   write_device_token_request_body "$body_file"
 
   while true; do
@@ -2272,25 +2294,43 @@ poll_device_authorization() {
     : >"$response_file"
     : >"$header_file"
     : >"$status_file"
-    if ! device_flow_http_post \
+    : >"$transport_error_file"
+    transport_status=0
+    if device_flow_http_post \
         "${base_url}/console/mcp/device/token" \
-        "$body_file" "$response_file" "$header_file" "$status_file"; then
-      interval=$((interval < 15 ? interval * 2 : 30))
-      continue
+        "$body_file" "$response_file" "$header_file" "$status_file" \
+        2>"$transport_error_file"; then
+      :
+    else
+      transport_status=$?
     fi
     http_code="$(cat "$status_file" 2>/dev/null || true)"
     if [[ "$http_code" =~ ^2 ]]; then
       token="$(device_flow_json_field "$response_file" access_token 2>/dev/null || true)"
       token_type="$(device_flow_json_field "$response_file" token_type 2>/dev/null || true)"
       if [[ "$token_type" != "Bearer" ]] || ! looks_like_jwt "$token"; then
+        if [[ "$transport_status" -ne 0 ]]; then
+          DEVICE_FLOW_ERROR="Rainbond Device Flow Token 响应不完整，将使用新的设备授权码重试。"
+          return "$DEVICE_FLOW_RETRY_REQUIRED_STATUS"
+        fi
         DEVICE_FLOW_ERROR="Rainbond Device Flow 返回的访问凭证无效。"
         return 1
       fi
       OBTAINED_RAINBOND_TOKEN="$token"
+      if [[ "$transport_status" -ne 0 ]]; then
+        warn "设备授权 Token 连接未正常结束，但已收到完整响应，继续处理。"
+      fi
       return 0
     fi
 
     protocol_error="$(device_flow_json_field "$response_file" error 2>/dev/null || true)"
+    if [[ "$transport_status" -ne 0 && -z "$protocol_error" ]]; then
+      # The server may already have consumed this one-time code. Reusing it can
+      # only turn an ambiguous delivery into invalid_grant, so restart the
+      # complete Device Flow with a fresh code instead.
+      DEVICE_FLOW_ERROR="无法确认 Rainbond Device Flow Token 响应；原设备码可能已被消费。"
+      return "$DEVICE_FLOW_RETRY_REQUIRED_STATUS"
+    fi
     if [[ "$http_code" == "429" ]]; then
       retry_after="$(device_flow_retry_after "$header_file" 2>/dev/null || true)"
       if [[ "$retry_after" =~ ^[0-9]+$ && "$retry_after" -gt "$interval" ]]; then
@@ -2324,34 +2364,57 @@ poll_device_authorization() {
 
 device_flow_login_to_rainbond() {
   local base_url="$1"
-  local request_status
-  if request_device_authorization "$base_url"; then
-    request_status=0
-  else
-    request_status=$?
-  fi
-  [[ "$request_status" -eq 0 ]] || return "$request_status"
+  local request_status poll_status
+  local flow_attempt=1
+  local max_flow_attempts=2
 
-  printf '\n[RAINSKILLS_USER_MESSAGE_BEGIN:runtime.device-authorization]\n' >&2
-  printf 'Rainbond 设备授权\n' >&2
-  printf '授权码：%s\n' "$DEVICE_FLOW_USER_CODE" >&2
-  printf '授权地址：%s\n' "$DEVICE_FLOW_VERIFICATION_URI_COMPLETE" >&2
-  printf '终端正在等待授权结果，完成后会自动继续，Ctrl+C 可取消。\n' >&2
-  if can_open_browser; then
-    printf '正在浏览器中打开授权页面…\n' >&2
-    open_browser "$DEVICE_FLOW_VERIFICATION_URI_COMPLETE"
-  else
-    printf '请在任意能够访问该 Rainbond 平台的电脑上打开上面的地址并完成登录授权。\n' >&2
-  fi
-  printf '[RAINSKILLS_USER_MESSAGE_END:runtime.device-authorization]\n' >&2
-  printf '[RAINSKILLS_AGENT_WAIT_REQUIRED:runtime-connect]\n' >&2
+  while [[ "$flow_attempt" -le "$max_flow_attempts" ]]; do
+    if request_device_authorization "$base_url"; then
+      request_status=0
+    else
+      request_status=$?
+    fi
+    if [[ "$request_status" -ne 0 ]]; then
+      if [[ "$request_status" -eq "$DEVICE_FLOW_RETRY_REQUIRED_STATUS" \
+            && "$flow_attempt" -lt "$max_flow_attempts" ]]; then
+        printf '设备授权初始化响应未完整确认，正在发起新的设备授权码…\n' >&2
+        flow_attempt=$((flow_attempt + 1))
+        continue
+      fi
+      return "$request_status"
+    fi
 
-  if ! poll_device_authorization "$base_url"; then
+    printf '\n[RAINSKILLS_USER_MESSAGE_BEGIN:runtime.device-authorization]\n' >&2
+    printf 'Rainbond 设备授权\n' >&2
+    printf '授权码：%s\n' "$DEVICE_FLOW_USER_CODE" >&2
+    printf '授权地址：%s\n' "$DEVICE_FLOW_VERIFICATION_URI_COMPLETE" >&2
+    printf '终端正在等待授权结果，完成后会自动继续，Ctrl+C 可取消。\n' >&2
+    if can_open_browser; then
+      printf '正在浏览器中打开授权页面…\n' >&2
+      open_browser "$DEVICE_FLOW_VERIFICATION_URI_COMPLETE"
+    else
+      printf '请在任意能够访问该 Rainbond 平台的电脑上打开上面的地址并完成登录授权。\n' >&2
+    fi
+    printf '[RAINSKILLS_USER_MESSAGE_END:runtime.device-authorization]\n' >&2
+    printf '[RAINSKILLS_AGENT_WAIT_REQUIRED:runtime-connect]\n' >&2
+
+    if poll_device_authorization "$base_url"; then
+      cleanup_device_flow
+      return 0
+    else
+      poll_status=$?
+    fi
     cleanup_device_flow
-    return 1
-  fi
-  cleanup_device_flow
-  return 0
+    if [[ "$poll_status" -eq "$DEVICE_FLOW_RETRY_REQUIRED_STATUS" \
+          && "$flow_attempt" -lt "$max_flow_attempts" ]]; then
+      printf 'Token 响应未完整确认，正在发起新的设备授权码…\n' >&2
+      flow_attempt=$((flow_attempt + 1))
+      continue
+    fi
+    return "$poll_status"
+  done
+
+  return 1
 }
 
 browser_login_to_rainbond() {

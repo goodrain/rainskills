@@ -1,0 +1,5 @@
+interface:
+  display_name: "Rainbond 平台插件管理"
+  short_description: "发现、安装、升级、卸载并验证 Rainbond 平台功能扩展"
+  default_prompt: "Use $rainbond-platform-plugin-manager to manage this Rainbond platform plugin safely and wait for its real application state."
+

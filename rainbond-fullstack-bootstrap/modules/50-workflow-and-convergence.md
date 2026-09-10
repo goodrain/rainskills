@@ -73,7 +73,11 @@ Then:
 
 ### 5a. Converge package uploads before topology configuration
 
-For every package-backed component, treat local preparation, event initialization, client HTTP upload, local cleanup, remote status verification, and event-based component creation as one bounded transaction. Execute the concrete contract in [40-source-and-package-rules.md](40-source-and-package-rules.md) before configuring ports, envs, storage, dependencies, or deploy state for that component.
+For every package-backed component, treat local preparation, event initialization, client HTTP upload, local cleanup,
+remote status verification, and the final event-based create-or-replace action as one bounded workflow. Execute the
+concrete contract in [40-source-and-package-rules.md](40-source-and-package-rules.md) before configuring ports, envs,
+storage, dependencies, or deploy state for a newly created component. Existing components keep their current topology
+and use `rainbond_replace_component_package` with the same `service_id`.
 
 Convergence gates:
 - `source.local_path` is client-local input and is read only by the local helper
@@ -82,7 +86,9 @@ Convergence gates:
 - failed HTTP upload means local cleanup, remote upload-event deletion, and stop
 - a successful HTTP response is not proof that Rainbond recorded the file; uploaded-file status must be non-empty before create-by-event
 - empty status means remote upload-event deletion and stop
-- only a successful create-by-event result makes the component eligible for the remaining topology and deploy steps
+- only a successful create-by-event result makes a new component eligible for the remaining topology and deploy steps
+- only a successful replace-by-event result with a build `event_id` starts existing-component convergence; wait for that
+  build and verify health without recreating the component
 
 ### 6. Ensure minimum topology
 

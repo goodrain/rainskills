@@ -1,0 +1,85 @@
+type: object
+additionalProperties: false
+required:
+  - action
+  - status
+  - facts
+  - blocker
+  - retryable
+  - next_action
+properties:
+  action:
+    type: string
+  status:
+    type: string
+    enum: [Running, Stopped, Failed, Creating, downloading, installing, unavailable]
+  plugin_id:
+    type: [string, "null"]
+  model_key:
+    type: [string, "null"]
+  job_name:
+    type: [string, "null"]
+  instance_id:
+    type: [string, "null"]
+  progress_mode:
+    type: [string, "null"]
+    enum: [continuous, deferred, null]
+  facts:
+    type: array
+    items:
+      type: object
+      additionalProperties: false
+      required: [source, summary]
+      properties:
+        source: {type: string}
+        summary: {type: string}
+        available: {type: boolean}
+        unavailable_reason: {type: [string, "null"]}
+  blocker:
+    type: [string, "null"]
+  retryable:
+    type: boolean
+  next_action:
+    type: string
+  recommendation:
+    type: object
+    additionalProperties: false
+    required: [objective, bottleneck, facts, dynamic_params, extra_argv, changes, rejected_options, missing_evidence, expected_effect, risks, confidence, validation_plan]
+    properties:
+      objective:
+        type: string
+        enum: [startup_safety, latency, ttft, decode_latency, throughput, concurrency, long_context, memory_fit, quality, cost, multimodal, stability]
+      bottleneck:
+        type: string
+        enum: [memory_capacity, prefill, decode_compute, queue_capacity, cache_reuse, cpu_compute, communication, model_choice, multimodal_capacity, stability, unknown]
+      facts: {type: array, items: {type: string}}
+      dynamic_params: {type: object}
+      extra_argv: {type: array, items: {type: string}}
+      changes:
+        type: array
+        items:
+          type: object
+          additionalProperties: false
+          required: [parameter, action, evidence, reason, expected_metric]
+          properties:
+            parameter: {type: string}
+            action: {type: string, enum: [enable, disable, increase, decrease, set, keep]}
+            current_value: {}
+            candidate_value: {}
+            evidence: {type: array, items: {type: string}}
+            reason: {type: string}
+            expected_metric: {type: string}
+      rejected_options:
+        type: array
+        items:
+          type: object
+          additionalProperties: false
+          required: [parameter, reason]
+          properties:
+            parameter: {type: string}
+            reason: {type: string}
+      missing_evidence: {type: array, items: {type: string}}
+      expected_effect: {type: string}
+      risks: {type: array, items: {type: string}}
+      confidence: {type: string, enum: [high, medium, caution]}
+      validation_plan: {type: string}

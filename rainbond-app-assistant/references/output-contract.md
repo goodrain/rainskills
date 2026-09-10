@@ -243,6 +243,7 @@
   |--------|------|
   | `stop` | terminal state with nothing further to recommend (already delivered, or a clean stop) |
   | `run bootstrap` | topology is missing and the source app must be created/bootstrapped next |
+  | `run project init in adopt/link mode, then continue to bootstrap` | a local workspace/package has a verified existing platform app but lacks a complete local manifest/binding pair |
   | `run troubleshooter` | topology is building/unhealthy and the next bounded step is the troubleshooter |
   | `run troubleshooter on the same source path` | a source-backed build/detection failed; route to the troubleshooter on the same source path, never to a package/image/template fallback (pairs with `runtime_state.phase = source_build_failed`) |
   | `run delivery verifier` | runtime looks healthy and the next step is delivery verification |

@@ -13,11 +13,13 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 SKILL_FILES = {
+    "rainbond-ai-assistant": ROOT / "rainbond-ai-assistant" / "SKILL.md",
     "rainbond-app-assistant": ROOT / "rainbond-app-assistant" / "SKILL.md",
     "rainbond-fullstack-bootstrap": ROOT / "rainbond-fullstack-bootstrap" / "SKILL.md",
     "rainbond-fullstack-troubleshooter": ROOT / "rainbond-fullstack-troubleshooter" / "SKILL.md",
     "rainbond-delivery-verifier": ROOT / "rainbond-delivery-verifier" / "SKILL.md",
     "rainbond-platform-query": ROOT / "rainbond-platform-query" / "SKILL.md",
+    "rainbond-platform-plugin-manager": ROOT / "rainbond-platform-plugin-manager" / "SKILL.md",
     "rainbond-app-version-assistant": ROOT / "rainbond-app-version-assistant" / "SKILL.md",
     "rainbond-env-sync": ROOT / "rainbond-env-sync" / "SKILL.md",
     "rainbond-project-init": ROOT / "rainbond-project-init" / "SKILL.md",
@@ -79,6 +81,48 @@ def classify_prompt(prompt: str, metadata_by_skill: dict[str, dict[str, str]]) -
     if explicit:
         return None
 
+    if "安装 rainbond" in text or "install rainbond" in text:
+        return "rainbond-platform-installer"
+
+    if "只初始化" in text or "rainbond.app.json" in text:
+        return "rainbond-project-init"
+
+    project_source_needles = [
+        "当前项目",
+        "当前目录",
+        "本地项目",
+        "本地目录",
+        "这个 git 仓库",
+        "this git repository",
+        "github.com/",
+        "gitlab.com/",
+        "gitee.com/",
+    ]
+    if any(needle in text for needle in project_source_needles):
+        return "rainbond-app-assistant"
+
+    if (
+        ("插件" in text or "功能扩展" in text or "platform plugin" in text)
+        and any(action in text for action in ("安装", "启用", "升级", "卸载", "状态", "install", "upgrade", "uninstall"))
+    ):
+        return "rainbond-platform-plugin-manager"
+
+    ai_engine_needles = [
+        "ai engine",
+        "modelscope",
+        "大模型",
+        "模型实例",
+        "模型下载",
+        "模型目录",
+        "vllm",
+        "gpu 显存",
+        "gpu切分",
+        "gpu 切分",
+        "cpu 部署模型",
+    ]
+    if any(needle in text for needle in ai_engine_needles):
+        return "rainbond-ai-assistant"
+
     platform_query_needles = [
         "当前企业",
         "当前登录的用户",
@@ -98,23 +142,6 @@ def classify_prompt(prompt: str, metadata_by_skill: dict[str, dict[str, str]]) -
 
     if "模板" in text or "market template" in text:
         return "rainbond-template-installer"
-
-    if "只初始化" in text or "rainbond.app.json" in text:
-        return "rainbond-project-init"
-
-    project_source_needles = [
-        "当前项目",
-        "当前目录",
-        "本地项目",
-        "本地目录",
-        "这个 git 仓库",
-        "this git repository",
-        "github.com/",
-        "gitlab.com/",
-        "gitee.com/",
-    ]
-    if any(needle in text for needle in project_source_needles):
-        return "rainbond-app-assistant"
 
     open_source_descriptor_needles = [
         "docker-compose",
