@@ -233,12 +233,49 @@ test("new-application Skills expose the four runtime choices without a private-e
     const source = runtimeRoutingSource(skillId);
     assert.match(
       source,
-      /1\) 独立服务器（推荐）——适合长期运行，在你的 Linux 服务器上安装开源 Rainbond\s+2\) 云端环境——最快体验，不需要准备服务器\s+3\) 本机环境——适合本地验证，在当前电脑上准备运行环境\s+4\) 已有 Rainbond——连接现有 Rainbond 环境并继续部署/,
+      /1\) Rainbond Cloud云端环境（推荐）——最快体验，不需要准备服务器\s+2\) 独立服务器——适合长期运行，在你的服务器上安装开源 Rainbond\s+3\) 本机环境——适合本地验证，在当前电脑上准备运行环境\s+4\) 已有 Rainbond——连接现有 Rainbond 环境并继续部署/,
       `${skillId} must show the flattened environment menu`,
     );
     assert.doesNotMatch(source, /私有环境（去对接）/);
     assert.doesNotMatch(source, /"private-deployment-location"/);
   }
+});
+
+test("app assistant analyzes only a current local project after runtime status reports no environment", () => {
+  const skill = fs.readFileSync(
+    path.join(root, "rainbond-app-assistant", "SKILL.md"),
+    "utf8",
+  );
+  const analysisPath = path.join(
+    root,
+    "rainbond-app-assistant",
+    "references",
+    "local-project-analysis.md",
+  );
+  assert.equal(fs.existsSync(analysisPath), true);
+  const analysis = fs.readFileSync(analysisPath, "utf8");
+  const routing = runtimeRoutingSource("rainbond-app-assistant");
+
+  assert.match(skill, /state=connected[^。\n]*usable=true[^。\n]*直接进入[^。\n]*部署/);
+  assert.match(skill, /state=not_started[^。\n]*usable=false[^。\n]*当前本地项目[^。\n]*local-project-analysis\.md/);
+
+  assert.match(analysis, /只读/);
+  assert.match(analysis, /仅适用于[^。\n]*当前本地项目/);
+  assert.match(analysis, /裸 Git URL[^。\n]*镜像[^。\n]*软件包[^。\n]*不得进入/);
+  assert.match(analysis, /不得写入[^。\n]*rainbond\.app\.json/);
+  assert.match(analysis, /不得[^。\n]*(?:联网|网络)/);
+  assert.match(analysis, /已识别：/);
+  assert.match(analysis, /预计交付结果：/);
+  assert.match(analysis, /rainbond-project-init[^。\n]*manifest inference/i);
+
+  const analysisStep = routing.indexOf("local-project-analysis.md");
+  const environmentMessage = routing.indexOf("runtime message --id new-application-environment");
+  assert(analysisStep >= 0, "missing local project analysis step");
+  assert(environmentMessage > analysisStep, "environment menu must follow project analysis");
+  assert.match(routing, /state=not_started[^。\n]*usable=false/);
+  assert.match(routing, /当前本地项目[^。\n]*local project analysis/);
+  assert.match(routing, /裸 Git URL[^。\n]*镜像[^。\n]*软件包[^。\n]*跳过[^。\n]*预分析/);
+  assert.match(routing, /state=connected[^。\n]*usable=true[^。\n]*不得[^。\n]*环境菜单/);
 });
 
 test("platform installer reuses the location selected by the flattened environment menu", () => {

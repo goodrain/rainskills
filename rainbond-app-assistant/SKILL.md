@@ -32,7 +32,9 @@ workspace context 包含 `enterprise_id`、`team_id`、`team_name` 和 `region_n
 
 ## Runtime Gate
 
-任何 Rainbond 查询、环境连接、平台安装或变更前，必须先读取 [generated Runtime Gate](references/generated/runtime-gate.md)。当前 Skill 在本会话首次调用 Rainbond 前强制加载且只加载一次；没有可用运行环境时按 Gate 的 mode 读取 [generated Runtime Routing](references/generated/runtime-routing.md)。Node.js/Rainskills 版本、profile、endpoint、唯一运行环境、workspace/app 绑定或授权状态变化时失效并重新读取。当前 profile 的 transport、鉴权、context、确认与运行时安全契约全部由该 Gate 提供。
+任何 Rainbond 查询、环境连接、平台安装或变更前，必须先读取 [generated Runtime Gate](references/generated/runtime-gate.md)。Skill 在本会话首次调用 Rainbond 前强制加载且只加载一次；没有可用运行环境时按 Gate 的 mode 读取 [generated Runtime Routing](references/generated/runtime-routing.md)。Node.js/Rainskills 版本、profile、endpoint、唯一运行环境、workspace/app 绑定或授权状态变化时失效并重新读取。当前 profile 的 transport、鉴权、context、确认与运行时安全契约全部由该 Gate 提供。
+
+state=connected,usable=true直接进入部署；state=not_started,usable=false且当前本地项目读[分析](references/local-project-analysis.md)；其余按 Gate 处理
 
 首次解析 runtime/workspace 后生成 [HandoffContext](schemas/generated/handoff-context.schema.yaml)。下层验证 fingerprint/freshness 后复用事实；reconnect、401/403、身份/来源变化、not-found、revision conflict 或 mutable state 过期时才刷新。
 

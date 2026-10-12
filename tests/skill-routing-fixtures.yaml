@@ -128,8 +128,8 @@ required_markers:
     - "do not expose the fenced YAML block"
     - "部署新应用还是管理已有应用"
     - "确认前不连接运行环境"
-    - "1) 独立服务器（推荐）——适合长期运行，在你的 Linux 服务器上安装开源 Rainbond"
-    - "2) 云端环境——最快体验，不需要准备服务器"
+    - "1) Rainbond Cloud云端环境（推荐）——最快体验，不需要准备服务器"
+    - "2) 独立服务器——适合长期运行，在你的服务器上安装开源 Rainbond"
     - "3) 本机环境——适合本地验证，在当前电脑上准备运行环境"
     - "4) 已有 Rainbond——连接现有 Rainbond 环境并继续部署"
     - "本机只允许连接一个 Rainbond 运行环境"
@@ -140,8 +140,8 @@ required_markers:
   rainbond-fullstack-bootstrap:
     - "the user gives a generic current-project deployment request"
     - "route that to `rainbond-app-assistant`"
-    - "1) 独立服务器（推荐）——适合长期运行，在你的 Linux 服务器上安装开源 Rainbond"
-    - "2) 云端环境——最快体验，不需要准备服务器"
+    - "1) Rainbond Cloud云端环境（推荐）——最快体验，不需要准备服务器"
+    - "2) 独立服务器——适合长期运行，在你的服务器上安装开源 Rainbond"
     - "3) 本机环境——适合本地验证，在当前电脑上准备运行环境"
     - "4) 已有 Rainbond——连接现有 Rainbond 环境并继续部署"
   rainbond-fullstack-troubleshooter:
@@ -163,14 +163,14 @@ required_markers:
     - "只让用户选择 `Rainbond Cloud` 或 `已有私有 Rainbond`"
   rainbond-project-init:
     - "<!-- rainskills-runtime-gate:start -->"
-    - "1) 独立服务器（推荐）——适合长期运行，在你的 Linux 服务器上安装开源 Rainbond"
-    - "2) 云端环境——最快体验，不需要准备服务器"
+    - "1) Rainbond Cloud云端环境（推荐）——最快体验，不需要准备服务器"
+    - "2) 独立服务器——适合长期运行，在你的服务器上安装开源 Rainbond"
     - "3) 本机环境——适合本地验证，在当前电脑上准备运行环境"
     - "4) 已有 Rainbond——连接现有 Rainbond 环境并继续部署"
   rainbond-template-installer:
     - "<!-- rainskills-runtime-gate:start -->"
-    - "1) 独立服务器（推荐）——适合长期运行，在你的 Linux 服务器上安装开源 Rainbond"
-    - "2) 云端环境——最快体验，不需要准备服务器"
+    - "1) Rainbond Cloud云端环境（推荐）——最快体验，不需要准备服务器"
+    - "2) 独立服务器——适合长期运行，在你的服务器上安装开源 Rainbond"
     - "3) 本机环境——适合本地验证，在当前电脑上准备运行环境"
     - "4) 已有 Rainbond——连接现有 Rainbond 环境并继续部署"
   rainbond-opensource-app-deploy:

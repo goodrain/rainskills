@@ -3,8 +3,8 @@ modes:
   new_application:
     message_id: new-application-environment
     choices:
-      - 独立服务器（推荐）——适合长期运行，在你的 Linux 服务器上安装开源 Rainbond
-      - 云端环境——最快体验，不需要准备服务器
+      - Rainbond Cloud云端环境（推荐）——最快体验，不需要准备服务器
+      - 独立服务器——适合长期运行，在你的服务器上安装开源 Rainbond
       - 本机环境——适合本地验证，在当前电脑上准备运行环境
       - 已有 Rainbond——连接现有 Rainbond 环境并继续部署
     allow_install_private: true

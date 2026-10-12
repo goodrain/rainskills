@@ -60,6 +60,7 @@ def validate_progressive_loading(skill_dir: Path) -> list[str]:
     references = {
         "references/generated/runtime-gate.md": "runtime gate",
         "references/generated/runtime-routing.md": "runtime routing",
+        "references/local-project-analysis.md": "local project analysis",
         "references/routing.md": "routing",
         "references/workflow-rules.md": "workflow rules",
         "references/operational-reference.md": "operational reference",
@@ -134,6 +135,11 @@ def validate_progressive_loading(skill_dir: Path) -> list[str]:
             "<!-- rainskills-runtime-routing:start -->",
             "<!-- rainskills-runtime-routing:end -->",
             "new-application-environment",
+            "local-project-analysis.md",
+            "state=not_started",
+            "state=connected",
+            "当前本地项目",
+            "裸 Git URL",
         ):
             require(required in routing, f"runtime routing is missing: {required}", failures)
 
