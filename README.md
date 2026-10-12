@@ -63,6 +63,15 @@ npx skills add goodrain/rainskills
 npx --yes rainskills
 ```
 
+DeepSeek Harness 用户也可以把 RainSkills bootstrap 作为 profile bundle 安装：
+
+```bash
+dsh plugin --profile web add rainskills
+```
+
+安装后调用 `/rainskills`，或直接告诉 Agent“安装 RainSkills”。该 bundle 只注册
+bootstrap Skill；完整的 `rainbond-*` Skills 仍由官方安装器统一安装和更新。
+
 `npx` 安装方式需要 Node.js 18 或更高版本。建议使用仍在维护的 Node.js 22 或 24。
 
 安装完成后，在项目目录告诉 Agent：
@@ -148,6 +157,7 @@ Compose、Helm 和第三方应用中的特权容器、Operator、CRD、Job、主
 - [RainSkills 产品介绍](https://www.rainbond.com/rainskills)
 - [安装与使用文档](https://www.rainbond.com/docs/ai/rainskills)
 - [安装与连接视频教程](https://www.rainbond.com/videos/rainskills-ai-deploy)
+- [市场上架 Runbook](https://github.com/goodrain/rainskills/blob/main/docs/marketplace-publishing.md)
 - [Rainbond 安装文档](https://www.rainbond.com/docs/installation)
 - [提交问题](https://github.com/goodrain/rainskills/issues)
 

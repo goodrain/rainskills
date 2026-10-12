@@ -31,6 +31,7 @@ const TEST_SCRIPTS = Object.freeze([
   "test:ai-engine",
   "test:skill-profile",
   "test:marketplace",
+  "test:dsh-bundle",
   "test:runtime-routing",
   "test:telemetry",
   "test:platform",

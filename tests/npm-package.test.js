@@ -72,7 +72,7 @@ test("package metadata defines a public npx command with pinned runtime dependen
   assert.equal(manifest.license, "Apache-2.0");
   assert.equal(manifest.homepage, "https://www.rainbond.com/rainskills");
   assert.match(manifest.description, /deploying, troubleshooting, and verifying applications/);
-  for (const keyword of ["ai-agent", "agent-skills", "application-delivery", "self-hosted", "kubernetes"]) {
+  for (const keyword of ["ai-agent", "agent-skills", "application-delivery", "self-hosted", "kubernetes", "dsh-plugin"]) {
     assert(manifest.keywords.includes(keyword), `missing package keyword: ${keyword}`);
   }
   assert.equal(
@@ -86,6 +86,12 @@ test("package metadata defines a public npx command with pinned runtime dependen
     yaml: "2.9.0",
   });
   assert.equal(manifest.devDependencies, undefined);
+  assert.deepEqual(manifest.dsh, {
+    bundle: {
+      patch: "./dsh/cordis.patch.yml",
+    },
+  });
+  assert(manifest.files.includes("dsh/"));
   assert.equal(manifest.pi, undefined);
   assert(!manifest.files.includes("pi/"));
   assert.equal(manifest.scripts["build:pi"], undefined);
@@ -150,6 +156,8 @@ test("packed artifact contains the installer and all skills but no development f
   assert(filePaths.has("scripts/build-skill-manifest.mjs"));
   assert(filePaths.has("scripts/install-local-cli.mjs"));
   assert(filePaths.has("install.sh"));
+  assert(filePaths.has("dsh/index.mjs"));
+  assert(filePaths.has("dsh/cordis.patch.yml"));
   assert.equal([...filePaths].some((filePath) => filePath.endsWith("test-prompts.json")), false);
   assert.equal([...filePaths].some((filePath) => filePath.startsWith("tests/effect-evals/")), false);
   assert.equal(filePaths.has("results.tsv"), false);
