@@ -46,7 +46,7 @@ Required wiring:
 - replicas = 1
 - restart policy = `Never` (run once and exit). If the platform does not expose a Job-style restart policy, scale the component to 0 after a successful run and document that decision in `actions_performed[].details`.
 
-Connection envs (`DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASS`, `DB_NAME`) MUST come from the provider connection envs of the database component injected through the explicit dependency. Do NOT hand-type those values on the init component. See the connection-env routing rules in [40-source-and-package-rules.md](../modules/40-source-and-package-rules.md) and the dependency rules in [50-workflow-and-convergence.md](../modules/50-workflow-and-convergence.md).
+Connection envs (`DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASS`, `DB_NAME`) MUST come from the provider connection envs of the database component injected through the explicit dependency. Do NOT hand-type those values on the init component. See the connection-env routing rules in [source topology](../modules/42-source-topology.md) and the dependency rules in [workflow](../modules/50-workflow.md).
 
 Idempotence:
 - the SQL files SHOULD be idempotent (`CREATE DATABASE IF NOT EXISTS`, `CREATE TABLE IF NOT EXISTS`, conditional inserts).

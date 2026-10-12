@@ -34,82 +34,39 @@
 
   Use this mode by default for successful, incomplete, blocked, ambiguous, and handoff results. Switch away from it only when the user explicitly requests structured output, YAML, JSON, debug details, or machine-readable output, or when an automation/evaluation consumer explicitly declares the structured contract requirement.
 
-<!-- rainskills-community-card:start -->
-## 交流群结束卡片
-
-本规则只适用于负责用户原始请求的顶层任务的最终回复。
-
-- 执行过程、中间错误、重试、等待或下层 Skill 的阶段结果不得展示本卡片；下层 Skill 只返回结果并由顶层调用者决定。
-- 顶层任务最终失败或未完成时，必须在用户可见结果末尾追加一次本卡片。用户取消、等待用户输入或已成功但仅待人工访问确认不算失败。
-- 顶层任务成功且产生用户可感知结果时，当前对话内最多展示一次；纯查询、过程检查和无人值守执行不展示。
-- 结构化、自动化或评测模式不追加本卡片，避免破坏机器可读契约。
-- 需要展示时，以下内容必须是整条用户可见回复的最后内容，且不得改写、增加其他链接或继续追加文字：
-
-```markdown
-欢迎扫码加入交流群，一起交流使用经验。
-
-![交流群二维码](https://www.rainbond.com/wechat/rainbond-xzs.png)
-```
-<!-- rainskills-community-card:end -->
+  First read the [generated user-result policy](generated/user-result.md), then apply the App Assistant-specific fields and terminal wording below.
 
   In customer report mode:
   - do not append `### Structured Output`
   - do not expose the fenced YAML block
-  - keep the report short and directly useful to the user
-  - state `部署成功`; when only browser confirmation remains, state `部署成功，待浏览器访问确认`
-  - include application name and selected environment
-  - include `部署位置` as a clickable `project.deployment_location_url`
-  - include `访问地址` as a clickable `delivery_state.preferred_access_url`
-  - include only the essential user-facing component status and HTTP verification evidence
-  - when browser confirmation remains, add at most one short validation note
-  - include proxy/mirror usage when it affected the deployment
-  - include warnings that matter after delivery, such as development-only database auth or missing production persistence
-  - every reply whose result line is `部署成功。` or `部署成功，待浏览器访问确认。` must append the following fixed block exactly once after all ordinary report sections; when the community-card policy is eligible, the card is the only content allowed after this block:
-
-    ```text
-    你接下来可以：
-
-    1. 修改代码并重新部署
-    2. 将当前应用创建快照发布版本，用于部署到生产环境
-    3. 查看运行日志
-    4. 将应用迁移到自己的 Rainbond
-    ```
+  - successful body gives the result, verified actions, current app/component state, verified address, relevant port or caveat, and at most one useful next step
+  - incomplete body gives the verified actions already completed, current state, one blocker, concise key evidence, relevant address/port caveat, and at most one next step
+  - omit unavailable fields instead of guessing or duplicating them in prose
+  - do not append a fixed next-actions list unless the user explicitly asks for options
+  - emit progress only on a state change or after 30 seconds without a visible message
   - do not expose orchestration enums, lower-level skill names, `Blocking Issue: none`, or the internal action ledger
 
-  Default concise section order:
-  - `### 部署结果`
-  - `### 运行状态`
-  - `### 处理记录` only when non-trivial fixes or proxy changes materially affect later operation
-  - `### 注意事项` when there are production-readiness caveats
-
-  Example concise delivery reply (the public URL is an example only; a real reply must use the exact gateway value from Iron Law 40):
+  Default success shape (the public URL is an example only; a real reply must use the exact verified gateway value from Iron Law 40):
 
   ```markdown
-  ### 部署结果
-  部署成功，待浏览器访问确认。
+  部署成功
 
-  应用：`demo-2048`
-  环境：`preview`
+  已执行动作：创建应用和组件，配置端口并完成交付验证。
+  当前状态：demo-2048 / web 均为 running。
+  访问地址：http://example.invalid/2048
+  端口说明：容器监听端口与对外端口已核验一致。
+  ```
 
-  - 部署位置：[打开 Rainbond 应用](https://run.rainbond.com/#/team/aw9qu6gd/region/rainbond/apps/3283/overview)
-  - 访问地址：[打开 2048](http://example.invalid/2048)
+  Default incomplete shape:
 
-  ### 运行状态
+  ```markdown
+  部署未完成
 
-  - `web`：运行中
-  - HTTP 检查：200 OK
-
-  服务运行正常。当前环境无法访问公网域名，请打开访问地址确认页面交互。
-
-  ### 处理记录
-  - 使用镜像代理完成依赖拉取
-
-  你接下来可以：
-
-  1. 修改代码并重新部署
-  2. 将当前应用创建快照发布版本，用于部署到生产环境
-  3. 查看运行日志
-  4. 将应用迁移到自己的 Rainbond
+  已执行动作：已创建应用和组件，并触发部署。
+  当前状态：组件仍在 building。
+  阻塞：镜像拉取失败。
+  关键证据：有界等待后仍返回相同镜像错误。
+  下一步：修复镜像地址后重新部署。
   ```
 
   ### Structured contract mode

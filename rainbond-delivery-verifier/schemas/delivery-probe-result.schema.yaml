@@ -1,0 +1,82 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: DeliveryProbeResult
+type: object
+additionalProperties: false
+required:
+  - policy_version
+  - status
+  - reason
+  - candidate_url
+properties:
+  policy_version:
+    const: rainskills.delivery-probe-policy.v1
+  status:
+    type: string
+    enum:
+      - verified
+      - manual_validation_required
+      - rejected
+      - failed
+  reason:
+    anyOf:
+      - enum:
+          - unsafe_url_or_method
+          - dns_error
+          - non_public_address
+          - timeout
+          - body_too_large
+          - response_error
+          - request_error
+          - redirect_without_location
+          - too_many_redirects
+          - unsafe_redirect
+          - redirect_downgrade
+          - cross_host_redirect
+          - http_status
+      - type: 'null'
+  candidate_url:
+    type: string
+  final_url:
+    type: string
+  redirect_target:
+    type: string
+  status_code:
+    type: integer
+  content_type:
+    type: string
+  body_bytes:
+    type: integer
+    minimum: 0
+  redirects:
+    type: array
+    maxItems: 3
+    items:
+      type: string
+allOf:
+  - if:
+      properties:
+        status:
+          const: verified
+    then:
+      required:
+        - final_url
+        - status_code
+        - content_type
+        - body_bytes
+        - redirects
+      properties:
+        reason:
+          type: 'null'
+        status_code:
+          minimum: 200
+          maximum: 299
+  - if:
+      properties:
+        status:
+          const: manual_validation_required
+    then:
+      required:
+        - redirect_target
+      properties:
+        reason:
+          const: cross_host_redirect

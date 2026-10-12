@@ -35,6 +35,7 @@ Follow this order.
 - if it exists, capture `app_id`
 - if it does not exist, create it
 - do not stop at "app missing"; missing app means initialization must continue into app creation
+- when adopting one exact existing app, reuse it, repair both local files to the verified identity, and do not call app creation
 
 6. Write local binding
 - create or update `.rainbond/local.json`
@@ -49,8 +50,12 @@ Follow this order.
 
 8. Decide next action
 - if the user asked only for initialization, stop after binding
-- if the user asked to initialize and continue, hand off to `rainbond-fullstack-bootstrap`
-- if this skill was entered by `rainbond-app-assistant` during a single-entry deployment or dev-to-test mainline run, treat that as initialize-and-continue rather than stop-after-init
+- if any resolved component uses `execution_mode = template`, never send it to bootstrap
+- when template install metadata is complete, set `next_action = template_install` and hand off to `rainbond-template-installer`
+- template metadata is complete only when `install.source`, `app_model_id`, and `app_model_version` are present, plus `market_name` for `install.source = cloud`
+- when template install metadata is incomplete, set `next_action = ask_manifest_review` unless the user explicitly requested stop-after-init
+- if the user asked to initialize and continue with non-template components, hand off to `rainbond-fullstack-bootstrap`
+- if this skill was entered by `rainbond-app-assistant` during a single-entry deployment or dev-to-test mainline run, continue through the template installer or bootstrap branch selected above rather than stopping at init
 - if the user intent is ambiguous, prefer stopping after initialization and state the next step explicitly
 
 Hard rule:
@@ -59,6 +64,7 @@ Hard rule:
 - if initialization is not complete, do not hand off to `rainbond-fullstack-troubleshooter`
 - `rainbond-fullstack-troubleshooter` is only valid after app creation and binding are complete
 - if the user requested stop-after-init, do not hand off to `rainbond-fullstack-bootstrap`
+- `rainbond-fullstack-bootstrap` never executes template components
 
 ## Verification Standard
 

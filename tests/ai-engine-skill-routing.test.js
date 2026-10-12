@@ -26,7 +26,7 @@ test("AI Engine, plugin, platform, and ordinary app intents remain mutually rout
 
 test("AI Engine context resolution uses the exact literal runtime contract", () => {
   const gate = require("node:fs").readFileSync(
-    path.join(root, "rainbond-ai-assistant", "references", "runtime-gate.md"),
+    path.join(root, "rainbond-ai-assistant", "references", "generated", "runtime-gate.md"),
     "utf8",
   );
 

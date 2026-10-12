@@ -46,9 +46,12 @@ function canonicalFiles(sourceRoot, manifest) {
     const match = normalized.match(/^(rainbond-[^/]+)\/$/);
     if (match) {
       const skillRoot = match[1];
+      const generatedRuntimeGate = `${skillRoot}/references/generated/runtime-gate.md`;
       const runtimeGate = `${skillRoot}/references/runtime-gate.md`;
       files.add(
-        fs.existsSync(path.join(sourceRoot, runtimeGate))
+        fs.existsSync(path.join(sourceRoot, generatedRuntimeGate))
+          ? generatedRuntimeGate
+          : fs.existsSync(path.join(sourceRoot, runtimeGate))
           ? runtimeGate
           : `${skillRoot}/SKILL.md`
       );

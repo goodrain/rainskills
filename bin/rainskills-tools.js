@@ -70,6 +70,14 @@ const ENTERPRISE_SCOPED_PLATFORM_QUERY_TOOLS = new Set([
   "rainbond_query_apps",
   "rainbond_query_components",
 ]);
+const HANDOFF_SKILLS = new Set([
+  "rainbond-app-assistant",
+  "rainbond-project-init",
+  "rainbond-fullstack-bootstrap",
+  "rainbond-fullstack-troubleshooter",
+  "rainbond-delivery-verifier",
+  "rainbond-template-installer",
+]);
 
 const EXIT = Object.freeze({
   USAGE: 2,
@@ -194,6 +202,21 @@ function parseCommand(args) {
   ];
   const command = remaining[0];
   const context = { skillId };
+  if (skillId === "rainbond-platform-query" && command !== "query") {
+    throw new BridgeError("platform query skill only allows the query command", EXIT.USAGE);
+  }
+  if (command === "query" && skillId !== "rainbond-platform-query") {
+    throw new BridgeError("query command requires rainbond-platform-query", EXIT.USAGE);
+  }
+  if (command === "delivery" && skillId !== "rainbond-delivery-verifier") {
+    throw new BridgeError("delivery probe requires rainbond-delivery-verifier", EXIT.USAGE);
+  }
+  if (command === "handoff" && !HANDOFF_SKILLS.has(skillId)) {
+    throw new BridgeError("handoff command is not allowed for this skill", EXIT.USAGE);
+  }
+  if (command === "snapshot" && skillId === "rainbond-platform-query") {
+    throw new BridgeError("platform query skill only allows the query command", EXIT.USAGE);
+  }
   if (
     command === "context"
     && remaining[1] === "resolve"
@@ -207,6 +230,47 @@ function parseCommand(args) {
       input: remaining[3],
       ...context,
     };
+  }
+  if (
+    command === "delivery"
+    && remaining[1] === "probe"
+    && remaining.length === 4
+    && remaining[2] === "--input"
+    && remaining[3] === "-"
+  ) {
+    return {
+      command,
+      action: remaining[1],
+      input: remaining[3],
+      ...context,
+    };
+  }
+  if (
+    command === "handoff"
+    && ["create", "validate"].includes(remaining[1])
+    && remaining.length === 4
+    && remaining[2] === "--input"
+    && remaining[3] === "-"
+  ) {
+    return { command, action: remaining[1], input: remaining[3], ...context };
+  }
+  if (
+    command === "snapshot"
+    && ["runtime", "app", "component", "delivery"].includes(remaining[1])
+    && remaining.length === 4
+    && remaining[2] === "--input"
+    && remaining[3] === "-"
+  ) {
+    return { command, scope: remaining[1], input: remaining[3], ...context };
+  }
+  if (
+    command === "poll"
+    && remaining.length === 4
+    && remaining[1]
+    && remaining[2] === "--input"
+    && remaining[3] === "-"
+  ) {
+    return { command, toolName: remaining[1], input: remaining[3], ...context };
   }
   if (
     command === "query"
@@ -276,15 +340,18 @@ function platformQueryIntent(toolName, argumentsValue) {
   for (const field of ["enterprise_id", "team_id"]) {
     if (argumentsValue[field] !== undefined) intent[field] = argumentsValue[field];
   }
+  if (toolName === "rainbond_query_components" && argumentsValue.app_id === undefined) {
+    throw new BridgeError("platform query app_id must be a positive integer", EXIT.USAGE);
+  }
   if (argumentsValue.app_id !== undefined) {
     const value = argumentsValue.app_id;
-    if (!(
-      (Number.isInteger(value) && value > 0)
-      || (typeof value === "string" && /^[1-9][0-9]*$/.test(value))
-    )) {
+    const normalized = typeof value === "string" && /^[1-9][0-9]*$/.test(value)
+      ? Number(value)
+      : value;
+    if (!Number.isSafeInteger(normalized) || normalized <= 0) {
       throw new BridgeError("platform query app_id must be a positive integer", EXIT.USAGE);
     }
-    intent.app_id = String(value);
+    intent.app_id = normalized;
   }
   return intent;
 }
@@ -503,7 +570,7 @@ async function executeWithUsageTelemetry(command, config) {
 }
 
 function commandTracksBusinessUsage(command) {
-  return command?.command === "read" || command?.command === "call";
+  return ["read", "call", "snapshot", "poll"].includes(command?.command);
 }
 
 function loadSkillBinding(config, skillId, rootSkillId) {
@@ -1291,6 +1358,38 @@ async function execute(command, config) {
   if (command.command === "package-upload") {
     return executePackageUpload(command, config);
   }
+  if (command.command === "snapshot") {
+    const { executeReadSnapshot } = require("./read-snapshot.js");
+    return executeReadSnapshot(command.argumentsValue, {
+      callTool: async (name, argumentsValue) => {
+        const result = await rpcRequest(config, "tools/call", { name, arguments: argumentsValue });
+        if (!result || result.isError || !("structuredContent" in result)) {
+          throw new BridgeError("snapshot read failed", EXIT.TOOL);
+        }
+        return sanitizeToolResult(
+          result.structuredContent,
+          [],
+          collectSensitiveArgumentRedactions(argumentsValue),
+        );
+      },
+    });
+  }
+  if (command.command === "poll") {
+    const { executeProtectedPoll } = require("./protected-poll.js");
+    return executeProtectedPoll(command.toolName, command.argumentsValue, {
+      callTool: async (name, argumentsValue) => {
+        const result = await rpcRequest(config, "tools/call", { name, arguments: argumentsValue });
+        if (!result || result.isError || !("structuredContent" in result)) {
+          throw new BridgeError("poll read failed", EXIT.TOOL);
+        }
+        return sanitizeToolResult(
+          result.structuredContent,
+          [],
+          collectSensitiveArgumentRedactions(argumentsValue),
+        );
+      },
+    });
+  }
   if (command.command === "status") {
     const tools = await listTools(config);
     const cached = loadCachedCatalog(config);
@@ -1410,19 +1509,25 @@ async function main(args = process.argv.slice(2)) {
   let argumentRedactions = [];
   try {
     command = parseCommand(args);
-    if (["read", "call", "package-upload", "query", "context"].includes(command.command)) {
+    if (["read", "call", "package-upload", "query", "context", "delivery", "handoff", "snapshot", "poll"].includes(command.command)) {
       const argumentsValue = readArguments(command.input);
       command.argumentsValue = argumentsValue;
       argumentRedactions = collectArgumentRedactions(argumentsValue);
     }
     if (command.command === "query") {
+      const intent = platformQueryIntent(command.toolName, command.argumentsValue);
+      if (intent.app_id !== undefined) {
+        command.argumentsValue = {
+          ...command.argumentsValue,
+          app_id: Number(intent.app_id),
+        };
+      }
       config = loadConfig({ includeRuntime: true });
       command.argumentsValue = await resolvePlatformQueryArguments(
         command.toolName,
         command.argumentsValue,
         config
       );
-      platformQueryIntent(command.toolName, command.argumentsValue);
       command = {
         command: "read",
         toolName: command.toolName,
@@ -1432,6 +1537,25 @@ async function main(args = process.argv.slice(2)) {
         process.stderr.write('{"warning":"using insecure HTTP transport"}\n');
       }
       const output = await executeWithUsageTelemetry(command, config);
+      process.stdout.write(`${JSON.stringify(fitOutput(output))}\n`);
+      return;
+    }
+    if (command.command === "delivery" && command.action === "probe") {
+      const { createDeliveryProbe } = require("./delivery-probe.js");
+      const output = await createDeliveryProbe()(command.argumentsValue);
+      process.stdout.write(`${JSON.stringify(fitOutput(output))}\n`);
+      return;
+    }
+    if (command.command === "handoff") {
+      const { createHandoffContext, validateHandoffContext } = require("./handoff-context.js");
+      const output = command.action === "create"
+        ? createHandoffContext(command.argumentsValue)
+        : validateHandoffContext(command.argumentsValue.context, {
+          current: command.argumentsValue.current,
+          signal: command.argumentsValue.signal,
+          now: command.argumentsValue.now,
+          maxAgeMs: command.argumentsValue.max_age_ms,
+        });
       process.stdout.write(`${JSON.stringify(fitOutput(output))}\n`);
       return;
     }

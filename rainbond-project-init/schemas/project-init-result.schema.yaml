@@ -1,0 +1,122 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: https://rainbond.com/schemas/project-init-result.schema.yaml
+title: ProjectInitResult
+type: object
+additionalProperties: false
+required:
+  - project
+  - environment
+  - component_sources
+  - init_status
+  - next_action
+properties:
+  project:
+    type: object
+    additionalProperties: false
+    required:
+      - identity
+      - binding_source
+    properties:
+      identity:
+        type: object
+        additionalProperties: false
+        required:
+          - team_name
+          - region_name
+          - app_name
+          - app_id
+        properties:
+          team_name:
+            type: string
+            minLength: 1
+          region_name:
+            type: string
+            minLength: 1
+          app_name:
+            type: string
+            minLength: 1
+          app_id:
+            anyOf:
+              - type: integer
+                minimum: 1
+              - type: 'null'
+      binding_source:
+        type: string
+        enum:
+          - manifest
+          - local_binding
+          - inferred
+  environment:
+    type: object
+    additionalProperties: false
+    required:
+      - name
+      - selection_source
+    properties:
+      name:
+        type: string
+        enum:
+          - preview
+          - production
+      selection_source:
+        type: string
+        enum:
+          - explicit
+          - local_preference
+          - default
+  component_sources:
+    type: array
+    items:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+        - role
+        - execution_mode
+        - status
+        - blocking_reason
+      properties:
+        name:
+          type: string
+          minLength: 1
+        role:
+          type: string
+          enum:
+            - frontend
+            - service
+            - database
+            - cache
+            - other
+        execution_mode:
+          type: string
+          enum:
+            - image
+            - source
+            - template
+            - blocked
+        status:
+          type: string
+          enum:
+            - ready
+            - needs_confirmation
+            - blocked
+        blocking_reason:
+          anyOf:
+            - type: string
+              minLength: 1
+            - type: 'null'
+  init_status:
+    type: string
+    enum:
+      - linked
+      - pending_verification
+      - blocked
+  next_action:
+    type: string
+    enum:
+      - stop
+      - bootstrap
+      - template_install
+      - reconnect_transport
+      - ask_identity
+      - ask_manifest_review

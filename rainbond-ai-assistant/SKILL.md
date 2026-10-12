@@ -1,6 +1,6 @@
 ---
 name: rainbond-ai-assistant
-description: Use for Rainbond AI Engine model discovery, ModelScope download, CPU or GPU instance deployment, diagnostics, capacity analysis, monitoring, tuning, start/stop, or deletion. Do not use for ordinary source/image application deployment, installing Rainbond itself, or non-AI application troubleshooting.
+description: Manage Rainbond AI Engine models and instances; discover or download ModelScope models, deploy on CPU/GPU, diagnose, monitor, tune, start/stop, or delete. Exclude ordinary apps, Rainbond installation, and non-AI troubleshooting.
 ---
 
 # Rainbond AI Assistant
@@ -10,13 +10,13 @@ description: Use for Rainbond AI Engine model discovery, ModelScope download, CP
 ## 最高优先级规则
 
 1. 所有 reference 按阶段加载，不得一次性读取全部，也不得提前读取无关 reference。
-2. 首次需要 Rainbond 时先读 [runtime gate](references/runtime-gate.md)，再读 [context and permissions](references/context-and-permissions.md)。业务 reference 保持 transport-neutral。
+2. 首次需要 Rainbond 时先读 [generated Runtime Gate](references/generated/runtime-gate.md)，本会话只读一次，再读 [context and permissions](references/context-and-permissions.md)。没有可用运行环境时按 Gate 的 mode 读取 [generated Runtime Routing](references/generated/runtime-routing.md)。Node.js/Rainskills 版本、profile、endpoint、唯一运行环境、workspace 或授权状态变化时 Gate 失效。业务 reference 保持 transport-neutral。
 3. Rainbond 读写只调用 Console 提供的当前宿主 Tool；不得直接请求 Console HTTP、AI Engine backend 或 Kubernetes，不提交内部命名空间、backend service、请求头、镜像或凭据。内置目录未命中时，允许按 [model discovery](references/model-discovery.md) 仅读官方 ModelScope OpenAPI；这不扩大 Rainbond 写入权限。
 4. AI Engine 返回的 resource、allocation、stage、event、log、probe、registration、monitoring 是权威事实。`unavailable/null/unknown` 不能变成 0、空闲或成功。
 5. 已知 Tool 直接调用；CLI 字段不确定时只 describe 单个 Tool，名称未知时只窄前缀 list；embedded 使用实时 Tool definition。禁止完整 Catalog discovery。
 6. write/destructive 经当前宿主审批后只执行一次。timeout、5xx、连接中断、审计失败或未知结果后先精确读取真实状态，禁止自动重放。
 7. `accepted`、下载 100%、Job complete、Pod Running 都不是业务终态。模型需 ready/verified；实例需 Running + health + target registration。
-8. 下载、实例创建/部署等需要持续轮询的长任务，写入前必须确认用户选择“持续监测”还是“受理后结束，待下次唤醒再查询”；用户已明确表达时不重复询问。该选择不替代写操作审批。
+8. 下载、实例创建/部署等长任务写入前，确认“持续监测”或“受理后结束”。持续监测只调用一次 protected `poll`，由 CLI 内部执行有界读取并只返回状态变化、终态或 blocker；用户已明确选择时不重复询问。该选择不替代写操作审批。
 9. 每个新实例创建都必须先完成 `startup_safety` 参数决策。用户已指定模型只跳过模型选型，不能跳过资源、上下文、KV cache、多模态和 allocation 安全规划；该规划完成前不得调用创建工具。
 10. 普通部署先理解业务场景，再由助手推导参数方案，不把场景标签绑定固定数值，也不把参数清单交给用户逐项选择。先使用用户约束、会话和平台事实；只询问无法自动解决且影响可启动性、业务能力或授权范围的缺口。省略参数必须有已验证的默认行为依据，创建后核对关键生效值，具体按参数决策指南执行。
 11. 工作空间未确定时只解决工作空间选择，不附带模型、场景和硬件问卷。确定后先查询 capabilities、resource capacity，必要时查询设备事实；不询问用户是否有 GPU、机器配置或应使用 CPU/GPU。用户主动指定的计算方式与预算是约束，须保留。场景提问优先开放式描述用途，示例只使用当前运行时、模型与创建接口已确认支持的任务，不把模型目录标签当作可部署能力。

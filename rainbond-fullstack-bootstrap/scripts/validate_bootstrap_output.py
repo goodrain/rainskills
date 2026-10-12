@@ -497,6 +497,16 @@ def validate_expected_fixture(
         if needle not in prose_body:
             errors.append(f"prose is missing required text: {needle!r}")
 
+    last_position = -1
+    for needle in assertions.get("prose_ordered", []):
+        position = prose_body.find(needle, last_position + 1)
+        if position < 0:
+            errors.append(
+                f"prose is missing required ordered text after offset {last_position}: {needle!r}"
+            )
+            break
+        last_position = position
+
     for needle in assertions.get("prose_not_contains", []):
         if needle in prose_body:
             errors.append(f"prose contains forbidden text: {needle!r}")

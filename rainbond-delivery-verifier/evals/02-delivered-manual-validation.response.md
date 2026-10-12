@@ -23,6 +23,7 @@ DeliveryVerificationResult:
   preferred_access_url: https://demo-team-us.rainbond.me/manual-demo
   verification_mode: inferred
   blocker: null
+  probe_evidence: null
   next_action: manual_url_validation
   component_status:
     db: running

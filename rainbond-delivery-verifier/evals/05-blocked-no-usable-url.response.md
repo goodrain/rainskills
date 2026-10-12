@@ -23,6 +23,7 @@ DeliveryVerificationResult:
   preferred_access_url: null
   verification_mode: inferred
   blocker: no usable access URL
+  probe_evidence: null
   next_action: run_troubleshooter
   component_status:
     db: running

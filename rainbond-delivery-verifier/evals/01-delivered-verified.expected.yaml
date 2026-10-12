@@ -7,14 +7,38 @@ assert:
     DeliveryVerificationResult.preferred_access_url: https://demo-team-us.rainbond.me/delivered-demo
     DeliveryVerificationResult.verification_mode: verified
     DeliveryVerificationResult.blocker: null
+    DeliveryVerificationResult.probe_evidence.policy_version: rainskills.delivery-probe-policy.v1
+    DeliveryVerificationResult.probe_evidence.status: verified
+    DeliveryVerificationResult.probe_evidence.persistence:
+      status: verified
+      caveat: null
     DeliveryVerificationResult.next_action: stop
   contains:
     DeliveryVerificationResult.component_status:
       db: running
       api/service: running
       frontend: running
+    DeliveryVerificationResult.probe_evidence.checks:
+      - name: critical_components
+        status: verified
+      - name: root
+        status: verified
+      - name: same_host_api
+        status: verified
+      - name: static_asset
+        status: verified
+      - name: deep_link
+        status: verified
+      - name: mime
+        status: verified
   prose_contains:
     - delivered
     - runtime_healthy
+    - critical components
+    - same-host /api
+    - persistence verified
+    - static asset
+    - deep-link
+    - MIME
     - https://demo-team-us.rainbond.me/delivered-demo
     - stop, delivery complete

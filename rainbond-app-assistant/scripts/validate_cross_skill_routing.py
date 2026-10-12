@@ -18,7 +18,7 @@ OPEN_STAGE_ROWS = (
     "| Phase 0：归属已确认、部署清单尚未验证 | 只读取 "
     "[source acquisition](references/source-acquisition.md) |",
     "| 官方部署清单已验证，首次需要连接或调用 Rainbond | 只读取自己的 "
-    "[runtime gate](references/runtime-gate.md) |",
+    "[generated Runtime Gate](references/generated/runtime-gate.md)，本会话只读一次 |",
     "| workspace context 已解析，需要建模、部署、排障或交付 app/component | 读取 "
     "[deployment workflow](references/deployment-workflow.md) |",
     "| 新鲜证据命中已知部署故障模式 | 再读取 "
@@ -67,6 +67,14 @@ def description_statements(value: str) -> list[str]:
     return [
         normalize(part)
         for part in re.split(r"[!?。！？\n]+|\.(?=\s|$)", value)
+        if normalize(part)
+    ]
+
+
+def description_clauses(value: str) -> list[str]:
+    return [
+        normalize(part)
+        for part in re.split(r"[!?。！？;；\n]+|\.(?=\s|$)", value)
         if normalize(part)
     ]
 
@@ -230,40 +238,34 @@ def validate_description_boundaries(
     open_description: str,
     failures: list[str],
 ) -> None:
-    app_statements = description_statements(app_description)
-    open_statements = description_statements(open_description)
+    app_statements = description_clauses(app_description)
+    open_statements = description_clauses(open_description)
     app_normalized = normalize(app_description)
 
     app_targets = ("rainbond app assistant", "app assistant")
     open_targets = ("rainbond opensource app deploy", "open source")
     template_targets = ("rainbond template installer", "template installer")
 
-    def app_category_owned(
-        statement: str,
-        category_phrases: tuple[str, ...],
-    ) -> bool:
-        implicit_owner = statement.startswith("use when") and any(
+    def app_category_owned(statement: str, category_phrases: tuple[str, ...]) -> bool:
+        return any(
             contains(statement, category)
             and not category_is_locally_negated(statement, category)
             for category in category_phrases
-        )
-        return implicit_owner or directed_relation(statement, category_phrases, app_targets)
+        ) and any(action in statement for action in ("deploy", "run", "inspect", "repair"))
 
     app_owner = all(
-        any(predicate(statement) and app_category_owned(statement, categories) for statement in app_statements)
-        for predicate, categories in (
-            (lambda statement: "source code" in statement, ("source code",)),
-            (lambda statement: "current project" in statement, ("current project",)),
-            (
-                lambda statement: "source directory" in statement and "package" in statement,
-                ("source directory", "source package"),
-            ),
-            (lambda statement: "bare git" in statement, ("bare git",)),
+        any(app_category_owned(statement, categories) for statement in app_statements)
+        for categories in (
+            ("current local project", "current project", "local project"),
+            ("ordinary git", "bare git"),
+            ("package", "source package"),
+            ("private image app", "private image project"),
+            ("single image component",),
         )
     )
     app_actions = all(
         action in app_normalized
-        for action in ("deploy", "run", "deliver", "inspect", "repair", "troubleshoot")
+        for action in ("deploy", "run", "inspect", "repair")
     )
     require(
         app_owner and app_actions,
@@ -273,12 +275,11 @@ def validate_description_boundaries(
     require(
         any(
             "supplied" in statement
-            and all(kind in statement for kind in ("compose", "helm", "image set", "descriptor"))
+            and all(kind in statement for kind in ("compose", "helm", "image set", "descriptors"))
             and directed_relation(
                 statement,
-                ("descriptor", "compose", "helm", "image set"),
+                ("descriptors", "compose", "helm", "image set"),
                 open_targets,
-                allow_negated_category=True,
             )
             for statement in app_statements
         ),
@@ -287,12 +288,11 @@ def validate_description_boundaries(
     )
     require(
         any(
-            "named third party open source suite" in statement
+            "named third party suites" in statement
             and directed_relation(
                 statement,
-                ("named third party open source suite", "open source suite"),
+                ("named third party suites",),
                 open_targets,
-                allow_negated_category=True,
             )
             for statement in app_statements
         ),
@@ -301,13 +301,8 @@ def validate_description_boundaries(
     )
     require(
         any(
-            "market template" in statement
-            and directed_relation(
-                statement,
-                ("market template",),
-                template_targets,
-                allow_negated_category=True,
-            )
+            "market templates" in statement
+            and directed_relation(statement, ("market templates",), template_targets)
             for statement in app_statements
         ),
         "App description must exclude confirmed market templates",
@@ -315,22 +310,19 @@ def validate_description_boundaries(
     )
 
     open_descriptor_owner = any(
-        (
-            statement.startswith("use when")
-            or directed_relation(
-                statement,
-                ("descriptor", "compose", "helm", "image set"),
-                open_targets,
-            )
+        "supplied" in statement
+        and all(kind in statement for kind in ("compose", "helm", "image set", "descriptors"))
+        and ("deploy" in statement or statement.startswith("use when"))
+        and not any(
+            category_is_locally_negated(statement, category)
+            for category in ("compose", "helm", "image set", "descriptors")
         )
-        and "supplies" in statement
-        and all(kind in statement for kind in ("compose", "helm", "image set", "descriptor"))
         for statement in open_statements
     )
     open_named_suite_owner = any(
-        statement.startswith("use when")
-        and "named third party open source suite" in statement
-        and not category_is_locally_negated(statement, "named third party open source suite")
+        "named third party open source suites" in statement
+        and ("deploy" in statement or statement.startswith("use when"))
+        and not category_is_locally_negated(statement, "named third party open source suites")
         for statement in open_statements
     )
     require(
@@ -339,30 +331,30 @@ def validate_description_boundaries(
         failures,
     )
     open_exclusion = any(
-        "bare git" in statement
-        and "directory" in statement
-        and "package" in statement
-        and "private image project" in statement
+        "current local projects" in statement
+        and "source packages" in statement
+        and "ordinary git" in statement
+        and "private images" in statement
         and all(
             directed_relation(
                 statement,
                 categories,
                 app_targets,
-                allow_negated_category=True,
             )
             for categories in (
-                ("bare git",),
-                ("source directory", "source package", "project source"),
+                ("current local projects",),
+                ("source packages",),
+                ("ordinary git",),
+                ("private images",),
             )
         )
         for statement in open_statements
     ) and any(
-        "market template" in statement
+        "market templates" in statement
         and directed_relation(
             statement,
-            ("market template",),
+            ("market templates",),
             template_targets,
-            allow_negated_category=True,
         )
         for statement in open_statements
     )
@@ -601,13 +593,13 @@ def validate_cross_skill_routing(repo_root: Path) -> list[str]:
         )
 
     for label, skill_dir in (("App", app_dir), ("Open-source", open_dir)):
-        gate_path = skill_dir / "references" / "runtime-gate.md"
+        gate_path = skill_dir / "references" / "generated" / "runtime-gate.md"
         require(gate_path.is_file(), f"{label} runtime gate is missing", failures)
         if gate_path.is_file():
             gate = gate_path.read_text(encoding="utf-8")
             require(
-                "rainskills.skill-runtime-contract.v1" in gate,
-                f"{label} runtime gate lacks the progressive-loading contract marker",
+                "generated-by: scripts/sync-runtime-contracts.mjs" in gate,
+                f"{label} runtime gate lacks its generated-source marker",
                 failures,
             )
             require(

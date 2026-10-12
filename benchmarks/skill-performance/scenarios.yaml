@@ -1,0 +1,97 @@
+schema: rainskills.repository-performance-scenarios.v1
+scenarios:
+  - id: deploy-current-project
+    effect_case_id: rainbond-app-assistant.01
+    entry_skill: rainbond-app-assistant
+    references:
+      - rainbond-app-assistant/references/routing.md
+      - rainbond-app-assistant/references/workflow-rules.md
+    mock_trace:
+      - {type: cli_invocation, bytes: 180}
+      - {type: backend_request, request_bytes: 220, response_bytes: 640}
+      - {type: backend_request, request_bytes: 310, response_bytes: 920}
+      - {type: poll, bytes: 96}
+      - {type: stdout, bytes: 420}
+      - {type: stderr, bytes: 0}
+  - id: deploy-bare-git
+    effect_case_id: rainbond-app-assistant.02
+    entry_skill: rainbond-app-assistant
+    references:
+      - rainbond-app-assistant/references/routing.md
+      - rainbond-app-assistant/references/workflow-rules.md
+    mock_trace:
+      - {type: cli_invocation, bytes: 176}
+      - {type: backend_request, request_bytes: 248, response_bytes: 710}
+      - {type: stdout, bytes: 380}
+      - {type: stderr, bytes: 0}
+  - id: create-three-component-topology
+    effect_case_id: rainbond-fullstack-bootstrap.01
+    entry_skill: rainbond-fullstack-bootstrap
+    references:
+      - rainbond-fullstack-bootstrap/modules/30-creation-rules.md
+      - rainbond-fullstack-bootstrap/modules/50-workflow.md
+    mock_trace:
+      - {type: cli_invocation, bytes: 210}
+      - {type: backend_request, request_bytes: 520, response_bytes: 840}
+      - {type: backend_request, request_bytes: 470, response_bytes: 760}
+      - {type: backend_request, request_bytes: 330, response_bytes: 600}
+      - {type: poll, bytes: 104}
+      - {type: stdout, bytes: 560}
+      - {type: stderr, bytes: 0}
+  - id: diagnose-missing-dependency
+    effect_case_id: rainbond-fullstack-troubleshooter.01
+    entry_skill: rainbond-fullstack-troubleshooter
+    references:
+      - rainbond-fullstack-troubleshooter/references/root-cause-rules.md
+      - rainbond-fullstack-troubleshooter/references/operational-reference.md
+    mock_trace:
+      - {type: cli_invocation, bytes: 196}
+      - {type: backend_request, request_bytes: 290, response_bytes: 920}
+      - {type: backend_request, request_bytes: 350, response_bytes: 680}
+      - {type: stdout, bytes: 510}
+      - {type: stderr, bytes: 0}
+  - id: verify-same-host-api-failure
+    effect_case_id: rainbond-delivery-verifier.02
+    entry_skill: rainbond-delivery-verifier
+    references: []
+    mock_trace:
+      - {type: cli_invocation, bytes: 168}
+      - {type: backend_request, request_bytes: 240, response_bytes: 580}
+      - {type: backend_request, request_bytes: 120, response_bytes: 96}
+      - {type: stdout, bytes: 430}
+      - {type: stderr, bytes: 0}
+  - id: initialize-monorepo
+    effect_case_id: rainbond-project-init.01
+    entry_skill: rainbond-project-init
+    references:
+      - rainbond-project-init/references/manifest-rules.md
+      - rainbond-project-init/references/workflow-and-verification.md
+    mock_trace:
+      - {type: cli_invocation, bytes: 184}
+      - {type: backend_request, request_bytes: 260, response_bytes: 620}
+      - {type: stdout, bytes: 450}
+      - {type: stderr, bytes: 0}
+  - id: install-plugin-and-resume-ai
+    effect_case_id: rainbond-platform-plugin-manager.02
+    entry_skill: rainbond-platform-plugin-manager
+    references:
+      - rainbond-platform-plugin-manager/references/plugin-lifecycle.md
+      - rainbond-platform-plugin-manager/references/output-contract.md
+    mock_trace:
+      - {type: cli_invocation, bytes: 174}
+      - {type: backend_request, request_bytes: 230, response_bytes: 540}
+      - {type: poll, bytes: 88}
+      - {type: poll, bytes: 92}
+      - {type: stdout, bytes: 400}
+      - {type: stderr, bytes: 0}
+  - id: reject-unsupported-multimodal-bypass
+    effect_case_id: rainbond-ai-assistant.02
+    entry_skill: rainbond-ai-assistant
+    references:
+      - rainbond-ai-assistant/references/gpu-provider-and-capacity.md
+      - rainbond-ai-assistant/references/instance-deployment.md
+    mock_trace:
+      - {type: cli_invocation, bytes: 188}
+      - {type: backend_request, request_bytes: 300, response_bytes: 740}
+      - {type: stdout, bytes: 470}
+      - {type: stderr, bytes: 0}

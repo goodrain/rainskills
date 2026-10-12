@@ -49,6 +49,66 @@ $defs:
       - run_troubleshooter
       - fix_cluster_capacity_first
       - code_build_handoff
+  probe_check:
+    type: object
+    additionalProperties: false
+    required:
+      - name
+      - status
+    properties:
+      name:
+        enum:
+          - critical_components
+          - root
+          - same_host_api
+          - static_asset
+          - deep_link
+          - mime
+      status:
+        enum:
+          - verified
+          - not_applicable
+          - manual_validation_needed
+          - failed
+  probe_evidence:
+    type: object
+    additionalProperties: false
+    required:
+      - policy_version
+      - status
+      - checks
+      - persistence
+    properties:
+      policy_version:
+        const: rainskills.delivery-probe-policy.v1
+      status:
+        enum:
+          - verified
+          - manual_validation_required
+          - rejected
+          - failed
+      checks:
+        type: array
+        minItems: 1
+        items:
+          $ref: "#/$defs/probe_check"
+      persistence:
+        type: object
+        additionalProperties: false
+        required:
+          - status
+          - caveat
+        properties:
+          status:
+            enum:
+              - verified
+              - not_applicable
+              - missing
+              - unverified
+          caveat:
+            anyOf:
+              - $ref: "#/$defs/non_empty_string"
+              - type: "null"
 properties:
   DeliveryVerificationResult:
     type: object
@@ -59,6 +119,7 @@ properties:
       - preferred_access_url
       - verification_mode
       - blocker
+      - probe_evidence
       - next_action
       - component_status
     properties:
@@ -75,6 +136,10 @@ properties:
       blocker:
         anyOf:
           - $ref: "#/$defs/non_empty_string"
+          - type: "null"
+      probe_evidence:
+        anyOf:
+          - $ref: "#/$defs/probe_evidence"
           - type: "null"
       next_action:
         $ref: "#/$defs/next_action"

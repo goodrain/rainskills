@@ -1,0 +1,40 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+title: DeliveryProbePolicy
+type: object
+additionalProperties: false
+required:
+  - policy_version
+  - allowed_schemes
+  - allowed_methods
+  - max_redirects
+  - connect_timeout_ms
+  - total_timeout_ms
+  - max_body_bytes
+  - redirect_scope
+  - credentials
+  - address_policy
+properties:
+  policy_version:
+    const: rainskills.delivery-probe-policy.v1
+  allowed_schemes:
+    const:
+      - http
+      - https
+  allowed_methods:
+    const:
+      - HEAD
+      - GET
+  max_redirects:
+    const: 3
+  connect_timeout_ms:
+    const: 5000
+  total_timeout_ms:
+    const: 15000
+  max_body_bytes:
+    const: 262144
+  redirect_scope:
+    const: same_effective_host_port_or_http_to_https_default_port
+  credentials:
+    const: none
+  address_policy:
+    const: public_only_revalidate_and_pin_each_request

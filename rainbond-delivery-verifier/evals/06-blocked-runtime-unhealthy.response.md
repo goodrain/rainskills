@@ -23,6 +23,25 @@ DeliveryVerificationResult:
   preferred_access_url: https://demo-team-us.rainbond.me/runtime-demo
   verification_mode: verified
   blocker: runtime unhealthy
+  probe_evidence:
+    policy_version: rainskills.delivery-probe-policy.v1
+    status: failed
+    checks:
+      - name: critical_components
+        status: verified
+      - name: root
+        status: verified
+      - name: same_host_api
+        status: failed
+      - name: static_asset
+        status: not_applicable
+      - name: deep_link
+        status: not_applicable
+      - name: mime
+        status: not_applicable
+    persistence:
+      status: verified
+      caveat: null
   next_action: run_troubleshooter
   component_status:
     db: running

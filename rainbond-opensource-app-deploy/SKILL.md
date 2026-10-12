@@ -1,29 +1,15 @@
 ---
 name: rainbond-opensource-app-deploy
-description: "Use when the user supplies a third-party Docker Compose file/content, Helm chart/values, or container image-set descriptor, or explicitly asks to deploy a named third-party open-source suite such as Harbor, Dify, or n8n. Not for the current/local project, source directory/package, an ordinary bare Git repository, private-image project, or confirmed market template; use rainbond-app-assistant for project/source requests and rainbond-template-installer for market templates."
+description: "Deploy supplied third-party Compose, Helm, or image-set descriptors and named third-party open-source suites such as Harbor, Dify, or n8n. Route current/local projects, source packages, ordinary Git repos, and private images to rainbond-app-assistant; market templates to rainbond-template-installer."
 ---
 
 # Rainbond Open-source App Deploy
 
 处理用户实际提供的第三方 Compose、Helm、镜像集合描述符，以及 **explicit named third-party open-source suite**。先从官方来源取得可审计的部署清单，再进入 Rainbond Runtime Gate；联网取材不等于已经授权连接或修改 Rainbond。
 
-<!-- rainskills-community-card:start -->
-## 交流群结束卡片
+## 用户可见结果协议
 
-本规则只适用于负责用户原始请求的顶层任务的最终回复。
-
-- 执行过程、中间错误、重试、等待或下层 Skill 的阶段结果不得展示本卡片；下层 Skill 只返回结果并由顶层调用者决定。
-- 顶层任务最终失败或未完成时，必须在用户可见结果末尾追加一次本卡片。用户取消、等待用户输入或已成功但仅待人工访问确认不算失败。
-- 顶层任务成功且产生用户可感知结果时，当前对话内最多展示一次；纯查询、过程检查和无人值守执行不展示。
-- 结构化、自动化或评测模式不追加本卡片，避免破坏机器可读契约。
-- 需要展示时，以下内容必须是整条用户可见回复的最后内容，且不得改写、增加其他链接或继续追加文字：
-
-```markdown
-欢迎扫码加入交流群，一起交流使用经验。
-
-![交流群二维码](https://www.rainbond.com/wechat/rainbond-xzs.png)
-```
-<!-- rainskills-community-card:end -->
+最终回复前读取 [generated user-result policy](references/generated/user-result.md)，再报告本 Skill 实际创建的拓扑、组件健康、依赖/存储验证、真实地址、smoke 结果和唯一 blocker。
 
 ## Phase 0：静态归属与资料取证
 
@@ -35,7 +21,7 @@ description: "Use when the user supplies a third-party Docker Compose file/conte
 
 归属确认后、任何 Rainbond 动作前，读取 [source acquisition](references/source-acquisition.md)，完成 active upstream fetch 和部署清单。普通裸 Git URL 不因仓库里可能存在 Compose 而自动改判；明确的开源套件意图才允许主动获取其官方资料。
 
-资料尚未形成可验证清单时不得读取 references/runtime-gate.md，不得查询/连接 Rainbond、安装平台或执行 Rainbond 写操作；允许读取公开的官方仓库、文档和 Release。不得读取本机凭据、用户主目录或无关私有仓库。
+资料尚未形成可验证清单时不得读取 references/generated/runtime-gate.md，不得查询/连接 Rainbond、安装平台或执行 Rainbond 写操作；允许读取公开的官方仓库、文档和 Release。不得读取本机凭据、用户主目录或无关私有仓库。
 
 ## 渐进加载
 
@@ -44,7 +30,7 @@ description: "Use when the user supplies a third-party Docker Compose file/conte
 | 阶段 | 读取 |
 |---|---|
 | Phase 0：归属已确认、部署清单尚未验证 | 只读取 [source acquisition](references/source-acquisition.md) |
-| 官方部署清单已验证，首次需要连接或调用 Rainbond | 只读取自己的 [runtime gate](references/runtime-gate.md) |
+| 官方部署清单已验证，首次需要连接或调用 Rainbond | 只读取自己的 [generated Runtime Gate](references/generated/runtime-gate.md)，本会话只读一次 |
 | workspace context 已解析，需要建模、部署、排障或交付 app/component | 读取 [deployment workflow](references/deployment-workflow.md) |
 | 新鲜证据命中已知部署故障模式 | 再读取 [failure-mode playbook](references/failure-mode-playbook.md) |
 
@@ -52,7 +38,7 @@ description: "Use when the user supplies a third-party Docker Compose file/conte
 
 ## Runtime 与安全边界
 
-官方部署清单验证后，任何 Rainbond 查询、环境连接、平台安装或变更前必须读取 references/runtime-gate.md；transport、鉴权、context、确认与运行时安全契约全部由该 Gate 提供。
+官方部署清单验证后，任何 Rainbond 查询、环境连接、平台安装或变更前必须读取 [generated Runtime Gate](references/generated/runtime-gate.md)；没有可用运行环境时按 Gate 的 mode 读取 [generated Runtime Routing](references/generated/runtime-routing.md)。Node.js/Rainskills 版本、profile、endpoint、唯一运行环境、workspace/app 绑定或授权状态变化时 Gate 失效。transport、鉴权、context、确认与运行时安全契约全部由该 Gate 提供。
 
 - 不得绕过 Gate 或读取相邻 Skill 的 Gate。
 - 可变调用先取得 confirmation ID，再用完全相同输入确认执行；写调用不得自动重放。

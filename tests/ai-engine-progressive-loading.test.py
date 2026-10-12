@@ -59,7 +59,7 @@ def main() -> int:
         assert len(root.splitlines()) <= 150, skill_id
         assert len(root.encode("utf-8")) <= 7_000, skill_id
         assert "不得一次性读取全部" in root
-        assert "references/runtime-gate.md" in root
+        assert "references/generated/runtime-gate.md" in root
         for reference in references:
             path = skill_root / "references" / reference
             assert path.is_file(), path
@@ -68,7 +68,7 @@ def main() -> int:
             for marker in FORBIDDEN_SHARED:
                 assert marker not in content, f"{path}: {marker}"
 
-        runtime_gate = (skill_root / "references" / "runtime-gate.md").read_text(encoding="utf-8")
+        runtime_gate = (skill_root / "references" / "generated" / "runtime-gate.md").read_text(encoding="utf-8")
         assert "<!-- rainskills-runtime-gate:start -->" in runtime_gate
         assert "rainskills-tools.js" in runtime_gate
 

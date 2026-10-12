@@ -1,0 +1,12 @@
+schema: rainskills.runtime-overlay.v1
+skill_id: rainbond-opensource-app-deploy
+profiles: [cli]
+command_set: [context_resolve, read, snapshot, call, call_confirm]
+version_guard: none
+missing_runtime_mode: new_application
+scope_discriminator: workspace
+resume_target: open-source-deployment
+invariants:
+  - Runtime access begins only after an official deployment manifest has been verified.
+  - Upstream research does not authorize Rainbond connection or mutation.
+  - Unmappable privileged, storage, or initialization semantics stop before component creation.

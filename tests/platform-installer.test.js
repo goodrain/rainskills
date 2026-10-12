@@ -61,18 +61,16 @@ test("user-message protocol renders one stable bounded message and rejects marke
       "runtime.new-application-environment",
     ),
     [
-      "可以，我会帮你完成应用识别、构建、部署和访问验证。",
+      "为了继续部署，还需要一个可用的应用运行环境。",
       "",
-      "不过目前还没有可用的应用运行环境。",
+      "Rainskills 负责分析和部署应用；Rainbond 负责为应用提供稳定运行环境。",
       "",
-      "你刚安装的 Rainskills 是负责“部署”的 AI 助手，它会分析项目并执行部署流程；Rainbond 负责为应用提供稳定运行环境。",
+      "请选择应用运行环境：",
       "",
-      "请选择应用要运行的环境：",
-      "",
-      "1) 云端环境（免费体验）",
-      "2) 本机环境",
-      "3) 独立服务器",
-      "4) 已有 Rainbond",
+      "1) Rainbond Cloud云端环境（推荐）——最快体验，不需要准备服务器",
+      "2) 独立服务器——适合长期运行，在你的服务器上安装开源 Rainbond",
+      "3) 本机环境——适合本地验证，在当前电脑上准备运行环境",
+      "4) 已有 Rainbond——连接现有 Rainbond 环境并继续部署",
     ].join("\n"),
   );
   assert.equal(
@@ -3077,7 +3075,7 @@ test("mutable official installer content is validated and hashed at download tim
 
 test("published guidance describes local and remote target selection", () => {
   const runtimeGate = fs.readFileSync(
-    path.join(repoRoot, "rainbond-app-assistant", "references", "runtime-gate.md"),
+    path.join(repoRoot, "rainbond-app-assistant", "references", "generated", "runtime-routing.md"),
     "utf8"
   );
   const policy = fs.readFileSync(
@@ -3094,7 +3092,7 @@ test("published guidance describes local and remote target selection", () => {
   for (const blocker of ["19041", "虚拟化", "NAT", "端口", "UAC", "计划任务", "摘要"]) {
     assert.match(troubleshooting, new RegExp(blocker));
   }
-  assert.match(runtimeGate, /云端环境（免费体验）.*本机环境.*独立服务器.*已有 Rainbond/s);
+  assert.match(runtimeGate, /Rainbond Cloud云端环境（推荐）.*独立服务器.*本机环境.*已有 Rainbond/s);
   assert.doesNotMatch(runtimeGate, /私有环境（去对接）/);
   assert.match(policy, /远程 Linux/);
   assert.doesNotMatch(policy, /不支持远程 SSH/);

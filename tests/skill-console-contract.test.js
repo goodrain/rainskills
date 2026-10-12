@@ -197,7 +197,12 @@ test("aggregate fast paths and recovery rules stay bounded", () => {
   const delivery = read("rainbond-delivery-verifier/SKILL.md");
   const envSync = read("rainbond-env-sync/SKILL.md");
   const appAssistant = appAssistantContract();
-  const bootstrap = read("rainbond-fullstack-bootstrap/modules/40-source-and-package-rules.md");
+  const bootstrap = [
+    read("rainbond-fullstack-bootstrap/modules/40-source-rules.md"),
+    read("rainbond-fullstack-bootstrap/modules/42-source-topology.md"),
+    read("rainbond-fullstack-bootstrap/modules/44-source-build-rules.md"),
+    read("rainbond-fullstack-bootstrap/modules/45-package-rules.md"),
+  ].join("\n");
   const troubleshooter = read("rainbond-fullstack-troubleshooter/SKILL.md");
 
   assert.match(delivery, /rainbond_get_app_health_overview/);
@@ -209,7 +214,11 @@ test("aggregate fast paths and recovery rules stay bounded", () => {
 });
 
 test("CNB recovery is state-dependent and destructive recovery stays explicitly confirmed", () => {
-  const bootstrap = read("rainbond-fullstack-bootstrap/modules/40-source-and-package-rules.md");
+  const bootstrap = [
+    read("rainbond-fullstack-bootstrap/modules/40-source-rules.md"),
+    read("rainbond-fullstack-bootstrap/modules/42-source-topology.md"),
+    read("rainbond-fullstack-bootstrap/modules/44-source-build-rules.md"),
+  ].join("\n");
   const appAssistant = appAssistantContract();
 
   for (const content of [bootstrap, appAssistant]) {

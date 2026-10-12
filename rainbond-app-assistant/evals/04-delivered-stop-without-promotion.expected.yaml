@@ -4,12 +4,7 @@ assert:
   prose_contains:
     - 部署成功
     - payments-app
-    - preview
-    - 部署位置
-    - 访问地址
-    - https://run.rainbond.com/#/team/demo-team/region/cn/apps/204/overview
     - https://demo-team-cn.rainbond.me/payments-app
-    - 200 OK
   prose_not_contains:
     - AppAssistantResult
     - Structured Output

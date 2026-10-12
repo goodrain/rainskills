@@ -372,6 +372,7 @@ def validate_cross_field_rules(payload: dict[str, Any], sections: dict[str, str]
     preferred_access_url = result.get("preferred_access_url")
     verification_mode = result.get("verification_mode")
     blocker = result.get("blocker")
+    probe_evidence = result.get("probe_evidence")
     next_action = result.get("next_action")
     component_status = result.get("component_status", {})
 
@@ -401,6 +402,32 @@ def validate_cross_field_rules(payload: dict[str, Any], sections: dict[str, str]
             errors.append("delivery_state=delivered requires blocker=null")
         if next_action != "stop":
             errors.append("delivery_state=delivered requires next_action=stop")
+        if not isinstance(probe_evidence, dict) or probe_evidence.get("status") != "verified":
+            errors.append("delivery_state=delivered requires verified bounded probe_evidence")
+        else:
+            checks = probe_evidence.get("checks", [])
+            check_map = {item.get("name"): item.get("status") for item in checks if isinstance(item, dict)}
+            required_checks = {
+                "critical_components", "root", "same_host_api", "static_asset", "deep_link", "mime"
+            }
+            if set(check_map) != required_checks:
+                errors.append("delivered probe_evidence must account for every mandatory acceptance check")
+            if check_map.get("critical_components") != "verified" or check_map.get("root") != "verified":
+                errors.append("delivered probe_evidence requires verified critical_components and root checks")
+            invalid_checks = {
+                name: status for name, status in check_map.items()
+                if status not in {"verified", "not_applicable"}
+            }
+            if invalid_checks:
+                errors.append(f"delivered probe_evidence has unverified checks: {invalid_checks!r}")
+            persistence = probe_evidence.get("persistence", {})
+            if persistence.get("status") not in {"verified", "not_applicable"}:
+                errors.append("delivered probe_evidence requires verified or not_applicable persistence")
+            if persistence.get("caveat") is not None:
+                errors.append("delivered probe_evidence cannot retain a persistence caveat")
+
+    if verification_mode == "verified" and not isinstance(probe_evidence, dict):
+        errors.append("verification_mode=verified requires bounded probe_evidence")
 
     if delivery_state == "delivered-but-needs-manual-validation":
         if not preferred_access_url:

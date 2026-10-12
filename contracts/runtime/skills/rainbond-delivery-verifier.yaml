@@ -1,0 +1,12 @@
+schema: rainskills.runtime-overlay.v1
+skill_id: rainbond-delivery-verifier
+profiles: [cli, embedded]
+command_set: [context_resolve, read, snapshot, poll, delivery_probe, handoff_create, handoff_validate, call, call_confirm]
+version_guard: none
+missing_runtime_mode: existing_application
+scope_discriminator: workspace
+resume_target: delivery-verification
+invariants:
+  - CLI URL verification uses only delivery_probe; embedded verification uses the server-owned equivalent adapter.
+  - Adapter unavailability degrades to delivered-but-needs-manual-validation and never to verified.
+  - Browser or model-driven fallback probes are forbidden.

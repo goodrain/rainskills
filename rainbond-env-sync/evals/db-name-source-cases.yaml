@@ -1,0 +1,25 @@
+cases:
+  - id: ordinary-component-db-name
+    key: DB_NAME
+    source: component_env
+    durable: true
+    sensitive: false
+    differs_from_baseline: true
+    expected_classification: keep
+    persist: true
+  - id: provider-connection-db-name
+    key: DB_NAME
+    source: connection_envs
+    durable: true
+    sensitive: false
+    differs_from_baseline: true
+    expected_classification: runtime_metadata
+    persist: false
+  - id: unknown-source-db-name
+    key: DB_NAME
+    source: unknown
+    durable: true
+    sensitive: false
+    differs_from_baseline: true
+    expected_classification: ambiguous
+    persist: false

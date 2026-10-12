@@ -1,0 +1,6 @@
+# Register the packaged Rainskills bootstrap Skill when this bundle is added to
+# a DeepSeek Harness profile. The plugin only exposes instructions; it does not
+# install Skills, connect Rainbond, or mutate the profile during activation.
+- insert:
+    - id: rainskills
+      name: ./index.mjs

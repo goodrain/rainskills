@@ -1,0 +1,12 @@
+schema: rainskills.runtime-overlay.v1
+skill_id: rainbond-fullstack-bootstrap
+profiles: [cli, embedded]
+command_set: [context_resolve, list, describe, read, snapshot, poll, package_upload, handoff_create, handoff_validate, call, call_confirm]
+version_guard: required
+missing_runtime_mode: new_application
+scope_discriminator: workspace
+resume_target: component-topology
+invariants:
+  - Template components are never created by bootstrap.
+  - Local package upload is CLI-only and uses the protected package_upload command.
+  - Dependency, provider, persistence, and proxy order must remain derived from verified manifest facts.

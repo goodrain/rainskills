@@ -23,6 +23,7 @@ DeliveryVerificationResult:
   preferred_access_url: null
   verification_mode: inferred
   blocker: cluster capacity blocked
+  probe_evidence: null
   next_action: fix_cluster_capacity_first
   component_status:
     db: running

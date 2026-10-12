@@ -31,75 +31,11 @@ If the system is already `runtime_healthy`, stop and say so. Do not continue mak
 
 ## Output Format
 
-Structured output contract（仅在用户或自动化/评测明确要求结构化结果时使用）：
+Default customer output is concise: a successful result contains only result, application, status, and a verified address when available; an incomplete result contains only status, one blocker, and one next step. Each field appears once. Do not append fixed option lists or the structured evidence ledger.
 
-- this skill must emit `TroubleshootResult`
-- keep the human-readable sections below exactly as the narrative surface contract
-- in explicit structured contract mode, append one final `### Structured Output` section and render `TroubleshootResult` in fenced `yaml`
-- do not place any prose after the final structured block
+Structured output is used only when the user or an automated evaluation explicitly requests it. Read the canonical [schema](../schemas/troubleshoot-result.schema.yaml) and generated [compact contract](generated/troubleshoot-contract.md) before constructing the final object.
 
-Canonical required top-level fields:
-- `runtime_state`
-- `blocker_bucket`
-- `actions_taken`
-- `verification_summary`
-- `next_handoff`
-
-Canonical required subfields:
-- `runtime_state.label`
-- `verification_summary.db_status`
-- `verification_summary.api_status`
-- `verification_summary.frontend_access_status`
-- `verification_summary.evidence_chain`
-- `verification_summary.dominant_evidence`
-- `verification_summary.stop_reason`
-- `verification_summary.recommended_next_action`
-- `verification_summary.stop_boundary`
-
-Optional extensions allowed inside the canonical object:
-- `runtime_state.component_status`
-- `runtime_state.dependency_readiness`
-- `runtime_state.blocker_summary`
-- `verification_summary.key_error_cleared`
-- `verification_summary.app_endpoint_operational`
-
-Do not add new top-level fields beyond the canonical contract unless the [product object model](../../rainbond-app-assistant/references/product-object-model.md) is updated first.
-
-Live schema summary:
-
-```yaml
-TroubleshootResult:
-  runtime_state:
-    label: topology_missing | topology_building | runtime_unhealthy | runtime_healthy | capacity_blocked | code_or_build_handoff_needed
-    component_status:
-      api: building | waiting | running | abnormal | capacity-blocked | null
-      db: building | waiting | running | abnormal | capacity-blocked | null
-    dependency_readiness:
-      db_dependency: resolved | deferred | deferred_by_upstream_convergence
-    blocker_summary: string | null
-  blocker_bucket: db not ready | dependency missing | env naming incompatibility | wrong connection values | api startup issue | frontend access-path issue | source build still running | source build failed | platform backend issue | external artifact unreachable | cluster capacity blocked | config_file_configmap_missing | null
-  actions_taken:
-    - string
-  verification_summary:
-    db_status: running | waiting | abnormal | capacity-blocked | null
-    api_status: running | waiting | abnormal | capacity-blocked | null
-    frontend_access_status: working | not_working | needs_validation | null
-    key_error_cleared: boolean | null
-    app_endpoint_operational: boolean | null
-    evidence_chain:
-      - app_detail | component_summary | component_events | build_logs | pod_list | pod_detail | runtime_logs | dependency_summary | connection_envs | runtime_envs | port_rules | frontend_access_check | scheduler_events | app_monitor
-    dominant_evidence: string | null
-    stop_reason: topology_missing | source_build_still_running | source_build_failed | external_artifact_unreachable | db_not_ready | dependency_missing | env_naming_incompatibility | wrong_connection_values | api_startup_issue | frontend_access_path_issue | cluster_capacity_blocked | code_or_build_handoff_needed | runtime_healthy_ready_for_delivery_verifier | null
-    recommended_next_action: string | null
-    stop_boundary:
-      stopped: boolean
-      delivery_verifier_allowed: boolean
-      code_changes_allowed: false
-      local_tests_allowed: false
-      commit_or_push_allowed: false
-      fallback_used: false
-  next_handoff: none | delivery_verifier | code_build_handoff
-```
+The schema is the only authority for fields, required keys, types, and enums. This reference retains human-readable sections, consistency rules, and examples only. Append one final `### Structured Output` section with fenced `yaml`, and place no prose after it.
 
 Consistency rules:
 - every non-null `blocker_bucket` must include a canonical bucket, `dominant_evidence`, `stop_reason`, and `recommended_next_action`

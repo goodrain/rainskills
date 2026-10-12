@@ -71,8 +71,8 @@ class ProgressiveLoadingValidatorTests(unittest.TestCase):
     def test_open_source_cannot_allow_gate_loading_before_inventory_validation(self) -> None:
         self.mutate(
             f"{OPEN_NAME}/SKILL.md",
-            "资料尚未形成可验证清单时不得读取 references/runtime-gate.md",
-            "资料尚未形成可验证清单时允许读取 references/runtime-gate.md",
+            "资料尚未形成可验证清单时不得读取 references/generated/runtime-gate.md",
+            "资料尚未形成可验证清单时允许读取 references/generated/runtime-gate.md",
         )
 
         result = self.run_cross()
@@ -86,7 +86,7 @@ class ProgressiveLoadingValidatorTests(unittest.TestCase):
             original_app = app_path.read_text(encoding="utf-8")
             self.mutate(
                 f"{APP_NAME}/SKILL.md",
-                "| 初始部署或首次 Rainbond 操作 | 本根入口、[own runtime gate](references/runtime-gate.md)、[routing](references/routing.md) | 其余全部 |",
+                "| 初始部署或首次 Rainbond 操作 | 本根入口、[generated Runtime Gate](references/generated/runtime-gate.md)、[routing](references/routing.md) | 其余全部 |",
                 "| 初始部署或首次 Rainbond 操作 | [workflow rules](references/workflow-rules.md) | runtime gate 稍后读取 |",
             )
             result = self.run_progressive()
@@ -102,7 +102,7 @@ class ProgressiveLoadingValidatorTests(unittest.TestCase):
             )
             self.mutate(
                 f"{OPEN_NAME}/SKILL.md",
-                "| 官方部署清单已验证，首次需要连接或调用 Rainbond | 只读取自己的 [runtime gate](references/runtime-gate.md) |",
+                "| 官方部署清单已验证，首次需要连接或调用 Rainbond | 只读取自己的 [generated Runtime Gate](references/generated/runtime-gate.md)，本会话只读一次 |",
                 "| 官方部署清单已验证，首次需要连接或调用 Rainbond | 不加载 reference |",
             )
             result = self.run_cross()
@@ -160,23 +160,23 @@ class ProgressiveLoadingValidatorTests(unittest.TestCase):
     def test_equivalent_discovery_description_rewrites_pass(self) -> None:
         self.mutate(
             f"{APP_NAME}/SKILL.md",
-            "Use whenever a user asks",
-            "Use when  a user asks",
+            "ordinary Git",
+            "ordinary  git",
         )
         self.mutate(
             f"{APP_NAME}/SKILL.md",
-            "bare Git repository URL",
-            "bare git repository URL",
+            "Route supplied Compose/Helm/image-set descriptors",
+            "route supplied compose / HELM / image set descriptors",
         )
         self.mutate(
             f"{OPEN_NAME}/SKILL.md",
-            "Use when the user supplies a third-party Docker Compose",
-            "use when the user supplies a third party docker   compose",
+            "Deploy supplied third-party Compose",
+            "deploy supplied third party   compose",
         )
         self.mutate(
             f"{OPEN_NAME}/SKILL.md",
-            "Helm chart/values, or container image-set descriptor, or explicitly asks",
-            "HELM chart / values, or container image set descriptor, or explicitly asks",
+            "Helm, or image-set descriptors",
+            "HELM, or image set descriptors",
         )
 
         result = self.run_cross()
@@ -373,8 +373,8 @@ class ProgressiveLoadingValidatorTests(unittest.TestCase):
         original_app = app_path.read_text(encoding="utf-8")
         with self.subTest(boundary="descriptor-to-open-source"):
             app = original_app.replace(
-                "Not for supplied third-party Compose, Helm, image-set descriptors, or an explicit named third-party open-source suite; use rainbond-opensource-app-deploy.",
-                "Supplied Compose, Helm, and image-set descriptors use rainbond-template-installer. An explicit named third-party open-source suite uses rainbond-opensource-app-deploy.",
+                "Route supplied Compose/Helm/image-set descriptors and named third-party suites to rainbond-opensource-app-deploy; market templates to rainbond-template-installer.",
+                "Route supplied Compose/Helm/image-set descriptors to rainbond-template-installer; named third-party suites to rainbond-opensource-app-deploy; market templates to rainbond-template-installer.",
                 1,
             )
             app_path.write_text(app, encoding="utf-8")
@@ -387,8 +387,8 @@ class ProgressiveLoadingValidatorTests(unittest.TestCase):
         original_open = open_path.read_text(encoding="utf-8")
         with self.subTest(boundary="source-to-app-assistant"):
             open_source = original_open.replace(
-                "use rainbond-app-assistant for project/source requests and rainbond-template-installer for market templates.",
-                "use rainbond-template-installer for project/source requests and market templates while rainbond-app-assistant remains available.",
+                "Route current/local projects, source packages, ordinary Git repos, and private images to rainbond-app-assistant; market templates to rainbond-template-installer.",
+                "Route current/local projects, source packages, ordinary Git repos, and private images to rainbond-template-installer; market templates to rainbond-template-installer.",
                 1,
             )
             open_path.write_text(open_source, encoding="utf-8")
@@ -401,7 +401,7 @@ class ProgressiveLoadingValidatorTests(unittest.TestCase):
         app = app_path.read_text(encoding="utf-8")
         app = re.sub(
             r'^description:.*$',
-            'description: "Use when deploying, running, delivering, publishing, inspecting, repairing, or troubleshooting source code, the current project, a source directory/package, or an ordinary bare Git repository. Supplied third-party Compose, Helm, image-set descriptors, and explicit named third-party open-source suites route to rainbond-opensource-app-deploy. Confirmed market templates route to rainbond-template-installer."',
+            'description: "Deploy, run, inspect, or repair a current/local project, ordinary Git, source package, private-image project, or single-image component with Rainbond. Route supplied Compose/Helm/image-set descriptors and named third-party suites to rainbond-opensource-app-deploy; market templates to rainbond-template-installer."',
             app,
             count=1,
             flags=re.MULTILINE,
@@ -412,7 +412,7 @@ class ProgressiveLoadingValidatorTests(unittest.TestCase):
         open_source = open_path.read_text(encoding="utf-8")
         open_source = re.sub(
             r'^description:.*$',
-            'description: "Use when the user supplies Docker Compose content, a Helm chart/values, a container image-set descriptor, or explicitly requests a named third-party open-source suite. Current/local projects, source directory/package requests, ordinary bare Git URLs, and private-image projects route to rainbond-app-assistant. Confirmed market templates route to rainbond-template-installer."',
+            'description: "Deploy supplied third-party Compose, Helm, or image-set descriptors and named third-party open-source suites. Route current/local projects, source packages, ordinary Git repos, and private images to rainbond-app-assistant; market templates to rainbond-template-installer."',
             open_source,
             count=1,
             flags=re.MULTILINE,
@@ -451,8 +451,8 @@ class ProgressiveLoadingValidatorTests(unittest.TestCase):
     def test_locally_negated_app_category_is_not_positive_ownership(self) -> None:
         path = self.root / APP_NAME / "SKILL.md"
         source = path.read_text(encoding="utf-8")
-        self.assertIn("the current project", source)
-        source = source.replace("the current project", "not the current project", 1)
+        self.assertIn("current/local project", source)
+        source = source.replace("current/local project", "not current/local project", 1)
         path.write_text(source, encoding="utf-8")
 
         result = self.run_cross()
@@ -463,10 +463,10 @@ class ProgressiveLoadingValidatorTests(unittest.TestCase):
     def test_clause_scoped_negation_rejects_current_project_ownership(self) -> None:
         path = self.root / APP_NAME / "SKILL.md"
         source = path.read_text(encoding="utf-8")
-        self.assertIn("the current project", source)
+        self.assertIn("current/local project", source)
         source = source.replace(
-            "the current project",
-            "but does not include the user's current project",
+            "current/local project",
+            "but does not include current/local project",
             1,
         )
         path.write_text(source, encoding="utf-8")

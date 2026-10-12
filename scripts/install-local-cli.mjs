@@ -196,6 +196,7 @@ export function installLocalCli({ source_root: sourceRoot, home }) {
     const stagedManifest = path.join(staging, "rainskills-skill-manifest.json");
     buildSkillManifest({ source_root: source, output: stagedManifest });
     atomicCopy(path.join(source, "bin", "rainskills-tools.js"), path.join(binDirectory, "rainskills-tools.js"), 0o700);
+    atomicCopy(path.join(source, "bin", "delivery-probe.js"), path.join(binDirectory, "delivery-probe.js"), 0o600);
     atomicCopy(stagedManifest, path.join(binDirectory, "rainskills-skill-manifest.json"), 0o600);
     migrateCodex(targetHome);
     migrateClaude(targetHome);

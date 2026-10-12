@@ -1,6 +1,6 @@
 ---
 name: rainbond-platform-installer
-description: Use when Rainskills private onboarding establishes that no reachable Rainbond exists and the user wants a local, server, multi-node host, or existing Kubernetes installation target.
+description: Install Rainbond on local, server, multi-node, or existing-Kubernetes targets only after Rainskills confirms no reachable platform. Exclude application deployment.
 ---
 
 # Rainbond Platform Installer

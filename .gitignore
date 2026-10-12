@@ -6,6 +6,15 @@ __pycache__/
 node_modules/
 *.tgz
 
+# Local performance runs and raw host artifacts
+benchmarks/skill-performance/results/
+benchmarks/skill-performance/experiments/
+**/host-artifacts/
+**/*-artifacts/
+**/events.timed.jsonl
+**/stdout.jsonl
+**/stderr.log
+
 # Local design, planning, and generated specification artifacts
 .claude/specs/
 .superpowers/

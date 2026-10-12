@@ -122,9 +122,14 @@ test("embedded profile is explicit, transport-safe, and contains only Agent-comp
     const skillPath = path.join(output, skill, "SKILL.md");
     const content = fs.readFileSync(skillPath, "utf8");
     assert.match(content, /^---\nmode: embedded\n/m, skill);
-    assert.match(content, /embedded profile|会话.*Rainbond Tool/i, skill);
-    assert.match(content, /Embedded Runtime Contract（最高优先级）/, skill);
-    assert.match(content, /不读取本机项目目录或 `\.rainbond\/` 文件/, skill);
+    assert.match(content, /references\/generated\/runtime-gate\.md/, skill);
+    const generatedGate = fs.readFileSync(
+      path.join(output, skill, "references", "generated", "runtime-gate.md"),
+      "utf8",
+    );
+    assert.match(generatedGate, /profile: embedded/, skill);
+    assert.match(generatedGate, /embedded profile|会话.*rainbond_\*/i, skill);
+    assert.match(generatedGate, /不读取客户端项目、`\.rainbond\/`/, skill);
   }
   for (const skill of [
     "rainbond-app-assistant",
@@ -140,7 +145,7 @@ test("embedded profile is explicit, transport-safe, and contains only Agent-comp
     assert.match(embeddedRoot, /JWT|密钥[\s\S]*不回显/, skill);
 
     const localGate = fs.readFileSync(
-      path.join(repoRoot, skill, "references", "runtime-gate.md"),
+      path.join(repoRoot, skill, "references", "generated", "runtime-gate.md"),
       "utf8",
     );
     assert.match(localGate, /固定 launcher/, skill);
@@ -149,6 +154,14 @@ test("embedded profile is explicit, transport-safe, and contains only Agent-comp
     assert.match(localGate, /npm root -g/, skill);
     assert.match(localGate, /~\/\.rainbond/, skill);
   }
+
+  const deliveryVerifier = fs.readFileSync(
+    path.join(output, "rainbond-delivery-verifier", "SKILL.md"),
+    "utf8",
+  );
+  assert.match(deliveryVerifier, /rainbond_probe_delivery_url/);
+  assert.match(deliveryVerifier, /delivered-but-needs-manual-validation/);
+  assert.match(deliveryVerifier, /rainskills\.delivery-probe-policy\.v1/);
   for (const markdownFile of markdownFiles(output)) {
     assert.doesNotMatch(
       fs.readFileSync(markdownFile, "utf8"),
@@ -161,7 +174,7 @@ test("embedded profile is explicit, transport-safe, and contains only Agent-comp
     "rainbond-app-assistant",
   ]) {
     const runtimeGate = fs.readFileSync(
-      path.join(output, skill, "references", "runtime-gate.md"),
+      path.join(output, skill, "references", "generated", "runtime-gate.md"),
       "utf8",
     );
     assert.match(runtimeGate, /embedded profile|会话.*Rainbond Tool/i, skill);
@@ -172,13 +185,13 @@ test("embedded profile is explicit, transport-safe, and contains only Agent-comp
     );
   }
 
-  const fallbackRoot = fs.readFileSync(
-    path.join(output, "rainbond-delivery-verifier", "SKILL.md"),
+  const fallbackGate = fs.readFileSync(
+    path.join(output, "rainbond-delivery-verifier", "references", "generated", "runtime-gate.md"),
     "utf8",
   );
-  assert.match(fallbackRoot, /## Rainbond 传输/);
+  assert.match(fallbackGate, /Embedded Runtime Gate/);
   assert.doesNotMatch(
-    fallbackRoot,
+    fallbackGate,
     /require_escalated|runtime connect|rainskills\.js|npm root -g|附加交互终端（TTY）/,
     "unmigrated root fallback must remove the complete client runtime interval",
   );

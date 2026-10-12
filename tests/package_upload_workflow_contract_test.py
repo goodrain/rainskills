@@ -10,10 +10,17 @@ SOURCE_AND_PACKAGE_RULES = (
     REPO_ROOT
     / "rainbond-fullstack-bootstrap"
     / "modules"
-    / "40-source-and-package-rules.md"
+    / "45-package-rules.md"
 )
 APP_ASSISTANT_SKILL = REPO_ROOT / "rainbond-app-assistant" / "SKILL.md"
 BOOTSTRAP_SKILL = REPO_ROOT / "rainbond-fullstack-bootstrap" / "SKILL.md"
+BOOTSTRAP_RUNTIME_GATE = (
+    REPO_ROOT
+    / "rainbond-fullstack-bootstrap"
+    / "references"
+    / "generated"
+    / "runtime-gate.md"
+)
 
 
 class PackageUploadWorkflowContractTest(unittest.TestCase):
@@ -48,8 +55,8 @@ class PackageUploadWorkflowContractTest(unittest.TestCase):
         self.assertNotIn("Run `upload_local_package.py upload`", guidance)
 
     def test_runtime_contract_pins_the_complete_package_upload_argv(self) -> None:
-        skill = BOOTSTRAP_SKILL.read_text(encoding="utf-8")
-        gate = skill.split("<!-- rainskills-runtime-gate:start -->", 1)[1].split(
+        generated = BOOTSTRAP_RUNTIME_GATE.read_text(encoding="utf-8")
+        gate = generated.split("<!-- rainskills-runtime-gate:start -->", 1)[1].split(
             "<!-- rainskills-runtime-gate:end -->", 1
         )[0]
         match = re.search(r"```json\n([\s\S]*?)\n```", gate)

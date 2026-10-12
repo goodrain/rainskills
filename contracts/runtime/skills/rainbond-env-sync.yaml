@@ -1,0 +1,12 @@
+schema: rainskills.runtime-overlay.v1
+skill_id: rainbond-env-sync
+profiles: [cli]
+command_set: [context_resolve, read, call, call_confirm]
+version_guard: none
+missing_runtime_mode: linked_project
+scope_discriminator: workspace
+resume_target: environment-sync
+invariants:
+  - The local project binding must already identify the target app and workspace.
+  - Any conflict result blocks every local env-file write in the current run.
+  - Sensitive and runtime-generated coordinates must never be persisted.

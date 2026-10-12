@@ -26,11 +26,17 @@ const skillIds = [
 ];
 
 function runtimeGateSource(skillId) {
-  const referencePath = path.join(root, skillId, "references", "runtime-gate.md");
-  const sourcePath = fs.existsSync(referencePath)
-    ? referencePath
-    : path.join(root, skillId, "SKILL.md");
-  return fs.readFileSync(sourcePath, "utf8");
+  return fs.readFileSync(
+    path.join(root, skillId, "references", "generated", "runtime-gate.md"),
+    "utf8",
+  );
+}
+
+function runtimeRoutingSource(skillId) {
+  return fs.readFileSync(
+    path.join(root, skillId, "references", "generated", "runtime-routing.md"),
+    "utf8",
+  );
 }
 
 function gate(skillId) {
@@ -62,7 +68,27 @@ test("every business Skill uses the single-runtime CLI contract", () => {
       allowInsecureHttp: false,
       privateLocation: undefined,
     });
-    for (const command of ["context_resolve", "read", "call", "call_confirm"]) {
+    const commandNames = skillId === "rainbond-platform-query"
+      ? ["query"]
+      : ["context_resolve", "read", "call", "call_confirm"];
+    if (skillId === "rainbond-platform-query") {
+      assert.deepEqual(current.input_commands, {
+        query: {
+          argv: [
+            "node",
+            "<home>/.rainbond/bin/rainskills-tools.js",
+            "query",
+            "<tool>",
+            "--input",
+            "-",
+            "--skill-id",
+            "rainbond-platform-query",
+          ],
+          stdin_schema_source: "platform-query-allowlist",
+        },
+      });
+    }
+    for (const command of commandNames) {
       const argv = current.input_commands[command].argv.slice(2)
         .map((item) => item === "<tool>" ? "rainbond_query_apps" : item)
         .map((item) => item === "<confirmation-id>"
@@ -72,17 +98,36 @@ test("every business Skill uses the single-runtime CLI contract", () => {
       assert.equal(parsed.skillId, skillId);
       assert.equal(Object.hasOwn(parsed, "operationId"), false);
     }
-    assert.deepEqual(current.input_commands.context_resolve.stdin, {
-      default: { required: ["enterprise", "workspace"] },
-      with_hints: {
-        required: ["enterprise", "workspace"],
-        hints: { team_name: "<team-name>" },
-      },
-      with_selection: {
-        required: ["enterprise", "workspace"],
-        selection: { option_id: "<option-id>" },
-      },
-    });
+    if (skillId !== "rainbond-platform-query") {
+      assert.deepEqual(current.input_commands.context_resolve.stdin, {
+        default: { required: ["enterprise", "workspace"] },
+        with_hints: {
+          required: ["enterprise", "workspace"],
+          hints: { team_name: "<team-name>" },
+        },
+        with_selection: {
+          required: ["enterprise", "workspace"],
+          selection: { option_id: "<option-id>" },
+        },
+      });
+    }
+    if (skillId === "rainbond-delivery-verifier") {
+      assert.deepEqual(current.input_commands.delivery_probe, {
+        argv: [
+          "node",
+          "<home>/.rainbond/bin/rainskills-tools.js",
+          "delivery",
+          "probe",
+          "--input",
+          "-",
+          "--skill-id",
+          "rainbond-delivery-verifier",
+        ],
+        policy_schema_source: "schemas/delivery-probe-policy.schema.yaml",
+        stdin_schema_source: "schemas/delivery-probe-input.schema.yaml",
+        result_schema_source: "schemas/delivery-probe-result.schema.yaml",
+      });
+    }
   }
 });
 
@@ -100,7 +145,9 @@ test("runtime gates contain no multi-environment or runtime-operation protocol",
     const current = gate(skillId);
     for (const pattern of forbidden) assert.doesNotMatch(current, pattern);
     assert.match(current, /本机只允许连接一个 Rainbond 运行环境/);
-    assert.match(current, /写调用不得自动重放/);
+    if (skillId !== "rainbond-platform-query") {
+      assert.match(current, /写调用不得自动重放/);
+    }
     assert.match(current, /403 直接停止/);
     assert.match(current, /同一个命令会话/);
     assert.match(current, /禁止[^。\n]*后续业务步骤/);
@@ -126,7 +173,7 @@ test("business Skills do not restore removed runtime registries outside the gene
     /不重复枚举环境/,
   ];
   for (const skillId of skillIds) {
-    const source = runtimeGateSource(skillId);
+    const source = fs.readFileSync(path.join(root, skillId, "SKILL.md"), "utf8");
     for (const pattern of forbidden) assert.doesNotMatch(source, pattern);
   }
 });
@@ -183,15 +230,52 @@ test("new-application Skills expose the four runtime choices without a private-e
     "rainbond-template-installer",
   ];
   for (const skillId of newApplicationSkillIds) {
-    const source = runtimeGateSource(skillId);
+    const source = runtimeRoutingSource(skillId);
     assert.match(
       source,
-      /1\) 云端环境（免费体验）\s+2\) 本机环境\s+3\) 独立服务器\s+4\) 已有 Rainbond/,
+      /1\) Rainbond Cloud云端环境（推荐）——最快体验，不需要准备服务器\s+2\) 独立服务器——适合长期运行，在你的服务器上安装开源 Rainbond\s+3\) 本机环境——适合本地验证，在当前电脑上准备运行环境\s+4\) 已有 Rainbond——连接现有 Rainbond 环境并继续部署/,
       `${skillId} must show the flattened environment menu`,
     );
     assert.doesNotMatch(source, /私有环境（去对接）/);
     assert.doesNotMatch(source, /"private-deployment-location"/);
   }
+});
+
+test("app assistant analyzes only a current local project after runtime status reports no environment", () => {
+  const skill = fs.readFileSync(
+    path.join(root, "rainbond-app-assistant", "SKILL.md"),
+    "utf8",
+  );
+  const analysisPath = path.join(
+    root,
+    "rainbond-app-assistant",
+    "references",
+    "local-project-analysis.md",
+  );
+  assert.equal(fs.existsSync(analysisPath), true);
+  const analysis = fs.readFileSync(analysisPath, "utf8");
+  const routing = runtimeRoutingSource("rainbond-app-assistant");
+
+  assert.match(skill, /state=connected[^。\n]*usable=true[^。\n]*直接进入[^。\n]*部署/);
+  assert.match(skill, /state=not_started[^。\n]*usable=false[^。\n]*当前本地项目[^。\n]*local-project-analysis\.md/);
+
+  assert.match(analysis, /只读/);
+  assert.match(analysis, /仅适用于[^。\n]*当前本地项目/);
+  assert.match(analysis, /裸 Git URL[^。\n]*镜像[^。\n]*软件包[^。\n]*不得进入/);
+  assert.match(analysis, /不得写入[^。\n]*rainbond\.app\.json/);
+  assert.match(analysis, /不得[^。\n]*(?:联网|网络)/);
+  assert.match(analysis, /已识别：/);
+  assert.match(analysis, /预计交付结果：/);
+  assert.match(analysis, /rainbond-project-init[^。\n]*manifest inference/i);
+
+  const analysisStep = routing.indexOf("local-project-analysis.md");
+  const environmentMessage = routing.indexOf("runtime message --id new-application-environment");
+  assert(analysisStep >= 0, "missing local project analysis step");
+  assert(environmentMessage > analysisStep, "environment menu must follow project analysis");
+  assert.match(routing, /state=not_started[^。\n]*usable=false/);
+  assert.match(routing, /当前本地项目[^。\n]*local project analysis/);
+  assert.match(routing, /裸 Git URL[^。\n]*镜像[^。\n]*软件包[^。\n]*跳过[^。\n]*预分析/);
+  assert.match(routing, /state=connected[^。\n]*usable=true[^。\n]*不得[^。\n]*环境菜单/);
 });
 
 test("platform installer reuses the location selected by the flattened environment menu", () => {

@@ -70,6 +70,11 @@ test("package metadata defines a public npx command with pinned runtime dependen
   assert.equal(manifest.bin.rainskills, "bin/rainskills.js");
   assert.equal(manifest.engines.node, ">=18");
   assert.equal(manifest.license, "Apache-2.0");
+  assert.equal(manifest.homepage, "https://www.rainbond.com/rainskills");
+  assert.match(manifest.description, /deploying, troubleshooting, and verifying applications/);
+  for (const keyword of ["ai-agent", "agent-skills", "application-delivery", "self-hosted", "kubernetes", "dsh-plugin"]) {
+    assert(manifest.keywords.includes(keyword), `missing package keyword: ${keyword}`);
+  }
   assert.equal(
     manifest.repository.url,
     "git+https://github.com/goodrain/rainskills.git"
@@ -81,6 +86,12 @@ test("package metadata defines a public npx command with pinned runtime dependen
     yaml: "2.9.0",
   });
   assert.equal(manifest.devDependencies, undefined);
+  assert.deepEqual(manifest.dsh, {
+    bundle: {
+      patch: "./dsh/cordis.patch.yml",
+    },
+  });
+  assert(manifest.files.includes("dsh/"));
   assert.equal(manifest.pi, undefined);
   assert(!manifest.files.includes("pi/"));
   assert.equal(manifest.scripts["build:pi"], undefined);
@@ -97,11 +108,11 @@ test("package metadata defines a public npx command with pinned runtime dependen
   );
   assert.equal(
     manifest.scripts.version,
-    "npm run sync:runtime-version && npm run sync:runtime-contracts && npm run build:marketplace"
+    "npm run sync:runtime-version && npm run sync:runtime-contracts && npm run sync:shared-contracts && npm run build:marketplace"
   );
   assert.equal(
     manifest.scripts.prepack,
-    "node scripts/sync-runtime-version.mjs --check && node scripts/sync-runtime-contracts.mjs --check && node scripts/build-marketplace-package.mjs --check --quiet"
+    "node scripts/sync-runtime-version.mjs --check && node scripts/sync-runtime-contracts.mjs --check && node scripts/sync-shared-contracts.mjs --check && node scripts/build-marketplace-package.mjs --check --quiet"
   );
   assert.equal(
     manifest.scripts["test:package-upload"],
@@ -141,9 +152,15 @@ test("packed artifact contains the installer and all skills but no development f
   assert(filePaths.has("agents/openai.yaml"));
   assert(filePaths.has("bin/rainskills.js"));
   assert(filePaths.has("bin/rainskills-tools.js"));
+  assert(filePaths.has("bin/delivery-probe.js"));
   assert(filePaths.has("scripts/build-skill-manifest.mjs"));
   assert(filePaths.has("scripts/install-local-cli.mjs"));
   assert(filePaths.has("install.sh"));
+  assert(filePaths.has("dsh/index.mjs"));
+  assert(filePaths.has("dsh/cordis.patch.yml"));
+  assert.equal([...filePaths].some((filePath) => filePath.endsWith("test-prompts.json")), false);
+  assert.equal([...filePaths].some((filePath) => filePath.startsWith("tests/effect-evals/")), false);
+  assert.equal(filePaths.has("results.tsv"), false);
   assert(![...filePaths].some((filePath) => filePath.startsWith("pi/")));
   assert(filePaths.has("rainbond-platform-installer/scripts/platform-installer.js"));
   assert(filePaths.has("rainbond-platform-installer/scripts/auto-update.js"));
@@ -314,6 +331,7 @@ test("the packed default installer installs only Skills and prints the approved 
   assert.equal(fs.existsSync(installedRootSkill), true);
   assert.match(fs.readFileSync(installedRootSkill, "utf8"), /只保存一个全局运行环境/);
   assert.equal(fs.existsSync(path.join(home, ".rainbond", "bin", "rainskills-tools.js")), true);
+  assert.equal(fs.existsSync(path.join(home, ".rainbond", "bin", "delivery-probe.js")), true);
   assert.equal(fs.existsSync(path.join(home, ".rainbond", "bin", "rainskills-skill-manifest.json")), true);
   assert.equal(fs.existsSync(path.join(home, ".rainbond", "lib", "rainbond-platform-installer", "scripts", "single-runtime.js")), true);
   const installedRuntimeRoot = path.join(home, ".rainbond", "lib", "rainskills");

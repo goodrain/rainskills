@@ -73,6 +73,34 @@ test("builder records exact Skill content and deterministic protected bundle dig
   assert.equal(fs.statSync(firstOutput).mode & 0o077, 0);
 });
 
+test("generated Runtime Gate changes are included in the Skill bundle digest", () => {
+  const sourceRoot = makeSourceRoot();
+  const generated = path.join(
+    sourceRoot,
+    "rainbond-app-assistant",
+    "references",
+    "generated",
+    "runtime-gate.md",
+  );
+  fs.mkdirSync(path.dirname(generated), { recursive: true });
+  fs.writeFileSync(generated, "runtime gate v1\n");
+
+  const firstOutput = path.join(sourceRoot, "first-runtime.json");
+  const first = build(sourceRoot, firstOutput);
+  assert.equal(first.status, 0, first.stderr);
+  const firstDigest = JSON.parse(fs.readFileSync(firstOutput, "utf8")).skills
+    .find(({ id }) => id === "rainbond-app-assistant").bundle_sha256;
+
+  fs.writeFileSync(generated, "runtime gate v2\n");
+  const secondOutput = path.join(sourceRoot, "second-runtime.json");
+  const second = build(sourceRoot, secondOutput);
+  assert.equal(second.status, 0, second.stderr);
+  const secondDigest = JSON.parse(fs.readFileSync(secondOutput, "utf8")).skills
+    .find(({ id }) => id === "rainbond-app-assistant").bundle_sha256;
+
+  assert.notEqual(firstDigest, secondDigest);
+});
+
 test("builder rejects symlinked Skill content and output inside a Skill bundle", () => {
   const sourceRoot = makeSourceRoot();
   const linked = path.join(sourceRoot, "rainbond-app-assistant", "linked-secret");

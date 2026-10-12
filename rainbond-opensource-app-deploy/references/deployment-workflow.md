@@ -107,7 +107,7 @@ When clean logs conflict with broken user behavior, treat that as protocol/frame
 
 ## 3. Deploy and wait for terminal build states
 
-Deploy only after the step 1 readiness gates pass. Use `rainbond_operate_app` for the deployment and `rainbond_wait_for_build_completion` for each returned build event.
+Deploy only after the step 1 readiness gates pass. Use `rainbond_operate_app` for the deployment, then call `rainbond_wait_for_build_completion(timeout=60)` once for each returned event in the current turn. If it returns `status=running`, end the current turn immediately with completed actions and current state；不得再次等待、手工轮询或继续轮询。A later explicit user “继续” starts a new bounded check.
 
 - Keep waiting with the same anchored event while the tool reports `running`.
 - Treat the terminal result and its classified reason as evidence.
@@ -116,7 +116,7 @@ Deploy only after the step 1 readiness gates pass. Use `rainbond_operate_app` fo
 
 ## 4. Check application health
 
-Use `rainbond_get_app_health_overview` as the default whole-application signal. Inspect each abnormal component's blocker, then obtain the minimum supporting pod, event, log, env, dependency, port, and storage evidence needed to explain it.
+Use one `snapshot app` request containing `rainbond_get_app_health_overview` as the default whole-application signal. Inspect each abnormal component's blocker, then obtain only bounded pod, event, log, env, dependency, port, and storage evidence needed to explain it.
 
 Continue to step 6 only when every required component is green. If any required component is building, waiting, abnormal, or capacity-blocked, continue to step 5.
 

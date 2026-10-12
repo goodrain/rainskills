@@ -30,29 +30,7 @@ Structured output contract（仅在用户或自动化/评测明确要求结构�
 - structured mode uses the same object shape when the result is `pending_verification` or `blocked`; those states do not enable structured mode by themselves
 - do not create sidecar result artifacts such as `.rainbond/init.result.json` as a substitute for the final reply contract; current-run status must be expressed in the prose sections and `ProjectInitResult`
 
-Proposed schema:
-
-```yaml
-ProjectInitResult:
-  project:
-    identity:
-      team_name: string
-      region_name: string
-      app_name: string
-      app_id: positive integer | null
-    binding_source: manifest | local_binding | inferred
-  environment:
-    name: preview | production
-    selection_source: explicit | local_preference | default
-  component_sources:
-    - name: string
-      role: frontend | service | database | cache | other
-      execution_mode: image | source | template | blocked
-      status: ready | needs_confirmation | blocked
-      blocking_reason: string | null
-  init_status: linked | pending_verification | blocked
-  next_action: stop | bootstrap | reconnect_transport | ask_identity | ask_manifest_review
-```
+The canonical fields, types, required keys, and enums are defined only in the [ProjectInitResult schema](../schemas/project-init-result.schema.yaml). This reference explains how to choose those values and render the user-facing result; it must not redefine the schema.
 
 Construction rules:
 
@@ -88,6 +66,8 @@ Construction rules:
   - use `stop` when the current run intentionally ends at the init boundary, including user-requested stop-after-init
   - when the user asked only for initialization, reuse, or status/result reporting, treat that as stop-at-init unless they explicitly asked to continue
   - use `bootstrap` only when the current run is expected to continue directly into `rainbond-fullstack-bootstrap`
+  - use `template_install` when a template component has complete install metadata and the run should continue into `rainbond-template-installer`
+  - when template metadata is incomplete, use `ask_manifest_review`; template components never enter bootstrap
   - use `reconnect_transport`, `ask_identity`, or `ask_manifest_review` only when that specific external action is the true gating step
 - `runtime_components`
   - may be written into `.rainbond/local.json` as a reuse hint, but it does not belong inside `ProjectInitResult`
@@ -242,6 +222,7 @@ Only in explicit structured contract mode, respond using exactly these sections:
 ### Next Step
 - one of:
   - `run rainbond-fullstack-bootstrap`
+  - `run rainbond-template-installer`
   - `stop, initialization complete`
   - `reconnect Rainbond transport and verify app existence`
   - `stop, initialization pending online verification`
@@ -252,6 +233,8 @@ Only in explicit structured contract mode, respond using exactly these sections:
 - if the user explicitly requested initialization only and init reached a stable boundary, use `stop, initialization complete`
 - if the user asked to reuse existing config and report the result, that is still initialization-only and should end with `stop, initialization complete`
 - if the user requested initialize-and-continue, use `run rainbond-fullstack-bootstrap`
+- if the user requested initialize-and-continue and template metadata is complete, use `run rainbond-template-installer`
+- if template metadata is incomplete, use `ask user to review generated manifest`
 
 ### Structured Output
 - append a fenced `yaml` block as the final section

@@ -1,0 +1,12 @@
+schema: rainskills.runtime-overlay.v1
+skill_id: rainbond-platform-plugin-manager
+profiles: [cli, embedded]
+command_set: [context_resolve, read, poll, call, call_confirm]
+version_guard: none
+missing_runtime_mode: plugin_management
+scope_discriminator: enterprise
+resume_target: plugin-lifecycle
+invariants:
+  - installed=true and status=RUNNING is the only ready state.
+  - Unknown install, upgrade, or removal results are queried before any retry.
+  - Delegated AI work continues only after the required plugin is verified RUNNING.

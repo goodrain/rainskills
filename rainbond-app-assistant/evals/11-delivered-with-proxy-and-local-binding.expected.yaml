@@ -4,16 +4,7 @@ assert:
   prose_contains:
     - 部署成功
     - spring-postgres-dev
-    - preview
-    - https://run.rainbond.com/#/team/kz5igqh4/region/rainbond/apps/180/overview
     - http://gr0c90d0-8080-kz5igqh4.203.0.113.10.nip.io
-    - db
-    - backend
-    - 200 OK
-    - 镜像代理
-    - Git 代理
-    - 1024Mi
-    - Rainbond 内部服务地址
   prose_not_contains:
     - AppAssistantResult
     - Structured Output

@@ -122,14 +122,24 @@ test("the release workflow checks runtime versions before packaging artifacts", 
   const versionCheck = workflow.indexOf(
     "node scripts/sync-runtime-version.mjs --check"
   );
+  const contractCheck = workflow.indexOf(
+    "node scripts/sync-runtime-contracts.mjs --check"
+  );
+  const sharedContractCheck = workflow.indexOf(
+    "node scripts/sync-shared-contracts.mjs --check"
+  );
   const marketplaceCheck = workflow.indexOf(
     "node scripts/build-marketplace-package.mjs --check"
   );
   const packStep = workflow.indexOf("name: Pack release tarball");
 
   assert.notEqual(versionCheck, -1);
+  assert.notEqual(contractCheck, -1);
+  assert.notEqual(sharedContractCheck, -1);
   assert.notEqual(marketplaceCheck, -1);
   assert.notEqual(packStep, -1);
-  assert(versionCheck < marketplaceCheck);
+  assert(versionCheck < contractCheck);
+  assert(contractCheck < sharedContractCheck);
+  assert(sharedContractCheck < marketplaceCheck);
   assert(marketplaceCheck < packStep);
 });

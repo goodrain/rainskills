@@ -7,6 +7,8 @@
 
 ## Explicit Structured Reply Shape
 
+Default customer output is not the structured shape below. On completion, report only result, application, status, and a verified address when one exists. On an incomplete run, report only status, one blocker, and one next step. Do not repeat fields, add fixed next-action lists, or expose the action ledger.
+
 Only when the user, automation, or evaluation explicitly requests structured output, include these sections in exactly this order:
 
 1. `### Creation Result`

@@ -857,7 +857,7 @@ May contain:
 - `region_name`
 - `app_name`
 - `app_id`
-- `platform.server_name`
+- `binding.platform.server_name`
 - `metadata.status`
 - link metadata
 - preferences such as `default_environment`
@@ -879,7 +879,7 @@ Example:
     "team_name": "example-team",
     "region_name": "cn-north-1",
     "app_name": "example-app",
-    "app_id": "123",
+    "app_id": 123,
     "platform": {
       "server_name": "rio.cn-north-1.rainbond.me"
     }
@@ -947,7 +947,7 @@ Example:
   "synced_at": "2026-04-01T14:30:00Z",
   "metadata": {
     "status": "synced",
-    "synced_by": "local-sync"
+    "synced_by": "rainbond-env-sync"
   }
 }
 ```
@@ -955,6 +955,7 @@ Example:
 Rule:
 
 - keep only durable non-sensitive values that differ from the project baseline
+- the example `DB_NAME` is an ordinary component-owned durable override; provider `connection_envs` or dependency-injected `DB_NAME` remains runtime metadata and is not persisted
 - do not persist runtime-derived coordinates such as `DB_HOST`, `DB_PORT`, `API_HOST`, or `API_PORT`
 
 ### 8.4 `.rainbond/secrets.<env>.json`
@@ -1281,16 +1282,7 @@ Current human-readable sections map as:
 - `Execution Summary` -> `ComponentSource[]`
 - `Next Step` -> `next_action`
 
-Target output object:
-
-```yaml
-ProjectInitResult:
-  project: Project
-  environment: Environment
-  component_sources: ComponentSource[]
-  init_status: linked | pending_verification | blocked
-  next_action: stop | bootstrap
-```
+Canonical output: `rainbond-project-init/schemas/project-init-result.schema.yaml`. Do not redefine its fields or enums here; embedded profiles that omit local project initialization also omit this schema.
 
 ### 13.2 `rainbond-fullstack-bootstrap`
 
@@ -1323,19 +1315,7 @@ Current human-readable sections map as:
 - `Verification Result` -> updated `RuntimeState`
 - `Follow-up Advice` -> next handoff guidance
 
-Target output object:
-
-```yaml
-TroubleshootResult:
-  runtime_state: RuntimeState
-  blocker_bucket: string | null
-  actions_taken: string[]
-  verification_summary:
-    db_status: string
-    api_status: string
-    frontend_access_status: string
-  next_handoff: none | delivery_verifier | code_build_handoff
-```
+Canonical output: `rainbond-fullstack-troubleshooter/schemas/troubleshoot-result.schema.yaml`. Do not redefine its fields or enums here; embedded profiles use the transported schema and generated compact contract bundled with the troubleshooter.
 
 ### 13.4 `rainbond-delivery-verifier`
 

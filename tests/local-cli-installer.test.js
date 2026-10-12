@@ -46,6 +46,7 @@ test("local CLI installer publishes a protected stable bridge and removes only l
 
   const binDirectory = path.join(home, ".rainbond", "bin");
   const bridge = path.join(binDirectory, "rainskills-tools.js");
+  const deliveryProbe = path.join(binDirectory, "delivery-probe.js");
   const manifest = path.join(binDirectory, "rainskills-skill-manifest.json");
   const localCli = path.join(
     home,
@@ -71,6 +72,7 @@ test("local CLI installer publishes a protected stable bridge and removes only l
     "single-runtime.js"
   );
   assert.equal(fs.existsSync(bridge), true);
+  assert.equal(fs.existsSync(deliveryProbe), true);
   assert.equal(fs.existsSync(manifest), true);
   assert.equal(fs.existsSync(localCli), true);
   assert.equal(fs.existsSync(localManifest), true);
@@ -83,8 +85,24 @@ test("local CLI installer publishes a protected stable bridge and removes only l
   assert.equal(fs.existsSync(platformInvocation.args[0]), true);
   assert.equal(fs.existsSync(runtimeModule), true);
   assert.equal(fs.lstatSync(bridge).isSymbolicLink(), false);
+  assert.equal(fs.lstatSync(deliveryProbe).isSymbolicLink(), false);
+  assert.equal(fs.statSync(deliveryProbe).mode & 0o077, 0);
   assert.equal(fs.statSync(manifest).mode & 0o077, 0);
   assert.equal(JSON.parse(fs.readFileSync(manifest, "utf8")).schema, "rainskills.skill-manifest.v1");
+  const probeResult = spawnSync(process.execPath, [
+    bridge,
+    "delivery", "probe", "--input", "-",
+    "--skill-id", "rainbond-delivery-verifier",
+  ], {
+    encoding: "utf8",
+    input: JSON.stringify({
+      policy_version: "rainskills.delivery-probe-policy.v1",
+      url: "file:///etc/passwd",
+      method: "GET",
+    }),
+  });
+  assert.equal(probeResult.status, 0, probeResult.stderr);
+  assert.equal(JSON.parse(probeResult.stdout).status, "rejected");
 
   const codex = fs.readFileSync(path.join(codexDirectory, "config.toml"), "utf8");
   assert.match(codex, /mcp_servers\.keep/);

@@ -23,6 +23,7 @@ DeliveryVerificationResult:
   preferred_access_url: null
   verification_mode: inferred
   blocker: source build still running
+  probe_evidence: null
   next_action: run_troubleshooter
   component_status:
     db: running

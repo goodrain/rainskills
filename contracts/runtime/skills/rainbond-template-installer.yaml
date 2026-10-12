@@ -1,0 +1,12 @@
+schema: rainskills.runtime-overlay.v1
+skill_id: rainbond-template-installer
+profiles: [cli, embedded]
+command_set: [context_resolve, read, handoff_create, handoff_validate, call, call_confirm]
+version_guard: none
+missing_runtime_mode: new_application
+scope_discriminator: workspace
+resume_target: template-installation
+invariants:
+  - Template and version identities must come from verified marketplace facts.
+  - Target-app reuse follows template policy and never guesses a forbidden app.
+  - Installation, deployment, and readiness are distinct states.

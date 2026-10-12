@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rainskills.dev/schemas/runtime-overlay.v1.json",
+  "title": "Rainskills Runtime Overlay",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "skill_id", "profiles", "command_set", "version_guard", "missing_runtime_mode", "scope_discriminator", "resume_target", "invariants"],
+  "properties": {
+    "schema": { "const": "rainskills.runtime-overlay.v1" },
+    "skill_id": { "type": "string", "pattern": "^rainbond-[a-z0-9-]+$" },
+    "profiles": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "enum": ["cli", "embedded"] } },
+    "command_set": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "enum": ["context_resolve", "list", "describe", "read", "query", "snapshot", "poll", "package_upload", "delivery_probe", "handoff_create", "handoff_validate", "call", "call_confirm"] }
+    },
+    "version_guard": { "enum": ["required", "none"] },
+    "missing_runtime_mode": { "enum": ["new_application", "existing_application", "linked_project", "ai_workload", "plugin_management", "read_only_query"] },
+    "scope_discriminator": { "enum": ["workspace", "enterprise", "read_only"] },
+    "resume_target": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "invariants": { "type": "array", "minItems": 1, "maxItems": 5, "items": { "type": "string", "minLength": 1, "maxLength": 320 } }
+  }
+}

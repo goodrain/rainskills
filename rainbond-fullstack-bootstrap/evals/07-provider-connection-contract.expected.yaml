@@ -24,7 +24,16 @@ assert:
       api: running
       mysql: running
   prose_contains:
+    - durable storage
+    - /var/lib/mysql
     - provider connection envs
     - rainbond_manage_component_dependency
+    - api -> mysql
+    - service_id=api, dep_service_id=mysql
     - No duplicate consumer DB envs
     - delivery-verifier
+  prose_ordered:
+    - durable storage at /var/lib/mysql
+    - provider connection envs on mysql
+    - service_id=api, dep_service_id=mysql
+    - deployed the configured components

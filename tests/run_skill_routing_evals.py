@@ -47,7 +47,7 @@ def skill_contract_text(skill_path: Path) -> str:
     if references.is_dir():
         texts.extend(
             path.read_text(encoding="utf-8")
-            for path in sorted(references.glob("*.md"))
+            for path in sorted(references.rglob("*.md"))
         )
     return "\n".join(texts)
 

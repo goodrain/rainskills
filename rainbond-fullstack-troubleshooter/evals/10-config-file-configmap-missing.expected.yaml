@@ -4,6 +4,10 @@ assert:
   equal:
     TroubleshootResult.runtime_state.label: runtime_unhealthy
     TroubleshootResult.blocker_bucket: config_file_configmap_missing
+    TroubleshootResult.actions_taken:
+      - Re-saved config-file content exactly once with new_file_content and no unchanged new_volume_path.
+      - Restarted the affected api component exactly once after the re-save.
+      - Read fresh post-restart component events and pod detail exactly once.
     TroubleshootResult.verification_summary.stop_reason: api_startup_issue
     TroubleshootResult.next_handoff: none
   contains:
@@ -19,4 +23,6 @@ assert:
   prose_contains:
     - config_file_configmap_missing
     - new_file_content
+    - fresh post-restart
+    - Restarted the affected api component exactly once
     - platform-side sync blocker

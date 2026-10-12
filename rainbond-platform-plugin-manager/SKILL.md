@@ -1,6 +1,6 @@
 ---
 name: rainbond-platform-plugin-manager
-description: Use for discovering, installing, enabling, upgrading, uninstalling, or checking a Rainbond Console platform plugin or feature extension. Do not use for installing Rainbond itself, deploying ordinary apps, or managing AI models after the plugin is ready.
+description: Discover, install, enable, upgrade, uninstall, or check Rainbond Console plugins. Exclude Rainbond installation, ordinary app deployment, and AI model operations after the plugin is ready.
 ---
 
 # Rainbond Platform Plugin Manager
@@ -10,18 +10,18 @@ description: Use for discovering, installing, enabling, upgrading, uninstalling,
 ## 最高优先级规则
 
 1. 所有 reference 按阶段读取，不得一次性读取全部；进入某阶段前只读取该阶段列出的文件。
-2. 首次需要 Rainbond 时先读取 [runtime gate](references/runtime-gate.md)。CLI 使用受保护的单运行环境；embedded 只使用当前会话 Tool。业务 reference 不决定传输方式。
+2. 首次需要 Rainbond 时先读取 [generated Runtime Gate](references/generated/runtime-gate.md)，本会话只读一次；没有可用运行环境时按 Gate 的 mode 读取 [generated Runtime Routing](references/generated/runtime-routing.md)。Node.js/Rainskills 版本、profile、endpoint、唯一运行环境、workspace 或授权状态变化时 Gate 失效。CLI 使用受保护的单运行环境；embedded 只使用当前会话 Tool。业务 reference 不决定传输方式。
 3. `team_name`、`region_name` 只来自可信会话上下文或用户明确选择。不得请求或提交平台内部命名空间、backend service、请求头或凭据。
 4. 只把 `installed=true && status=RUNNING` 当作 ready。installed-state `unavailable` 不是 absent；安装请求 accepted 也不是 ready。
 5. write/destructive 必须走当前宿主审批并只执行一次。timeout、5xx、连接中断或未知结果后先读状态，禁止重放原写请求。
 6. 升级读取 `team_name/app_id` 后复用 `rainbond_upgrade_app`；卸载复用 `rainbond_delete_app`。不得发明插件专用删除 Tool，也不得直接操作 Kubernetes/RBDPlugin。
-7. 插件安装、升级等需要持续轮询的长任务，写入前必须确认用户选择“持续监测”还是“受理后结束，待下次唤醒再查询”；用户已明确表达时不重复询问。该选择不替代写操作审批。
+7. 插件安装、升级等长任务写入前，确认“持续监测”或“受理后结束”。持续监测只调用一次 protected `poll`，由 CLI 内部执行有界读取并只返回状态变化、终态或 blocker；用户已明确选择时不重复询问。该选择不替代写操作审批。
 
 ## 渐进加载路由
 
 | 当前阶段 | 读取 | 不提前读取 |
 |---|---|---|
-| 首次平台访问 | [runtime gate](references/runtime-gate.md) | 插件生命周期和恢复 |
+| 首次平台访问 | [generated Runtime Gate](references/generated/runtime-gate.md) | 插件生命周期和恢复 |
 | 发现、版本与 installed-state | [plugin discovery](references/plugin-discovery.md) | 升级、卸载、恢复 |
 | 安装、轮询、升级或卸载 | [plugin lifecycle](references/plugin-lifecycle.md) | 故障恢复（除非失败） |
 | unavailable、失败或未知结果 | [recovery](references/recovery.md) | 无关业务 reference |

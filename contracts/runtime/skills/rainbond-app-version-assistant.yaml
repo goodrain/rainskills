@@ -1,0 +1,11 @@
+schema: rainskills.runtime-overlay.v1
+skill_id: rainbond-app-version-assistant
+profiles: [cli, embedded]
+command_set: [context_resolve, read, call, call_confirm]
+version_guard: none
+missing_runtime_mode: existing_application
+scope_discriminator: workspace
+resume_target: app-version-operation
+invariants:
+  - Version operations require an existing app selected from verified context.
+  - Snapshot, publish, and rollback writes each require their own confirmation and must not be replayed.

@@ -5,7 +5,14 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EXPECTED = {"runtime-gate.md", "plugin-discovery.md", "plugin-lifecycle.md", "recovery.md", "output-contract.md"}
+EXPECTED = {
+    "generated/runtime-gate.md",
+    "generated/runtime-routing.md",
+    "plugin-discovery.md",
+    "plugin-lifecycle.md",
+    "recovery.md",
+    "output-contract.md",
+}
 
 
 def main() -> int:
@@ -22,4 +29,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-

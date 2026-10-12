@@ -2,7 +2,7 @@
 
 - Read when: you need to classify the current blocker, decide whether bootstrap is successful enough to stop, or choose `next_handoff`.
 - Do not read when: you are only resolving config or deciding source/package routing before execution starts.
-- Depends on: [../SKILL.md](../SKILL.md), [50-workflow-and-convergence.md](50-workflow-and-convergence.md), [../schemas/bootstrap-result.schema.yaml](../schemas/bootstrap-result.schema.yaml).
+- Depends on: [../SKILL.md](../SKILL.md), [workflow](50-workflow.md), [convergence rules](55-convergence-rules.md), and [../schemas/bootstrap-result.schema.yaml](../schemas/bootstrap-result.schema.yaml).
 - Produces: canonical runtime-state wording, bootstrap success criteria, stop conditions, and normalized handoff decisions.
 
 ## Shared State Vocabulary

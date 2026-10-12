@@ -36,7 +36,7 @@ test("repository exposes one complete Rainskills marketplace entry", () => {
   const skill = read("SKILL.md");
 
   assert.match(skill, /^---\nname: rainskills\n/);
-  assert.match(skill, /description: Use when /);
+  assert.match(skill, /description: .*single Rainskills runtime/i);
   assert.match(skill, /single marketplace entry/i);
   assert.match(skill, /install\.sh/);
   assert.match(skill, /every bundled `rainbond-\*` Skill as an independent Skill/i);
@@ -287,19 +287,22 @@ test("npm artifact includes the marketplace entry without a Pi adapter", () => {
   );
 });
 
-test("README presents the concise public installation and capability overview", () => {
+test("README presents the public value, installation, scope, and safety boundaries", () => {
   const readme = read("README.md");
 
-  assert.match(readme, /> 让你的 AI Agent 把应用真正跑起来。/);
+  assert.match(readme, /> 让你的 AI Agent 把当前项目部署上线，并验证页面和 API。/);
   assert.match(readme, /npx skills add goodrain\/rainskills/);
   assert.match(readme, /npx --yes rainskills/);
   assert.match(readme, /Codex、Claude Code、Pi Agent、\s*DeepSeek Harness、WorkBuddy 和 Hermes Agent/);
-  assert.match(readme, /AI 负责生成，Rainskills 负责部署，Rainbond 负责持续运行/);
-  const capabilities = readme
-    .split("## Rainskills 可以做什么")[1]
-    .split("## License")[0]
-    .match(/^- /gm) || [];
-  assert.equal(capabilities.length, 6);
+  assert.match(readme, /AI 负责生成，RainSkills 负责交付，Rainbond 负责持续运行/);
+  assert.match(readme, /## 为什么使用 RainSkills/);
+  assert.match(readme, /Agent 直接 SSH \/ 临时脚本/);
+  assert.match(readme, /页面和 API 完成实际访问验证/);
+  assert.match(readme, /RainSkills 安装与运行环境连接是两个阶段/);
+  assert.match(readme, /## 支持范围/);
+  assert.match(readme, /## 安全和权限边界/);
+  assert.match(readme, /## 哪些场景可能不需要 RainSkills/);
+  assert.doesNotMatch(readme, /Rainbond MCP|MCP 接口/);
 });
 
 test("generated marketplace guidance installs Skills without eager runtime setup", () => {
@@ -332,7 +335,10 @@ test("DeepSeek Harness and WorkBuddy are supported as first-class hosts", () => 
 
   assert.match(skill, /DeepSeek Harness=`dsh`/);
   assert.match(skill, /WorkBuddy=`workbuddy`/);
-  assert.match(read("rainbond-app-assistant/SKILL.md"), /priority over the built-in Sites skill/);
+  assert.match(
+    read("rainbond-app-assistant/SKILL.md"),
+    /WorkBuddy 中只要用户明确指定 Rainbond\/Rainskills[\s\S]{0,300}优先于内置 `发布应用 \/ Sites`/,
+  );
 });
 
 test("Hermes Agent uses the shared CLI profile and native skills home", () => {

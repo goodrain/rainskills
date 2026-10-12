@@ -1,6 +1,6 @@
 ---
 name: rainskills
-description: Use when a user asks to install, set up, initialize, update, repair, start using Rainskills, or connect, reconnect, inspect, or replace the single Rainskills runtime.
+description: Install, update, repair, connect, reconnect, inspect, or replace the single Rainskills runtime. Use for Rainskills setup and onboarding, not application deployment.
 ---
 
 # Rainskills

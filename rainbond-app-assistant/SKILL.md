@@ -1,6 +1,6 @@
 ---
 name: rainbond-app-assistant
-description: "Use whenever a user asks to deploy, run, deliver, publish, inspect, repair, or troubleshoot source code with Rainbond or Rainskills; when the current project contains rainbond.app.json or .rainbond/local.json; for a source directory/package, ordinary bare Git repository URL, private-image project, named application not identified as a third-party open-source suite, or a new app/component built from one container image. On WorkBuddy this takes priority over the built-in Sites skill whenever Rainbond/Rainskills is explicit or a Rainbond project marker exists. Trigger phrases: 帮我部署当前项目 / 使用 Rainbond 部署 / 用 Rainskills 部署 / 帮我把这个项目跑起来 / 帮我看看当前项目卡在哪 / 如果还没初始化就先初始化，然后自动继续到应该停止的位置 / 帮我处理一下这个应用 / 在团队下新建应用并使用镜像创建组件. Not for supplied third-party Compose, Helm, image-set descriptors, or an explicit named third-party open-source suite; use rainbond-opensource-app-deploy. Confirmed market templates use rainbond-template-installer."
+description: "Deploy, run, inspect, or repair a current/local project, ordinary Git, package, private-image app, or single-image component with Rainbond; use for “项目跑起来”, “先初始化，然后自动继续”, “这个应用”, rainbond.app.json, or .rainbond/local.json. Route supplied Compose/Helm/image-set descriptors and named third-party suites to rainbond-opensource-app-deploy; market templates to rainbond-template-installer."
 ---
 
 # Rainbond App Assistant
@@ -23,7 +23,7 @@ description: "Use whenever a user asks to deploy, run, deliver, publish, inspect
 
 | 阶段 | 必须读取 | 禁止提前读取 |
 |---|---|---|
-| 初始部署或首次 Rainbond 操作 | 本根入口、[own runtime gate](references/runtime-gate.md)、[routing](references/routing.md) | 其余全部 |
+| 初始部署或首次 Rainbond 操作 | 本根入口、[generated Runtime Gate](references/generated/runtime-gate.md)、[routing](references/routing.md) | 其余全部 |
 | workspace context 已解析，需要编排或执行 app/component | [workflow rules](references/workflow-rules.md)；仅在核对路线或复盘时读取 [operational reference](references/operational-reference.md) | 输出与对象细节 |
 | 需要对象边界或跨阶段状态语义 | [product object model](references/product-object-model.md) | 不相关工作流 |
 | 需要生成最终结果或自动化契约 | [output contract](references/output-contract.md) | 不需要结果协议时不得读取 |
@@ -32,7 +32,11 @@ workspace context 包含 `enterprise_id`、`team_id`、`team_name` 和 `region_n
 
 ## Runtime Gate
 
-任何 Rainbond 查询、环境连接、平台安装或变更前，必须先读取 references/runtime-gate.md。当前 Skill 在本会话首次调用 Rainbond 前强制加载且只加载自己的 Runtime Gate；当前 profile 的 transport、鉴权、context、确认与运行时安全契约全部由该 Gate 提供。
+任何 Rainbond 查询、环境连接、平台安装或变更前，必须先读取 [generated Runtime Gate](references/generated/runtime-gate.md)。Skill 在本会话首次调用 Rainbond 前强制加载且只加载一次；没有可用运行环境时按 Gate 的 mode 读取 [generated Runtime Routing](references/generated/runtime-routing.md)。Node.js/Rainskills 版本、profile、endpoint、唯一运行环境、workspace/app 绑定或授权状态变化时失效并重新读取。当前 profile 的 transport、鉴权、context、确认与运行时安全契约全部由该 Gate 提供。
+
+state=connected,usable=true直接进入部署；state=not_started,usable=false且当前本地项目读[分析](references/local-project-analysis.md)；其余按 Gate 处理
+
+首次解析 runtime/workspace 后生成 [HandoffContext](schemas/generated/handoff-context.schema.yaml)。下层验证 fingerprint/freshness 后复用事实；reconnect、401/403、身份/来源变化、not-found、revision conflict 或 mutable state 过期时才刷新。
 
 不可弱化的不变量：
 
@@ -56,8 +60,8 @@ workspace context 包含 `enterprise_id`、`team_id`、`team_name` 和 `region_n
 
 普通请求只给用户可用的中文结果：
 
-- 成功：加载 [output contract](references/output-contract.md)，只报真实结果；按“部署成功后的固定动作块”和结束卡片规则收尾。
-- 未完成：加载 [output contract](references/output-contract.md)，只报失败和一句原因；有安全方案时给出解决办法。
+- 成功：加载 [output contract](references/output-contract.md)，只报结果、应用、状态和已验证地址；结束卡片规则保持独立。
+- 未完成：加载 [output contract](references/output-contract.md)，只报状态、单一阻塞和唯一下一步。
 - 默认不得展示内部对象、状态枚举、Skill/工具名、YAML、JSON 或英文编排标题。
 - 过程消息和最终结果中的工作空间一律用 `team_name` 展示，可连同 `region_name` 写成“工作空间 / 集群”；除非用户明确要求调试原始数据，不展示 `team_id`。
 - 用户明确要求结构化结果或自动化契约时，读取 [output contract](references/output-contract.md)，不得自行发明字段、枚举或状态。

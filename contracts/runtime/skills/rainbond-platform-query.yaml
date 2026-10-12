@@ -1,0 +1,12 @@
+schema: rainskills.runtime-overlay.v1
+skill_id: rainbond-platform-query
+profiles: [cli, embedded]
+command_set: [query]
+version_guard: none
+missing_runtime_mode: read_only_query
+scope_discriminator: read_only
+resume_target: platform-query
+invariants:
+  - Only allowlisted read-only query tools may execute.
+  - Missing positive integer app_id stops before component or app detail access.
+  - Query scope must not broaden beyond the user's explicit request.

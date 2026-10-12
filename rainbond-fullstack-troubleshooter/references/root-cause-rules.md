@@ -202,8 +202,9 @@ Action:
 - read the component storage summary and locate every config-file volume and its mount path
 - read `rainbond_get_config_file` for each config-file volume to confirm the platform-side content exists
 - read pod detail and extract the missing ConfigMap name from the `FailedMount` event
-- apply at most one low-risk repair: re-save the config-file volume content via `rainbond_manage_component_storage(update_volume)`. 路径不变时省略 `new_volume_path`; when repairing the config-file content, `new_file_content` is required, then restart once
-- if the ConfigMap is still missing after one repair attempt, or the storage update returns a 5xx error, stop. Report a platform-side sync blocker; do not loop on config edits
+- execute one bounded recovery sequence: re-save the config-file volume content exactly once via `rainbond_manage_component_storage(update_volume)` with required `new_file_content` and no unchanged `new_volume_path`; restart the affected component exactly once; then read fresh post-restart component events and pod detail exactly once
+- use only that fresh post-restart evidence to decide whether the ConfigMap recovered. If the update result is unknown or returns 5xx, read current state once and stop without replaying the write or restart
+- if the ConfigMap is still missing after the bounded sequence, stop and report a platform-side sync blocker; do not loop on config edits
 
 Expected result:
 - if the mount recovers, `runtime_state.label = runtime_healthy`

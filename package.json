@@ -1,9 +1,9 @@
 {
   "name": "rainskills",
   "version": "0.1.42",
-  "description": "Interactive Rainbond skill installer for Codex, Claude Code, Pi Agent, DeepSeek Harness, WorkBuddy, and Hermes Agent",
+  "description": "Agent Skills for deploying, troubleshooting, and verifying applications on Rainbond from Codex, Claude Code, and other AI coding agents",
   "license": "Apache-2.0",
-  "homepage": "https://github.com/goodrain/rainskills#readme",
+  "homepage": "https://www.rainbond.com/rainskills",
   "bugs": {
     "url": "https://github.com/goodrain/rainskills/issues"
   },
@@ -13,13 +13,21 @@
   },
   "keywords": [
     "rainbond",
+    "ai-agent",
+    "agent-skills",
+    "deployment",
+    "application-delivery",
+    "self-hosted",
+    "kubernetes",
+    "devops",
+    "vibe-coding",
     "codex",
     "claude-code",
+    "pi-agent",
     "deepseek-harness",
+    "dsh-plugin",
     "workbuddy",
-    "hermes-agent",
-    "skills",
-    "installer"
+    "hermes-agent"
   ],
   "bin": {
     "rainskills": "bin/rainskills.js"
@@ -29,6 +37,7 @@
     "agents/",
     "bin/",
     "install.sh",
+    "dsh/",
     "marketplace/",
     "contracts/",
     "rainbond-ai-assistant/",
@@ -66,16 +75,33 @@
     "check:runtime-version": "node scripts/sync-runtime-version.mjs --check",
     "sync:runtime-contracts": "node scripts/sync-runtime-contracts.mjs",
     "check:runtime-contracts": "node scripts/sync-runtime-contracts.mjs --check",
+    "sync:shared-contracts": "node scripts/sync-shared-contracts.mjs",
+    "check:shared-contracts": "node scripts/sync-shared-contracts.mjs --check",
     "sync:ai-engine-contract": "node scripts/sync-ai-engine-contract.mjs",
     "check:ai-engine-contract": "node scripts/sync-ai-engine-contract.mjs --check",
-    "version": "npm run sync:runtime-version && npm run sync:runtime-contracts && npm run build:marketplace",
-    "prepack": "node scripts/sync-runtime-version.mjs --check && node scripts/sync-runtime-contracts.mjs --check && node scripts/build-marketplace-package.mjs --check --quiet",
+    "version": "npm run sync:runtime-version && npm run sync:runtime-contracts && npm run sync:shared-contracts && npm run build:marketplace",
+    "prepack": "node scripts/sync-runtime-version.mjs --check && node scripts/sync-runtime-contracts.mjs --check && node scripts/sync-shared-contracts.mjs --check && node scripts/build-marketplace-package.mjs --check --quiet",
     "test": "node scripts/run-test-suite.js",
     "test:test-runner": "node --test tests/test-suite-runner.test.js",
     "test:published-verifier": "node --test tests/published-package-verifier.test.js",
     "verify:published": "node scripts/verify-published-package.js",
     "test:runtime-version": "node --test tests/runtime-version-sync.test.js",
     "test:runtime-contracts": "node scripts/sync-runtime-contracts.mjs --check",
+    "test:runtime-contract-generation": "node --test tests/runtime-contract-generation.test.js",
+    "test:shared-contract-generation": "node --test tests/shared-contract-generation.test.js",
+    "test:skill-performance-repository": "node --test tests/skill-performance-repository.test.js",
+    "test:codex-host-evals": "node --test tests/codex-host-evals.test.js",
+    "test:effect-evals": "node --test tests/effect-evals.test.js",
+    "test:skill-description-budget": "node --test tests/skill-description-budget.test.js",
+    "test:skill-entrypoint-budget": "node --test tests/skill-entrypoint-budget.test.js",
+    "test:project-init-contract": "node --test tests/project-init-contract.test.js",
+    "test:bootstrap-contract": "node --test tests/bootstrap-contract.test.js",
+    "test:troubleshooter-contract": "node --test tests/troubleshooter-contract.test.js",
+    "test:env-sync-contract": "node --test tests/env-sync-contract.test.js",
+    "test:handoff-context": "node --test tests/handoff-context.test.js",
+    "test:read-snapshot": "node --test tests/read-snapshot.test.js",
+    "test:protected-poll": "node --test tests/protected-poll.test.js",
+    "test:delivery-probe": "node --test tests/delivery-probe.test.js",
     "test:auto-update": "node --test tests/auto-update.test.js",
     "test:launcher": "node --test tests/console-origin.test.js tests/host-targets.test.js tests/local-cli-installer.test.js tests/npx-launcher.test.js tests/runtime-state.test.js tests/single-runtime.test.js tests/single-runtime-cli.test.js tests/single-runtime-launcher.test.js tests/skill-manifest-builder.test.js",
     "test:api-bridge": "node --test tests/api-bridge.test.js",
@@ -83,6 +109,7 @@
     "test:ai-engine": "node --test tests/ai-engine-contract.test.js tests/ai-engine-skill-routing.test.js tests/ai-engine-output-contract.test.js tests/ai-engine-cpu-deployment.test.js tests/ai-engine-gpu-prerequisites.test.js && python3 tests/ai-engine-progressive-loading.test.py && python3 rainbond-platform-plugin-manager/scripts/validate_progressive_loading.py && python3 rainbond-ai-assistant/scripts/validate_progressive_loading.py && python3 tests/run_ai_engine_skill_evals.py",
     "test:skill-profile": "node --test tests/skill-profile-builder.test.js tests/markdown-link-integrity.test.js tests/user-facing-output-contract.test.js",
     "test:marketplace": "node --test tests/marketplace-entry.test.js",
+    "test:dsh-bundle": "node --test tests/dsh-bundle.test.js",
     "test:runtime-routing": "node --test tests/runtime-onboarding-routing.test.js && python3 rainbond-app-assistant/scripts/validate_progressive_loading.py && python3 rainbond-app-assistant/scripts/validate_cross_skill_routing.py && python3 tests/progressive-loading-validators.test.py && python3 tests/local_project_init_gate_test.py && python3 tests/run_skill_routing_evals.py",
     "test:telemetry": "node --test tests/telemetry.test.js",
     "test:platform": "node --test tests/platform-installer.test.js tests/host-cluster-installer.test.js tests/existing-kubernetes-installer.test.js tests/ssh-key-setup.test.js",
@@ -95,6 +122,11 @@
   },
   "dependencies": {
     "yaml": "2.9.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./dsh/cordis.patch.yml"
+    }
   },
   "publishConfig": {
     "access": "public",

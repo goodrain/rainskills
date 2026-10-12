@@ -1,0 +1,13 @@
+schema: rainskills.runtime-overlay.v1
+skill_id: rainbond-ai-assistant
+profiles: [cli, embedded]
+command_set: [context_resolve, read, poll, call, call_confirm]
+version_guard: none
+missing_runtime_mode: ai_workload
+scope_discriminator: workspace
+resume_target: ai-engine-intent
+invariants:
+  - AI Engine context must use the literal enterprise/workspace resolve request; do not probe with list or describe.
+  - context resolve 禁止使用 --help 或空对象 {}；required 声明维度，并不是要求模型填写维度值。
+  - CPU and model-management work may continue when GPU is unavailable; never infer GPU readiness from an empty result.
+  - Unknown write results are queried by exact model or instance identity before any retry.

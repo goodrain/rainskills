@@ -147,4 +147,4 @@ The manifest-level choice is the user's persisted intent — honor it without re
 Do not treat this reference as the execution-policy source of truth. The execution rules live in:
 - [../modules/10-context-loading.md](../modules/10-context-loading.md)
 - [../modules/20-scope-and-boundaries.md](../modules/20-scope-and-boundaries.md)
-- [../modules/40-source-and-package-rules.md](../modules/40-source-and-package-rules.md)
+- [source rules](../modules/40-source-rules.md), [source topology](../modules/42-source-topology.md), [source build rules](../modules/44-source-build-rules.md), and [package rules](../modules/45-package-rules.md)

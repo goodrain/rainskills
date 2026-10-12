@@ -893,13 +893,43 @@ test("platform query uses the single runtime without creating a runtime operatio
       "--skill-id", "rainbond-platform-query",
     ], {
       home,
-      input: JSON.stringify({ enterprise_id: "enterprise-1", app_id: 1 }),
+      input: JSON.stringify({ enterprise_id: "enterprise-1", app_id: "1" }),
     });
 
     assert.equal(result.code, 0, result.stderr);
     assert.deepEqual(JSON.parse(result.stdout), { items: [{ service_cname: "web" }] });
     assert.equal(requests.length, 1);
     assert.equal(fs.existsSync(path.join(home, ".rainbond", "rainskills", "operations")), false);
+  });
+});
+
+test("component query rejects a missing or invalid app_id before platform access", async () => {
+  await withRpcServer((_record, response) => {
+    response.writeHead(500);
+    response.end();
+  }, async (baseUrl, requests) => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-query-app-id-"));
+    prepareConnectedEnvironment(home, new URL(baseUrl).origin, "bridge-jwt.payload.signature");
+
+    for (const input of [
+      {},
+      { app_id: null },
+      { app_id: 0 },
+      { app_id: -1 },
+      { app_id: 1.5 },
+      { app_id: "0" },
+      { app_id: "app-1" },
+      { app_id: "9007199254740992" },
+    ]) {
+      const result = await runRawBridge([
+        "query", "rainbond_query_components", "--input", "-",
+        "--skill-id", "rainbond-platform-query",
+      ], { home, input: JSON.stringify(input) });
+      assert.equal(result.code, 2);
+      assert.match(result.stderr, /app_id must be a positive integer/i);
+    }
+
+    assert.equal(requests.length, 0);
   });
 });
 
@@ -1287,6 +1317,60 @@ test("one-shot platform query rejects unbound tools before state or network acce
     assert.match(result.stderr, /platform query tool is not allowed/i);
     assert.equal(requests.length, 0);
     assert.equal(fs.existsSync(path.join(home, ".rainbond", "rainskills", "operations")), false);
+  });
+});
+
+test("one-shot platform query rejects mutation-shaped query tools before state or network access", async () => {
+  await withRpcServer((_record, response) => {
+    response.writeHead(500);
+    response.end();
+  }, async (baseUrl, requests) => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-one-shot-query-mutation-"));
+    prepareConnectedEnvironment(home, new URL(baseUrl).origin, "bridge-jwt.payload.signature");
+    const result = await runRawBridge([
+      "query", "rainbond_query_delete_history", "--input", "-",
+      "--skill-id", "rainbond-platform-query",
+    ], { home, input: "{}" });
+
+    assert.equal(result.code, 2);
+    assert.match(result.stderr, /platform query tool is not allowed/i);
+    assert.equal(requests.length, 0);
+  });
+});
+
+test("platform query skill cannot invoke mutation-capable commands", async () => {
+  await withRpcServer((_record, response) => {
+    response.writeHead(500);
+    response.end();
+  }, async (baseUrl, requests) => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-query-command-boundary-"));
+    prepareConnectedEnvironment(home, new URL(baseUrl).origin, "bridge-jwt.payload.signature");
+    const result = await runRawBridge([
+      "call", "rainbond_create_app", "--input", "-",
+      "--skill-id", "rainbond-platform-query",
+    ], { home, input: "{}" });
+
+    assert.equal(result.code, 2);
+    assert.match(result.stderr, /platform query skill only allows the query command/i);
+    assert.equal(requests.length, 0);
+  });
+});
+
+test("query command is reserved for the platform query skill", async () => {
+  await withRpcServer((_record, response) => {
+    response.writeHead(500);
+    response.end();
+  }, async (baseUrl, requests) => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-query-skill-boundary-"));
+    prepareConnectedEnvironment(home, new URL(baseUrl).origin, "bridge-jwt.payload.signature");
+    const result = await runRawBridge([
+      "query", "rainbond_query_apps", "--input", "-",
+      "--skill-id", "rainbond-app-assistant",
+    ], { home, input: "{}" });
+
+    assert.equal(result.code, 2);
+    assert.match(result.stderr, /query command requires rainbond-platform-query/i);
+    assert.equal(requests.length, 0);
   });
 });
 

@@ -26,21 +26,6 @@ REQUIRED_SECTIONS = [
     "### Structured Output",
 ]
 
-CANONICAL_BUCKETS = {
-    "db not ready",
-    "dependency missing",
-    "env naming incompatibility",
-    "wrong connection values",
-    "api startup issue",
-    "frontend access-path issue",
-    "source build still running",
-    "source build failed",
-    "platform backend issue",
-    "external artifact unreachable",
-    "cluster capacity blocked",
-    "config_file_configmap_missing",
-}
-
 SECRET_KEYWORDS = (
     "password",
     "secret",
@@ -412,8 +397,6 @@ def validate_troubleshoot_cross_field_rules(payload: dict[str, Any]) -> list[str
     recommended_next_action = verification.get("recommended_next_action")
 
     if bucket is not None:
-        if bucket not in CANONICAL_BUCKETS:
-            errors.append(f"blocker_bucket must be canonical; got {bucket!r}")
         if not blocker_summary:
             errors.append("non-null blocker_bucket requires runtime_state.blocker_summary")
         if not dominant_evidence:

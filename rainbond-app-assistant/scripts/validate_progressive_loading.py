@@ -12,7 +12,7 @@ from pathlib import Path
 DEFAULT_SKILL_DIR = Path(__file__).resolve().parents[1]
 APP_INITIAL_STAGE = (
     "| 初始部署或首次 Rainbond 操作 | 本根入口、"
-    "[own runtime gate](references/runtime-gate.md)、"
+    "[generated Runtime Gate](references/generated/runtime-gate.md)、"
     "[routing](references/routing.md) | 其余全部 |"
 )
 APP_CONTEXT_STAGE = (
@@ -30,7 +30,8 @@ def require(condition: bool, message: str, failures: list[str]) -> None:
 def validate_progressive_loading(skill_dir: Path) -> list[str]:
     failures: list[str] = []
     root_path = skill_dir / "SKILL.md"
-    runtime_gate = skill_dir / "references" / "runtime-gate.md"
+    runtime_gate = skill_dir / "references" / "generated" / "runtime-gate.md"
+    runtime_routing = skill_dir / "references" / "generated" / "runtime-routing.md"
     workflow_path = skill_dir / "references" / "workflow-rules.md"
     root = root_path.read_text(encoding="utf-8")
     root_bytes = len(root.encode("utf-8"))
@@ -45,7 +46,7 @@ def validate_progressive_loading(skill_dir: Path) -> list[str]:
         failures,
     )
     require(
-        "任何 Rainbond 查询、环境连接、平台安装或变更前，必须先读取 references/runtime-gate.md。"
+        "任何 Rainbond 查询、环境连接、平台安装或变更前，必须先读取 [generated Runtime Gate](references/generated/runtime-gate.md)。"
         in root,
         "root must require its runtime gate before Rainbond access",
         failures,
@@ -57,7 +58,9 @@ def validate_progressive_loading(skill_dir: Path) -> list[str]:
     )
 
     references = {
-        "references/runtime-gate.md": "runtime gate",
+        "references/generated/runtime-gate.md": "runtime gate",
+        "references/generated/runtime-routing.md": "runtime routing",
+        "references/local-project-analysis.md": "local project analysis",
         "references/routing.md": "routing",
         "references/workflow-rules.md": "workflow rules",
         "references/operational-reference.md": "operational reference",
@@ -106,15 +109,14 @@ def validate_progressive_loading(skill_dir: Path) -> list[str]:
     ):
         require(forbidden not in root, f"root embeds staged content: {forbidden}", failures)
 
-    require(runtime_gate.is_file(), "missing references/runtime-gate.md", failures)
+    require(runtime_gate.is_file(), "missing references/generated/runtime-gate.md", failures)
     if runtime_gate.is_file():
         gate = runtime_gate.read_text(encoding="utf-8")
         for required in (
-            "rainskills.skill-runtime-contract.v1",
+            "generated-by: scripts/sync-runtime-contracts.mjs",
+            "source-sha256:",
             "<!-- rainskills-runtime-gate:start -->",
             "<!-- rainskills-runtime-gate:end -->",
-            "<!-- rainskills-runtime-routing:start -->",
-            "<!-- rainskills-runtime-routing:end -->",
             "rainskills.single-runtime-contract.v1",
             "rainskills-tools.js",
             "固定 launcher",
@@ -123,9 +125,23 @@ def validate_progressive_loading(skill_dir: Path) -> list[str]:
             "npm root -g",
             "401",
             "403",
-            "new-application-environment",
         ):
             require(required in gate, f"runtime gate is missing: {required}", failures)
+
+    require(runtime_routing.is_file(), "missing references/generated/runtime-routing.md", failures)
+    if runtime_routing.is_file():
+        routing = runtime_routing.read_text(encoding="utf-8")
+        for required in (
+            "<!-- rainskills-runtime-routing:start -->",
+            "<!-- rainskills-runtime-routing:end -->",
+            "new-application-environment",
+            "local-project-analysis.md",
+            "state=not_started",
+            "state=connected",
+            "当前本地项目",
+            "裸 Git URL",
+        ):
+            require(required in routing, f"runtime routing is missing: {required}", failures)
 
     require(workflow_path.is_file(), "missing references/workflow-rules.md", failures)
     if workflow_path.is_file():

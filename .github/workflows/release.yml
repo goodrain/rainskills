@@ -68,6 +68,12 @@ jobs:
       - name: Verify runtime package versions
         run: node scripts/sync-runtime-version.mjs --check
 
+      - name: Verify generated runtime contracts
+        run: node scripts/sync-runtime-contracts.mjs --check
+
+      - name: Verify generated shared contracts
+        run: node scripts/sync-shared-contracts.mjs --check
+
       - name: Verify marketplace package
         run: node scripts/build-marketplace-package.mjs --check
 

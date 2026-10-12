@@ -1,0 +1,62 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: rainskills.handoff-context.v1
+title: Rainskills HandoffContext
+type: object
+additionalProperties: false
+required:
+  - schema
+  - producer
+  - profile
+  - observed_at
+  - enterprise_id
+  - team_id
+  - team_name
+  - region_name
+  - app_id
+  - app_name
+  - runtime_fingerprint
+  - identity_fingerprint
+  - snapshot_revision
+  - source_kind
+  - runtime_state
+  - next_phase
+  - invalidation_reason
+properties:
+  schema:
+    const: rainskills.handoff-context.v1
+  producer:
+    type: string
+    pattern: ^rainbond-[a-z0-9-]+$
+  profile:
+    enum: [cli, embedded]
+  observed_at:
+    type: string
+    format: date-time
+  enterprise_id: { type: string, minLength: 1 }
+  team_id: { type: string, minLength: 1 }
+  team_name: { type: string, minLength: 1 }
+  region_name: { type: string, minLength: 1 }
+  app_id:
+    anyOf:
+      - { type: integer, minimum: 1 }
+      - { type: "null" }
+  app_name:
+    anyOf:
+      - { type: string, minLength: 1 }
+      - { type: "null" }
+  runtime_fingerprint: { type: string, pattern: "^[a-f0-9]{64}$" }
+  identity_fingerprint: { type: string, pattern: "^[a-f0-9]{64}$" }
+  snapshot_revision:
+    anyOf:
+      - { type: string, minLength: 1 }
+      - { type: "null" }
+  source_kind:
+    enum: [source, image, package, template, null]
+  runtime_state:
+    enum: [topology_missing, topology_building, runtime_unhealthy, runtime_healthy, capacity_blocked, code_or_build_handoff_needed]
+  next_phase:
+    enum: [init, bootstrap, troubleshoot, verify, stop]
+  invalidation_reason:
+    anyOf:
+      - { type: string, minLength: 1 }
+      - { type: "null" }

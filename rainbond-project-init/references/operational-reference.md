@@ -59,7 +59,7 @@ Hand off after init:
 Execution summary reminder:
 - `image` is the most reliable current executable path
 - `source` should only be marked ready when the source metadata is truly sufficient
-- `template` remains a reserved schema path until template-install support is implemented
+- `template` with complete install metadata hands off to `rainbond-template-installer`; incomplete metadata stops at `ask_manifest_review`
 
 Environment rule:
 - selected environment must always resolve to `preview` or `production`

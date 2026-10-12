@@ -5,6 +5,11 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import {
+  readRuntimeOverlay,
+  renderRuntimeGate,
+  renderRuntimeRouting,
+} from "./lib/runtime-contracts.mjs";
 
 const scriptRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const EMBEDDED_SKILLS = [
@@ -248,6 +253,15 @@ function transformSkill(skillName, content) {
     );
   }
 
+  if (!hasClientRuntimeBlocks && transformed.includes("<!-- rainskills-runtime-routing:start -->")) {
+    transformed = replaceRequired(
+      transformed,
+      /\s*<!-- rainskills-runtime-routing:start -->[\s\S]*?<!-- rainskills-runtime-routing:end -->/,
+      `\n\n${embeddedTransportSection().trimEnd()}\n`,
+      `${skillName} client runtime routing block`,
+    );
+  }
+
   if (skillName === "rainbond-fullstack-bootstrap") {
     transformed = transformed.replace(
       /- \*\*Profile before create\*\*: when the `rainbond_get_project_source_profile` tool is available in this session \(rainagent runtime\), you MUST call it once for the repository before the FIRST `rainbond_create_component_from_source` of that repository, and fill creation parameters from the profile \(subdirectories, default branch, dockerfile preference, ports, env keys\)\. In CLI runtimes without that tool, derive the same facts by reading the local project files before creating\. Creating source components by guess is forbidden\./,
@@ -260,7 +274,7 @@ function transformSkill(skillName, content) {
     "---\nmode: embedded\n",
     `${skillName} frontmatter`
   );
-  return insertEmbeddedRuntimeContract(transformed, skillName);
+  return transformed;
 }
 
 function assertEmbeddedSafe(root) {
@@ -281,6 +295,9 @@ function buildEmbeddedProfile({ source_root: sourceRoot, output, revision }) {
   const resolvedOutput = path.resolve(output);
   assertEmptyOutput(resolvedOutput);
   fs.mkdirSync(resolvedOutput, { recursive: true, mode: 0o700 });
+  const packageVersion = JSON.parse(
+    fs.readFileSync(path.join(resolvedSource, "package.json"), "utf8"),
+  ).version;
 
   for (const skillName of EMBEDDED_SKILLS) {
     const source = path.join(resolvedSource, skillName);
@@ -294,21 +311,28 @@ function buildEmbeddedProfile({ source_root: sourceRoot, output, revision }) {
       const sanitized = transformEmbeddedNarrative(original);
       if (sanitized !== original) fs.writeFileSync(markdownFile, sanitized, "utf8");
     }
-    const runtimeGate = path.join(destination, "references", "runtime-gate.md");
-    if (fs.existsSync(runtimeGate)) {
-      const replacement = skillName === "rainbond-app-assistant"
-        ? `${embeddedTopLevelPreflight()}\n${embeddedRuntimeSection()}`
-        : embeddedTransportSection();
-      const transformedGate = replaceClientRuntimeBlocks(
-        fs.readFileSync(runtimeGate, "utf8"),
-        replacement,
-        `${skillName} runtime gate reference`
-      );
-      fs.writeFileSync(runtimeGate, transformedGate, { encoding: "utf8", mode: 0o600 });
-    }
     const skillFile = path.join(destination, "SKILL.md");
     const transformed = transformSkill(skillName, fs.readFileSync(skillFile, "utf8"));
     fs.writeFileSync(skillFile, transformed, { encoding: "utf8", mode: 0o600 });
+    const overlay = readRuntimeOverlay(resolvedSource, skillName);
+    const generatedGate = path.join(destination, "references", "generated", "runtime-gate.md");
+    fs.mkdirSync(path.dirname(generatedGate), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(
+      generatedGate,
+      renderRuntimeGate({
+        sourceRoot: resolvedSource,
+        packageVersion,
+        overlay,
+        profile: "embedded",
+      }),
+      { encoding: "utf8", mode: 0o600 },
+    );
+    const generatedRouting = path.join(destination, "references", "generated", "runtime-routing.md");
+    fs.writeFileSync(
+      generatedRouting,
+      renderRuntimeRouting({ sourceRoot: resolvedSource, overlay, profile: "embedded" }),
+      { encoding: "utf8", mode: 0o600 },
+    );
   }
 
   const referencePath = path.join(

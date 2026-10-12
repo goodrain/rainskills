@@ -1,0 +1,12 @@
+schema: rainskills.runtime-overlay.v1
+skill_id: rainbond-app-assistant
+profiles: [cli, embedded]
+command_set: [context_resolve, read, snapshot, poll, handoff_create, handoff_validate, call, call_confirm]
+version_guard: required
+missing_runtime_mode: new_application
+scope_discriminator: workspace
+resume_target: project-deployment
+invariants:
+  - team_id may be used internally but must never appear in user-visible progress or results.
+  - A specialist handoff reuses the validated gate and context unless an explicit invalidation condition occurs.
+  - Source-backed intent must not silently change to package, image, or template delivery.

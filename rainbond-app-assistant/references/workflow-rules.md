@@ -434,17 +434,8 @@
 
     具体的 provider 命名约定、connection env 变量名（`DB_*` / `REDIS_*` / `KAFKA_*` 等是示例，按 provider 文档实际名字为准）、以及依赖 alias 细节，详见 bootstrap modules/30-creation-rules.md 的相关章节。
 24. 不要自动拉起本地 Docker Desktop/OrbStack、执行本地 Docker build/push、或推送临时镜像作为兜底；这属于 delivery-mode 策略切换，必须先得到用户明确确认。
-25. 每次运行内部仍必须形成 `AppAssistantResult` 结果对象，但默认用户答复不一定暴露 YAML。
-    当 `source_app_delivery` 的 runtime healthy、没有 blocker、控制台部署位置和公网访问地址都已确定，且 delivery 已 `delivered` 或只剩浏览器人工确认时，默认使用简洁中文交付报告，不追加 `### Structured Output`。报告的全部现有内容结束后，必须以以下固定动作块收尾；动作块只出现一次，后面不得再追加文字：
-
-    ```text
-    你接下来可以：
-
-    1. 修改代码并重新部署
-    2. 将当前应用创建快照发布版本，用于部署到生产环境
-    3. 查看运行日志
-    4. 将应用迁移到自己的 Rainbond
-    ```
+25. 每次运行内部仍必须形成 `AppAssistantResult` 结果对象，但默认用户答复不暴露 YAML。
+    当 `source_app_delivery` 的 runtime healthy、没有 blocker 且 delivery 已 `delivered` 或只剩浏览器人工确认时，默认正文只输出结果、应用、状态和已验证地址，同一字段只出现一次；不附加固定下一步列表。
 26. 只有在自动化/评测明确要求结构化契约，或用户明确要求 YAML、JSON、调试详情、内部状态对象时，才把 `AppAssistantResult` 渲染为最终 fenced `yaml`。部署失败、仍在构建、存在 blocker/handoff/身份歧义或进入 dev-to-test promotion 都不是默认暴露 YAML 的理由。
 27. 如果本次使用了 Git、镜像仓库或其他传输代理，必须在默认交付报告的处理记录或注意事项中说明；在结构化模式下也必须写入 `actions_performed[].details`。
     代理事实属于执行记录，不是强制暴露 YAML 的理由。
@@ -454,7 +445,7 @@
      - 如果用户要求操作这些组件，明确告知：需要通过 Kubernetes 命令（如 `kubectl rollout restart deployment/<name> -n rbd-system`）或 Rainbond 集群管理控制台进行，超出本技能的操作范围，不要假装可以执行
 28a. 已知 `service_id` 的组件在构建、部署或运行操作后失败或立即异常时，调用 `rainbond_get_operation_failure_context({team_name, region_name, app_id, service_id, event_id?})`，按其 `classified_reason` 决定停下、只读核实或低风险修复；`unknown` 回退既有证据链，禁止盲目重放写操作。CLI 在确认令牌生成前报告的 missing/invalid field 属于参数校验失败，尚未进入组件操作：按 Console Tool schema 修正参数一次，不调用 failure context，也不查询组件残留。
     `event_log_tail` 只作为敏感诊断证据使用，绝不能复制、引用或向用户展示其原文；输出只能使用 `classified_reason`、非敏感摘要和已脱敏字段。
-28b. 运行态或交付健康检查先调用 `rainbond_get_app_health_overview`；仅 `abnormal` 或 `unknown` 组件再读取 component summary、日志、事件或存储明细。
+28b. 运行态或交付健康检查先用一次 `snapshot app|delivery` 聚合已知只读请求（包含 `rainbond_get_app_health_overview`）；仅 `abnormal` 或 `unknown` 组件再读取有 cursor/time/tail 边界的明细。
 29. **仅给 bare Git URL 时默认 root + 空 `subdirectories`**：当用户给的只是一个 Git URL（无本地 manifest、无明确子目录提示），默认 `subdirectories=""`（仓库根）进入 source 检测，让后端判断这个仓库结构。**不要**先问用户"根目录还是子目录"。
     - 单项目仓库（一个 buildable root）→ 后端检测通过，正常 build
     - 多组件 / 多 example 仓库 → 后端返回 `multiple services detected` 或等价歧义信号 → 按 Iron Law 10 停下问用户选哪个子目录
@@ -482,7 +473,7 @@
     再执行客户端上传事务。初始化上传时传 `component_id=service_id`，上传状态非空后调用
     `rainbond_replace_component_package(service_id=原值, event_id=新上传事件)`；禁止再次调用
     `rainbond_create_component_from_package`，禁止通过 `v2` / `v3` 后缀绕过英文名冲突。替换返回构建
-    `event_id` 后使用 `rainbond_wait_for_build_completion` 有界等待并验证健康状态。
+    `event_id` 后在当前回复中只调用一次 `rainbond_wait_for_build_completion(timeout=60)`。返回 `status=running` 时立即结束当前回复，报告已完成动作、当前状态和 event；不得再次等待、手工轮询或继续轮询。用户之后明确说“继续”时才开始新的检查回合。
 30b. **镜像组件的后续发布也必须复用组件**：期望镜像与当前镜像相同但需要重新拉取时，直接调用
     `rainbond_build_component(service_id=原值)`；镜像地址或标签变化时，调用
     `rainbond_change_component_image(service_id=原值, image=新值)`，再调用 `rainbond_build_component`。

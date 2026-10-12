@@ -1,0 +1,12 @@
+schema: rainskills.runtime-overlay.v1
+skill_id: rainbond-project-init
+profiles: [cli]
+command_set: [context_resolve, read, handoff_create, handoff_validate, call, call_confirm]
+version_guard: none
+missing_runtime_mode: new_application
+scope_discriminator: workspace
+resume_target: project-initialization
+invariants:
+  - Project identity and app_id must follow the canonical binding schema.
+  - Template manifests hand off to template_install and never enter bootstrap.
+  - Identity ambiguity stops without guessing or scanning outside the project.
