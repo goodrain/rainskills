@@ -98,7 +98,7 @@ test("generated CLI references are current, source-digested, and preserve comman
     assert.match(content, /write_stdin/);
     assert.match(content, /403/);
     const contract = extractContract(content);
-    assert.equal(contract.package_version, "rainskills@0.1.42", skillId);
+    assert.equal(contract.package_version, "rainskills@0.1.43", skillId);
     for (const command of Object.values(contract.input_commands)) {
       assert(command.argv.includes("--skill-id"), skillId);
       assert(command.argv.includes(skillId), skillId);
@@ -122,13 +122,13 @@ test("renderer is deterministic, rejects unknown overlay keys, and binds source 
   const overlay = runtime.readRuntimeOverlay(repoRoot, "rainbond-app-assistant");
   const first = runtime.renderRuntimeGate({
     sourceRoot: repoRoot,
-    packageVersion: "0.1.42",
+    packageVersion: "0.1.43",
     overlay,
     profile: "cli",
   });
   const second = runtime.renderRuntimeGate({
     sourceRoot: repoRoot,
-    packageVersion: "0.1.42",
+    packageVersion: "0.1.43",
     overlay,
     profile: "cli",
   });
@@ -136,7 +136,7 @@ test("renderer is deterministic, rejects unknown overlay keys, and binds source 
 
   const changed = runtime.renderRuntimeGate({
     sourceRoot: repoRoot,
-    packageVersion: "0.1.42",
+    packageVersion: "0.1.43",
     overlay: { ...overlay, invariants: [...overlay.invariants, "changed fixture invariant"] },
     profile: "cli",
   });
