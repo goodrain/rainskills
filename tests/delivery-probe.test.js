@@ -176,15 +176,18 @@ test("real probe transport enforces total timeout and response limits", async (t
     method: "GET",
     address: "127.0.0.1",
     headers: {},
-    connectTimeoutMs: 100,
-    totalTimeoutMs: 50,
+    connectTimeoutMs: 5000,
+    totalTimeoutMs: 5000,
     maxBodyBytes: 32,
   };
   const declared = await defaultRequestUrl(new URL(`http://localhost:${port}/declared-large`), options);
   assert.equal(declared.error, "body_too_large");
   const chunked = await defaultRequestUrl(new URL(`http://localhost:${port}/chunked-large`), options);
   assert.equal(chunked.error, "body_too_large");
-  const slow = await defaultRequestUrl(new URL(`http://localhost:${port}/slow`), options);
+  const slow = await defaultRequestUrl(new URL(`http://localhost:${port}/slow`), {
+    ...options,
+    totalTimeoutMs: 50,
+  });
   assert.equal(slow.error, "timeout");
 });
 

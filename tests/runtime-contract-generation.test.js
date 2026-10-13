@@ -98,7 +98,7 @@ test("generated CLI references are current, source-digested, and preserve comman
     assert.match(content, /write_stdin/);
     assert.match(content, /403/);
     const contract = extractContract(content);
-    assert.equal(contract.package_version, "rainskills@0.1.43", skillId);
+    assert.equal(contract.package_version, `rainskills@${require("../package.json").version}`, skillId);
     for (const command of Object.values(contract.input_commands)) {
       assert(command.argv.includes("--skill-id"), skillId);
       assert(command.argv.includes(skillId), skillId);
