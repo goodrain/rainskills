@@ -590,7 +590,7 @@ test("protected update state and custom install destinations survive across runs
     path.join(home, ".dsh", "skills"),
   ]);
   assert.deepEqual(resolveInstallDestinations(["workbuddy", "--force"], home), [
-    path.join(home, ".workbuddy-ai", "skills"),
+    path.join(home, ".workbuddy", "skills"),
   ]);
   assert.deepEqual(resolveInstallDestinations(["hermes", "--force"], home), [
     path.join(home, ".hermes", "skills"),
@@ -600,7 +600,7 @@ test("protected update state and custom install destinations survive across runs
     path.join(home, ".codex", "skills"),
     path.join(home, ".pi", "agent", "skills"),
     path.join(home, ".dsh", "skills"),
-    path.join(home, ".workbuddy-ai", "skills"),
+    path.join(home, ".workbuddy", "skills"),
     path.join(home, ".hermes", "skills"),
   ]);
   assert.deepEqual(
@@ -655,6 +655,25 @@ test("skill synchronization updates known agent roots without touching Rainbond 
   assert.equal(
     fs.readFileSync(path.join(rainbondRoot, "rainskills", "runtime-connection-v1.json"), "utf8"),
     "runtime sentinel\n"
+  );
+});
+
+test("skill synchronization discovers the default WorkBuddy root without saved state", () => {
+  const { synchronizeInstalledSkills } = require(autoUpdatePath);
+  const home = temporaryHome();
+  const packageRoot = path.join(home, "package");
+  const workBuddyRoot = path.join(home, ".workbuddy", "skills");
+  fs.mkdirSync(packageRoot);
+  fs.mkdirSync(workBuddyRoot, { recursive: true });
+  writeSkill(packageRoot, "rainbond-one", "new one");
+  writeSkill(workBuddyRoot, "rainbond-one", "old one");
+
+  const result = synchronizeInstalledSkills({ packageRoot, home, platform: "linux" });
+
+  assert.equal(result.destinations, 1);
+  assert.match(
+    fs.readFileSync(path.join(workBuddyRoot, "rainbond-one", "SKILL.md"), "utf8"),
+    /new one/
   );
 });
 

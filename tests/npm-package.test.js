@@ -138,7 +138,7 @@ test("package metadata defines a public npx command with pinned runtime dependen
   );
   assert.equal(
     manifest.scripts["test:windows"],
-    "node --test tests/windows-onboarding.test.js tests/windows-platform.test.js"
+    "node --test tests/windows-onboarding.test.js tests/windows-platform.test.js tests/windows-runtime-store.test.js"
   );
 });
 
@@ -337,6 +337,17 @@ test("the packed default installer installs only Skills and prints the approved 
   const installedRuntimeRoot = path.join(home, ".rainbond", "lib", "rainskills");
   assert.equal(fs.existsSync(path.join(installedRuntimeRoot, "bin", "rainskills.js")), true);
   assert.equal(fs.existsSync(path.join(installedRuntimeRoot, "install.sh")), true);
+  assert.equal(
+    fs.existsSync(path.join(
+      installedRuntimeRoot,
+      "marketplace",
+      "rainskills",
+      "skills",
+      "rainskills",
+      "SKILL.md"
+    )),
+    true
+  );
   assert.equal(fs.existsSync(path.join(installedRuntimeRoot, "node_modules", "yaml", "package.json")), true);
   const installedUploadArgs = [
     "package-upload", "--archive", path.join(tempDir, "package.zip"), "--input", "-",

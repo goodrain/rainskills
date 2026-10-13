@@ -15,6 +15,7 @@ const RUNTIME_BUNDLE_DIRECTORIES = Object.freeze([
   "bin",
   "scripts",
   "contracts",
+  "marketplace",
   "rainbond-ai-assistant",
   "rainbond-app-assistant",
   "rainbond-app-version-assistant",

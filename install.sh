@@ -251,7 +251,7 @@ Environment:
   RAINBOND_LOGIN_TIMEOUT Browser login timeout in seconds (default 600)
   RAINSKILLS_NO_BROWSER  Set to 1 to print the authorization URL without opening it
   DSH_HOME               DeepSeek Harness home (default: ~/.dsh)
-  WORKBUDDY_CONFIG_DIR   WorkBuddy config home (default: ~/.workbuddy-ai)
+  WORKBUDDY_CONFIG_DIR   WorkBuddy config home (default: ~/.workbuddy)
   HERMES_HOME            Hermes Agent home (default: ~/.hermes)
 EOF
 }
@@ -1489,7 +1489,7 @@ collect_destinations() {
         destinations+=("${DSH_HOME:-$HOME/.dsh}/skills")
         ;;
       workbuddy)
-        destinations+=("${WORKBUDDY_CONFIG_DIR:-$HOME/.workbuddy-ai}/skills")
+        destinations+=("${WORKBUDDY_CONFIG_DIR:-$HOME/.workbuddy}/skills")
         ;;
       hermes)
         destinations+=("${HERMES_HOME:-$HOME/.hermes}/skills")
@@ -1499,7 +1499,7 @@ collect_destinations() {
         destinations+=("$HOME/.codex/skills")
         destinations+=("$HOME/.pi/agent/skills")
         destinations+=("${DSH_HOME:-$HOME/.dsh}/skills")
-        destinations+=("${WORKBUDDY_CONFIG_DIR:-$HOME/.workbuddy-ai}/skills")
+        destinations+=("${WORKBUDDY_CONFIG_DIR:-$HOME/.workbuddy}/skills")
         destinations+=("${HERMES_HOME:-$HOME/.hermes}/skills")
         ;;
       *)
@@ -3177,9 +3177,8 @@ main() {
   [[ "${#skills[@]}" -gt 0 ]] || die "在 $SCRIPT_DIR 下没有找到 rainbond-* skill 目录。"
 
   local root_skill_dir="$SCRIPT_DIR/marketplace/rainskills/skills/rainskills"
-  if [[ -d "$root_skill_dir" ]]; then
-    skills+=("$root_skill_dir")
-  fi
+  [[ -d "$root_skill_dir" ]] || die "Rainskills 安装包缺少 rainskills 根入口 Skill。"
+  skills+=("$root_skill_dir")
 
   for skill_dir in "${skills[@]}"; do
     validate_skill_dir "$skill_dir"

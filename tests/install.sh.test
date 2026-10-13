@@ -527,7 +527,7 @@ run_installer() {
     fi
     HOME="$workdir/home" \
     DSH_HOME="${TEST_DSH_HOME:-$workdir/home/.dsh}" \
-    WORKBUDDY_CONFIG_DIR="${TEST_WORKBUDDY_CONFIG_DIR:-$workdir/home/.workbuddy-ai}" \
+    WORKBUDDY_CONFIG_DIR="${TEST_WORKBUDDY_CONFIG_DIR:-}" \
     HERMES_HOME="${TEST_HERMES_HOME:-$workdir/home/.hermes}" \
     SHELL="/bin/zsh" \
     TEST_LOG_DIR="$workdir/logs" \
@@ -888,7 +888,7 @@ test_skills_only_completion_contract_for_every_posix_target() {
       assert_file_exists "$tmpdir/home/.dsh/skills/rainbond-app-assistant/SKILL.md"
     fi
     if [[ "$target" == "workbuddy" || "$target" == "all" ]]; then
-      assert_file_exists "$tmpdir/home/.workbuddy-ai/skills/rainbond-app-assistant/SKILL.md"
+      assert_file_exists "$tmpdir/home/.workbuddy/skills/rainbond-app-assistant/SKILL.md"
     fi
     if [[ "$target" == "hermes" || "$target" == "all" ]]; then
       assert_file_exists "$tmpdir/home/.hermes/skills/rainbond-app-assistant/SKILL.md"
@@ -979,7 +979,7 @@ test_posix_all_target_installs_every_skill_set_and_preserves_force_counts() {
     "$tmpdir/home/.claude/skills/rainbond-app-assistant" \
     "$tmpdir/home/.pi/agent/skills/rainbond-app-assistant" \
     "$tmpdir/home/.dsh/skills/rainbond-app-assistant" \
-    "$tmpdir/home/.workbuddy-ai/skills/rainbond-app-assistant" \
+    "$tmpdir/home/.workbuddy/skills/rainbond-app-assistant" \
     "$tmpdir/home/.hermes/skills/rainbond-app-assistant" \
     "$tmpdir/logs"
   make_fake_commands "$tmpdir/bin"
@@ -987,7 +987,7 @@ test_posix_all_target_installs_every_skill_set_and_preserves_force_counts() {
   printf 'old claude skill\n' > "$tmpdir/home/.claude/skills/rainbond-app-assistant/SKILL.md"
   printf 'old pi skill\n' > "$tmpdir/home/.pi/agent/skills/rainbond-app-assistant/SKILL.md"
   printf 'old dsh skill\n' > "$tmpdir/home/.dsh/skills/rainbond-app-assistant/SKILL.md"
-  printf 'old workbuddy skill\n' > "$tmpdir/home/.workbuddy-ai/skills/rainbond-app-assistant/SKILL.md"
+  printf 'old workbuddy skill\n' > "$tmpdir/home/.workbuddy/skills/rainbond-app-assistant/SKILL.md"
   printf 'old hermes skill\n' > "$tmpdir/home/.hermes/skills/rainbond-app-assistant/SKILL.md"
   source_skill="$REPO_ROOT/rainbond-app-assistant/SKILL.md"
   skill_count="$(find "$REPO_ROOT" -maxdepth 1 -mindepth 1 -type d -name 'rainbond-*' | wc -l | tr -d ' ')"
@@ -1009,7 +1009,7 @@ test_posix_all_target_installs_every_skill_set_and_preserves_force_counts() {
     || fail "Pi pre-existing Skill was not force-overwritten"
   cmp -s "$source_skill" "$tmpdir/home/.dsh/skills/rainbond-app-assistant/SKILL.md" \
     || fail "DeepSeek Harness pre-existing Skill was not force-overwritten"
-  cmp -s "$source_skill" "$tmpdir/home/.workbuddy-ai/skills/rainbond-app-assistant/SKILL.md" \
+  cmp -s "$source_skill" "$tmpdir/home/.workbuddy/skills/rainbond-app-assistant/SKILL.md" \
     || fail "WorkBuddy pre-existing Skill was not force-overwritten"
   cmp -s "$source_skill" "$tmpdir/home/.hermes/skills/rainbond-app-assistant/SKILL.md" \
     || fail "Hermes pre-existing Skill was not force-overwritten"

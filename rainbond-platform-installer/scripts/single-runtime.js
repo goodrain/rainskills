@@ -57,10 +57,18 @@ function validateSingleRuntime(input) {
   };
 }
 
+function createDefaultStateStore(platform, home) {
+  if (platform === "win32") {
+    const { createWindowsSecureStateStore } = require("./windows-platform.js");
+    return createWindowsSecureStateStore({ home });
+  }
+  return createSecureStateStore({ platform, home });
+}
+
 function createSingleRuntimeStore({
   platform = process.platform,
   home = os.homedir(),
-  stateStore = createSecureStateStore({ platform, home }),
+  stateStore = createDefaultStateStore(platform, home),
   now = () => new Date().toISOString(),
 } = {}) {
   const runtimePath = path.join(home, ".rainbond", "rainskills", "single-runtime-v1.json");
