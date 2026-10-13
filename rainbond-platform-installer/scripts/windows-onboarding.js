@@ -197,7 +197,18 @@ function discoverSkills(packageRoot) {
     "skills",
     "rainskills"
   );
-  if (fs.existsSync(rootSkill)) skills.push(rootSkill);
+  if (fs.existsSync(rootSkill)) {
+    skills.push(rootSkill);
+  } else {
+    const packageFile = path.join(packageRoot, "package.json");
+    let officialPackage = false;
+    try {
+      officialPackage = JSON.parse(fs.readFileSync(packageFile, "utf8")).name === "rainskills";
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+    if (officialPackage) throw new Error("官方 Rainskills 包缺少 rainskills 根入口 Skill");
+  }
   if (skills.length === 0) {
     throw new Error(`在 ${packageRoot} 下没有找到 rainbond-* skill 目录`);
   }

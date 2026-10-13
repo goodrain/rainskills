@@ -36,7 +36,7 @@ function workBuddySkillsDirectory(home, env = process.env) {
   const configHome = typeof env.WORKBUDDY_CONFIG_DIR === "string"
     && env.WORKBUDDY_CONFIG_DIR.trim()
     ? env.WORKBUDDY_CONFIG_DIR.trim()
-    : path.join(home, ".workbuddy-ai");
+    : path.join(home, ".workbuddy");
   return path.join(path.resolve(configHome), "skills");
 }
 

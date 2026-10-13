@@ -36,6 +36,9 @@ jobs:
       - name: Run Windows installer contracts
         run: node --test tests/windows-onboarding.test.js tests/windows-platform.test.js tests/platform-installer.test.js
 
+      - name: Verify Windows runtime credentials through source and installed CLI
+        run: node --test tests/windows-runtime-store.test.js
+
   test:
     name: ${{ matrix.os }} / Node ${{ matrix.node }}
     runs-on: ${{ matrix.os }}

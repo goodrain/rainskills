@@ -50,6 +50,7 @@ const DEFAULT_AGENT_ROOTS = Object.freeze([
   [".codex", "skills"],
   [".claude", "skills"],
   [".agents", "skills"],
+  [".workbuddy", "skills"],
   [".hermes", "skills"],
 ]);
 const AUTO_UPDATE_ENVIRONMENT_KEYS = Object.freeze([

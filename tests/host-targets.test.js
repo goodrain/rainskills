@@ -23,6 +23,9 @@ test("host target registry exposes every first-class Rainskills host", () => {
 
 test("agent-specific destinations honor their config homes", () => {
   const home = path.resolve("/tmp/rainskills-host-home");
+  assert.deepEqual(destinationsForHostTarget("workbuddy", home, {}), [
+    path.join(home, ".workbuddy", "skills"),
+  ]);
   const env = {
     DSH_HOME: path.join(home, "custom-dsh"),
     WORKBUDDY_CONFIG_DIR: path.join(home, "custom-workbuddy"),

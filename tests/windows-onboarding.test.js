@@ -349,7 +349,7 @@ test("Windows argument parsing rejects unknown input before installation", () =>
     path.join(home, ".codex", "skills"),
     path.join(home, ".pi", "agent", "skills"),
     path.join(home, ".dsh", "skills"),
-    path.join(home, ".workbuddy-ai", "skills"),
+    path.join(home, ".workbuddy", "skills"),
     path.join(home, ".hermes", "skills"),
   ]);
   assert.deepEqual(destinationsForTarget("pi", home, {}), [
@@ -359,7 +359,7 @@ test("Windows argument parsing rejects unknown input before installation", () =>
     path.join(home, ".dsh", "skills"),
   ]);
   assert.deepEqual(destinationsForTarget("workbuddy", home, {}), [
-    path.join(home, ".workbuddy-ai", "skills"),
+    path.join(home, ".workbuddy", "skills"),
   ]);
   assert.deepEqual(destinationsForTarget("hermes", home, {}), [
     path.join(home, ".hermes", "skills"),
@@ -433,6 +433,18 @@ test("Windows discovery includes the existing root environment-management Skill"
   const rootSkill = writeMarketplaceRootSkill(packageRoot);
 
   assert.deepEqual(discoverSkills(packageRoot), [businessSkill, rootSkill]);
+});
+
+test("Windows discovery rejects an official package without the root Skill", () => {
+  const { discoverSkills } = require(windowsOnboardingPath);
+  const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-package-missing-root-"));
+  fs.writeFileSync(
+    path.join(packageRoot, "package.json"),
+    `${JSON.stringify({ name: "rainskills", version: "1.0.0" })}\n`
+  );
+  writeSkill(packageRoot, "rainbond-test");
+
+  assert.throws(() => discoverSkills(packageRoot), /入口 Skill|root Skill/i);
 });
 
 test("native main honors a custom Skills destination without runtime setup", async () => {

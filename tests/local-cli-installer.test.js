@@ -63,6 +63,17 @@ test("local CLI installer publishes a protected stable bridge and removes only l
     "rainskills",
     "package.json"
   );
+  const localRootSkill = path.join(
+    home,
+    ".rainbond",
+    "lib",
+    "rainskills",
+    "marketplace",
+    "rainskills",
+    "skills",
+    "rainskills",
+    "SKILL.md"
+  );
   const runtimeModule = path.join(
     home,
     ".rainbond",
@@ -76,6 +87,7 @@ test("local CLI installer publishes a protected stable bridge and removes only l
   assert.equal(fs.existsSync(manifest), true);
   assert.equal(fs.existsSync(localCli), true);
   assert.equal(fs.existsSync(localManifest), true);
+  assert.equal(fs.existsSync(localRootSkill), true);
   assert.equal(require(localManifest).version, require("../package.json").version);
   const installedLauncher = require(localCli);
   const platformInvocation = installedLauncher.resolveInvocation([
@@ -112,6 +124,28 @@ test("local CLI installer publishes a protected stable bridge and removes only l
   assert.deepEqual(claude.mcpServers.keep, { url: "https://keep.example/mcp" });
   assert.equal(claude.mcpServers.rainbond, undefined);
   assert.equal(claude.theme, "dark");
+
+  const workBuddySkills = path.join(home, ".workbuddy", "skills");
+  const repair = spawnSync(process.execPath, [
+    localCli,
+    "workbuddy",
+    "--force",
+    "--non-interactive",
+    "--no-telemetry",
+  ], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      HOME: home,
+      RAINSKILLS_TELEMETRY_DISABLED: "1",
+      WORKBUDDY_CONFIG_DIR: "",
+    },
+  });
+  assert.equal(repair.status, 0, repair.stderr || repair.stdout);
+  assert.equal(
+    fs.existsSync(path.join(workBuddySkills, "rainskills", "SKILL.md")),
+    true
+  );
 });
 
 test("migration preserves direct Rainbond MCP entries that were not owned by Rainskills", () => {
