@@ -144,7 +144,7 @@ export function buildSkillManifest({ source_root: sourceRoot, output, revision }
   ].sort((left, right) => path.basename(left).localeCompare(path.basename(right)));
   if (skillDirectories.length === 0) throw new Error("no RainSkills Skill directories were found");
   for (const directory of skillDirectories) assertRegularDirectory(directory, "Skill directory");
-  assertOutputOutsideSkills(output, skillDirectories);
+  if (output !== undefined) assertOutputOutsideSkills(output, skillDirectories);
 
   const skills = skillDirectories.map((directory) => {
     const id = path.basename(directory);
@@ -176,7 +176,8 @@ export function buildSkillManifest({ source_root: sourceRoot, output, revision }
     source_revision: revision || null,
     skills,
   };
-  writePrivateJson(output, manifest);
+  // Installers can compare the complete expected manifest before creating staging.
+  if (output !== undefined) writePrivateJson(output, manifest);
   return manifest;
 }
 

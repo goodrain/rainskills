@@ -1165,7 +1165,7 @@ install_local_cli() {
   local installer="$SCRIPT_DIR/scripts/install-local-cli.mjs"
   [[ -f "$installer" ]] || die "Rainskills 本地 CLI 安装器缺失。"
   node "$installer" --source-root "$SCRIPT_DIR" --home "$HOME" >/dev/null \
-    || die "Rainskills 本地 CLI 安装失败。"
+    || die "Rainskills 本地 CLI 刷新未完成，请查看上方 [rainskills-cli] 阶段和原始错误；目录访问或删除确认被拒绝时，请在前台取得宿主授权后重试。"
 }
 
 copy_skill() {

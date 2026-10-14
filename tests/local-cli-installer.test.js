@@ -6,9 +6,191 @@ const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const test = require("node:test");
+const { pathToFileURL } = require("node:url");
 
 const repoRoot = path.resolve(__dirname, "..");
 const installer = path.join(repoRoot, "scripts", "install-local-cli.mjs");
+
+async function installationFixture(t) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-cli-refresh-"));
+  t.after(() => {
+    t.mock.restoreAll();
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  const { installLocalCli } = await import(pathToFileURL(installer).href);
+  const warnings = [];
+  const install = () => installLocalCli({ source_root: repoRoot, home, warn: (message) => warnings.push(message) });
+  install();
+  const root = path.join(home, ".rainbond");
+  const files = [
+    "lib/rainbond-platform-installer/scripts/installed-version.js",
+    "lib/rainskills/bin/rainskills.js",
+    "bin/rainskills-tools.js",
+    "bin/delivery-probe.js",
+    "bin/rainskills-skill-manifest.json",
+  ].map((name) => path.join(root, name));
+  return { home, root, files, warnings, install };
+}
+
+function snapshot(directory) {
+  return fs.readdirSync(directory).sort().flatMap((name) => {
+    const file = path.join(directory, name);
+    const info = fs.lstatSync(file);
+    return info.isDirectory()
+      ? [[name, "directory"], ...snapshot(file).map(([child, ...rest]) => [path.join(name, child), ...rest])]
+      : [[name, info.mode, fs.readFileSync(file).toString("base64")]];
+  });
+}
+
+test("identical CLI reinstall performs no staging, replacement, or cleanup writes", async (t) => {
+  const { install, files } = await installationFixture(t);
+  const before = files.map((file) => fs.statSync(file).mtimeMs);
+  for (const method of ["mkdirSync", "writeFileSync", "copyFileSync", "renameSync", "rmSync", "chmodSync"]) {
+    t.mock.method(fs, method, () => { throw new Error(`unexpected ${method}`); });
+  }
+  assert.equal(install().status, "unchanged");
+  assert.deepEqual(files.map((file) => fs.statSync(file).mtimeMs), before);
+});
+
+test("same-version CLI repairs changed, missing, and unexpected files", async (t) => {
+  const { install, root, files } = await installationFixture(t);
+  const expected = files.map((file) => fs.readFileSync(file));
+  fs.writeFileSync(files[0], "damaged runtime\n");
+  fs.unlinkSync(files[1]);
+  fs.writeFileSync(files[2], "damaged bridge\n");
+  fs.writeFileSync(files[4], "damaged manifest\n");
+  const extra = path.join(root, "lib", "rainskills", "unexpected.js");
+  fs.writeFileSync(extra, "stale file\n");
+  assert.equal(install().status, "installed");
+  assert.deepEqual(files.map((file) => fs.readFileSync(file)), expected);
+  assert.equal(fs.existsSync(extra), false);
+});
+
+test("failed replacement rolls back earlier CLI targets and preserves the original error when cleanup fails", async (t) => {
+  const { install, root, files, warnings } = await installationFixture(t);
+  for (const file of files) fs.writeFileSync(file, `previous ${path.basename(file)}\n`);
+  const beforeLib = snapshot(path.join(root, "lib"));
+  const beforeBin = snapshot(path.join(root, "bin"));
+  const rename = fs.renameSync;
+  let failed = false;
+  t.mock.method(fs, "renameSync", (from, to) => {
+    if (to === files[3] && !failed) {
+      failed = true;
+      throw new Error("SIMULATED_SANDBOX_REPLACE_DENIED");
+    }
+    return rename(from, to);
+  });
+  t.mock.method(fs, "rmSync", () => { throw new Error("SIMULATED_SAFE_DELETE_CONFIRM_REQUIRED"); });
+  assert.throws(install, (error) => {
+    assert.match(error.message, /replace.*SIMULATED_SANDBOX_REPLACE_DENIED/);
+    return true;
+  });
+  assert.deepEqual(snapshot(path.join(root, "lib")), beforeLib);
+  assert.deepEqual(snapshot(path.join(root, "bin")), beforeBin);
+  assert(warnings.some((message) => /cleanup.*SIMULATED_SAFE_DELETE_CONFIRM_REQUIRED/.test(message)));
+});
+
+test("verified installation succeeds with deferred cleanup and a later unchanged install leaves it alone", async (t) => {
+  const { install, root, files, warnings } = await installationFixture(t);
+  fs.writeFileSync(files[0], "old runtime\n");
+  t.mock.method(fs, "rmSync", () => { throw new Error("SIMULATED_SAFE_DELETE_CONFIRM_REQUIRED"); });
+  const result = install();
+  assert.equal(result.status, "installed");
+  assert.equal(result.cleanupPending.length, 1);
+  assert(result.cleanupPending[0].startsWith(path.join(root, ".cli-install.")));
+  assert.equal(fs.existsSync(result.cleanupPending[0]), true);
+  assert(warnings.some((message) => message.includes("SIMULATED_SAFE_DELETE_CONFIRM_REQUIRED")));
+  assert.equal(install().status, "unchanged");
+});
+
+test("verification failure restores the original CLI files", async (t) => {
+  const { install, root, files } = await installationFixture(t);
+  fs.writeFileSync(files[2], "original bridge\n");
+  const before = snapshot(path.join(root, "bin"));
+  const rename = fs.renameSync;
+  let corrupted = false;
+  t.mock.method(fs, "renameSync", (from, to) => {
+    rename(from, to);
+    if (to === files[2] && !corrupted) {
+      corrupted = true;
+      fs.writeFileSync(to, "corrupted after publication\n");
+    }
+  });
+  assert.throws(install, /verify/);
+  assert.deepEqual(snapshot(path.join(root, "bin")), before);
+});
+
+test("staging failure leaves every installed target intact even when cleanup is denied", async (t) => {
+  const { install, root, files } = await installationFixture(t);
+  fs.writeFileSync(files[0], "original runtime\n");
+  const before = snapshot(path.join(root, "lib"));
+  t.mock.method(fs, "writeFileSync", () => { throw new Error("SIMULATED_STAGE_WRITE_DENIED"); });
+  t.mock.method(fs, "rmSync", () => { throw new Error("SIMULATED_CLEANUP_DENIED"); });
+  assert.throws(install, /stage.*SIMULATED_STAGE_WRITE_DENIED/);
+  assert.deepEqual(snapshot(path.join(root, "lib")), before);
+});
+
+test("rollback failure retains recoverable backups and reports both failures", async (t) => {
+  const { install, root, files } = await installationFixture(t);
+  fs.writeFileSync(files[0], "original runtime\n");
+  fs.writeFileSync(files[2], "original bridge\n");
+  const runtime = path.join(root, "lib", "rainbond-platform-installer");
+  const rename = fs.renameSync;
+  let replacing = true;
+  t.mock.method(fs, "renameSync", (from, to) => {
+    if (replacing && to === files[2]) {
+      replacing = false;
+      throw new Error("SIMULATED_REPLACE_DENIED");
+    }
+    if (!replacing && to === runtime) throw new Error("SIMULATED_ROLLBACK_DENIED");
+    return rename(from, to);
+  });
+  t.mock.method(fs, "rmSync", () => { assert.fail("recovery backups must not be deleted"); });
+  assert.throws(install, (error) => {
+    assert.match(error.message, /replace.*SIMULATED_REPLACE_DENIED/);
+    assert.match(error.message, /rollback incomplete.*SIMULATED_ROLLBACK_DENIED/);
+    return true;
+  });
+  const retained = fs.readdirSync(root).find((name) => name.startsWith(".cli-install."));
+  assert(retained);
+  const journal = JSON.parse(fs.readFileSync(path.join(root, retained, "transaction.json"), "utf8"));
+  const entry = journal.entries.find((item) => item.destination === runtime);
+  assert.equal(fs.readFileSync(path.join(entry.backup, "scripts", "installed-version.js"), "utf8"), "original runtime\n");
+});
+
+test("legacy configuration migration failure also rolls back CLI publication", async (t) => {
+  const { install, root, files, home } = await installationFixture(t);
+  fs.writeFileSync(files[2], "original bridge\n");
+  const config = path.join(home, ".claude.json");
+  const content = JSON.stringify({ mcpServers: { rainbond: { command: "npx", args: ["rainskills@0.1.6", "mcp", "serve"] } } });
+  fs.writeFileSync(config, content);
+  const before = snapshot(path.join(root, "bin"));
+  const rename = fs.renameSync;
+  let failed = false;
+  t.mock.method(fs, "renameSync", (from, to) => {
+    if (to === config && !failed) {
+      failed = true;
+      throw new Error("SIMULATED_CONFIG_REPLACE_DENIED");
+    }
+    return rename(from, to);
+  });
+  assert.throws(install, /replace.*SIMULATED_CONFIG_REPLACE_DENIED/);
+  assert.equal(fs.readFileSync(config, "utf8"), content);
+  assert.equal(fs.existsSync(`${config}.rainskills-backup`), false);
+  assert.deepEqual(snapshot(path.join(root, "bin")), before);
+});
+
+test("unsafe CLI destination links are rejected without modifying their targets", { skip: process.platform === "win32" }, async (t) => {
+  const { install, root, files, home } = await installationFixture(t);
+  const external = path.join(home, "external.js");
+  fs.writeFileSync(external, "untouched\n");
+  fs.unlinkSync(files[2]);
+  fs.symlinkSync(external, files[2]);
+  assert.throws(install, /symbolic|symlink/i);
+  assert.equal(fs.readFileSync(external, "utf8"), "untouched\n");
+  assert(fs.lstatSync(files[2]).isSymbolicLink());
+  assert(!fs.readdirSync(root).some((name) => name.startsWith(".cli-install.")));
+});
 
 test("local CLI installer publishes a protected stable bridge and removes only legacy Rainskills MCP entries", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-local-cli-"));
