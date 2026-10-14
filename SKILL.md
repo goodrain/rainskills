@@ -18,6 +18,8 @@ If the adjacent installer is missing, check the local Node.js version before cho
 
 Skills-only 安装不需要 Node.js；CDN fallback 只负责安装 Skill 文件，不代表运行环境连接、应用部署或平台安装已经可执行。用户首次提出需要运行环境的动作时，对应业务 Skill 才检查 Node.js；固定 Rainskills launcher 需要 Node.js 18 或更高版本。缺失或版本过低时保留原始 intent 并停止，等待用户或 agent 明确同意安装或升级 Node.js，安装完成消息不得提前提示 Node.js。
 
+WorkBuddy 中安装、更新和修复必须以前台附着方式启动，不得主动设置后台执行、使用 `&` 或 `nohup`。需要访问 `~/.rainbond` 或确认批量删除时，通过宿主的正常授权流程处理；发生权限或 `SAFE_DELETE_BULK_CONFIRM_REQUIRED` 错误时，先处理授权，不得重复启动后台重试或拆分删除来规避守卫。宿主自动返回持久句柄时继续等待原句柄；安装失败时保留 `[rainskills-cli]` 阶段和原始错误，不能仅凭 Skill 已复制就报告完整安装成功。安装验证成功后的 `[rainskills-cli][cleanup]` 提示表示临时文件待清理，不等于安装失败。
+
 执行优化：同一会话内只检查一次 Node.js 和运行环境状态；仅在 Node.js、Rainskills 或唯一运行环境发生变化后失效。固定 launcher 和 argv 已在本 Skill 中，禁止读取、搜索或探测 `rainskills.js`，也禁止执行 `npm root -g`。
 
 ## Completion Message
