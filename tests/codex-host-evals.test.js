@@ -72,6 +72,25 @@ test("reference metrics count repeated direct reads and exact selected bytes", a
   fs.rmSync(workspace, { recursive: true, force: true });
 });
 
+test("host metrics deduplicate per-response usage and recognize composed CLI commands", async () => {
+  const { normalizeCodexRun } = await import("../scripts/run-codex-host-evals.mjs");
+  const response = (id, input) => ({ type: "token_usage_record", payload: { response_id: id, usage: { input_tokens: input, cached_input_tokens: 40, output_tokens: 10, reasoning_output_tokens: 5, cache_write_input_tokens: 0 } } });
+  const timedEvents = [
+    { received_ms: 1, event: response("one", 100) },
+    { received_ms: 2, event: response("one", 100) },
+    { received_ms: 3, event: response("two", 120) },
+    { received_ms: 4, event: { type: "item.started", item: { id: "batch", type: "command_execution", command: "node /installed/bin/rainskills.js tools batch --input -" } } },
+    { received_ms: 5, event: { type: "item.started", item: { id: "recipe", type: "command_execution", command: "node /installed/bin/rainskills-tools.js recipe --input -" } } },
+    { received_ms: 6, event: { type: "turn.completed", usage: { input_tokens: 220, cached_input_tokens: 80, output_tokens: 20 } } },
+  ];
+  const result = normalizeCodexRun({ timedEvents, processExitMs: 7, exitCode: 0 });
+  assert.equal(result.model_roundtrips, 2);
+  assert.equal(result.usage.total_tokens, 240);
+  assert.equal(result.usage.cached_input_tokens, 80);
+  assert.equal(result.tool_calls_by_operation.rainskills_batch, 1);
+  assert.equal(result.tool_calls_by_operation.rainskills_recipe, 1);
+});
+
 test("unavailable host scenarios are explicit instead of using proxy metrics", async () => {
   const { unavailableScenario } = await import("../scripts/run-codex-host-evals.mjs");
   const result = unavailableScenario({

@@ -504,7 +504,7 @@ class ProgressiveLoadingValidatorTests(unittest.TestCase):
 
     def test_local_artifact_init_gate_cannot_be_removed(self) -> None:
         self.mutate(
-            f"{APP_NAME}/references/workflow-rules.md",
+            f"{APP_NAME}/references/phases/routing-details.md",
             "本地软件包部署必须先完成本地项目初始化",
             "本地软件包可以直接上传而无需项目初始化",
         )
@@ -516,7 +516,7 @@ class ProgressiveLoadingValidatorTests(unittest.TestCase):
 
     def test_address_only_source_image_exception_cannot_be_removed(self) -> None:
         self.mutate(
-            f"{APP_NAME}/references/workflow-rules.md",
+            f"{APP_NAME}/references/phases/routing-details.md",
             "address-only source/image requests do not require local project files",
             "all source and image requests require local project files",
         )

@@ -220,7 +220,20 @@ export function installLocalCli({ source_root: sourceRoot, home, warn = (message
       { destination: path.join(libDirectory, "rainbond-platform-installer"), tree: runtime },
       { destination: path.join(libDirectory, "rainskills"), tree: bundle },
     ];
-    for (const [name, mode] of [["rainskills-tools.js", 0o700], ["delivery-probe.js", 0o600]]) {
+    const bridgeShim = `#!/usr/bin/env node
+"use strict";
+try {
+  const bridge = require("../lib/rainskills/bin/rainskills-tools.js");
+  module.exports = bridge;
+  if (require.main === module) bridge.main();
+} catch (_error) {
+  if (require.main !== module) throw _error;
+  process.stderr.write(JSON.stringify({error:"installed Rainskills CLI runtime is incomplete",code:"E_RUNTIME_INCOMPLETE",stage:"local",next_action:"repair_runtime"}) + "\\n");
+  process.exitCode = 3;
+}
+`;
+    plan.push({ destination: path.join(binDirectory, "rainskills-tools.js"), tree: fileTree(bridgeShim, 0o700) });
+    for (const [name, mode] of [["delivery-probe.js", 0o600]]) {
       const tree = new Map();
       addSource(tree, path.join(source, "bin", name), "", "file", mode);
       plan.push({ destination: path.join(binDirectory, name), tree });

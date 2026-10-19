@@ -14,10 +14,11 @@ const OVERLAY_KEYS = Object.freeze([
   "schema", "skill_id", "profiles", "command_set", "version_guard",
   "missing_runtime_mode", "scope_discriminator", "resume_target", "invariants",
 ]);
+const OPTIONAL_OVERLAY_KEYS = ["cli_only_commands"];
 const PROFILES = new Set(["cli", "embedded"]);
 const COMMANDS = new Set([
   "context_resolve", "list", "describe", "read", "query", "snapshot", "poll", "package_upload",
-  "delivery_probe", "handoff_create", "handoff_validate", "call", "call_confirm",
+  "delivery_probe", "handoff_create", "handoff_validate", "call", "call_confirm", "batch", "recipe",
 ]);
 const VERSION_GUARDS = new Set(["required", "none"]);
 const MISSING_RUNTIME_MODES = new Set([
@@ -36,7 +37,7 @@ function assertEnum(value, values, label) {
 
 export function validateRuntimeOverlay(overlay, expectedSkillId = overlay?.skill_id) {
   if (!overlay || typeof overlay !== "object" || Array.isArray(overlay)) throw new Error("runtime overlay must be an object");
-  const unknown = Object.keys(overlay).filter((key) => !OVERLAY_KEYS.includes(key));
+  const unknown = Object.keys(overlay).filter((key) => !OVERLAY_KEYS.includes(key) && !OPTIONAL_OVERLAY_KEYS.includes(key));
   if (unknown.length > 0) throw new Error(`unknown overlay key: ${unknown.join(", ")}`);
   const missing = OVERLAY_KEYS.filter((key) => !(key in overlay));
   if (missing.length > 0) throw new Error(`missing overlay key: ${missing.join(", ")}`);
@@ -49,6 +50,12 @@ export function validateRuntimeOverlay(overlay, expectedSkillId = overlay?.skill
       throw new Error(`${label} must be a non-empty unique array`);
     }
     for (const value of values) assertEnum(value, allowed, label);
+  }
+  if (overlay.cli_only_commands !== undefined && (!Array.isArray(overlay.cli_only_commands)
+    || new Set(overlay.cli_only_commands).size !== overlay.cli_only_commands.length
+    || overlay.cli_only_commands.some((value) => !overlay.command_set.includes(value)))) throw new Error("cli_only_commands must be a unique command_set subset");
+  for (const command of ["batch", "recipe"]) {
+    if (overlay.command_set.includes(command) && !overlay.cli_only_commands?.includes(command)) throw new Error(`${command} must be CLI-only`);
   }
   if (!overlay.profiles.includes("cli")) throw new Error("profiles must include cli");
   assertEnum(overlay.version_guard, VERSION_GUARDS, "version_guard");
@@ -109,6 +116,11 @@ function buildCommand(skillId, command) {
     argv: commandArgv(skillId, "handoff", "validate", "--input", "-"),
     stdin_schema_source: "contracts/handoff-context.schema.yaml#validation-input",
   };
+  if (["batch", "recipe"].includes(command)) return {
+    argv: commandArgv(skillId, command, "--input", "-"),
+    confirm_argv: [...commandArgv(skillId, command, "--input", "-"), "--confirm", "<confirmation-id>"],
+    stdin_schema_source: command === "batch" ? "schemas/generated/confirmed-batch.schema.yaml" : "schemas/generated/component-recipe.schema.yaml",
+  };
   if (command === "call") return { argv: commandArgv(skillId, "call", "<tool>", "--input", "-"), stdin_schema_source: "tool-catalog" };
   if (command === "call_confirm") return { argv: [...commandArgv(skillId, "call", "<tool>", "--input", "-"), "--confirm", "<confirmation-id>"], stdin_schema_source: "same-confirmed-input" };
   throw new Error(`unsupported command: ${command}`);
@@ -159,7 +171,7 @@ export function renderRuntimeGate({ sourceRoot, packageVersion, overlay, profile
     CONTEXT_GUIDANCE: contextGuidance,
     SKILL_ID: overlay.skill_id,
     SUPPORTED_PROFILES: overlay.profiles.join(", "),
-    COMMAND_SET: overlay.command_set.join(", "),
+    COMMAND_SET: overlay.command_set.filter((command) => profile === "cli" || !overlay.cli_only_commands?.includes(command)).join(", "),
     VERSION_GUARD_MODE: overlay.version_guard,
     MISSING_RUNTIME_MODE: overlay.missing_runtime_mode,
     SCOPE_DISCRIMINATOR: overlay.scope_discriminator,

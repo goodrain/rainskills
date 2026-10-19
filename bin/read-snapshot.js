@@ -1,11 +1,7 @@
 "use strict";
 
 const SCOPES = new Set(["runtime", "app", "component", "delivery"]);
-const READ_PREFIXES = [
-  "rainbond_query_", "rainbond_get_", "rainbond_list_", "rainbond_check_",
-  "rainbond_describe_", "rainbond_validate_", "rainbond_verify_", "rainbond_search_",
-];
-const DESTRUCTIVE = /(?:delete|remove|purge|destroy|update|create|set|manage|operate|restart|deploy)/i;
+const { classifyTool } = require("./tool-policy.js");
 const SENSITIVE_KEY = /(?:authorization|jwt|token|password|secret|credential|private[_-]?key|cookie|certificate|ssl)/i;
 const LOG_OR_EVENT = /(?:log|event)/i;
 const BOUND_KEYS = new Set(["cursor", "since_seconds", "tail"]);
@@ -16,11 +12,6 @@ function isPlainObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function readOnlyTool(name) {
-  return typeof name === "string"
-    && READ_PREFIXES.some((prefix) => name.startsWith(prefix))
-    && !DESTRUCTIVE.test(name);
-}
 
 function validateSnapshotInput(input) {
   if (!isPlainObject(input) || !SCOPES.has(input.scope)) throw new Error("snapshot scope is invalid");
@@ -28,7 +19,7 @@ function validateSnapshotInput(input) {
     throw new Error("snapshot requires one to eight requests");
   }
   for (const entry of input.requests) {
-    if (!isPlainObject(entry) || !readOnlyTool(entry.name) || !isPlainObject(entry.arguments)) {
+    if (!isPlainObject(entry) || classifyTool(entry.name, entry.arguments) !== "read" || !isPlainObject(entry.arguments)) {
       throw new Error("snapshot accepts read-only tool requests with object arguments");
     }
     if (LOG_OR_EVENT.test(entry.name) && !Object.keys(entry.arguments).some((key) => BOUND_KEYS.has(key))) {
@@ -43,6 +34,7 @@ function redact(value) {
   if (!isPlainObject(value)) return value;
   const output = {};
   for (const [key, child] of Object.entries(value)) {
+    if (key === "request_body") continue;
     if (SENSITIVE_KEY.test(key)) continue;
     output[key] = redact(child);
   }

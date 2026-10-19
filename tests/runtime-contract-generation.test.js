@@ -58,7 +58,10 @@ test("Runtime Gate sources and overlays are canonical, strict, and complete", ()
   for (const skillId of skillIds) {
     const overlayPath = path.join(repoRoot, "contracts", "runtime", "skills", `${skillId}.yaml`);
     const overlay = YAML.parse(fs.readFileSync(overlayPath, "utf8"));
-    assert.deepEqual(Object.keys(overlay).sort(), overlayKeys, skillId);
+    assert.deepEqual(Object.keys(overlay).filter((key) => key !== "cli_only_commands").sort(), overlayKeys, skillId);
+    if (overlay.cli_only_commands) {
+      assert(overlay.cli_only_commands.every((command) => overlay.command_set.includes(command)));
+    }
     assert.equal(overlay.schema, "rainskills.runtime-overlay.v1", skillId);
     assert.equal(overlay.skill_id, skillId, skillId);
     assert(overlay.profiles.includes("cli"), skillId);

@@ -60,6 +60,7 @@ class RainskillsToolContractTests(unittest.TestCase):
             for path in (
                 RAINSKILLS_ROOT / "rainbond-app-assistant/SKILL.md",
                 RAINSKILLS_ROOT / "rainbond-app-assistant/references/workflow-rules.md",
+                *sorted((RAINSKILLS_ROOT / "rainbond-app-assistant/references/phases").glob("*.md")),
             )
         )
         cls.bootstrap_creation = (

@@ -17,8 +17,7 @@ APP_INITIAL_STAGE = (
 )
 APP_CONTEXT_STAGE = (
     "| workspace context 已解析，需要编排或执行 app/component | "
-    "[workflow rules](references/workflow-rules.md)；仅在核对路线或复盘时读取 "
-    "[operational reference](references/operational-reference.md) | 输出与对象细节 |"
+    "[mainline](references/mainline.md)；按其阶段表进入专项 Skill | 输出与对象细节 |"
 )
 
 
@@ -32,7 +31,7 @@ def validate_progressive_loading(skill_dir: Path) -> list[str]:
     root_path = skill_dir / "SKILL.md"
     runtime_gate = skill_dir / "references" / "generated" / "runtime-gate.md"
     runtime_routing = skill_dir / "references" / "generated" / "runtime-routing.md"
-    workflow_path = skill_dir / "references" / "workflow-rules.md"
+    workflow_path = skill_dir / "references" / "phases" / "routing-details.md"
     root = root_path.read_text(encoding="utf-8")
     root_bytes = len(root.encode("utf-8"))
     root_lines = len(root.splitlines())
@@ -62,7 +61,10 @@ def validate_progressive_loading(skill_dir: Path) -> list[str]:
         "references/generated/runtime-routing.md": "runtime routing",
         "references/local-project-analysis.md": "local project analysis",
         "references/routing.md": "routing",
-        "references/workflow-rules.md": "workflow rules",
+        "references/workflow-rules.md": "workflow index",
+        "references/mainline.md": "mainline",
+        "references/customer-result.md": "customer result",
+        "references/structured-result.md": "structured result",
         "references/operational-reference.md": "operational reference",
         "references/output-contract.md": "output contract",
         "references/product-object-model.md": "product object model",
@@ -156,6 +158,8 @@ def validate_progressive_loading(skill_dir: Path) -> list[str]:
         ):
             require(required in workflow, f"local artifact init gate is missing: {required}", failures)
 
+    for reference in (skill_dir / "references").rglob("*.md"):
+        require(reference.stat().st_size <= 16 * 1024, f"reference exceeds budget: {reference.name}", failures)
     return failures
 
 

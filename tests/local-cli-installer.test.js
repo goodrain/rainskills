@@ -32,6 +32,38 @@ async function installationFixture(t) {
   return { home, root, files, warnings, install };
 }
 
+test("installed compatibility bridge loads handoff helpers from the complete bundle", async (t) => {
+  const { root } = await installationFixture(t);
+  const input = {
+    producer: "rainbond-app-assistant", profile: "cli", observed_at: "2026-10-19T00:00:00Z",
+    enterprise_id: "enterprise", team_id: "team", team_name: "default", region_name: "region",
+    app_id: null, app_name: "example", endpoint: "https://example.invalid", runtime_revision: "test",
+    snapshot_revision: null, source_kind: "image", runtime_state: "topology_missing",
+    next_phase: "init", invalidation_reason: null,
+  };
+  const bridge = path.join(root, "bin", "rainskills-tools.js");
+  const run = (value) => spawnSync(process.execPath, [bridge, "handoff", "create", "--input", "-", "--skill-id", "rainbond-app-assistant"], {
+    input: JSON.stringify(value), encoding: "utf8", cwd: os.tmpdir(),
+  });
+  const result = run(input);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).schema, "rainskills.handoff-context.v1");
+  const invalid = run({ ...input, app_id: -1, app_name: "do-not-echo-this-value" });
+  assert.equal(invalid.status, 2, invalid.stderr);
+  assert.equal(JSON.parse(invalid.stderr).code, "E_INPUT_INVALID");
+  assert.doesNotMatch(invalid.stderr, /do-not-echo-this-value/);
+  fs.unlinkSync(path.join(root, "lib", "rainskills", "bin", "handoff-context.js"));
+  const broken = run(input);
+  assert.equal(broken.status, 3, broken.stderr);
+  assert.equal(JSON.parse(broken.stderr).code, "E_RUNTIME_INCOMPLETE");
+});
+
+test("installed handoff, snapshot and poll execute through the compatibility entrypoint", async (t) => {
+  const { home, root } = await installationFixture(t);
+  const { smokeInstalledRuntime } = require(path.join(root, "lib/rainskills/bin/runtime-smoke.js"));
+  assert.deepEqual(await smokeInstalledRuntime(home), { status: "ok", checked: ["handoff", "snapshot", "poll"] });
+});
+
 function snapshot(directory) {
   return fs.readdirSync(directory).sort().flatMap((name) => {
     const file = path.join(directory, name);

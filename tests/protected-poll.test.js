@@ -35,7 +35,7 @@ test("poll input is bounded and read-only", () => {
 test("component convergence policies return after one sixty-second wait", () => {
   for (const relativePath of [
     "contracts/runtime/cli-base.md",
-    "rainbond-app-assistant/references/workflow-rules.md",
+    "rainbond-app-assistant/references/mainline.md",
     "rainbond-fullstack-bootstrap/modules/44-source-build-rules.md",
     "rainbond-fullstack-bootstrap/modules/45-package-rules.md",
     "rainbond-opensource-app-deploy/references/deployment-workflow.md",
@@ -115,4 +115,30 @@ test("CLI parser exposes one stdin-only poll invocation", () => {
     input: "-",
     skillId: "rainbond-ai-assistant",
   });
+});
+
+test("poll aborts a hung in-flight read at its deadline", async () => {
+  let aborted = false;
+  const start = Date.now();
+  const result = await poll.executeProtectedPoll("rainbond_get_instance", input({ timeout_ms: 25 }), {
+    callTool: (_tool, _args, { signal, timeoutMs }) => {
+      assert(timeoutMs <= 25);
+      signal.addEventListener("abort", () => { aborted = true; }, { once: true });
+      return new Promise(() => {});
+    },
+  });
+  assert.equal(result.blocker, "timeout");
+  assert.equal(aborted, true);
+  assert(Date.now() - start < 1000);
+});
+
+test("cancelling an in-flight read does not start another request", async () => {
+  const controller = new AbortController();
+  let calls = 0;
+  const result = await poll.executeProtectedPoll("rainbond_get_instance", input(), {
+    signal: controller.signal,
+    callTool: () => { calls += 1; controller.abort(); return new Promise(() => {}); },
+  });
+  assert.equal(result.blocker, "cancelled");
+  assert.equal(calls, 1);
 });

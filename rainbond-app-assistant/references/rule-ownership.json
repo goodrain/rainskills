@@ -1,0 +1,265 @@
+{
+  "schema": "rainskills.rule-ownership.v1",
+  "baseline": "93eaf32",
+  "rules": {
+    "1": {
+      "owner": "local-inputs",
+      "files": [
+        "references/phases/local-inputs.md"
+      ],
+      "source_sha256": "d61d3978708ae6115deaed83275aaa7ddcc81b1829be9c316b82060caf33964e"
+    },
+    "2": {
+      "owner": "initialize",
+      "files": [
+        "references/phases/initialize.md"
+      ],
+      "source_sha256": "1b28be44630748fab68300217adfcfeb2a3bfaf2f106a8242bb0b5aebe0a56b4"
+    },
+    "3": {
+      "owner": "mainline-details",
+      "files": [
+        "references/phases/mainline-details.md"
+      ],
+      "source_sha256": "4a542070263aa15da947c16e92373a9619caf0a51c8a0d7a07c63532031476ce"
+    },
+    "4": {
+      "owner": "initialize",
+      "files": [
+        "references/phases/initialize.md"
+      ],
+      "source_sha256": "9d6dcf4fe7bde2292ad5d9f632b56c1ed660ad2f00aa17f4c156c0536eda82c2"
+    },
+    "5": {
+      "owner": "source-policy",
+      "files": [
+        "references/phases/source-policy.md"
+      ],
+      "source_sha256": "450d0f481cf0d5d361fd4426cc90acd599dcb3dfdba8bbc79266511774aed602"
+    },
+    "6": {
+      "owner": "source-proxy",
+      "files": [
+        "references/phases/source-proxy.md"
+      ],
+      "source_sha256": "cdf2fd7ac3f1bb31b15b74f8f170d755e44c89b9234803fe80c2b6cd730e8f7a"
+    },
+    "8": {
+      "owner": "source-policy",
+      "files": [
+        "references/phases/source-policy.md"
+      ],
+      "source_sha256": "feb6ab2396b5008ab402d850bc6f868d5552fa14450c9fabf1d8287bab501724"
+    },
+    "9": {
+      "owner": "source-create",
+      "files": [
+        "references/phases/source-create.md"
+      ],
+      "source_sha256": "dffd709ea20731ebb4db21804919345460ecd85088f5fd83450ca840d75921a6"
+    },
+    "10": {
+      "owner": "source-create",
+      "files": [
+        "references/phases/source-create.md"
+      ],
+      "source_sha256": "d50798330c49786aaf1f158c09586d2b623e62abca25f3def8cc0edcbf7a2891"
+    },
+    "11": {
+      "owner": "troubleshoot",
+      "files": [
+        "references/phases/troubleshoot.md"
+      ],
+      "source_sha256": "6aaa6c155ee2572c7063d168308d30bca426e87073979f100d8859e685bcaac9"
+    },
+    "12": {
+      "owner": "customer-rules",
+      "files": [
+        "references/phases/customer-rules.md"
+      ],
+      "source_sha256": "4bf9e0e62660b7d31b05bc7012472925bc53fd7ce33b484d332dfb7f9b73d315"
+    },
+    "13": {
+      "owner": "troubleshoot",
+      "files": [
+        "references/phases/troubleshoot.md"
+      ],
+      "source_sha256": "b88caa8a245244cf50d87865aab56e2a7db7e811aa6ebcf14d42e4fd386008bf"
+    },
+    "14": {
+      "owner": "source-policy",
+      "files": [
+        "references/phases/source-policy.md"
+      ],
+      "source_sha256": "b092a6a9e79c0079d4e900e7694cfbfa80c43597cdc1ef6cab2c266dfa46f850"
+    },
+    "15": {
+      "owner": "troubleshoot",
+      "files": [
+        "references/phases/troubleshoot.md"
+      ],
+      "source_sha256": "0237e5e1f4a70a2a5f838ca595bd4cb12356d4c6728a80e8f861936915b1ff43"
+    },
+    "16": {
+      "owner": "troubleshoot",
+      "files": [
+        "references/phases/troubleshoot.md"
+      ],
+      "source_sha256": "f5ad09b379cfc23ce9358f34d44ffe8726c0a2f2639d35a5d00d1cdc5c375e11"
+    },
+    "17": {
+      "owner": "source-build",
+      "files": [
+        "references/phases/source-build.md"
+      ],
+      "source_sha256": "bd411ad3bb0e9efd48d05cc2ee66892f1fc93da73b2f93741d1cbbd49d3f42b5"
+    },
+    "18": {
+      "owner": "source-build",
+      "files": [
+        "references/phases/source-build.md"
+      ],
+      "source_sha256": "be1eaf601842bde9401f5f4c62cf0b60d527c3b1102ebc8177444cc349eb9a97"
+    },
+    "19": {
+      "owner": "deliver",
+      "files": [
+        "references/phases/deliver.md"
+      ],
+      "source_sha256": "ef895f8eed7441cc4848ac339a987ab34ad0f2de418ef29f0c25f46435ee38de"
+    },
+    "20": {
+      "owner": "bootstrap",
+      "files": [
+        "references/phases/bootstrap.md"
+      ],
+      "source_sha256": "a634dfc296e8c919f3be94c35455f138895ae23fae7ed87176f5a71bba4878f2"
+    },
+    "24": {
+      "owner": "source-policy",
+      "files": [
+        "references/phases/source-policy.md"
+      ],
+      "source_sha256": "0d478dfac6adea86e3939a897272cb9b2232eea5b516503274ee85981734151b"
+    },
+    "25": {
+      "owner": "customer-rules",
+      "files": [
+        "references/phases/customer-rules.md"
+      ],
+      "source_sha256": "3b2b2f52de0bb51c6fc99add8c17da4c717c855505c0925407b3df35afc68a6f"
+    },
+    "26": {
+      "owner": "customer-rules",
+      "files": [
+        "references/phases/customer-rules.md"
+      ],
+      "source_sha256": "baa9d923ff21fb9469c541e672270295d75d579971757acb1a40470cfc64f16f"
+    },
+    "27": {
+      "owner": "customer-rules",
+      "files": [
+        "references/phases/customer-rules.md"
+      ],
+      "source_sha256": "95ccbebf4bb9797f923d3d5ee29234906f6c2f1d8a1ba8460926deb49a0b30aa"
+    },
+    "28": {
+      "owner": "troubleshoot",
+      "files": [
+        "references/phases/troubleshoot.md"
+      ],
+      "source_sha256": "b18b1762f70c09f1819a37e2e256399b1906445999e7675a43e2a455d79a7782"
+    },
+    "29": {
+      "owner": "source-create",
+      "files": [
+        "references/phases/source-create.md"
+      ],
+      "source_sha256": "2156444a976cc3d345dad250da90c0b7d77dfd86964e55006b9ca8ff370b2cb6"
+    },
+    "30": {
+      "owner": "source-failure",
+      "files": [
+        "references/phases/source-failure.md"
+      ],
+      "source_sha256": "0a145d87802ae67b9f69fa179f5d60c98f62d19b32de269ef0e3a3a7f177da6a"
+    },
+    "31": {
+      "owner": "mainline-details",
+      "files": [
+        "references/phases/mainline-details.md"
+      ],
+      "source_sha256": "22e42c8088d294e3a58cc1c67463637cd8cf977f6b507c6c7a94ae591064fa69"
+    },
+    "32": {
+      "owner": "mainline-details",
+      "files": [
+        "references/phases/mainline-details.md"
+      ],
+      "source_sha256": "019430bf4931d64733d7b635cff7e01aba31c8aeb940f3bda18a9192f5724afe"
+    },
+    "33": {
+      "owner": "source-build",
+      "files": [
+        "references/phases/source-build.md"
+      ],
+      "source_sha256": "f706e434370c8c49561bb6785f6a539fec36b110b8f45347284cd80d22fc0258"
+    },
+    "34": {
+      "owner": "identity",
+      "files": [
+        "references/phases/identity.md"
+      ],
+      "source_sha256": "50093ce5129849b266d397879bc87907f6e46ea2b994a768f79d5714a8075114"
+    },
+    "35": {
+      "owner": "narration",
+      "files": [
+        "references/phases/narration.md"
+      ],
+      "source_sha256": "461bd8405cafc91f1aebae8b3e53e11d7418d1f14a60086086dbf2776c7da86d"
+    },
+    "36": {
+      "owner": "input-literals",
+      "files": [
+        "references/phases/input-literals.md"
+      ],
+      "source_sha256": "283dd7bbc7d0b4d86f5ff875b4ca6adf39496745b77dc467c30e6f93d30de8e0"
+    },
+    "37": {
+      "owner": "topology-selection",
+      "files": [
+        "references/phases/topology-selection.md"
+      ],
+      "source_sha256": "a5ce9cf007a3eb9408388e3f24ce8e26c880f22495e7f4f5d167aafa90537f8d"
+    },
+    "38": {
+      "owner": "source-policy",
+      "files": [
+        "references/phases/source-policy.md"
+      ],
+      "source_sha256": "4b197b51c66a8fe0fb446cee8d2474088c5557c70f6902a171086d721a79a609"
+    },
+    "39": {
+      "owner": "mainline-details",
+      "files": [
+        "references/phases/mainline-details.md"
+      ],
+      "source_sha256": "e68daec2f325a0ddbb8f8fad8eaf46e65a583858f34db47b3ba87ea566db444c"
+    },
+    "40": {
+      "owner": "deliver",
+      "files": [
+        "references/phases/deliver.md"
+      ],
+      "source_sha256": "2e09ec193e8874d26e91ba25a58fa6d0947ca27dd10b815d603428f24c5bf16a"
+    },
+    "41": {
+      "owner": "deliver",
+      "files": [
+        "references/phases/deliver.md"
+      ],
+      "source_sha256": "99c52655d2167834244e074fd59b51de5525d378ac0589063393311f38f1e887"
+    }
+  }
+}

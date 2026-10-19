@@ -9,7 +9,7 @@ const YAML = require("yaml");
 const root = path.resolve(__dirname, "..");
 
 function read(relativePath) {
-  return fs.readFileSync(path.join(root, relativePath), "utf8");
+  return require("./helpers/skill-documents.js").readSkillDocument(root, relativePath);
 }
 
 function envSyncContract() {

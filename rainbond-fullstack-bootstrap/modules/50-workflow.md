@@ -93,7 +93,7 @@ Convergence gates:
 ### 6. Ensure minimum topology
 
 - ensure dependencies exist from manifest `depends_on` with `rainbond_manage_component_dependency`
-- apply the accepted provenance in parent `SKILL.md` **Always-on Guardrail 18**; dependency direction is always consumer `service_id` -> provider `dep_service_id`
+- apply the accepted provenance in [creation rules §2b](30-creation-rules.md); dependency direction is always consumer `service_id` -> provider `dep_service_id`
 - also wire topology edges such as `backend -> db` and `proxy/web -> backend` only when the edge is supported by manifest/Compose, env or config references, project documentation, current runtime evidence, or explicit user confirmation
 - for every multi-component topology, build an explicit dependency checklist before handoff:
   - list provider components such as databases, caches, brokers, queues, search services, object storage, and backend/API services

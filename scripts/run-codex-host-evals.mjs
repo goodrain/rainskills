@@ -152,7 +152,7 @@ function observedReferenceReads(timedEvents, workspace) {
 }
 
 function commandOperation(command) {
-  const match = String(command).match(/rainskills-tools\.js\s+(read|snapshot|poll|call|handoff|context|status)\b/);
+  const match = String(command).match(/(?:rainskills-tools\.js\s+|rainskills\.js\s+tools\s+)(read|snapshot|poll|call|handoff|context|status|batch|recipe)\b/);
   return match ? `rainskills_${match[1]}` : "command_other";
 }
 
@@ -200,6 +200,9 @@ export function normalizeCodexRun({ timedEvents, processExitMs, exitCode, timedO
   let firstTool = null;
   let turnCompleted = null;
   let usageEvent = null;
+  const responses = new Map();
+  let invalidResponseUsage = false;
+  const turnUsages = [];
   const agentMessages = [];
   let toolCalls = 0;
   let pollCalls = 0;
@@ -210,6 +213,16 @@ export function normalizeCodexRun({ timedEvents, processExitMs, exitCode, timedO
   const toolCallsByOperation = {};
 
   for (const { received_ms: receivedMs, event } of timedEvents) {
+    if (event.type === "token_usage_record") {
+      const record = event.payload || event;
+      if (record.response_id && record.usage) {
+        const usage = record.usage;
+        if (![usage.input_tokens, usage.output_tokens, usage.cached_input_tokens ?? 0, usage.reasoning_output_tokens ?? 0, usage.cache_write_input_tokens ?? 0].every((v) => Number.isSafeInteger(v) && v >= 0)
+          || (usage.cached_input_tokens ?? 0) > usage.input_tokens || (usage.reasoning_output_tokens ?? 0) > usage.output_tokens) invalidResponseUsage = true;
+        else if (responses.has(record.response_id) && JSON.stringify(responses.get(record.response_id)) !== JSON.stringify(usage)) invalidResponseUsage = true;
+        else responses.set(record.response_id, usage);
+      }
+    }
     if (event.type === "turn.started") turnStarts += 1;
     if (event.type === "error" && /reconnecting/i.test(String(event.message || ""))) retryCalls += 1;
     if ((event.type === "item.started" || event.type === "item.completed") && firstItem === null) {
@@ -236,10 +249,18 @@ export function normalizeCodexRun({ timedEvents, processExitMs, exitCode, timedO
     if (event.type === "turn.completed") {
       turnCompleted = receivedMs;
       usageEvent = event.usage || null;
+      if (usageEvent) turnUsages.push(usageEvent);
     }
     if (/compact/i.test(String(event.type))) compactionCount += 1;
   }
 
+  const detailedUsage = responses.size > 0 && !invalidResponseUsage;
+  const observedUsages = detailedUsage ? [...responses.values()] : turnUsages;
+  if (observedUsages.some((item) => !Number.isSafeInteger(item.input_tokens) || !Number.isSafeInteger(item.output_tokens))) invalidResponseUsage = true;
+  if (observedUsages.length && !invalidResponseUsage) {
+    usageEvent = Object.fromEntries(["input_tokens", "cached_input_tokens", "cache_write_input_tokens", "output_tokens", "reasoning_output_tokens"].map((key) => [key, observedUsages.reduce((sum, item) => sum + (item[key] || 0), 0)]));
+  }
+  if (invalidResponseUsage) usageEvent = null;
   let usage = unavailableUsage();
   if (usageEvent) {
     const input = usageEvent.input_tokens;
@@ -251,7 +272,7 @@ export function normalizeCodexRun({ timedEvents, processExitMs, exitCode, timedO
       && cached <= input && reasoning <= output) {
       usage = {
         status: "observed",
-        source: "codex_exec_json",
+        source: detailedUsage ? "token_usage_record" : "codex_exec_json",
         input_tokens: input,
         cached_input_tokens: cached,
         cache_write_input_tokens: cacheWrite,
@@ -289,7 +310,7 @@ export function normalizeCodexRun({ timedEvents, processExitMs, exitCode, timedO
       external_platform_wait_ms: unavailableValue(),
     },
     host_turns: Math.max(turnStarts, usageEvent ? 1 : 0),
-    model_roundtrips: unavailableValue(),
+    model_roundtrips: detailedUsage ? responses.size : unavailableValue(),
     retry_calls: retryCalls,
     tool_calls: toolCalls,
     tool_calls_by_category: toolCallsByCategory,

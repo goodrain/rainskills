@@ -19,7 +19,9 @@ test("published package verification always disables telemetry and isolates HOME
   });
 
   assert.equal(status, 0);
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].command, process.execPath);
+  assert.match(calls[1].args[0], /runtime-smoke\.js$/);
   assert.equal(calls[0].command, "npx");
   assert.deepEqual(calls[0].args, [
     "--yes", "--package=rainskills@0.1.41", "rainskills", "all", "--force", "--no-telemetry",

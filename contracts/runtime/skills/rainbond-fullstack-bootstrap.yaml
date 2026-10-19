@@ -1,7 +1,8 @@
 schema: rainskills.runtime-overlay.v1
 skill_id: rainbond-fullstack-bootstrap
 profiles: [cli, embedded]
-command_set: [context_resolve, list, describe, read, snapshot, poll, package_upload, handoff_create, handoff_validate, call, call_confirm]
+command_set: [context_resolve, list, describe, read, snapshot, poll, package_upload, handoff_create, handoff_validate, call, call_confirm, batch, recipe]
+cli_only_commands: [batch, recipe]
 version_guard: required
 missing_runtime_mode: new_application
 scope_discriminator: workspace
