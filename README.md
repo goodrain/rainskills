@@ -15,7 +15,8 @@ DeepSeek Harness、WorkBuddy 和 Hermes Agent 能够继续完成应用部署、
 [产品介绍](https://www.rainbond.com/rainskills) ·
 [安装与使用](https://www.rainbond.com/docs/ai/rainskills) ·
 [视频教程](https://www.rainbond.com/videos/rainskills-ai-deploy) ·
-[Rainbond Cloud](https://run.rainbond.com)
+[Rainbond Cloud](https://run.rainbond.com) ·
+[微信交流](#微信交流)
 
 ## 为什么使用 RainSkills
 
@@ -160,6 +161,14 @@ Compose、Helm 和第三方应用中的特权容器、Operator、CRD、Job、主
 - [市场上架 Runbook](https://github.com/goodrain/rainskills/blob/main/docs/marketplace-publishing.md)
 - [Rainbond 安装文档](https://www.rainbond.com/docs/installation)
 - [提交问题](https://github.com/goodrain/rainskills/issues)
+
+## 微信交流
+
+扫码添加微信，备注「RainSkills」，交流安装、部署和使用问题。
+
+<a href="https://www.rainbond.com/wechat/rainbond-xzs.png">
+  <img src="https://www.rainbond.com/wechat/rainbond-xzs.png" alt="添加微信交流 RainSkills 的二维码" width="220" />
+</a>
 
 ## License
 
