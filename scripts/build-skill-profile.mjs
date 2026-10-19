@@ -124,7 +124,7 @@ function markdownFiles(root) {
 }
 
 function transformEmbeddedNarrative(content) {
-  return content.replace(
+  return content.replace(/<!-- rainskills-cli-only:start -->[\s\S]*?<!-- rainskills-cli-only:end -->/g, "").replace(
     "user-level home directories as a whole (`~/.codex`, `~/.claude`, `~/.rainbond`, `~/.cache`, etc.). Only the protected `~/.rainbond/rainskills/single-runtime-v1.json` may be read by the configured CLI runtime.",
     "user-level home directories (`~/.codex`, `~/.claude`, `~/.rainbond`, `~/.cache`, etc.) and all named files under them. The embedded runtime never reads client credential files."
   ).replace(/\[([^\]]+)\]\((?:scripts|evals)\/[^)]*\)/g, "$1");

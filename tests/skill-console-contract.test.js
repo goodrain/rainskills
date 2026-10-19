@@ -9,7 +9,12 @@ const root = path.resolve(__dirname, "..");
 const builder = path.join(root, "scripts", "build-skill-profile.mjs");
 
 function read(relativePath) {
-  return fs.readFileSync(path.join(root, relativePath), "utf8");
+  const content = require("./helpers/skill-documents.js").readSkillDocument(root, relativePath);
+  if (relativePath.startsWith("rainbond-") && relativePath.endsWith("/SKILL.md")) {
+    const directory = path.join(root, relativePath.split("/")[0], "references");
+    return content + "\n" + markdownFiles(directory).map((file) => fs.readFileSync(file, "utf8")).join("\n");
+  }
+  return content;
 }
 
 function appAssistantContract() {
@@ -58,8 +63,8 @@ test("published source and embedded profile use the Console-backed tool contract
     read("rainbond-fullstack-troubleshooter/SKILL.md"),
     read("rainbond-fullstack-troubleshooter/references/root-cause-rules.md"),
   ].join("\n");
-  assert.match(troubleshooter, /路径不变时省略 `new_volume_path`/);
-  assert.match(troubleshooter, /`new_file_content` is required/);
+  assert.match(troubleshooter, /no unchanged `new_volume_path`/);
+  assert.match(troubleshooter, /required `new_file_content`/);
   assert.doesNotMatch(troubleshooter, /new_volume_path` is required even when the path is unchanged/);
 });
 
@@ -107,45 +112,21 @@ test("platform query fixes Console-required arguments for CLI and embedded execu
   assert.match(query, /rainbond_query_regions.*enterprise_id/s);
 });
 
-test("local runtime commands request protected-state access in sandboxed hosts", () => {
-  const localRuntimeSkills = [
-    "SKILL.md",
-    ...fs.readdirSync(root, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory() && entry.name.startsWith("rainbond-"))
-      .map((entry) => `${entry.name}/SKILL.md`)
-      .filter((relativePath) => fs.existsSync(path.join(root, relativePath)))
-      .filter((relativePath) => read(relativePath).includes("local-runtime.js")),
-  ];
-  const expectedRule = /受限沙箱.*用户级受保护目录访问/is;
-
-  for (const relativePath of localRuntimeSkills) {
-    assert.match(read(relativePath), expectedRule, relativePath);
-  }
-
+test("CLI gates declare protected-state access and embedded keeps server-side transport", () => {
+  const gate = read("rainbond-app-assistant/references/generated/runtime-gate.md");
+  assert.match(gate, /受限沙箱.*用户级受保护目录访问/is);
   const embedded = embeddedMarkdown();
-  assert.match(embedded, expectedRule);
+  assert.match(embedded, /服务端负责/);
+  assert.doesNotMatch(embedded, /rainskills-tools\.js|Device Flow/);
 });
 
-test("runtime prerequisites are session-cached and never rediscover fixed launchers", () => {
-  const localRuntimeSkills = [
-    "SKILL.md",
-    ...fs.readdirSync(root, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory() && entry.name.startsWith("rainbond-"))
-      .map((entry) => `${entry.name}/SKILL.md`)
-      .filter((relativePath) => fs.existsSync(path.join(root, relativePath)))
-      .filter((relativePath) => read(relativePath).includes("local-runtime.js")),
-  ];
-
-  for (const relativePath of localRuntimeSkills) {
-    const content = read(relativePath);
-    assert.match(content, /同一会话内只检查一次 Node\.js/, relativePath);
-    assert.match(content, /禁止读取、搜索或探测 `?rainskills\.js`?/, relativePath);
-    assert.match(content, /npm root -g/, relativePath);
-  }
-
+test("runtime preflight is declared once per session in the generated gate", () => {
+  const gate = read("rainbond-app-assistant/references/generated/runtime-gate.md");
+  assert.match(gate, /本会话第一次/);
+  assert.match(gate, /禁止搜索或探测 `rainskills\.js`/);
+  assert.match(gate, /npm root -g/);
   const embedded = embeddedMarkdown();
-  assert.match(embedded, /同一会话内只检查一次 Node\.js/);
-  assert.match(embedded, /禁止读取、搜索或探测 `?rainskills\.js`?/);
+  assert.doesNotMatch(embedded, /rainskills\.js|runtime connect|npm root -g/);
 });
 
 test("Device Flow stays attached without requiring a terminal TTY", () => {

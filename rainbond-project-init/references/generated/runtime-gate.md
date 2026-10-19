@@ -1,12 +1,14 @@
 <!-- generated-by: scripts/sync-runtime-contracts.mjs -->
-<!-- source-sha256: 239ace1f451950a0f152afeeec2c84f4c033c743e9dce8fcc340c41b7ffb6572 -->
+<!-- source-sha256: b947b67d0d5dcb67ed659380f4f3dd20fae4dc854a1be75257bcb46ddb01dfe5 -->
 <!-- profile: cli -->
 <!-- rainskills-runtime-gate:start -->
 # 单运行环境 CLI 门禁（生成文件）
 
-本机只允许连接一个 Rainbond 运行环境。当前 Skill 在本会话第一次调用 Rainbond 前，执行固定 launcher 的 `runtime status --json`。只有命令退出码为 0、`state=connected` 且 `usable=true` 时才继续。不得配置或直接调用客户端 MCP，不得枚举环境、读取凭据、创建业务 operation，或生成运行环境 ID、业务 operation ID 与 intent JSON。
+本机只允许连接一个 Rainbond 运行环境。当前 Skill 在本会话第一次调用 Rainbond 前，执行固定 launcher 的 `runtime status --json`。只有命令退出码为 0、`state=connected` 且 `usable=true` 时才继续。不得配置或直接调用客户端 MCP，不得枚举环境、读取凭据、创建自定义业务 operation，或生成运行环境 ID、业务 operation ID 与 intent JSON。固定 batch/recipe 请求和 CLI 返回的 confirmation_id 属于受保护调用协议，不是模型自建业务工作流。
 
 运行状态必须来自固定 launcher；不得使用未验证的替代 CLI 或传输。
+
+如果 integrity.status=failed 或 repair_required=true，停止业务调用并修复相同版本的本地安装；不得将缺模块当作 API 参数错误排查或绕过兼容入口。
 
 没有可用运行环境时，严格按下方 overlay 的 `missing_runtime_mode` 进入对应的 Runtime Routing；不得扩大可选环境范围。连接和重新授权必须使用浏览器 Device Flow，不复用 Shell 中缓存的 JWT；Device Flow 不依赖 stdin TTY，必须保持进程附着直到完成。新凭据只有通过 live probe 后才可覆盖唯一运行环境。CLI 返回 401 时，只读调用可在 `runtime reconnect` 成功后重试一次；写调用不得自动重放，必须先查询平台真实状态。403 直接停止，不重新授权。
 

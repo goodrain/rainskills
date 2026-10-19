@@ -1,0 +1,30 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+$id: rainskills.component-recipe.v1.request
+title: Explicit component creation and configuration recipe
+type: object
+additionalProperties: false
+required: [schema, scope, enterprise_id, kind, create]
+properties:
+  schema: {const: rainskills.component-recipe.v1.request}
+  scope: {$ref: 'confirmed-batch.schema.yaml#/$defs/scope'}
+  enterprise_id: {type: string, minLength: 1}
+  kind: {enum: [image, source, package]}
+  create:
+    type: object
+    required: [service_cname]
+    description: Exact live create-tool arguments. is_deploy must be false; source URL/ref and package event remain unchanged. Existing names block creation.
+  configure:
+    type: array
+    maxItems: 32
+    description: Configuration batch steps without service_id. Only the create response may supply that ID.
+    items: {type: object, required: [key, tool, arguments]}
+  stateful: {type: boolean}
+  storage:
+    type: object
+    required: [volume_name, volume_type, volume_path]
+    description: Explicit create_volume parameters, applied before deployment. Scope, operation and service_id are supplied by the recipe.
+allOf:
+  - if:
+      properties: {stateful: {const: true}}
+      required: [stateful]
+    then: {required: [storage]}

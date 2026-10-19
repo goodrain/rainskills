@@ -38,12 +38,16 @@ Local source and package artifacts require an existing or just-completed `rainbo
 
 Load only the active row. A single execution branch may read at most two conditional documents before returning to this workflow.
 
+<!-- rainskills-cli-only:start -->
+For several already verified configuration steps or one fixed component-creation recipe in CLI profile, read [bounded CLI execution](modules/52-cli-batching.md). Keep single-operation calls for exceptional or destructive changes.
+<!-- rainskills-cli-only:end -->
+
 ## Workflow
 
 1. **Resolve scope.** Confirm app identity, selected environment, requested component subset, and exact manifest revision. Generic current-project deployment belongs to `rainbond-app-assistant`.
 2. **Preflight.** Detect existing resources, source/package readiness, provider contracts, capacity blockers, and required confirmations before mutation.
 3. **Create in dependency order.** Providers first, then services, then frontends. Template components are never executed here.
-4. **Configure before deploy.** Apply env, storage, config files, ports, proxy mode, and explicit dependencies before the first affected deployment.
+4. **Configure before deploy.** Apply env, storage, config files, ports, proxy mode, and explicit dependencies before the first affected deployment; defer only edges whose provider metadata is proven unavailable under the source-convergence rules.
 5. **Converge writes once.** Unknown create/update/deploy results are queried by exact identity before retry; no write is replayed speculatively.
 6. **Verify and hand off.** Use one bounded read-only `snapshot app` for the known verification reads, then return `troubleshooter`, `delivery_verifier`, `code_build_handoff`, or `none`.
 
@@ -59,7 +63,7 @@ For a known single dependency edge, do not call `describe`; query `operation=sum
 ## Safety invariants
 
 - Every mutable CLI call requires its confirmation ID and identical confirmed input.
-- Database and other stateful providers expose durable storage and own their connection contract; consumers receive dependencies in provider-to-consumer direction.
+- Database and other stateful providers expose durable storage and own their connection contract; dependency calls use consumer `service_id` -> provider `dep_service_id`.
 - Frontend `access_mode` and reverse-proxy behavior are explicit; do not expose a backend publicly merely to make a frontend work.
 - Package upload uses the fixed protected helper contract and always cleans local staging according to its stop rules.
 - Preserve source kind, ref, monorepo context, Dockerfile choice, and user-selected delivery mode.

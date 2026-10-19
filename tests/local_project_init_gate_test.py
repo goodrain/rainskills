@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-WORKFLOW = ROOT / "rainbond-app-assistant" / "references" / "workflow-rules.md"
+WORKFLOW = ROOT / "rainbond-app-assistant" / "references" / "phases" / "routing-details.md"
 PROJECT_INIT = ROOT / "rainbond-project-init" / "SKILL.md"
 BOOTSTRAP = ROOT / "rainbond-fullstack-bootstrap" / "SKILL.md"
 

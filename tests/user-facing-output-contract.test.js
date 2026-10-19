@@ -48,7 +48,7 @@ const evalDirectories = [
 ];
 
 function read(relativePath) {
-  return fs.readFileSync(path.join(root, relativePath), "utf8");
+  return require("./helpers/skill-documents.js").readSkillDocument(root, relativePath);
 }
 
 test("customer output contains no community advertising", () => {
@@ -94,7 +94,7 @@ test("deployment progress identifies workspaces by name instead of team ID", () 
   assert.match(entrypoint, /不展示 `team_id`/);
   assert.match(
     entrypoint,
-    /未完成：加载 \[output contract\]\(references\/output-contract\.md\)/,
+    /中间阻塞：[^\n]*不加载结果协议/,
   );
   assert.match(workflow, /team_id[^。\n]*不得[^。\n]*过程消息[^。\n]*最终报告/);
 });

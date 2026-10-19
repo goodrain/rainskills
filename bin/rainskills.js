@@ -278,6 +278,11 @@ async function runBuiltin(args, {
       throw new Error("runtime status 只支持固定参数 --json");
     }
     const packageVersion = require("../package.json").version;
+    const integrity = require("./runtime-integrity.js").checkRuntimeIntegrity();
+    if (integrity.status !== "ok") {
+      write(`${JSON.stringify({ schema: "rainskills.runtime-status.v1", state: "needs_reconnect", usable: false, package_version: packageVersion, integrity, repair_required: true })}\n`);
+      return true;
+    }
     if (runtimeStateManager) {
       write(`${JSON.stringify({
         ...(await runtimeStateManager.status()),

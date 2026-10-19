@@ -131,6 +131,17 @@ function run({ sourceRoot, check }) {
       throw new Error(`${skillId} does not discover its generated HandoffContext schema`);
     }
   }
+  for (const filename of ["confirmed-batch.schema.yaml", "component-recipe.schema.yaml"]) {
+    const canonical = fs.readFileSync(path.join(sourceRoot, "contracts", filename), "utf8");
+    const expected = `# generated-by: scripts/sync-shared-contracts.mjs\n# source-sha256: ${sha256(canonical)}\n${canonical}`;
+    for (const skillId of ["rainbond-app-assistant", "rainbond-fullstack-bootstrap", "rainbond-fullstack-troubleshooter"]) {
+      const target = path.join(sourceRoot, skillId, "schemas", "generated", filename);
+      if (!fs.existsSync(target) || fs.readFileSync(target, "utf8") !== expected) {
+        stale.push(path.relative(sourceRoot, target));
+        if (!check) writeAtomically(target, expected);
+      }
+    }
+  }
   if (check && stale.length > 0) throw new Error(`generated shared contract is stale: ${stale.join(", ")}`);
 }
 

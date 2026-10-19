@@ -1,12 +1,14 @@
 <!-- generated-by: scripts/sync-runtime-contracts.mjs -->
-<!-- source-sha256: 8da03d34dfa7f4e5f021de3b74e4b929756c77497ffbfd82db9a4e918d2298cd -->
+<!-- source-sha256: c89120d128441a50eef95348dcc1de5b62167860c35cf8be8b708440e15dbc5c -->
 <!-- profile: cli -->
 <!-- rainskills-runtime-gate:start -->
 # 单运行环境 CLI 门禁（生成文件）
 
-本机只允许连接一个 Rainbond 运行环境。当前 Skill 在本会话第一次调用 Rainbond 前，执行固定 launcher 的 `runtime status --json`。只有命令退出码为 0、`state=connected` 且 `usable=true` 时才继续。不得配置或直接调用客户端 MCP，不得枚举环境、读取凭据、创建业务 operation，或生成运行环境 ID、业务 operation ID 与 intent JSON。
+本机只允许连接一个 Rainbond 运行环境。当前 Skill 在本会话第一次调用 Rainbond 前，执行固定 launcher 的 `runtime status --json`。只有命令退出码为 0、`state=connected` 且 `usable=true` 时才继续。不得配置或直接调用客户端 MCP，不得枚举环境、读取凭据、创建自定义业务 operation，或生成运行环境 ID、业务 operation ID 与 intent JSON。固定 batch/recipe 请求和 CLI 返回的 confirmation_id 属于受保护调用协议，不是模型自建业务工作流。
 
 运行状态的 `package_version` 必须与下方 JSON contract 完全一致；缺失或不一致时先执行固定版本 `rainskills@0.1.45` 的更新/修复流程。不得在版本错配时继续业务调用。
+
+如果 integrity.status=failed 或 repair_required=true，停止业务调用并修复相同版本的本地安装；不得将缺模块当作 API 参数错误排查或绕过兼容入口。
 
 没有可用运行环境时，严格按下方 overlay 的 `missing_runtime_mode` 进入对应的 Runtime Routing；不得扩大可选环境范围。连接和重新授权必须使用浏览器 Device Flow，不复用 Shell 中缓存的 JWT；Device Flow 不依赖 stdin TTY，必须保持进程附着直到完成。新凭据只有通过 live probe 后才可覆盖唯一运行环境。CLI 返回 401 时，只读调用可在 `runtime reconnect` 成功后重试一次；写调用不得自动重放，必须先查询平台真实状态。403 直接停止，不重新授权。
 
@@ -28,7 +30,7 @@ Hermes Agent 使用 `terminal` 且 `background=true` 启动授权，随后只对
 
 - `skill_id`: `rainbond-fullstack-bootstrap`
 - `supported_profiles`: `cli, embedded`
-- `command_set`: `context_resolve, list, describe, read, snapshot, poll, package_upload, handoff_create, handoff_validate, call, call_confirm`
+- `command_set`: `context_resolve, list, describe, read, snapshot, poll, package_upload, handoff_create, handoff_validate, call, call_confirm, batch, recipe`
 - `version_guard`: `required`
 - `missing_runtime_mode`: `new_application`
 - `scope_discriminator`: `workspace`
@@ -255,6 +257,52 @@ Hermes Agent 使用 `terminal` 且 `background=true` 启动授权，随后只对
         "<confirmation-id>"
       ],
       "stdin_schema_source": "same-confirmed-input"
+    },
+    "batch": {
+      "argv": [
+        "node",
+        "<home>/.rainbond/bin/rainskills-tools.js",
+        "batch",
+        "--input",
+        "-",
+        "--skill-id",
+        "rainbond-fullstack-bootstrap"
+      ],
+      "confirm_argv": [
+        "node",
+        "<home>/.rainbond/bin/rainskills-tools.js",
+        "batch",
+        "--input",
+        "-",
+        "--skill-id",
+        "rainbond-fullstack-bootstrap",
+        "--confirm",
+        "<confirmation-id>"
+      ],
+      "stdin_schema_source": "schemas/generated/confirmed-batch.schema.yaml"
+    },
+    "recipe": {
+      "argv": [
+        "node",
+        "<home>/.rainbond/bin/rainskills-tools.js",
+        "recipe",
+        "--input",
+        "-",
+        "--skill-id",
+        "rainbond-fullstack-bootstrap"
+      ],
+      "confirm_argv": [
+        "node",
+        "<home>/.rainbond/bin/rainskills-tools.js",
+        "recipe",
+        "--input",
+        "-",
+        "--skill-id",
+        "rainbond-fullstack-bootstrap",
+        "--confirm",
+        "<confirmation-id>"
+      ],
+      "stdin_schema_source": "schemas/generated/component-recipe.schema.yaml"
     }
   }
 }

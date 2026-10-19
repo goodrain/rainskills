@@ -104,7 +104,7 @@
     "test:delivery-probe": "node --test tests/delivery-probe.test.js",
     "test:auto-update": "node --test tests/auto-update.test.js",
     "test:launcher": "node --test tests/console-origin.test.js tests/host-targets.test.js tests/local-cli-installer.test.js tests/npx-launcher.test.js tests/runtime-state.test.js tests/single-runtime.test.js tests/single-runtime-cli.test.js tests/single-runtime-launcher.test.js tests/skill-manifest-builder.test.js",
-    "test:api-bridge": "node --test tests/api-bridge.test.js",
+    "test:api-bridge": "node --test tests/api-bridge.test.js tests/tool-policy.test.js tests/confirmed-batch.test.js tests/batch-cli.test.js tests/component-recipe.test.js tests/recipe-cli.test.js",
     "test:console-contract": "python3 tests/console_tool_contract_test.py",
     "test:ai-engine": "node --test tests/ai-engine-contract.test.js tests/ai-engine-skill-routing.test.js tests/ai-engine-output-contract.test.js tests/ai-engine-cpu-deployment.test.js tests/ai-engine-gpu-prerequisites.test.js && python3 tests/ai-engine-progressive-loading.test.py && python3 rainbond-platform-plugin-manager/scripts/validate_progressive_loading.py && python3 rainbond-ai-assistant/scripts/validate_progressive_loading.py && python3 tests/run_ai_engine_skill_evals.py",
     "test:skill-profile": "node --test tests/skill-profile-builder.test.js tests/markdown-link-integrity.test.js tests/user-facing-output-contract.test.js",

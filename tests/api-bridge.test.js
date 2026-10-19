@@ -1286,6 +1286,7 @@ test("protected context resolve rejects stale selections and unsupported input b
       .map((line) => JSON.parse(line))
       .find((payload) => payload.error);
     assert.deepEqual(errorPayload, {
+      code: "E_INPUT_INVALID", stage: "input", next_action: "correct_input",
       error: "context input fields are invalid",
       expected: {
         required: ["enterprise", "workspace"],
@@ -1668,6 +1669,7 @@ test("usage, input, configuration, transport, and tool errors have stable exit c
     assert.doesNotMatch(business.stderr, /echoed-argument/);
     const errorLines = business.stderr.trim().split("\n");
     assert.deepEqual(JSON.parse(errorLines.at(-1)), {
+      code: "E_PLATFORM", stage: "request", next_action: "inspect_error",
       status_code: 400,
       msg_show: "invalid input",
       arguments: "[REDACTED]",

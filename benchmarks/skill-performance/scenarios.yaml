@@ -5,7 +5,7 @@ scenarios:
     entry_skill: rainbond-app-assistant
     references:
       - rainbond-app-assistant/references/routing.md
-      - rainbond-app-assistant/references/workflow-rules.md
+      - rainbond-app-assistant/references/mainline.md
     mock_trace:
       - {type: cli_invocation, bytes: 180}
       - {type: backend_request, request_bytes: 220, response_bytes: 640}
@@ -18,7 +18,7 @@ scenarios:
     entry_skill: rainbond-app-assistant
     references:
       - rainbond-app-assistant/references/routing.md
-      - rainbond-app-assistant/references/workflow-rules.md
+      - rainbond-app-assistant/references/mainline.md
     mock_trace:
       - {type: cli_invocation, bytes: 176}
       - {type: backend_request, request_bytes: 248, response_bytes: 710}

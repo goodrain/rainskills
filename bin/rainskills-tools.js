@@ -32,20 +32,7 @@ const SENSITIVE_RESPONSE_KEY_PATTERN = /(?:authorization|jwt|token|password|secr
 const SENSITIVE_ENV_NAME_PATTERN = /(?:^|_)(?:PASSWORD|PASSWD|PASS|SECRET|TOKEN|API_?KEY|PRIVATE_?KEY|CREDENTIALS?|AUTH(?:ORIZATION)?|COOKIE|CERT(?:IFICATE)?)(?:_|$)/i;
 const ENV_NAME_FIELDS = Object.freeze(["attr_name", "name", "note", "env_name"]);
 const ENV_VALUE_FIELDS = new Set(["attr_value", "value"]);
-const RISK_POLICY = Object.freeze({
-  version: "1",
-  readPrefixes: [
-    "rainbond_query_", "rainbond_get_", "rainbond_list_", "rainbond_check_",
-    "rainbond_describe_", "rainbond_validate_", "rainbond_verify_", "rainbond_search_",
-  ],
-  destructiveFragments: ["delete", "remove", "purge", "destroy"],
-});
-const MIXED_TOOL_OPERATION_POLICY = Object.freeze({
-  rainbond_manage_component_dependency: Object.freeze({
-    readOperations: Object.freeze(["summary"]),
-    destructiveOperations: Object.freeze(["delete"]),
-  }),
-});
+const { RISK_POLICY, classifyTool } = require("./tool-policy.js");
 const CALL_OPTION_DEFINITIONS = Object.freeze({
   "--confirm": Object.freeze({ property: "confirmation", pattern: OPERATION_ID_PATTERN }),
   "--skill-id": Object.freeze({ property: "skillId", pattern: SKILL_ID_PATTERN }),
@@ -79,20 +66,7 @@ const HANDOFF_SKILLS = new Set([
   "rainbond-template-installer",
 ]);
 
-const EXIT = Object.freeze({
-  USAGE: 2,
-  CONFIG: 3,
-  TRANSPORT: 4,
-  TOOL: 5,
-});
-
-class BridgeError extends Error {
-  constructor(message, exitCode, payload) {
-    super(message);
-    this.exitCode = exitCode;
-    this.payload = payload;
-  }
-}
+const { BridgeError, EXIT, inputValidation, errorResult } = require("./bridge-errors.js");
 
 function requireRuntimeModule(filename) {
   const candidates = [
@@ -307,6 +281,11 @@ function parseCommand(args) {
   }
   if (command === "read" && remaining.length === 4 && remaining[1] && remaining[2] === "--input" && remaining[3] === "-") {
     return { command, toolName: remaining[1], input: remaining[3], ...context };
+  }
+  if (command === "batch" || command === "recipe") {
+    if (!["rainbond-app-assistant", "rainbond-fullstack-bootstrap", "rainbond-fullstack-troubleshooter"].includes(skillId)) throw new BridgeError("batch is not allowed for this skill", EXIT.USAGE);
+    const parsed = parseCommand(["call", "rainskills_confirmed_batch", ...remaining.slice(1), "--skill-id", skillId]);
+    return { ...parsed, command };
   }
   if (command === "call" && remaining.length >= 4 && remaining[1] && remaining[2] === "--input" && remaining[3] === "-") {
     const parsed = { command, toolName: remaining[1], input: remaining[3], ...context };
@@ -550,7 +529,8 @@ async function executeWithUsageTelemetry(command, config) {
       : command;
     const output = await execute(executionCommand, config);
     if (telemetry) {
-      const firstUse = telemetry.recordFirstUse("success");
+      const workflowFailed = ["batch", "recipe"].includes(command.command) && output.status !== "succeeded";
+      const firstUse = telemetry.recordFirstUse(workflowFailed ? "failed" : "success");
       const active = telemetry.recordActiveDaily();
       await Promise.allSettled([firstUse.delivery, active.delivery]);
     }
@@ -570,7 +550,7 @@ async function executeWithUsageTelemetry(command, config) {
 }
 
 function commandTracksBusinessUsage(command) {
-  return ["read", "call", "snapshot", "poll"].includes(command?.command);
+  return ["read", "call", "snapshot", "poll", "batch", "recipe"].includes(command?.command);
 }
 
 function loadSkillBinding(config, skillId, rootSkillId) {
@@ -620,23 +600,6 @@ function loadSkillBinding(config, skillId, rootSkillId) {
     bundleSha256: entry.bundle_sha256,
     content: entry.content,
   };
-}
-
-function classifyTool(toolName, argumentsValue = {}) {
-  const normalized = String(toolName || "").toLowerCase();
-  const operation = typeof argumentsValue.operation === "string"
-    ? argumentsValue.operation.trim().toLowerCase()
-    : "";
-  const mixedPolicy = MIXED_TOOL_OPERATION_POLICY[normalized];
-  if (mixedPolicy) {
-    if (mixedPolicy.destructiveOperations.includes(operation)) return "destructive";
-    if (mixedPolicy.readOperations.includes(operation)) return "read";
-  }
-  if (RISK_POLICY.destructiveFragments.some((fragment) => normalized.includes(fragment))) {
-    return "destructive";
-  }
-  if (RISK_POLICY.readPrefixes.some((prefix) => normalized.startsWith(prefix))) return "read";
-  return "write";
 }
 
 function operationFile(config, operationId) {
@@ -728,6 +691,7 @@ function confirmOperation(
   if (!record || record.status !== "awaiting_confirmation" || record.tool_name !== toolName ||
     record.operation_class !== operationClass ||
     record.arguments_digest !== argumentsDigest(argumentsValue) ||
+    (record.expires_at && Date.now() >= Date.parse(record.expires_at)) ||
     record.skill_id !== skillBinding.skillId ||
     record.root_skill_id !== skillBinding.rootSkillId ||
     record.skill_package_version !== skillBinding.packageVersion ||
@@ -862,6 +826,7 @@ function sanitizeToolResult(value, pathParts = [], sensitiveArguments = []) {
   const safe = {};
   const sensitiveEnv = hasSensitiveEnvName(value);
   for (const [key, item] of Object.entries(value)) {
+    if (key === "request_body") continue;
     // Console destructive operations may return this one-time control value.
     // It is not a credential and must remain available for the confirmation flow.
     const isPackageUploadAuthMode = key === "authorization"
@@ -915,12 +880,15 @@ function safeJson(value, secrets = []) {
 function httpJsonRpcRequest(config, endpointPath, message, {
   timeoutMs = REQUEST_TIMEOUT_MS,
   maxResponseBytes = RESPONSE_MAX_BYTES,
+  signal,
 } = {}) {
   const endpoint = new URL(`${config.baseUrl.replace(/\/+$/, "")}${endpointPath}`);
   const payload = JSON.stringify(message);
   const client = endpoint.protocol === "https:" ? https : http;
 
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(new BridgeError("request cancelled", EXIT.TRANSPORT)); return; }
+    let abortRequest;
     let settled = false;
     let responseRef;
     let wallTimer;
@@ -929,6 +897,7 @@ function httpJsonRpcRequest(config, endpointPath, message, {
       if (settled) return;
       settled = true;
       clearTimeout(wallTimer);
+      signal?.removeEventListener("abort", abortRequest);
       callback(value);
     };
     const fail = (error, abort = false) => {
@@ -990,6 +959,8 @@ function httpJsonRpcRequest(config, endpointPath, message, {
         ? error
         : new BridgeError("unable to reach Rainbond API", EXIT.TRANSPORT));
     });
+    abortRequest = () => fail(new BridgeError("request cancelled", EXIT.TRANSPORT), true);
+    signal?.addEventListener("abort", abortRequest, { once: true });
     wallTimer = setTimeout(() => {
       fail(new BridgeError("Rainbond API request timed out", EXIT.TRANSPORT), true);
     }, timeoutMs);
@@ -1073,7 +1044,7 @@ async function rpcRequest(config, method, params = {}, options = {}) {
     id: 1,
     method,
     params,
-  }, options);
+  }, { ...options, signal: options.signal || config.signal });
   if (isVerifiedMissingRpcRoute(response)) {
     throw new BridgeError(
       "当前 Rainbond 版本不支持 Rainskills CLI，请先将 Rainbond 升级到 v6.9.9 或更高版本",
@@ -1351,7 +1322,91 @@ async function resolveStatelessContext(input, config) {
   return workspaceSelectionResult(enterpriseId, matchingOptions);
 }
 
+async function executeConfirmedToolCall(command, config, toolName, argumentsValue, executeStep = execute) {
+  if (command.signal?.aborted) throw new BridgeError("workflow cancelled", EXIT.USAGE, undefined, "E_CANCELLED");
+  const child = { command: "call", toolName, argumentsValue, skillId: command.skillId, rootSkillId: command.rootSkillId, telemetryInstallationId: command.telemetryInstallationId, signal: command.signal };
+  const prepared = await executeStep(child, config);
+  if (command.signal?.aborted) throw new BridgeError("workflow cancelled", EXIT.USAGE, undefined, "E_CANCELLED");
+  if (!prepared.requires_confirmation || !prepared.confirmation_id) throw new BridgeError("workflow write did not return a confirmation", EXIT.CONFIG);
+  return executeStep({ ...child, confirmation: prepared.confirmation_id }, config);
+}
+
+async function executeConfirmedWorkflow(command, config) {
+  const { validateBatch, executeBatch, configurationSatisfied } = require("./confirmed-batch.js");
+  const { preflightRecipe, executeRecipe } = require("./component-recipe.js");
+  const input = command.argumentsValue;
+  const recipe = command.command === "recipe";
+  const tool = recipe ? "rainskills_component_recipe" : "rainskills_confirmed_batch";
+  const validate = (name, args) => validateToolArguments(config, name, args);
+  const read = (toolName, argumentsValue) => execute({ command: "read", toolName, argumentsValue, skillId: command.skillId, signal: command.signal }, config);
+  const skipKeys = [];
+  const snapshots = new Map();
+  const dirtyComponents = new Set();
+  let completedWrites = 0;
+  const currentConfiguration = async (step) => {
+    const { team_name, region_name, app_id, service_id } = step.arguments;
+    const key = `${step.tool}:${service_id}`;
+    if (!snapshots.has(key)) {
+      const args = { team_name, region_name, app_id, service_id, operation: "summary" };
+      try { await validate(step.tool, args); }
+      catch (error) { if (error.exitCode === EXIT.USAGE) return false; throw error; }
+      snapshots.set(key, await read(step.tool, args));
+    }
+    return configurationSatisfied(step.tool, step.arguments, snapshots.get(key));
+  };
+  let steps;
+  if (recipe) {
+    const plan = await preflightRecipe(input, { validate, read });
+    steps = [{ key: "create", tool: plan.tool }, ...plan.steps];
+  } else {
+    steps = validateBatch(input);
+    for (const step of steps) await validate(step.tool, step.arguments);
+    for (const step of steps) {
+      const satisfied = await currentConfiguration(step);
+      if (satisfied && !dirtyComponents.has(step.arguments.service_id)) skipKeys.push(step.key);
+      else {
+        dirtyComponents.add(step.arguments.service_id);
+        if (step.arguments.dep_service_id) dirtyComponents.add(step.arguments.dep_service_id);
+        for (const id of step.arguments.dep_service_ids || []) dirtyComponents.add(id);
+      }
+    }
+  }
+  const binding = loadSkillBinding(config, command.skillId, command.rootSkillId);
+  const protectedInput = { input, skipped: skipKeys, identity: argumentsDigest({ endpoint: config.baseUrl, identity: config.jwt }) };
+  let operation;
+  if (!command.confirmation) {
+    operation = prepareOperation(config, tool, "write", protectedInput, binding);
+    writeOperation(config, { ...operation, expires_at: new Date(Date.now() + 10 * 60_000).toISOString() });
+    return { requires_confirmation: true, confirmation_id: operation.operation_id, operation_class: "write", steps: steps.map(({ key, tool: name }) => ({ key, tool: name, status: skipKeys.includes(key) ? "skipped" : "planned" })), summary: "Confirm this exact workflow within the current authorized app scope." };
+  }
+  operation = confirmOperation(config, command.confirmation, tool, "write", protectedInput, binding);
+  try {
+    const adapters = {
+      validate, read, signal: command.signal,
+      isSatisfied: async (step) => {
+        const satisfied = await currentConfiguration(step);
+        if (skipKeys.includes(step.key) && !satisfied) throw new BridgeError("confirmed no-op state changed; prepare a new batch", EXIT.USAGE, undefined, "E_PLAN_STALE");
+        return satisfied;
+      },
+      call: (toolName, argumentsValue) => executeConfirmedToolCall(command, config, toolName, argumentsValue),
+      onCreated: async (identity) => { operation = { ...operation, created: identity }; writeOperation(config, operation); },
+      onProgress: async (output) => {
+        if (output.completed !== completedWrites) { snapshots.clear(); completedWrites = output.completed; }
+        operation = { ...operation, progress: output }; writeOperation(config, operation);
+      },
+    };
+    const output = await (recipe ? executeRecipe(input, adapters) : executeBatch(input, adapters));
+    writeOperation(config, { ...operation, status: output.status, progress: output });
+    return output;
+  } catch (error) {
+    updateOperation(config, operation, error.exitCode === EXIT.TRANSPORT ? "unknown" : "failed");
+    throw error;
+  }
+}
+
 async function execute(command, config) {
+  if (command.signal?.aborted) throw new BridgeError("workflow cancelled", EXIT.USAGE, undefined, "E_CANCELLED");
+  if (["batch", "recipe"].includes(command.command)) return executeConfirmedWorkflow(command, config);
   if (command.command === "context") {
     return resolveStatelessContext(command.argumentsValue, config);
   }
@@ -1359,7 +1414,8 @@ async function execute(command, config) {
     return executePackageUpload(command, config);
   }
   if (command.command === "snapshot") {
-    const { executeReadSnapshot } = require("./read-snapshot.js");
+    const { executeReadSnapshot, validateSnapshotInput } = require("./read-snapshot.js");
+    inputValidation(() => validateSnapshotInput(command.argumentsValue));
     return executeReadSnapshot(command.argumentsValue, {
       callTool: async (name, argumentsValue) => {
         const result = await rpcRequest(config, "tools/call", { name, arguments: argumentsValue });
@@ -1375,10 +1431,12 @@ async function execute(command, config) {
     });
   }
   if (command.command === "poll") {
-    const { executeProtectedPoll } = require("./protected-poll.js");
+    const { executeProtectedPoll, validatePollInput } = require("./protected-poll.js");
+    inputValidation(() => validatePollInput(command.toolName, command.argumentsValue));
     return executeProtectedPoll(command.toolName, command.argumentsValue, {
-      callTool: async (name, argumentsValue) => {
-        const result = await rpcRequest(config, "tools/call", { name, arguments: argumentsValue });
+      signal: command.signal,
+      callTool: async (name, argumentsValue, options) => {
+        const result = await rpcRequest(config, "tools/call", { name, arguments: argumentsValue }, options);
         if (!result || result.isError || !("structuredContent" in result)) {
           throw new BridgeError("poll read failed", EXIT.TOOL);
         }
@@ -1418,6 +1476,9 @@ async function execute(command, config) {
   }
 
   const argumentsValue = command.argumentsValue || readArguments(command.input);
+  if (command.toolName === "rainbond_wait_for_build_completion") {
+    if (argumentsValue.timeout !== undefined && (!Number.isInteger(argumentsValue.timeout) || argumentsValue.timeout < 1 || argumentsValue.timeout > 60)) throw new BridgeError("wait timeout must be between 1 and 60 seconds", EXIT.USAGE);
+  }
   const operationClass = classifyTool(command.toolName, argumentsValue);
   if (command.command === "read" && operationClass !== "read") {
     throw new BridgeError(
@@ -1472,7 +1533,7 @@ async function execute(command, config) {
         installation_id: command.telemetryInstallationId,
       };
     }
-    const result = await rpcRequest(config, "tools/call", params);
+    const result = await rpcRequest(config, "tools/call", params, command.toolName === "rainbond_wait_for_build_completion" ? { timeoutMs: (argumentsValue.timeout || 60) * 1000, signal: command.signal } : { signal: command.signal });
     if (!result || typeof result !== "object") {
       throw new BridgeError("Rainbond tool result is invalid", EXIT.TRANSPORT);
     }
@@ -1498,6 +1559,7 @@ async function execute(command, config) {
   } catch (error) {
     if (operation) {
       updateOperation(config, operation, error.exitCode === EXIT.TRANSPORT ? "unknown" : "failed");
+      if (error.exitCode === EXIT.TRANSPORT) error.code = "E_WRITE_RESULT_UNKNOWN";
     }
     throw error;
   }
@@ -1507,9 +1569,16 @@ async function main(args = process.argv.slice(2)) {
   let config;
   let command;
   let argumentRedactions = [];
+  const controller = new AbortController();
+  const cancel = () => controller.abort();
   try {
     command = parseCommand(args);
-    if (["read", "call", "package-upload", "query", "context", "delivery", "handoff", "snapshot", "poll"].includes(command.command)) {
+    command.signal = controller.signal;
+    if (["poll", "batch", "recipe"].includes(command.command)) {
+      process.once("SIGINT", cancel);
+      process.once("SIGTERM", cancel);
+    }
+    if (["read", "call", "package-upload", "query", "context", "delivery", "handoff", "snapshot", "poll", "batch", "recipe"].includes(command.command)) {
       const argumentsValue = readArguments(command.input);
       command.argumentsValue = argumentsValue;
       argumentRedactions = collectArgumentRedactions(argumentsValue);
@@ -1548,14 +1617,14 @@ async function main(args = process.argv.slice(2)) {
     }
     if (command.command === "handoff") {
       const { createHandoffContext, validateHandoffContext } = require("./handoff-context.js");
-      const output = command.action === "create"
+      const output = inputValidation(() => command.action === "create"
         ? createHandoffContext(command.argumentsValue)
         : validateHandoffContext(command.argumentsValue.context, {
           current: command.argumentsValue.current,
           signal: command.argumentsValue.signal,
           now: command.argumentsValue.now,
           maxAgeMs: command.argumentsValue.max_age_ms,
-        });
+        }));
       process.stdout.write(`${JSON.stringify(fitOutput(output))}\n`);
       return;
     }
@@ -1565,20 +1634,26 @@ async function main(args = process.argv.slice(2)) {
     if (config.isInsecureHttp) {
       process.stderr.write('{"warning":"using insecure HTTP transport"}\n');
     }
+    config.signal = command.signal;
     const output = await executeWithUsageTelemetry(command, config);
     process.stdout.write(`${JSON.stringify(fitOutput(output))}\n`);
   } catch (error) {
     const bridgeError = error instanceof BridgeError
       ? error
-      : new BridgeError("unexpected API bridge error", EXIT.TRANSPORT);
+      : new BridgeError(error.code === "MODULE_NOT_FOUND" ? "installed Rainskills CLI runtime is incomplete" : "unexpected internal CLI error", error.code === "MODULE_NOT_FOUND" ? EXIT.CONFIG : EXIT.TRANSPORT, undefined, error.code === "MODULE_NOT_FOUND" ? "E_RUNTIME_INCOMPLETE" : "E_INTERNAL");
     const secrets = [config && config.jwt, config && config.baseUrl, ...argumentRedactions];
-    const output = bridgeError.payload || { error: bridgeError.message };
+    const output = sanitizeToolResult(errorResult(bridgeError), [], argumentRedactions);
     process.stderr.write(`${safeJson(output, secrets)}\n`);
     process.exitCode = bridgeError.exitCode;
+  } finally {
+    process.removeListener("SIGINT", cancel);
+    process.removeListener("SIGTERM", cancel);
   }
 }
 
 module.exports = {
+  main,
+  executeConfirmedToolCall,
   REQUEST_TIMEOUT_MS,
   INPUT_MAX_BYTES,
   RESPONSE_MAX_BYTES,

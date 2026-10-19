@@ -5,7 +5,7 @@ description: "Deploy, run, inspect, or repair a current/local project, ordinary 
 
 # Rainbond App Assistant
 
-这是源码与当前项目的 Rainbond 顶层入口。它根据现状编排 init、bootstrap、troubleshooter、delivery verifier 和显式请求的 dev-to-test promotion，但不替代下层 Skill。
+这是源码与当前项目的 Rainbond 编排入口，按现状选择初始化、创建、排障、交付或显式 promotion。
 
 ## 路由所有权
 
@@ -24,11 +24,11 @@ description: "Deploy, run, inspect, or repair a current/local project, ordinary 
 | 阶段 | 必须读取 | 禁止提前读取 |
 |---|---|---|
 | 初始部署或首次 Rainbond 操作 | 本根入口、[generated Runtime Gate](references/generated/runtime-gate.md)、[routing](references/routing.md) | 其余全部 |
-| workspace context 已解析，需要编排或执行 app/component | [workflow rules](references/workflow-rules.md)；仅在核对路线或复盘时读取 [operational reference](references/operational-reference.md) | 输出与对象细节 |
+| workspace context 已解析，需要编排或执行 app/component | [mainline](references/mainline.md)；按其阶段表进入专项 Skill | 输出与对象细节 |
 | 需要对象边界或跨阶段状态语义 | [product object model](references/product-object-model.md) | 不相关工作流 |
 | 需要生成最终结果或自动化契约 | [output contract](references/output-contract.md) | 不需要结果协议时不得读取 |
 
-workspace context 包含 `enterprise_id`、`team_id`、`team_name` 和 `region_name`；`team_id` 可作为内部调用参数继续使用，但不得复制到用户可见的过程消息或最终结果中。app/component 标识只来自用户明确输入或本次实时查询/创建结果。它们都由当前任务携带，不写入 Runtime，也不得生成或传递 CLI 业务 operation ID、运行环境 ID 或 intent JSON。
+workspace context 包含 `enterprise_id`、`team_id`、`team_name` 和 `region_name`；`team_id` 可作为内部调用参数继续使用，但不得复制到用户可见的过程消息或最终结果中。app/component 标识只来自用户明确输入或本次实时查询/创建结果。这些标识不写 Runtime；不得生成 CLI 业务 operation ID、运行环境 ID 或 intent JSON。
 
 ## Runtime Gate
 
@@ -40,7 +40,7 @@ state=connected,usable=true直接进入部署；state=not_started,usable=false�
 
 不可弱化的不变量：
 
-- 不得绕过 Gate 选择的 transport、context 或授权边界。进入专项阶段后，按 workflow rules 完整读取对应专项 Skill；其中重复的 Gate 只用于一致性核对，不得触发第二次连接、状态检查或 context 解析，除非 Gate 声明的失效条件已经发生。
+- 不得绕过 Gate 选择的 transport、context 或授权边界。进入专项阶段后，按 workflow rules 完整读取对应专项 Skill；重复 Gate 只核对一致性，不得触发第二次连接、状态检查或 context 解析，除非 Gate 声明的失效条件已经发生。
 - 401：只读调用仅可按 Gate 允许的恢复流程重试一次；写调用不得自动重放，必须先查询真实状态。403：立即停止，不做未授权重试。
 - 可变调用必须先取得确认 ID，再用完全相同输入附加确认执行；不得绕过确认。
 - JWT、凭据与密钥不得回显、复制到报告或通过替代 transport 绕过保护。
@@ -54,17 +54,18 @@ state=connected,usable=true直接进入部署；state=not_started,usable=false�
 - 到达 code_or_build_handoff_needed 后硬停止，不自动改代码、运行本地测试、提交、推送或重试。
 - 密钥只来自当前 profile 允许的输入源，永不回显或写入报告。
 
-详细主线、context 复用、专项手册加载、构建/运行时证据链、依赖、确认边界与尝试预算只在需要执行时读取 [workflow rules](references/workflow-rules.md)。
+详细主线与阶段选择读取 [mainline](references/mainline.md)。规则迁移位置可按需查 [workflow index](references/workflow-rules.md)，只在核对路线或复盘时读取 [operational reference](references/operational-reference.md)。
 
 ## 简洁结果协议
 
 普通请求只给用户可用的中文结果：
 
-- 成功：加载 [output contract](references/output-contract.md)，只报结果、应用、状态和已验证地址；结束卡片规则保持独立。
-- 未完成：加载 [output contract](references/output-contract.md)，只报状态、单一阻塞和唯一下一步。
+- 成功：加载 [customer result](references/customer-result.md)，只报结果、应用、状态和已验证地址；结束卡片规则保持独立。
+- 中间阻塞：直接简短说明状态、单一阻塞和所需输入，不加载结果协议。
+- 交付未完成：加载 [customer result](references/customer-result.md)，只报状态、单一阻塞和唯一下一步。
 - 默认不得展示内部对象、状态枚举、Skill/工具名、YAML、JSON 或英文编排标题。
 - 过程消息和最终结果中的工作空间一律用 `team_name` 展示，可连同 `region_name` 写成“工作空间 / 集群”；除非用户明确要求调试原始数据，不展示 `team_id`。
-- 用户明确要求结构化结果或自动化契约时，读取 [output contract](references/output-contract.md)，不得自行发明字段、枚举或状态。
+- 用户明确要求结构化结果或自动化契约时，读取 [structured result](references/structured-result.md) 与既有 schema，不得自行发明字段、枚举或状态。
 
 ## 停止条件
 

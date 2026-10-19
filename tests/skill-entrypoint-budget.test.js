@@ -58,6 +58,21 @@ test("project init entrypoint is a bounded conditional router", () => {
   assertReferenceBudgets("rainbond-project-init");
 });
 
+test("app assistant bounds every reference and keeps optional contracts off the intermediate path", () => {
+  const entry = fs.readFileSync(path.join(root, "rainbond-app-assistant/SKILL.md"), "utf8");
+  assert(Buffer.byteLength(entry) <= 7000);
+  assertReferenceBudgets("rainbond-app-assistant");
+  const initial = entry.split("\n").find((line) => line.startsWith("| 初始部署"));
+  assert(initial.includes("runtime-gate.md"));
+  assert.doesNotMatch(initial, /mainline|structured-result|customer-result/);
+  const intermediate = entry.split("\n").find((line) => line.startsWith("- 中间阻塞"));
+  assert(intermediate);
+  assert.doesNotMatch(intermediate, /\]\(/);
+  const rules = JSON.parse(fs.readFileSync(path.join(root, "rainbond-app-assistant/references/rule-ownership.json"), "utf8"));
+  assert.equal(Object.keys(rules.rules).length, 37);
+  for (const rule of Object.values(rules.rules)) for (const file of rule.files) assert(fs.existsSync(path.join(root, "rainbond-app-assistant", file)));
+});
+
 test("bootstrap entrypoint is a bounded conditional router", () => {
   assertEntrypoint("rainbond-fullstack-bootstrap", 14 * 1024);
   assertReferenceBudgets("rainbond-fullstack-bootstrap");

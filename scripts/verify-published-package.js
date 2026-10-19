@@ -48,7 +48,12 @@ function verifyPublishedPackage(selector, {
       stdio: "inherit",
     });
     if (result.error) throw result.error;
-    return Number.isInteger(result.status) ? result.status : 1;
+    if (result.status !== 0) return Number.isInteger(result.status) ? result.status : 1;
+    const smoke = spawnImpl(process.execPath, [path.join(home, ".rainbond", "lib", "rainskills", "bin", "runtime-smoke.js"), home], {
+      cwd: root, env: verificationEnvironment, stdio: "inherit",
+    });
+    if (smoke.error) throw smoke.error;
+    return Number.isInteger(smoke.status) ? smoke.status : 1;
   } finally {
     if (ownsTemporaryDirectory) fs.rmSync(root, { recursive: true, force: true });
   }

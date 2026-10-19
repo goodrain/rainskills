@@ -179,10 +179,7 @@ test("business Skills do not restore removed runtime registries outside the gene
 });
 
 test("app assistant loads specialist guidance without legacy select-skill tools or operation state", () => {
-  const source = fs.readFileSync(
-    path.join(root, "rainbond-app-assistant", "references", "workflow-rules.md"),
-    "utf8",
-  );
+  const source = require("./helpers/skill-documents.js").readSkillDocument(root, "rainbond-app-assistant/references/workflow-rules.md");
   assert.doesNotMatch(source, /select_skill_/);
   assert.doesNotMatch(source, /绑定到本次 operation/);
   assert.doesNotMatch(source, /context resolve` 已保存/);
