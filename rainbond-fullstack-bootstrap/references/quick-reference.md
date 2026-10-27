@@ -2,6 +2,14 @@
 
 Use this file for low-frequency reminders. Do not treat it as the source of truth for execution logic.
 
+## Operation semantics (upgrade vs deploy vs restart)
+
+- `rainbond_operate_app(action=upgrade)` applies already-saved configuration (env, dependency, storage, probe, connection env, ports) to running instances through a rolling update. It does not rebuild.
+- `rainbond_operate_app(action=deploy)` rebuilds from source or image and then deploys. Use it for the first deployment, or when the code or image actually changed.
+- `rainbond_operate_app(action=restart)` only recreates instances: it neither rebuilds nor applies pending configuration changes.
+- `rainbond_build_component` is the creation-step build, not a configuration-update mechanism.
+- A 409 "operation too frequent" response means the previous async event is still running. Wait for its terminal state (bounded) instead of retrying immediately; the platform releases the guard after 3 minutes.
+
 ## Common Mistakes
 
 - creating duplicate components instead of checking existing ones first
