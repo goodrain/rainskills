@@ -35,6 +35,8 @@ Call `rainbond_create_component_from_image` with `is_deploy=false`. Reuse the re
 
 Do not accept the Console default `is_deploy=true` and then deploy the same component again after configuration. If an existing component was already deployed successfully, port and outer-access changes synchronize through the Console/Region APIs; do not rebuild it merely to apply those changes.
 
+If the component is already running and you are only changing envs, dependencies, storage, probes, or connection envs, apply the change with `rainbond_operate_app(action=upgrade)` instead of `deploy` — `deploy` rebuilds from source or image, while `upgrade` applies saved configuration through a rolling update.
+
 ## 2b. Deployment-plan readiness for multi-component image topologies
 
 Before any mutating Rainbond Tool call for a multi-component image deployment, build a short `DeploymentPlanReadiness` mentally and stop if it is not ready.

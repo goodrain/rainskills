@@ -48,7 +48,7 @@ For services not in this list, recall the documented data directory from the ima
 
 **Rules**:
 - inspect existing component storage before deploying the stateful-service component
-- if no durable storage is already mounted at the data directory, use `rainbond_manage_component_storage(operation=create_volume, volume_name=<short-name>, volume_type=share-file, volume_path=<data-dir>)` **before** `rainbond_operate_app(action=deploy)`
+- if no durable storage is already mounted at the data directory, use `rainbond_manage_component_storage(operation=create_volume, volume_name=<short-name>, volume_type=share-file, volume_path=<data-dir>)` **before** applying it — use `rainbond_operate_app(action=upgrade)` for an already-running component, and `action=deploy` only when this is the component's first deployment or a rebuild is actually required
 - prefer the smallest durable storage binding accepted by the platform; do not invent a storage class, PVC name, host path, reclaim policy, or data-retention guarantee
 - if the storage Tool call fails or the platform does not expose a usable storage provider, do not silently ignore it; report missing persistence as a bootstrap caveat or blocker depending on user intent
 - if no stateful service component is present, no persistence check is required

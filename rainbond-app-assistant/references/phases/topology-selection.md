@@ -34,7 +34,7 @@
 
     **持久化方案**：
     1. 用 `rainbond_manage_component_storage(operation=create_volume, volume_type=share-file, volume_path=<官方数据目录>)` 在服务的数据目录挂 RWX 共享文件存储（stateless 组件能挂）
-    2. 然后 `rainbond_operate_app(action=deploy)` — **先挂存储再 deploy**，顺序不能反
+    2. 然后应用配置：**首次部署**用 `rainbond_operate_app(action=deploy)`；组件**已在运行时**只改存储/配置要用 `action=upgrade`（deploy 会重新构建，upgrade 只做滚动更新）— 顺序不能反
     3. **禁止**用 `volume_type=local`（local 强制要求 stateful，平台会 HTTP 400 拒绝）
 
     **需要 stateful + local volume（高 IOPS 数据库）的唯一路径**：通过 `rainbond_install_app_model` 从应用市场安装预配置的 stateful 模板。镜像/源码模式做不到这件事，不要假装能做。

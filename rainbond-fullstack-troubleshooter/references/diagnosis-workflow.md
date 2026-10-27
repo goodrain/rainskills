@@ -4,6 +4,13 @@ Load this reference for evidence collection, operation anchoring, bounded repair
 
 For a build, restart, or redeploy that needs repeated status reads, invoke protected `poll` once. The CLI owns the bounded loop and returns only state transitions, final state, blocker, retryability, attempts, and elapsed time; unchanged states never enter model context.
 
+## Operation and status vocabulary
+
+- Apply a repaired env / dependency / storage / probe / connection-env change with `rainbond_operate_app(action=upgrade)`. `restart` does not apply pending configuration, and `deploy` rebuilds from source or image unnecessarily.
+- Use the platform's status values: `building`, `waiting`, `starting`, `running`, `upgrade` (not "upgrading"), `stopping`, `closed`, `abnormal` / `some_abnormal`, `undeploy`. `undeploy` is a runtime label, not evidence that a build never started — check build events and build logs instead.
+- Source and CNB builds have a hard timeout of about 60 minutes. Elapsed time below that threshold is not failure evidence; do not re-trigger a build just because it is slow.
+- A 409 "operation too frequent" response means the previous async operation is still running. Wait for its terminal event (bounded) instead of retrying in a loop; the platform releases the guard after 3 minutes.
+
 ## Workflow
 
 Follow this order unless there is strong evidence to do otherwise.
