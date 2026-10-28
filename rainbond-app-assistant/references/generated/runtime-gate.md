@@ -1,12 +1,12 @@
 <!-- generated-by: scripts/sync-runtime-contracts.mjs -->
-<!-- source-sha256: 5be7e59399345293898319a817284aed82158de668484672bdedd1237436b61b -->
+<!-- source-sha256: 6f505bc057d0772f2c2a66c39ff77baf0b9b0efe05233c5bd06a8b2f76f130db -->
 <!-- profile: cli -->
 <!-- rainskills-runtime-gate:start -->
 # 单运行环境 CLI 门禁（生成文件）
 
 本机只允许连接一个 Rainbond 运行环境。当前 Skill 在本会话第一次调用 Rainbond 前，执行固定 launcher 的 `runtime status --json`。只有命令退出码为 0、`state=connected` 且 `usable=true` 时才继续。不得配置或直接调用客户端 MCP，不得枚举环境、读取凭据、创建自定义业务 operation，或生成运行环境 ID、业务 operation ID 与 intent JSON。固定 batch/recipe 请求和 CLI 返回的 confirmation_id 属于受保护调用协议，不是模型自建业务工作流。
 
-运行状态的 `package_version` 必须与下方 JSON contract 完全一致；缺失或不一致时先执行固定版本 `rainskills@0.1.47` 的更新/修复流程。不得在版本错配时继续业务调用。
+运行状态的 `package_version` 必须与下方 JSON contract 完全一致；缺失或不一致时先执行固定版本 `rainskills@0.1.48` 的更新/修复流程。不得在版本错配时继续业务调用。
 
 如果 integrity.status=failed 或 repair_required=true，停止业务调用并修复相同版本的本地安装；不得将缺模块当作 API 参数错误排查或绕过兼容入口。
 
@@ -47,7 +47,7 @@ Hermes Agent 使用 `terminal` 且 `background=true` 启动授权，随后只对
 ```json
 {
   "schema": "rainskills.single-runtime-contract.v1",
-  "package_version": "rainskills@0.1.47",
+  "package_version": "rainskills@0.1.48",
   "runtime_status": [
     "node",
     "<home>/.rainbond/lib/rainskills/bin/rainskills.js",
