@@ -208,14 +208,6 @@ function embeddedRuntimeContractSection() {
   ].join("\n");
 }
 
-function insertEmbeddedRuntimeContract(content, skillName) {
-  return replaceRequired(
-    content,
-    /^(---\n[\s\S]*?\n---\n)/,
-    `$1\n${embeddedRuntimeContractSection()}`,
-    `${skillName} embedded runtime contract`
-  );
-}
 
 function replaceClientRuntimeBlocks(content, replacement, skillName) {
   return replaceRequired(
@@ -237,14 +229,6 @@ function transformSkill(skillName, content) {
       `${embeddedTopLevelPreflight()}\n${embeddedRuntimeSection()}`,
       skillName
     );
-    transformed = transformed.replace(
-      "Uses the installed RainSkills CLI for platform actions.",
-      "Uses the session-provided Rainbond tools for platform actions."
-    );
-    transformed = transformed.replace(
-      "主要服务 CLI / Codex 端使用者",
-      "主要服务本机 profile 使用者"
-    );
   } else if (hasClientRuntimeBlocks) {
     transformed = replaceClientRuntimeBlocks(
       transformed,
@@ -262,12 +246,6 @@ function transformSkill(skillName, content) {
     );
   }
 
-  if (skillName === "rainbond-fullstack-bootstrap") {
-    transformed = transformed.replace(
-      /- \*\*Profile before create\*\*: when the `rainbond_get_project_source_profile` tool is available in this session \(rainagent runtime\), you MUST call it once for the repository before the FIRST `rainbond_create_component_from_source` of that repository, and fill creation parameters from the profile \(subdirectories, default branch, dockerfile preference, ports, env keys\)\. In CLI runtimes without that tool, derive the same facts by reading the local project files before creating\. Creating source components by guess is forbidden\./,
-      "- **Profile before create**: call `rainbond_get_project_source_profile` once for the repository before the FIRST `rainbond_create_component_from_source`, and fill creation parameters from the profile (subdirectories, default branch, dockerfile preference, ports, env keys). If the Tool is unavailable or the profile is incomplete, stop and request the missing source facts; creating source components by guess is forbidden."
-    );
-  }
   transformed = replaceRequired(
     transformed,
     /^---\n/,
@@ -286,6 +264,50 @@ function assertEmbeddedSafe(root) {
           `embedded profile contains forbidden '${marker}' in ${path.relative(root, markdownFile)}`
         );
       }
+    }
+  }
+}
+
+/**
+ * 关键规则守护：这些句子是 embedded profile 的行为护栏，曾经在上游重构中
+ * 被整段删除（2026-10-08 "slim bootstrap entrypoint"），而 builder 的隐式
+ * replace 只是静默 no-op，导致线上护栏凭空消失。这里让构建直接失败。
+ */
+const REQUIRED_EMBEDDED_RULES = {
+  "rainbond-fullstack-bootstrap": [
+    "Profile before create",
+    "do **not** create an image component",
+  ],
+  "rainbond-delivery-verifier": ["delivered-but-needs-manual-validation"],
+};
+
+function assertRequiredEmbeddedRules(root) {
+  for (const [skillName, rules] of Object.entries(REQUIRED_EMBEDDED_RULES)) {
+    const file = path.join(root, skillName, "SKILL.md");
+    const content = fs.readFileSync(file, "utf8");
+    for (const rule of rules) {
+      if (!content.includes(rule)) {
+        throw new Error(
+          `embedded profile lost required rule '${rule}' in ${skillName}/SKILL.md ` +
+            "(upstream text changed without updating the builder?)"
+        );
+      }
+    }
+  }
+}
+
+/** 每个 skill 都必须带上生成的 runtime gate，且明确是 embedded 契约 */
+function assertGeneratedRuntimeGates(root, skills) {
+  for (const skillName of skills) {
+    const gate = path.join(root, skillName, "references", "generated", "runtime-gate.md");
+    if (!fs.existsSync(gate)) {
+      throw new Error(`embedded profile missing generated runtime gate for ${skillName}`);
+    }
+    const content = fs.readFileSync(gate, "utf8");
+    if (!content.includes("embedded")) {
+      throw new Error(
+        `generated runtime gate for ${skillName} does not declare the embedded profile`
+      );
     }
   }
 }
@@ -358,6 +380,9 @@ function buildEmbeddedProfile({ source_root: sourceRoot, output, revision }) {
     `${JSON.stringify(manifest, null, 2)}\n`,
     { encoding: "utf8", mode: 0o600 }
   );
+
+  assertRequiredEmbeddedRules(resolvedOutput);
+  assertGeneratedRuntimeGates(resolvedOutput, EMBEDDED_SKILLS);
 }
 
 try {
