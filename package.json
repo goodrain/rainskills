@@ -89,6 +89,7 @@
     "test:runtime-contracts": "node scripts/sync-runtime-contracts.mjs --check",
     "test:runtime-contract-generation": "node --test tests/runtime-contract-generation.test.js",
     "test:shared-contract-generation": "node --test tests/shared-contract-generation.test.js",
+    "test:tool-references": "node --test tests/tool-references-contract.test.js",
     "test:skill-performance-repository": "node --test tests/skill-performance-repository.test.js",
     "test:codex-host-evals": "node --test tests/codex-host-evals.test.js",
     "test:effect-evals": "node --test tests/effect-evals.test.js",

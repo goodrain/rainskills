@@ -1,6 +1,6 @@
 ---
 name: rainbond-fullstack-bootstrap
-description: "Create only the Rainbond app/component topology for a known current project or manifest. Use for ‘只帮我创建应用和组件，不要继续排障’, ‘create topology’, or ‘bootstrap only’. Do not use for generic current-project deployment; route it to rainbond-app-assistant."
+description: "Create only the Rainbond app/component topology for a known project or manifest. Use for ‘只帮我创建应用和组件，不要继续排障’, ‘create topology’, or ‘bootstrap only’. Not for a bare Git URL without a local project or manifest, or generic deployment — route both to rainbond-app-assistant."
 ---
 
 # Rainbond Fullstack Bootstrap
@@ -21,6 +21,24 @@ If the user gives a generic current-project deployment request, route that to `r
 ## Local artifact precondition
 
 Local source and package artifacts require an existing or just-completed `rainbond-project-init` result with canonical `rainbond.app.json`, `.rainbond/local.json`, and verified `app_id`. An address-only Git or image request does not require local files and stays outside this precondition. Never pass `source.local_path` to a Rainbond Tool.
+
+## Profile before create (embedded runtime)
+
+Before the FIRST `rainbond_create_component_from_source` for a repository, call
+`rainbond_get_project_source_profile` once with that `git_url`, then fill `code_version`,
+`subdirectories`, build preference, ports, and env keys from the result.
+
+If the profile is unavailable or incomplete (`no_manifest`, private repo, static site):
+
+- do **not** retry the profile with equivalent arguments — an identical call cannot change the outcome
+- do **not** create an image component and then switch its build source as a workaround: that
+  bypasses the platform's source-profile gate and leaves a component whose runtime shape no
+  longer matches its source
+- use the normal source-create path with the facts you actually have (static sites:
+  `language = static`, ports from backend detection), and if a required fact is still missing,
+  stop and ask the user for it
+
+Creating source components by guess is forbidden.
 
 ## Conditional reading table
 

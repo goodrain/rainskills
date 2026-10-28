@@ -1,6 +1,6 @@
 ---
 name: rainbond-app-assistant
-description: "Deploy, run, inspect, or repair a current/local project, ordinary Git, package, private-image app, or single-image component with Rainbond; use for “项目跑起来”, “先初始化，然后自动继续”, “这个应用”, rainbond.app.json, or .rainbond/local.json. Route supplied Compose/Helm/image-set descriptors and named third-party suites to rainbond-opensource-app-deploy; market templates to rainbond-template-installer."
+description: "Deploy, run, inspect, or repair a current/local project, an ordinary Git URL, a package, a private-image app, or a single-image component with Rainbond; use for “项目跑起来”, “先初始化，然后自动继续”, “这个应用”, rainbond.app.json, .rainbond/local.json. Route supplied Compose/Helm/image-set descriptors and named third-party suites to rainbond-opensource-app-deploy; market templates to rainbond-template-installer."
 ---
 
 # Rainbond App Assistant

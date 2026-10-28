@@ -196,6 +196,39 @@ test("embedded profile is explicit, transport-safe, and contains only Agent-comp
     "unmigrated root fallback must remove the complete client runtime interval",
   );
 
+  // 关键护栏必须真的出现在转换产物里（历史上曾被上游静默删除）
+  const embeddedBootstrap = fs.readFileSync(
+    path.join(output, "rainbond-fullstack-bootstrap", "SKILL.md"),
+    "utf8",
+  );
+  assert.match(
+    embeddedBootstrap,
+    /Profile before create/,
+    "embedded bootstrap must keep the profile-before-create rule",
+  );
+  assert.match(
+    embeddedBootstrap,
+    /do \*\*not\*\* create an image component/,
+    "embedded bootstrap must forbid the image-placeholder workaround",
+  );
+
+  const embeddedVerifier = fs.readFileSync(
+    path.join(output, "rainbond-delivery-verifier", "SKILL.md"),
+    "utf8",
+  );
+  assert.match(
+    embeddedVerifier,
+    /delivered-but-needs-manual-validation/,
+    "embedded delivery verifier must keep the manual-validation downgrade",
+  );
+
+  // 每个 skill 都必须有 embedded runtime gate
+  for (const skill of embeddedSkills) {
+    const gate = path.join(output, skill, "references", "generated", "runtime-gate.md");
+    assert.equal(fs.existsSync(gate), true, `${skill} missing generated runtime gate`);
+    assert.match(fs.readFileSync(gate, "utf8"), /embedded/i);
+  }
+
   assert.equal(fs.existsSync(path.join(output, "rainbond-project-init")), false);
   assert.equal(fs.existsSync(path.join(output, "rainbond-env-sync")), false);
   assert.equal(
@@ -290,4 +323,26 @@ test("release workflow publishes an isolated embedded artifact and channel manif
     /TARBALL="\$\{\{ steps\.meta\.outputs\.tarball \}\}"[\s\S]{0,100}cat > stable\.json <<EOF/
   );
   assert.doesNotMatch(workflow, /build-pi-extension|Verify Pi extension/i);
+});
+
+test("embedded build fails when a required guardrail rule is missing", () => {
+  const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-src-"));
+  fs.cpSync(repoRoot, sourceRoot, {
+    recursive: true,
+    filter: (entry) => {
+      const base = path.basename(entry);
+      return !["node_modules", ".git", "tests", "marketplace", "benchmarks"].includes(base);
+    },
+  });
+  const bootstrap = path.join(sourceRoot, "rainbond-fullstack-bootstrap", "SKILL.md");
+  const original = fs.readFileSync(bootstrap, "utf8");
+  fs.writeFileSync(
+    bootstrap,
+    original.replace(/Profile before create[\s\S]*?Creating source components by guess is forbidden\./, ""),
+    "utf8",
+  );
+  const output = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-out-")), "embedded");
+  const result = buildEmbeddedProfile(output, "--source-root", sourceRoot);
+  assert.notEqual(result.status, 0, "build must fail when a guardrail rule disappears");
+  assert.match(result.stderr, /lost required rule/i);
 });

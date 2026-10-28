@@ -11,6 +11,7 @@ const TEST_SCRIPTS = Object.freeze([
   "test:runtime-contracts",
   "test:runtime-contract-generation",
   "test:shared-contract-generation",
+  "test:tool-references",
   "test:skill-performance-repository",
   "test:codex-host-evals",
   "test:effect-evals",

@@ -23,6 +23,8 @@ Once a component resolves to `source.kind = source`:
 - do **not** silently downgrade the component to `image`
 - do **not** guess a fallback image unless an explicit higher-priority image override was provided for the current run
 - do **not** switch to local Docker build, temporary registry push, or package upload as an implicit workaround
+- do **not** create an image component first and later switch it to source to bypass the
+  source-profile gate; if source creation is blocked, stop and report the blocker
 
 ### Source-ref Preservation
 
