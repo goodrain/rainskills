@@ -1,0 +1,714 @@
+{
+  "version": 1,
+  "note": "embedded skills 引用的 rainbond_* 工具清单。由 scripts/export-tool-references.mjs 生成，请勿手工编辑。",
+  "skills": [
+    "rainbond-ai-assistant",
+    "rainbond-app-assistant",
+    "rainbond-app-version-assistant",
+    "rainbond-delivery-verifier",
+    "rainbond-fullstack-bootstrap",
+    "rainbond-fullstack-troubleshooter",
+    "rainbond-platform-plugin-manager",
+    "rainbond-platform-query",
+    "rainbond-template-installer"
+  ],
+  "tools": [
+    {
+      "name": "rainbond_build_component",
+      "skills": [
+        "rainbond-app-assistant",
+        "rainbond-fullstack-bootstrap",
+        "rainbond-fullstack-troubleshooter"
+      ]
+    },
+    {
+      "name": "rainbond_change_component_image",
+      "skills": [
+        "rainbond-app-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_check_component",
+      "skills": [
+        "rainbond-app-assistant",
+        "rainbond-fullstack-troubleshooter"
+      ]
+    },
+    {
+      "name": "rainbond_complete_app_share",
+      "skills": [
+        "rainbond-app-version-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_create_ai_engine_instance",
+      "skills": [
+        "rainbond-ai-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_create_ai_engine_model_download",
+      "skills": [
+        "rainbond-ai-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_create_app",
+      "skills": [
+        "rainbond-template-installer"
+      ]
+    },
+    {
+      "name": "rainbond_create_app_from_snapshot_version",
+      "skills": [
+        "rainbond-app-version-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_create_app_share_record",
+      "skills": [
+        "rainbond-app-version-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_create_app_version_snapshot",
+      "skills": [
+        "rainbond-app-version-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_create_component",
+      "skills": [
+        "rainbond-app-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_create_component_from_image",
+      "skills": [
+        "rainbond-app-assistant",
+        "rainbond-fullstack-bootstrap"
+      ]
+    },
+    {
+      "name": "rainbond_create_component_from_local_package",
+      "skills": [
+        "rainbond-fullstack-bootstrap"
+      ]
+    },
+    {
+      "name": "rainbond_create_component_from_package",
+      "skills": [
+        "rainbond-app-assistant",
+        "rainbond-fullstack-bootstrap"
+      ]
+    },
+    {
+      "name": "rainbond_create_component_from_source",
+      "skills": [
+        "rainbond-app-assistant",
+        "rainbond-fullstack-bootstrap"
+      ]
+    },
+    {
+      "name": "rainbond_delete_ai_engine_instance",
+      "skills": [
+        "rainbond-ai-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_delete_ai_engine_team_model",
+      "skills": [
+        "rainbond-ai-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_delete_app",
+      "skills": [
+        "rainbond-platform-plugin-manager"
+      ]
+    },
+    {
+      "name": "rainbond_delete_app_share_record",
+      "skills": [
+        "rainbond-app-version-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_delete_app_version_rollback_record",
+      "skills": [
+        "rainbond-app-version-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_delete_app_version_snapshot",
+      "skills": [
+        "rainbond-app-version-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_delete_component",
+      "skills": [
+        "rainbond-app-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_delete_package_upload",
+      "skills": [
+        "rainbond-app-assistant",
+        "rainbond-fullstack-bootstrap"
+      ]
+    },
+    {
+      "name": "rainbond_get_ai_engine_capabilities",
+      "skills": [
+        "rainbond-ai-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_get_ai_engine_gpu_device_timeseries",
+      "skills": [
+        "rainbond-ai-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_get_ai_engine_instance",
+      "skills": [
+        "rainbond-ai-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_get_ai_engine_instance_deployment",
+      "skills": [
+        "rainbond-ai-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_get_ai_engine_instance_logs",
+      "skills": [
+        "rainbond-ai-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_get_ai_engine_model_catalog_detail",
+      "skills": [
+        "rainbond-ai-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_get_ai_engine_model_download",
+      "skills": [
+        "rainbond-ai-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_get_ai_engine_model_download_logs",
+      "skills": [
+        "rainbond-ai-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_get_ai_engine_monitoring_overview",
+      "skills": [
+        "rainbond-ai-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_get_ai_engine_resource_capacity",
+      "skills": [
+        "rainbond-ai-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_get_ai_engine_team_model",
+      "skills": [
+        "rainbond-ai-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_get_app_detail",
+      "skills": [
+        "rainbond-delivery-verifier"
+      ]
+    },
+    {
+      "name": "rainbond_get_app_health_overview",
+      "skills": [
+        "rainbond-app-assistant",
+        "rainbond-delivery-verifier",
+        "rainbond-fullstack-troubleshooter"
+      ]
+    },
+    {
+      "name": "rainbond_get_app_publish_candidates",
+      "skills": [
+        "rainbond-app-version-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_get_app_share_event",
+      "skills": [
+        "rainbond-app-version-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_get_app_share_info",
+      "skills": [
+        "rainbond-app-version-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_get_app_share_record",
+      "skills": [
+        "rainbond-app-version-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_get_app_upgrade_record",
+      "skills": [
+        "rainbond-app-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_get_app_version_overview",
+      "skills": [
+        "rainbond-app-version-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_get_app_version_rollback_record_detail",
+      "skills": [
+        "rainbond-app-version-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_get_app_version_snapshot_detail",
+      "skills": [
+        "rainbond-app-version-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_get_component_build_logs",
+      "skills": [
+        "rainbond-app-assistant",
+        "rainbond-fullstack-bootstrap",
+        "rainbond-fullstack-troubleshooter"
+      ]
+    },
+    {
+      "name": "rainbond_get_component_build_source",
+      "skills": [
+        "rainbond-app-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_get_component_check_result",
+      "skills": [
+        "rainbond-app-assistant",
+        "rainbond-fullstack-bootstrap"
+      ]
+    },
+    {
+      "name": "rainbond_get_component_detail",
+      "skills": [
+        "rainbond-app-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_get_component_events",
+      "skills": [
+        "rainbond-app-assistant",
+        "rainbond-fullstack-bootstrap",
+        "rainbond-fullstack-troubleshooter"
+      ]
+    },
+    {
+      "name": "rainbond_get_component_logs",
+      "skills": [
+        "rainbond-fullstack-troubleshooter"
+      ]
+    },
+    {
+      "name": "rainbond_get_component_pods",
+      "skills": [
+        "rainbond-fullstack-troubleshooter"
+      ]
+    },
+    {
+      "name": "rainbond_get_component_summary",
+      "skills": [
+        "rainbond-app-assistant",
+        "rainbond-fullstack-bootstrap",
+        "rainbond-fullstack-troubleshooter"
+      ]
+    },
+    {
+      "name": "rainbond_get_config_file",
+      "skills": [
+        "rainbond-fullstack-troubleshooter"
+      ]
+    },
+    {
+      "name": "rainbond_get_current_user",
+      "skills": [
+        "rainbond-app-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_get_operation_failure_context",
+      "skills": [
+        "rainbond-app-assistant",
+        "rainbond-fullstack-troubleshooter"
+      ]
+    },
+    {
+      "name": "rainbond_get_package_upload_status",
+      "skills": [
+        "rainbond-fullstack-bootstrap"
+      ]
+    },
+    {
+      "name": "rainbond_get_pod_detail",
+      "skills": [
+        "rainbond-fullstack-troubleshooter"
+      ]
+    },
+    {
+      "name": "rainbond_get_project_source_profile",
+      "skills": [
+        "rainbond-app-assistant",
+        "rainbond-fullstack-bootstrap"
+      ]
+    },
+    {
+      "name": "rainbond_get_team_apps",
+      "skills": [
+        "rainbond-platform-query"
+      ]
+    },
+    {
+      "name": "rainbond_giveup_app_share",
+      "skills": [
+        "rainbond-app-version-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_horizontal_scale_component",
+      "skills": [
+        "rainbond-app-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_init_package_upload",
+      "skills": [
+        "rainbond-app-assistant",
+        "rainbond-fullstack-bootstrap"
+      ]
+    },
+    {
+      "name": "rainbond_install_app_by_market",
+      "skills": [
+        "rainbond-template-installer"
+      ]
+    },
+    {
+      "name": "rainbond_install_app_model",
+      "skills": [
+        "rainbond-app-assistant",
+        "rainbond-fullstack-bootstrap",
+        "rainbond-template-installer"
+      ]
+    },
+    {
+      "name": "rainbond_install_platform_plugin",
+      "skills": [
+        "rainbond-platform-plugin-manager"
+      ]
+    },
+    {
+      "name": "rainbond_list_ai_engine_gpu_devices",
+      "skills": [
+        "rainbond-ai-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_list_ai_engine_gpu_instance_bindings",
+      "skills": [
+        "rainbond-ai-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_list_ai_engine_gpu_instance_usage",
+      "skills": [
+        "rainbond-ai-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_list_ai_engine_instance_events",
+      "skills": [
+        "rainbond-ai-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_list_ai_engine_instances",
+      "skills": [
+        "rainbond-ai-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_list_ai_engine_model_recommendations",
+      "skills": [
+        "rainbond-ai-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_list_ai_engine_team_models",
+      "skills": [
+        "rainbond-ai-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_list_app_share_events",
+      "skills": [
+        "rainbond-app-version-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_list_app_share_records",
+      "skills": [
+        "rainbond-app-version-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_list_app_version_rollback_records",
+      "skills": [
+        "rainbond-app-version-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_list_app_version_snapshots",
+      "skills": [
+        "rainbond-app-version-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_list_platform_plugins",
+      "skills": [
+        "rainbond-platform-plugin-manager"
+      ]
+    },
+    {
+      "name": "rainbond_manage_component_autoscaler",
+      "skills": [
+        "rainbond-app-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_manage_component_connection_envs",
+      "skills": [
+        "rainbond-app-assistant",
+        "rainbond-fullstack-bootstrap",
+        "rainbond-fullstack-troubleshooter"
+      ]
+    },
+    {
+      "name": "rainbond_manage_component_dependency",
+      "skills": [
+        "rainbond-app-assistant",
+        "rainbond-fullstack-bootstrap",
+        "rainbond-fullstack-troubleshooter"
+      ]
+    },
+    {
+      "name": "rainbond_manage_component_envs",
+      "skills": [
+        "rainbond-app-assistant",
+        "rainbond-fullstack-bootstrap",
+        "rainbond-fullstack-troubleshooter"
+      ]
+    },
+    {
+      "name": "rainbond_manage_component_ports",
+      "skills": [
+        "rainbond-app-assistant",
+        "rainbond-fullstack-bootstrap"
+      ]
+    },
+    {
+      "name": "rainbond_manage_component_probe",
+      "skills": [
+        "rainbond-app-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_manage_component_storage",
+      "skills": [
+        "rainbond-app-assistant",
+        "rainbond-fullstack-bootstrap",
+        "rainbond-fullstack-troubleshooter"
+      ]
+    },
+    {
+      "name": "rainbond_operate_app",
+      "skills": [
+        "rainbond-app-assistant",
+        "rainbond-fullstack-bootstrap",
+        "rainbond-fullstack-troubleshooter"
+      ]
+    },
+    {
+      "name": "rainbond_probe_delivery_url",
+      "skills": [
+        "rainbond-delivery-verifier"
+      ]
+    },
+    {
+      "name": "rainbond_query_app_model_versions",
+      "skills": [
+        "rainbond-template-installer"
+      ]
+    },
+    {
+      "name": "rainbond_query_apps",
+      "skills": [
+        "rainbond-platform-query"
+      ]
+    },
+    {
+      "name": "rainbond_query_cloud_app_models",
+      "skills": [
+        "rainbond-app-assistant",
+        "rainbond-template-installer"
+      ]
+    },
+    {
+      "name": "rainbond_query_cloud_markets",
+      "skills": [
+        "rainbond-app-assistant",
+        "rainbond-template-installer"
+      ]
+    },
+    {
+      "name": "rainbond_query_components",
+      "skills": [
+        "rainbond-app-assistant",
+        "rainbond-delivery-verifier",
+        "rainbond-fullstack-bootstrap",
+        "rainbond-fullstack-troubleshooter",
+        "rainbond-platform-query"
+      ]
+    },
+    {
+      "name": "rainbond_query_enterprises",
+      "skills": [
+        "rainbond-platform-query"
+      ]
+    },
+    {
+      "name": "rainbond_query_local_app_models",
+      "skills": [
+        "rainbond-app-assistant",
+        "rainbond-template-installer"
+      ]
+    },
+    {
+      "name": "rainbond_query_region_rbd_components",
+      "skills": [
+        "rainbond-app-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_query_regions",
+      "skills": [
+        "rainbond-platform-query"
+      ]
+    },
+    {
+      "name": "rainbond_query_teams",
+      "skills": [
+        "rainbond-platform-query"
+      ]
+    },
+    {
+      "name": "rainbond_replace_component_package",
+      "skills": [
+        "rainbond-app-assistant",
+        "rainbond-fullstack-bootstrap"
+      ]
+    },
+    {
+      "name": "rainbond_rollback_app_upgrade_record",
+      "skills": [
+        "rainbond-app-version-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_rollback_app_version_snapshot",
+      "skills": [
+        "rainbond-app-version-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_search_ai_engine_model_catalog",
+      "skills": [
+        "rainbond-ai-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_start_app_share_event",
+      "skills": [
+        "rainbond-app-version-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_submit_app_share_info",
+      "skills": [
+        "rainbond-app-version-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_update_ai_engine_instance_state",
+      "skills": [
+        "rainbond-ai-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_update_component_build_source",
+      "skills": [
+        "rainbond-app-assistant",
+        "rainbond-fullstack-bootstrap"
+      ]
+    },
+    {
+      "name": "rainbond_upgrade_app",
+      "skills": [
+        "rainbond-platform-plugin-manager"
+      ]
+    },
+    {
+      "name": "rainbond_upload_package_file",
+      "skills": [
+        "rainbond-fullstack-bootstrap"
+      ]
+    },
+    {
+      "name": "rainbond_vertical_scale_component",
+      "skills": [
+        "rainbond-app-assistant"
+      ]
+    },
+    {
+      "name": "rainbond_wait_for_build_completion",
+      "skills": [
+        "rainbond-ai-assistant",
+        "rainbond-app-assistant",
+        "rainbond-app-version-assistant",
+        "rainbond-delivery-verifier",
+        "rainbond-fullstack-bootstrap",
+        "rainbond-fullstack-troubleshooter",
+        "rainbond-platform-plugin-manager",
+        "rainbond-platform-query",
+        "rainbond-template-installer"
+      ]
+    }
+  ]
+}
