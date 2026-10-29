@@ -8,6 +8,7 @@ export const RUNTIME_SKILL_IDS = Object.freeze([
   "rainbond-delivery-verifier", "rainbond-env-sync", "rainbond-fullstack-bootstrap",
   "rainbond-fullstack-troubleshooter", "rainbond-opensource-app-deploy",
   "rainbond-platform-plugin-manager", "rainbond-platform-query", "rainbond-project-init",
+  "rainbond-scheduled-task",
   "rainbond-template-installer",
 ]);
 const OVERLAY_KEYS = Object.freeze([

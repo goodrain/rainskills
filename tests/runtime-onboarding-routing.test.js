@@ -22,6 +22,7 @@ const skillIds = [
   "rainbond-opensource-app-deploy",
   "rainbond-platform-plugin-manager",
   "rainbond-project-init",
+  "rainbond-scheduled-task",
   "rainbond-template-installer",
 ];
 

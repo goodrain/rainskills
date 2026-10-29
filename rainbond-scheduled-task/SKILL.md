@@ -13,12 +13,13 @@ description: Create, inspect, pause, resume, delete, or trial-run recurring (cro
 
 ## Fast path
 
-1. 解析：频率、目标（team/region/app/component）、要执行的 prompt、是否需要飞书通知。
-2. 用**一句话**向用户确认，不铺表格：
+1. Read the [generated Runtime Gate](references/generated/runtime-gate.md) once per session; if absent, follow [generated Runtime Routing](references/generated/runtime-routing.md).
+2. 解析：频率、目标（team/region/app/component）、要执行的 prompt、是否需要飞书通知。
+3. 用**一句话**向用户确认，不铺表格：
 
    > 每天 09:00 巡检 default/rainbond 的 nginx，汇总结果、仅记录。确认创建？
 
-3. 确认后调用 `schedule_create_task`；成功只回一句“已创建，下次 10-30 09:00”。
+4. 确认后调用 `schedule_create_task`；成功只回一句“已创建，下次 10-30 09:00”。
 
 ## Field mapping
 

@@ -27,6 +27,7 @@ const RUNTIME_BUNDLE_DIRECTORIES = Object.freeze([
   "rainbond-platform-plugin-manager",
   "rainbond-platform-query",
   "rainbond-project-init",
+  "rainbond-scheduled-task",
   "rainbond-template-installer",
 ]);
 const RUNTIME_BUNDLE_FILES = Object.freeze(["install.sh", "package.json"]);
