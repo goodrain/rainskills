@@ -44,7 +44,7 @@ description: Create, inspect, pause, resume, delete, or trial-run recurring (cro
 | 删除 | `schedule_delete_task`（先二次确认） |
 | 现在跑一次 | `schedule_test_task` |
 | 最近结果 | `schedule_list_runs` |
-| 飞书是否就绪 | `schedule_check_notification` |
+| 飞书是否就绪 | `schedule_check_notification`（已有任务）/ `schedule_check_notification_channel`（创建前） |
 
 ## Constraints
 
