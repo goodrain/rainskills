@@ -1,5 +1,5 @@
 <!-- generated-by: scripts/sync-runtime-contracts.mjs -->
-<!-- source-sha256: 980f0e4d46020ec403777f9b9b27042cbd93daa9cfbf7eda0778a06bffddc108 -->
+<!-- source-sha256: 53ee1e25073e9c773aeb11b1785f777b450117c083867d3c9c6243301dc99eba -->
 <!-- profile: cli -->
 <!-- rainskills-runtime-gate:start -->
 # 单运行环境 CLI 门禁（生成文件）
@@ -47,7 +47,7 @@ Hermes Agent 使用 `terminal` 且 `background=true` 启动授权，随后只对
 ```json
 {
   "schema": "rainskills.single-runtime-contract.v1",
-  "package_version": "rainskills@0.1.48",
+  "package_version": "rainskills@0.1.49",
   "runtime_status": [
     "node",
     "<home>/.rainbond/lib/rainskills/bin/rainskills.js",
