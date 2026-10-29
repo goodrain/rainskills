@@ -719,6 +719,12 @@
       ]
     },
     {
+      "name": "schedule_check_notification_channel",
+      "skills": [
+        "rainbond-scheduled-task"
+      ]
+    },
+    {
       "name": "schedule_create_task",
       "skills": [
         "rainbond-scheduled-task"
