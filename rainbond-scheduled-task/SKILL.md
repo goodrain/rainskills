@@ -19,7 +19,9 @@ description: Create, inspect, pause, resume, delete, or trial-run recurring (cro
 
    > 每天 09:00 巡检 default/rainbond 的 nginx，汇总结果、仅记录。确认创建？
 
-4. 确认后调用 `schedule_create_task`；成功只回一句“已创建，下次 10-30 09:00”。
+4. 确认必须包含：cron、时区、**未来 3 次执行时间**、目标（中文名）、结果模式、通知方式；
+5. 通知方式必须让用户三选一：**仅记录 / 异常时发飞书 / 总是发飞书**；选发飞书前先调 `schedule_check_notification_channel`，未连接飞书或群未就绪则说明并降级为“仅记录”；
+6. 确认后调用 `schedule_create_task`；成功回一句“已创建，下次 <时间>”。
 
 ## Field mapping
 
@@ -52,4 +54,4 @@ description: Create, inspect, pause, resume, delete, or trial-run recurring (cro
 - 不猜企业 ID，不跨企业创建；
 - 删除、停用必须二次确认；
 - 定时任务运行不写记忆，不要向用户承诺“会记住上次巡检”；
-- 通知策略非 `record_only` 时，先 `schedule_check_notification`，未就绪则提示先绑定飞书群。
+- 通知策略非 `record_only` 时，创建前先 `schedule_check_notification_channel`，未就绪则降级为“仅记录”并告知用户。
