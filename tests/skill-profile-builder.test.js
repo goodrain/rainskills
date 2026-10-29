@@ -16,6 +16,7 @@ const embeddedSkills = [
   "rainbond-fullstack-troubleshooter",
   "rainbond-platform-plugin-manager",
   "rainbond-platform-query",
+  "rainbond-scheduled-task",
   "rainbond-template-installer",
 ];
 

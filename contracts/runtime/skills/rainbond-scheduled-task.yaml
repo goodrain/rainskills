@@ -1,0 +1,13 @@
+schema: rainskills.runtime-overlay.v1
+skill_id: rainbond-scheduled-task
+profiles: [cli, embedded]
+command_set: [context_resolve, read, call, call_confirm]
+version_guard: none
+missing_runtime_mode: existing_application
+scope_discriminator: workspace
+resume_target: scheduled-task
+invariants:
+  - Recurring cron tasks are created only after the user confirms frequency, target, and prompt in one line.
+  - Deletion and disabling require a second explicit confirmation and never run unattended.
+  - Notification policies other than record_only require schedule_check_notification to succeed first.
+  - Never report a task as created, updated, or deleted unless the tool result confirms it.

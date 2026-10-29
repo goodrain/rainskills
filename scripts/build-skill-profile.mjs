@@ -23,6 +23,7 @@ const EMBEDDED_SKILLS = [
   // which the RainAgent embedded runtime does not provide.
   "rainbond-platform-plugin-manager",
   "rainbond-platform-query",
+  "rainbond-scheduled-task",
   "rainbond-template-installer",
 ];
 const EXCLUDED_SUBTREES = new Set([

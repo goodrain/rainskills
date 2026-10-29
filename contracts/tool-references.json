@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "note": "embedded skills 引用的 rainbond_* 工具清单。由 scripts/export-tool-references.mjs 生成，请勿手工编辑。",
+  "note": "embedded skills 引用的 rainbond_*/schedule_* 工具清单。由 scripts/export-tool-references.mjs 生成，请勿手工编辑。",
   "skills": [
     "rainbond-ai-assistant",
     "rainbond-app-assistant",
@@ -10,6 +10,7 @@
     "rainbond-fullstack-troubleshooter",
     "rainbond-platform-plugin-manager",
     "rainbond-platform-query",
+    "rainbond-scheduled-task",
     "rainbond-template-installer"
   ],
   "tools": [
@@ -707,7 +708,56 @@
         "rainbond-fullstack-troubleshooter",
         "rainbond-platform-plugin-manager",
         "rainbond-platform-query",
+        "rainbond-scheduled-task",
         "rainbond-template-installer"
+      ]
+    },
+    {
+      "name": "schedule_check_notification",
+      "skills": [
+        "rainbond-scheduled-task"
+      ]
+    },
+    {
+      "name": "schedule_create_task",
+      "skills": [
+        "rainbond-scheduled-task"
+      ]
+    },
+    {
+      "name": "schedule_delete_task",
+      "skills": [
+        "rainbond-scheduled-task"
+      ]
+    },
+    {
+      "name": "schedule_list_runs",
+      "skills": [
+        "rainbond-scheduled-task"
+      ]
+    },
+    {
+      "name": "schedule_list_tasks",
+      "skills": [
+        "rainbond-scheduled-task"
+      ]
+    },
+    {
+      "name": "schedule_set_task_enabled",
+      "skills": [
+        "rainbond-scheduled-task"
+      ]
+    },
+    {
+      "name": "schedule_test_task",
+      "skills": [
+        "rainbond-scheduled-task"
+      ]
+    },
+    {
+      "name": "schedule_update_task",
+      "skills": [
+        "rainbond-scheduled-task"
       ]
     }
   ]

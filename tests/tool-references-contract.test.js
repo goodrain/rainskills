@@ -31,3 +31,16 @@ test("tool-references contains the delivery probe adapter", () => {
     "negative references (do not call X) must not be recorded as required tools"
   );
 });
+
+test("tool-references records the scheduled task adapters", () => {
+  const contract = JSON.parse(fs.readFileSync(contractPath, "utf8"));
+  for (const name of ["schedule_create_task", "schedule_delete_task", "schedule_list_runs"]) {
+    const tool = contract.tools.find((entry) => entry.name === name);
+    assert(tool, `${name} must be recorded as a required tool`);
+    assert.equal(
+      tool.skills.includes("rainbond-scheduled-task"),
+      true,
+      `${name} must be attributed to rainbond-scheduled-task`
+    );
+  }
+});

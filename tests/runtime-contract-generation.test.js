@@ -22,6 +22,7 @@ const skillIds = [
   "rainbond-platform-plugin-manager",
   "rainbond-platform-query",
   "rainbond-project-init",
+  "rainbond-scheduled-task",
   "rainbond-template-installer",
 ];
 const overlayKeys = [

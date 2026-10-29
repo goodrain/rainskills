@@ -28,6 +28,7 @@ const skillNames = [
   "rainbond-platform-plugin-manager",
   "rainbond-platform-query",
   "rainbond-project-init",
+  "rainbond-scheduled-task",
   "rainbond-template-installer",
 ];
 const approvedCapabilitySummary = `Rainskills 安装完成，下一条消息即可直接使用。

@@ -21,10 +21,11 @@ export const EMBEDDED_SKILLS = [
   "rainbond-fullstack-troubleshooter",
   "rainbond-platform-plugin-manager",
   "rainbond-platform-query",
+  "rainbond-scheduled-task",
   "rainbond-template-installer",
 ];
 
-/** 正则提取产生的伪工具名 / 文档动词与枚举 */
+/** 正则提取产生的伪工具名 / 文档动词与枚举（rainbond_* 与 schedule_* 两种工具命名空间） */
 const NON_TOOL_REFERENCES = new Set([
   "rainbond_create_component_",
   "rainbond_manage_component_",
@@ -52,7 +53,7 @@ export function collectToolReferences(root = repoRoot) {
       for (const line of content.split(/\r?\n/)) {
         // 「不得调用不存在的 rainbond_xxx」属于反向引用，不算能力缺口
         if (line.includes("不存在") || /not\s+exist/i.test(line)) continue;
-        for (const match of line.matchAll(/\brainbond_[a-z0-9_]+\b/g)) {
+        for (const match of line.matchAll(/\b(?:rainbond|schedule)_[a-z0-9_]+\b/g)) {
           const name = match[0];
           if (NON_TOOL_REFERENCES.has(name)) continue;
           if (!refs.has(name)) refs.set(name, new Set());
@@ -74,7 +75,7 @@ export function renderToolReferences(root = repoRoot) {
     JSON.stringify(
       {
         version: 1,
-        note: "embedded skills 引用的 rainbond_* 工具清单。由 scripts/export-tool-references.mjs 生成，请勿手工编辑。",
+        note: "embedded skills 引用的 rainbond_*/schedule_* 工具清单。由 scripts/export-tool-references.mjs 生成，请勿手工编辑。",
         skills: EMBEDDED_SKILLS,
         tools: [...refs.entries()].map(([name, skills]) => ({ name, skills })),
       },
