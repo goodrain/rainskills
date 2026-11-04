@@ -19,6 +19,39 @@ const {
 
 const root = path.resolve(__dirname, "..");
 
+test("CLI help exposes the local delivery adapter without a runtime or credentials", (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-probe-help-"));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  for (const args of [
+    ["--help"],
+    ["delivery", "probe", "--help", "--skill-id", "rainbond-delivery-verifier"],
+  ]) {
+    const result = spawnSync(process.execPath, [path.join(root, "bin/rainskills-tools.js"), ...args], {
+      env: { ...process.env, HOME: home, RAINSKILLS_TELEMETRY_DISABLED: "1" }, encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const help = JSON.parse(result.stdout);
+    assert(help.commands.includes("delivery probe"));
+    assert.deepEqual(help.delivery_probe.argv, ["delivery", "probe", "--input", "-", "--skill-id", "rainbond-delivery-verifier"]);
+    assert.equal(help.delivery_probe.runtime_connection_required, false);
+    assert.equal(help.delivery_probe.input_example.policy_version, POLICY_VERSION);
+    assert.equal(fs.existsSync(path.join(home, ".rainbond")), false);
+  }
+});
+
+test("documented probe invocation reaches the adapter rather than capability discovery", (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "rainskills-probe-cli-"));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const result = spawnSync(process.execPath, [path.join(root, "bin/rainskills-tools.js"),
+    "delivery", "probe", "--input", "-", "--skill-id", "rainbond-delivery-verifier"], {
+    env: { ...process.env, HOME: home, RAINSKILLS_TELEMETRY_DISABLED: "1" }, encoding: "utf8",
+    input: JSON.stringify({ policy_version: POLICY_VERSION, url: "http://127.0.0.1/", method: "HEAD" }),
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).status, "rejected");
+  assert.equal(fs.existsSync(path.join(home, ".rainbond")), false);
+});
+
 test("delivery probe command has one fixed skill-bound contract", () => {
   assert.deepEqual(parseCommand([
     "delivery", "probe", "--input", "-",

@@ -105,6 +105,12 @@ Classify each blocker before searching:
 
 When clean logs conflict with broken user behavior, treat that as protocol/framework-class. Do not guess a destructive storage or database repair from a browser symptom.
 
+## Normal operating topology
+
+Use the upstream-supported topology for normal long-term operation by default. A development team is a deployment location, not permission to substitute an experience/demo database, omit persistence or dependencies, or deploy a testing image. Only use those reduced modes when the user explicitly requests them and record the limitation.
+
+Secrets must be generated or injected through the authorized protected configuration path and omitted from task/Git output. Do not remove a required database merely to avoid handling its password. Acceptance fixtures belong on the real supported topology; they do not define the deployment architecture.
+
 ## 3. Deploy and wait for terminal build states
 
 Deploy only after the step 1 readiness gates pass. Use `rainbond_operate_app` for the deployment. Use `rainbond_wait_for_build_completion(timeout=60)` for each bounded read of the same event. For an authorized deployment, continue waiting in the current turn on `status=running` until a terminal result, cancellation, or a real blocker. Follow the generated Runtime Gate for read transport failures; never replay the build or deployment write because a wait timed out.
@@ -136,9 +142,9 @@ For each blocker:
 
 Budget rules:
 
-- Allow at most one repair attempt for the same blocker signature, then re-verify.
-- If the same signature remains, stop and report the evidence and required human decision.
-- Stop after three distinct repair attempts in one run, or after two consecutive health passes with no material improvement.
+- Apply each evidence-backed repair hypothesis once, then re-verify the same objects. Do not replay an unknown write.
+- If the signature remains, inspect official configuration/source guidance and continue with a distinct supported hypothesis within scope; do not return a routine configuration change to the user.
+- Do not repeat unchanged reads or the same failed repair indefinitely. Stop for an evidenced external/authorization blocker or when supported in-scope remedies are exhausted, recording what was attempted; attempt counts alone do not make a user action necessary.
 - Stop immediately for a confirmed unreachable upstream image, cluster capacity failure, or source-code/build defect that Rainbond configuration cannot repair.
 - Repeated identical read-only checks without new anchored evidence do not count as progress.
 
