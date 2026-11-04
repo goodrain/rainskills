@@ -32,7 +32,7 @@ test("poll input is bounded and read-only", () => {
   assert.doesNotThrow(() => poll.validatePollInput("rainbond_get_instance", input()));
 });
 
-test("component convergence policies return after one sixty-second wait", () => {
+test("component convergence continues anchored reads without requiring another user turn", () => {
   for (const relativePath of [
     "contracts/runtime/cli-base.md",
     "rainbond-app-assistant/references/mainline.md",
@@ -43,8 +43,9 @@ test("component convergence policies return after one sixty-second wait", () => 
     const content = fs.readFileSync(path.join(root, relativePath), "utf8");
     assert.match(content, /rainbond_wait_for_build_completion\(timeout=60\)/, relativePath);
     assert.match(content, /status=running/, relativePath);
-    assert.match(content, /结束当前回复|end the current turn/i, relativePath);
-    assert.match(content, /不得[^\n]*(?:再次等待|手工轮询|继续轮询)/, relativePath);
+    assert.match(content, /同一.*event|same.*event/i, relativePath);
+    assert.match(content, /继续等待|continue waiting/i, relativePath);
+    assert.doesNotMatch(content, /立即结束当前回复|end the current turn immediately|用户明确继续后再/, relativePath);
   }
 });
 

@@ -48,7 +48,7 @@ When a matching package-backed component already exists:
 3. Require a non-empty result from `rainbond_get_package_upload_status`.
 4. Call `rainbond_replace_component_package` with the same `service_id`, the new upload `event_id`, and the previously
    observed package event as `expected_current_event_id` when it is available.
-5. Record the returned build `event_id`, then call `rainbond_wait_for_build_completion(timeout=60)` once in the current turn. If it returns `status=running`, end the current turn immediately with completed actions and current state；不得再次等待、手工轮询或继续轮询。A later explicit user “继续” starts a new bounded check.
+5. Record the returned build `event_id`. Use `rainbond_wait_for_build_completion(timeout=60)` for each bounded read of the same event. For an authorized deployment, continue waiting in the current turn on `status=running` until a terminal result, cancellation, or a real blocker. Follow the generated Runtime Gate for read transport failures; never replay the build or deployment write because a wait timed out.
 6. Verify the component health overview after the build and rolling upgrade converge.
 
 Do not call `rainbond_create_component_from_package` for an existing logical component, do not invent a versioned

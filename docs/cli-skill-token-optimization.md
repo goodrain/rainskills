@@ -24,7 +24,7 @@ node <home>/.rainbond/bin/rainskills-tools.js recipe --input - --skill-id rainbo
 
 预检只在当前真实状态足以证明时跳过。敏感值被脱敏时不猜测是否相等；已有端口别名还必须核对请求中的 k8s_service_name。前面的写可能影响后续步骤时，后续步骤保持 planned，执行时重新读取；不能把一个已确认 skipped 的步骤偷偷扩展成写操作。
 
-recipe 完成只代表创建/配置完成，`deploy_and_verify` 不是部署成功或已交付。继续通过既有部署操作取得真实 event，再做有界等待和实际访问验证。平台返回 running 时结束当前回复，用户明确继续后再检查。
+recipe 完成只代表创建/配置完成，`deploy_and_verify` 不是部署成功或已交付。继续通过既有部署操作取得真实 event，再做有界等待和实际访问验证。平台返回 running 时按 generated Runtime Gate 围绕原事件继续有界只读等待，不重放写请求。
 
 ## 可复核的静态读取变化
 

@@ -9,6 +9,8 @@ const { createHash, randomUUID } = require("node:crypto");
 const { spawnSync } = require("node:child_process");
 
 const REQUEST_TIMEOUT_MS = 180_000;
+// Allow the server to finish its bounded build wait and serialize the response.
+const BUILD_WAIT_TRANSPORT_GRACE_MS = 15_000;
 const INPUT_MAX_BYTES = 1024 * 1024;
 const RESPONSE_MAX_BYTES = 10 * 1024 * 1024;
 const STDOUT_MAX_BYTES = 128 * 1024;
@@ -1533,7 +1535,7 @@ async function execute(command, config) {
         installation_id: command.telemetryInstallationId,
       };
     }
-    const result = await rpcRequest(config, "tools/call", params, command.toolName === "rainbond_wait_for_build_completion" ? { timeoutMs: (argumentsValue.timeout || 60) * 1000, signal: command.signal } : { signal: command.signal });
+    const result = await rpcRequest(config, "tools/call", params, command.toolName === "rainbond_wait_for_build_completion" ? { timeoutMs: (argumentsValue.timeout || 60) * 1000 + BUILD_WAIT_TRANSPORT_GRACE_MS, signal: command.signal } : { signal: command.signal });
     if (!result || typeof result !== "object") {
       throw new BridgeError("Rainbond tool result is invalid", EXIT.TRANSPORT);
     }

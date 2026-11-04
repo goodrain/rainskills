@@ -66,6 +66,34 @@ test("waits stay read-only and event request bodies never enter query output", a
   assert.doesNotMatch(valid.stdout, /leaked-value|request_body|confirmation_id/);
 });
 
+test("build wait accepts a response arriving just after the server wait budget", async (t) => {
+  const fixture = await cliFixture(t, async () => {
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    return { structuredContent: { status: "running", event_id: "build-1" } };
+  }, []);
+  const result = await fixture.run(["read", "rainbond_wait_for_build_completion", "--input", "-"], {
+    event_id: "build-1", timeout: 1,
+  });
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(result.value.status, "running");
+  assert.equal(fixture.requests.filter((request) => request.method === "tools/call").length, 1);
+});
+
+test("successive anchored build waits converge without replaying a deployment", async (t) => {
+  let waits = 0;
+  const fixture = await cliFixture(t, () => ({ structuredContent: {
+    status: ++waits === 1 ? "running" : "success", event_id: "build-1",
+  } }), []);
+  const args = ["read", "rainbond_wait_for_build_completion", "--input", "-"];
+  const input = { event_id: "build-1", timeout: 1 };
+  assert.equal((await fixture.run(args, input)).value.status, "running");
+  assert.equal((await fixture.run(args, input)).value.status, "success");
+  const calls = fixture.requests.filter((request) => request.method === "tools/call");
+  assert.equal(calls.length, 2);
+  assert(calls.every((request) => request.params.name === "rainbond_wait_for_build_completion"
+    && request.params.arguments.event_id === "build-1"));
+});
+
 test("cancelling during internal preflight cannot start its confirmed write", async () => {
   const { executeConfirmedToolCall } = require("../bin/rainskills-tools.js");
   const controller = new AbortController();

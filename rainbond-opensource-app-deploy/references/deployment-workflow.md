@@ -107,7 +107,7 @@ When clean logs conflict with broken user behavior, treat that as protocol/frame
 
 ## 3. Deploy and wait for terminal build states
 
-Deploy only after the step 1 readiness gates pass. Use `rainbond_operate_app` for the deployment, then call `rainbond_wait_for_build_completion(timeout=60)` once for each returned event in the current turn. If it returns `status=running`, end the current turn immediately with completed actions and current state；不得再次等待、手工轮询或继续轮询。A later explicit user “继续” starts a new bounded check.
+Deploy only after the step 1 readiness gates pass. Use `rainbond_operate_app` for the deployment. Use `rainbond_wait_for_build_completion(timeout=60)` for each bounded read of the same event. For an authorized deployment, continue waiting in the current turn on `status=running` until a terminal result, cancellation, or a real blocker. Follow the generated Runtime Gate for read transport failures; never replay the build or deployment write because a wait timed out.
 
 - Keep waiting with the same anchored event while the tool reports `running`.
 - Treat the terminal result and its classified reason as evidence.
