@@ -1,5 +1,5 @@
 <!-- generated-by: scripts/sync-runtime-contracts.mjs -->
-<!-- source-sha256: 74c3f2ecfb57966119975185b95ad5ba9544c898065bdae4d9270e69867a2bf2 -->
+<!-- source-sha256: 5fa4b8bf63842b36637a1e8eb9a3b08dd0d01b1d2e263f340f8b4ae24f76077b -->
 <!-- profile: cli -->
 <!-- rainskills-runtime-gate:start -->
 # 单运行环境 CLI 门禁（生成文件）
@@ -20,7 +20,9 @@ Hermes Agent 使用 `terminal` 且 `background=true` 启动授权，随后只对
 
 固定 `<target>`：Codex=`codex`、Claude Code=`claude`、Pi Agent=`pi`、DeepSeek Harness=`dsh`、WorkBuddy=`workbuddy`、Hermes Agent=`hermes`。DeepSeek Harness 和 WorkBuddy 返回持久终端或后台句柄时，只轮询原句柄直到退出。
 
-构建、镜像拉取或部署收敛在一个用户回合内最多等待 60 秒：同一 event 只调用一次 `rainbond_wait_for_build_completion(timeout=60)`。返回 `status=running` 时立即结束当前回复，报告已完成动作、当前状态和 event；不得在同一回合再次等待、手工轮询或继续推理。用户之后明确说“继续”时，才对同一 event 开始新的 60 秒检查回合。
+构建、镜像拉取或部署使用 `rainbond_wait_for_build_completion(timeout=60)` 进行单次有界只读等待；60 秒是一次请求的服务端等待窗口，不是整个任务或用户回合的期限。用户已授权完整部署或持续监测时，返回 `status=running` 就在同一回合围绕同一 event 继续等待，直到终态、用户取消或真实阻塞；不要要求用户反复说“继续”，也不要用定时任务替代正常等待。用户明确要求单次查询或指定等待预算时遵守该范围。正常 running 和只读等待不消耗配置修复重试预算，也不受通用八分钟执行预算截断。
+
+只读等待发生传输超时时保留原 event，短暂退避后仍按同一 event 回查，不重发部署或构建写请求；连续三次传输失败时报告连接阻塞、最后证据和原 event，禁止重放未知结果的写入。401/403 仍按上方鉴权门禁处理。工具返回宿主持久会话句柄时先等待该原句柄结束，再开始下一次只读等待；不得并发等待同一事件、无限 shell 忙循环或无锚点轮询。每次出现实质状态变化或需要用户行动时更新进度，终态成功后继续应用健康、业务与交付验证，不能仅凭构建成功宣布交付。
 
 受限沙箱执行本地状态命令时必须申请用户级受保护目录访问权限；不得修改 `~/.rainbond` 权限或复制受保护状态。固定 launcher 与 argv 已在本文件声明，禁止搜索或探测 `rainskills.js`，也禁止执行 `npm root -g`。
 

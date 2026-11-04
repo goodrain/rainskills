@@ -50,7 +50,7 @@ state=connected,usable=true直接进入部署；state=not_started,usable=false�
 - 项目上下文只可来自当前 profile 与 Gate 允许的输入源；不得越权扫描，或把不可用的客户端文件当成事实。
 - 一旦确认 source-backed 或 source ref，不得静默切换为 package/image/template 或改 branch；任何 delivery mode、workaround 或破坏性动作都需用户明确确认。
 - 多 team/app 且无可靠本地提示时停止询问，禁止默认选择第一个；自动选择必须报告依据。
-- 同类错误最多重试一次、同阶段最多两次，总流程默认不超过八分钟。
+- 修复限同错重试一次、同阶段两次、八分钟；只读等待按 Gate，不计预算。
 - 到达 code_or_build_handoff_needed 后硬停止，不自动改代码、运行本地测试、提交、推送或重试。
 - 密钥只来自当前 profile 允许的输入源，永不回显或写入报告。
 

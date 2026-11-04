@@ -9,6 +9,8 @@ const { createHash, randomUUID } = require("node:crypto");
 const { spawnSync } = require("node:child_process");
 
 const REQUEST_TIMEOUT_MS = 180_000;
+// Allow the server to finish its bounded build wait and serialize the response.
+const BUILD_WAIT_TRANSPORT_GRACE_MS = 15_000;
 const INPUT_MAX_BYTES = 1024 * 1024;
 const RESPONSE_MAX_BYTES = 10 * 1024 * 1024;
 const STDOUT_MAX_BYTES = 128 * 1024;
@@ -158,6 +160,7 @@ function parseCommand(args) {
   if (args.includes("--operation-id") || args.includes("--environment-id")) {
     throw new BridgeError("--operation-id and --environment-id are no longer supported", EXIT.USAGE);
   }
+  if (args.length === 1 && args[0] === "--help") return { command: "help" };
   const skillIndex = args.indexOf("--skill-id");
   if (
     skillIndex < 0
@@ -184,6 +187,10 @@ function parseCommand(args) {
   }
   if (command === "delivery" && skillId !== "rainbond-delivery-verifier") {
     throw new BridgeError("delivery probe requires rainbond-delivery-verifier", EXIT.USAGE);
+  }
+  if (command === "delivery" && remaining.length === 3
+    && remaining[1] === "probe" && remaining[2] === "--help") {
+    return { command: "help", ...context };
   }
   if (command === "handoff" && !HANDOFF_SKILLS.has(skillId)) {
     throw new BridgeError("handoff command is not allowed for this skill", EXIT.USAGE);
@@ -309,7 +316,22 @@ function parseCommand(args) {
     }
     return parsed;
   }
-  throw new BridgeError("invalid command; use status, list, describe, read, or call", EXIT.USAGE);
+  throw new BridgeError("invalid command or arguments; use --help for fixed contracts, including delivery probe --input -", EXIT.USAGE);
+}
+
+function toolsHelp() {
+  return {
+    schema: "rainskills.tools-help.v1",
+    commands: ["status", "list", "describe", "context resolve", "read", "snapshot", "poll", "delivery probe", "handoff", "call", "batch", "recipe", "package-upload", "query"],
+    delivery_probe: {
+      argv: ["delivery", "probe", "--input", "-", "--skill-id", "rainbond-delivery-verifier"],
+      input_example: { policy_version: "rainskills.delivery-probe-policy.v1", url: "https://example.com/", method: "HEAD" },
+      runtime_connection_required: false,
+      credentials: "none",
+      purpose: "Bounded, read-only public URL verification. Independent authenticated business UI tests do not replace this probe.",
+    },
+    note: "An invalid argument or unsupported help invocation does not prove a capability is missing. Other commands retain their skill, runtime and confirmation requirements.",
+  };
 }
 
 function platformQueryIntent(toolName, argumentsValue) {
@@ -1533,7 +1555,7 @@ async function execute(command, config) {
         installation_id: command.telemetryInstallationId,
       };
     }
-    const result = await rpcRequest(config, "tools/call", params, command.toolName === "rainbond_wait_for_build_completion" ? { timeoutMs: (argumentsValue.timeout || 60) * 1000, signal: command.signal } : { signal: command.signal });
+    const result = await rpcRequest(config, "tools/call", params, command.toolName === "rainbond_wait_for_build_completion" ? { timeoutMs: (argumentsValue.timeout || 60) * 1000 + BUILD_WAIT_TRANSPORT_GRACE_MS, signal: command.signal } : { signal: command.signal });
     if (!result || typeof result !== "object") {
       throw new BridgeError("Rainbond tool result is invalid", EXIT.TRANSPORT);
     }
@@ -1573,6 +1595,10 @@ async function main(args = process.argv.slice(2)) {
   const cancel = () => controller.abort();
   try {
     command = parseCommand(args);
+    if (command.command === "help") {
+      process.stdout.write(`${JSON.stringify(toolsHelp())}\n`);
+      return;
+    }
     command.signal = controller.signal;
     if (["poll", "batch", "recipe"].includes(command.command)) {
       process.once("SIGINT", cancel);

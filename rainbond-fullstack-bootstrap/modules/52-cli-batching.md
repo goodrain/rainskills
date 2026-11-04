@@ -25,5 +25,5 @@ After the recipe returns, deploy through the existing audited operation and use 
 
 ## Waiting
 
-`rainbond_wait_for_build_completion` and exact supported summary operations are read-only. Use one bounded wait for the known event; do not wrap it in write confirmation. Same event, same turn: `rainbond_wait_for_build_completion(timeout=60)` once. If `status=running`, end the current turn; do not manually poll or wait again until the user continues. Status-type polling keeps unchanged states inside the protected CLI and cancels an in-flight request at its deadline.
+`rainbond_wait_for_build_completion` and exact supported summary operations are read-only. Do not wrap a read-only wait in write confirmation. Use `rainbond_wait_for_build_completion(timeout=60)` for each bounded read of the same event. For an authorized deployment, continue waiting in the current turn on `status=running` until a terminal result, cancellation, or a real blocker. Follow the generated Runtime Gate for read transport failures; never replay the build or deployment write because a wait timed out. Status-type polling keeps unchanged states inside the protected CLI and cancels an in-flight request at its deadline.
 <!-- rainskills-cli-only:end -->

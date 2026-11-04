@@ -22,6 +22,7 @@ Decide whether an existing Rainbond app is converged, usable, and backed by a ve
 | Condition | Read now | Do not preload |
 |---|---|---|
 | Need convergence, reverse-proxy, persistence, static frontend, or probe rules | [verification rules](references/verification-rules.md), [delivery workflow](references/delivery-workflow.md) | output examples |
+| Adapter appears missing, CLI arguments fail, or business UI checks are pending | [capability recovery](references/capability-recovery.md) | final-output examples |
 | Need final state mapping or structured result | [delivery workflow](references/delivery-workflow.md), [output contract](references/output-contract.md) | unrelated verification branches |
 | Need customer wording | [generated user-result policy](references/generated/user-result.md), [output contract](references/output-contract.md) | raw evidence detail |
 
@@ -41,7 +42,7 @@ Canonical schemas: [probe policy](schemas/delivery-probe-policy.schema.yaml) wit
 
 - Stop when app identity or required component/access evidence is ambiguous.
 - Stop when bootstrap or troubleshooting is still active; do not claim final delivery early.
-- Stop when the safe probe adapter is unavailable and require manual validation.
+- Diagnose adapter availability using the fixed contract and [capability recovery](references/capability-recovery.md) before reporting it missing. Input/help errors are not proof of an unavailable adapter.
 - Stop on unsafe URL, DNS, redirect, timeout, or body-limit policy without sending or replaying a request.
 - Stop rather than repairing configuration or code from the verifier.
 
